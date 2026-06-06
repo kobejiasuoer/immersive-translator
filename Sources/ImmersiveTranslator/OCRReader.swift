@@ -12,12 +12,16 @@ enum OCRError: LocalizedError {
 }
 
 enum OCRReader {
-    static func recognizeText(in image: CGImage) async throws -> String {
+    static func recognizeText(
+        in image: CGImage,
+        mode: OCRRecognitionMode = .accurate,
+        languagePreset: OCRLanguagePreset = .autoMixed
+    ) async throws -> String {
         try await Task.detached(priority: .userInitiated) {
             let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-            request.recognitionLanguages = ["en-US", "ja-JP", "ko-KR", "zh-Hans", "zh-Hant"]
+            request.recognitionLevel = mode == .accurate ? .accurate : .fast
+            request.usesLanguageCorrection = mode == .accurate
+            request.recognitionLanguages = languagePreset.recognitionLanguages
 
             let handler = VNImageRequestHandler(cgImage: image)
             try handler.perform([request])

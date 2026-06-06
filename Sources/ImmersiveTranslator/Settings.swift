@@ -28,6 +28,26 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(targetLanguage, forKey: Keys.targetLanguage) }
     }
 
+    @Published var ocrMode: OCRRecognitionMode {
+        didSet { UserDefaults.standard.set(ocrMode.rawValue, forKey: Keys.ocrMode) }
+    }
+
+    @Published var ocrLanguagePreset: OCRLanguagePreset {
+        didSet { UserDefaults.standard.set(ocrLanguagePreset.rawValue, forKey: Keys.ocrLanguagePreset) }
+    }
+
+    @Published var enableStreamingTranslation: Bool {
+        didSet { UserDefaults.standard.set(enableStreamingTranslation, forKey: Keys.enableStreamingTranslation) }
+    }
+
+    @Published var selectionHotKeyPreset: SelectionHotKeyPreset {
+        didSet { UserDefaults.standard.set(selectionHotKeyPreset.rawValue, forKey: Keys.selectionHotKeyPreset) }
+    }
+
+    @Published var ocrHotKeyPreset: OCRHotKeyPreset {
+        didSet { UserDefaults.standard.set(ocrHotKeyPreset.rawValue, forKey: Keys.ocrHotKeyPreset) }
+    }
+
     init() {
         let apiKeyResult = Self.loadAPIKey()
         apiKey = apiKeyResult.value
@@ -35,6 +55,11 @@ final class SettingsStore: ObservableObject {
         endpoint = UserDefaults.standard.string(forKey: Keys.endpoint) ?? "https://api.openai.com/v1/chat/completions"
         model = UserDefaults.standard.string(forKey: Keys.model) ?? "gpt-4o-mini"
         targetLanguage = UserDefaults.standard.string(forKey: Keys.targetLanguage) ?? "简体中文"
+        ocrMode = OCRRecognitionMode(rawValue: UserDefaults.standard.string(forKey: Keys.ocrMode) ?? "") ?? .accurate
+        ocrLanguagePreset = OCRLanguagePreset(rawValue: UserDefaults.standard.string(forKey: Keys.ocrLanguagePreset) ?? "") ?? .autoMixed
+        enableStreamingTranslation = UserDefaults.standard.object(forKey: Keys.enableStreamingTranslation) as? Bool ?? true
+        selectionHotKeyPreset = SelectionHotKeyPreset(rawValue: UserDefaults.standard.string(forKey: Keys.selectionHotKeyPreset) ?? "") ?? .optionSpace
+        ocrHotKeyPreset = OCRHotKeyPreset(rawValue: UserDefaults.standard.string(forKey: Keys.ocrHotKeyPreset) ?? "") ?? .controlOptionSpace
     }
 
     private static func loadAPIKey() -> (value: String, errorMessage: String?) {
@@ -72,6 +97,67 @@ final class SettingsStore: ObservableObject {
         static let endpoint = "endpoint"
         static let model = "model"
         static let targetLanguage = "targetLanguage"
+        static let ocrMode = "ocrMode"
+        static let ocrLanguagePreset = "ocrLanguagePreset"
+        static let enableStreamingTranslation = "enableStreamingTranslation"
+        static let selectionHotKeyPreset = "selectionHotKeyPreset"
+        static let ocrHotKeyPreset = "ocrHotKeyPreset"
+    }
+}
+
+enum OCRRecognitionMode: String, CaseIterable, Identifiable {
+    case accurate
+    case fast
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .accurate:
+            return "准确"
+        case .fast:
+            return "快速"
+        }
+    }
+}
+
+enum OCRLanguagePreset: String, CaseIterable, Identifiable {
+    case autoMixed
+    case chineseEnglish
+    case english
+    case japanese
+    case korean
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .autoMixed:
+            return "混合"
+        case .chineseEnglish:
+            return "中英"
+        case .english:
+            return "英文"
+        case .japanese:
+            return "日文"
+        case .korean:
+            return "韩文"
+        }
+    }
+
+    var recognitionLanguages: [String] {
+        switch self {
+        case .autoMixed:
+            return ["en-US", "zh-Hans", "zh-Hant", "ja-JP", "ko-KR"]
+        case .chineseEnglish:
+            return ["zh-Hans", "zh-Hant", "en-US"]
+        case .english:
+            return ["en-US"]
+        case .japanese:
+            return ["ja-JP", "en-US"]
+        case .korean:
+            return ["ko-KR", "en-US"]
+        }
     }
 }
 
@@ -85,7 +171,7 @@ final class SettingsWindowController: NSWindowController {
         let window = NSWindow(contentViewController: hosting)
         window.title = "沉浸式翻译设置"
         window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 520, height: 370))
+        window.setContentSize(NSSize(width: 560, height: 620))
         window.isReleasedWhenClosed = false
         super.init(window: window)
     }
@@ -116,10 +202,12 @@ struct SettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
+                sectionTitle("翻译服务")
                 labeledField("API Key", text: $settingsStore.apiKey, secure: true)
                 labeledField("接口地址", text: $settingsStore.endpoint)
                 labeledField("模型", text: $settingsStore.model)
                 labeledField("目标语言", text: $settingsStore.targetLanguage)
+                Toggle("流式显示译文", isOn: $settingsStore.enableStreamingTranslation)
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -131,6 +219,44 @@ struct SettingsView: View {
                     presetButton("DeepSeek V4 Flash", endpoint: "https://api.deepseek.com/chat/completions", model: "deepseek-v4-flash")
                     presetButton("OpenAI Mini", endpoint: "https://api.openai.com/v1/chat/completions", model: "gpt-4o-mini")
                 }
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                sectionTitle("截图 OCR")
+                Picker("识别模式", selection: $settingsStore.ocrMode) {
+                    ForEach(OCRRecognitionMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Picker("识别语言", selection: $settingsStore.ocrLanguagePreset) {
+                    ForEach(OCRLanguagePreset.allCases) { preset in
+                        Text(preset.title).tag(preset)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text("语言越少通常越快、误识别越少；混合适合临时看不准语言的截图。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                sectionTitle("快捷键")
+                Picker("选中文本翻译", selection: $settingsStore.selectionHotKeyPreset) {
+                    ForEach(SelectionHotKeyPreset.allCases) { preset in
+                        Text(preset.title).tag(preset)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Picker("截图 OCR 翻译", selection: $settingsStore.ocrHotKeyPreset) {
+                    ForEach(OCRHotKeyPreset.allCases) { preset in
+                        Text(preset.title).tag(preset)
+                    }
+                }
+                .pickerStyle(.menu)
             }
 
             if let apiKeyStorageError = settingsStore.apiKeyStorageError {
@@ -155,6 +281,12 @@ struct SettingsView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
     }
 
     private func labeledField(_ title: String, text: Binding<String>, secure: Bool = false) -> some View {

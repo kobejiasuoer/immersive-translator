@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @main
@@ -43,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyManager: HotKeyManager?
     private var screenSelector: ScreenSelectionController?
     private var statusItem: NSStatusItem?
+    private var cancellables: Set<AnyCancellable> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureMenuBar()
@@ -56,7 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        hotKeyManager?.register()
+        registerHotKeys()
+        observeSettings()
         showWelcomeIfNeeded()
     }
 
@@ -65,8 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.title = "译"
 
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "翻译选中文本  ⌥Space", action: #selector(menuTranslateSelection), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "截图 OCR 翻译  ⌃⌥Space", action: #selector(menuTranslateScreenshot), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "翻译选中文本  \(settingsStore.selectionHotKeyPreset.title)", action: #selector(menuTranslateSelection), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "截图 OCR 翻译  \(settingsStore.ocrHotKeyPreset.title)", action: #selector(menuTranslateScreenshot), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "翻译历史...", action: #selector(openHistory), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "设置...", action: #selector(openSettings), keyEquivalent: ","))
@@ -77,6 +80,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.items.forEach { $0.target = self }
         item.menu = menu
         statusItem = item
+    }
+
+    private func refreshMenu() {
+        if let statusItem {
+            NSStatusBar.system.removeStatusItem(statusItem)
+        }
+        statusItem = nil
+        configureMenuBar()
+    }
+
+    private func registerHotKeys() {
+        hotKeyManager?.register(
+            selectionPreset: settingsStore.selectionHotKeyPreset,
+            ocrPreset: settingsStore.ocrHotKeyPreset
+        )
+    }
+
+    private func observeSettings() {
+        settingsStore.$selectionHotKeyPreset
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.registerHotKeys()
+                self?.refreshMenu()
+            }
+            .store(in: &cancellables)
+
+        settingsStore.$ocrHotKeyPreset
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.registerHotKeys()
+                self?.refreshMenu()
+            }
+            .store(in: &cancellables)
     }
 
     private func showWelcomeIfNeeded() {
@@ -212,7 +248,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             message: "正在 OCR 识别"
         )
         do {
-            let text = try await OCRReader.recognizeText(in: image)
+            let text = try await OCRReader.recognizeText(
+                in: image,
+                mode: settingsStore.ocrMode,
+                languagePreset: settingsStore.ocrLanguagePreset
+            )
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 panelController.show(
                     original: "截图区域：\(pixelSize)",
@@ -263,7 +303,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         do {
-            let result = try await translator.translateWithMetadata(text: text)
+            let result: TranslationResult
+            if settingsStore.enableStreamingTranslation {
+                result = try await translator.translateStreaming(text: text) { [weak self] progress in
+                    guard let self else { return }
+                    self.panelController.show(
+                        original: text,
+                        translation: progress.text,
+                        isLoading: !progress.isFinal,
+                        source: source,
+                        status: progress.isFinal ? .success : .loading,
+                        message: progress.isFinal ? "译文已经准备好" : "正在流式显示译文",
+                        elapsed: progress.elapsed + preflightElapsed
+                    )
+                }
+            } else {
+                result = try await translator.translateWithMetadata(text: text)
+            }
             let translation = result.text
             let totalElapsed = result.elapsed + preflightElapsed
             historyStore.add(

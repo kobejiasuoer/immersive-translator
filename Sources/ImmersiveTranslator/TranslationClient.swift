@@ -30,6 +30,12 @@ struct TranslationResult {
     let model: String
 }
 
+struct TranslationProgress {
+    let text: String
+    let elapsed: TimeInterval
+    let isFinal: Bool
+}
+
 final class TranslationClient {
     private let logger = Logger(subsystem: "local.immersive-translator.mvp", category: "TranslationClient")
     private let settingsStore: SettingsStore
@@ -45,6 +51,23 @@ final class TranslationClient {
 
     @MainActor
     func translateWithMetadata(text: String) async throws -> TranslationResult {
+        try await performTranslation(text: text, stream: false, onProgress: nil)
+    }
+
+    @MainActor
+    func translateStreaming(
+        text: String,
+        onProgress: @escaping @MainActor (TranslationProgress) -> Void
+    ) async throws -> TranslationResult {
+        try await performTranslation(text: text, stream: true, onProgress: onProgress)
+    }
+
+    @MainActor
+    private func performTranslation(
+        text: String,
+        stream: Bool,
+        onProgress: (@MainActor (TranslationProgress) -> Void)?
+    ) async throws -> TranslationResult {
         let apiKey = settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -55,12 +78,12 @@ final class TranslationClient {
         guard let url = Self.chatCompletionsURL(from: endpoint) else { throw TranslationClientError.invalidEndpoint }
         let startedAt = Date()
         let requestOptions = Self.requestOptions(endpoint: url, model: resolvedModel)
-        logger.info("translation.request.start endpoint=\(url.absoluteString, privacy: .public) model=\(resolvedModel, privacy: .public) textLength=\(text.count, privacy: .public)")
-        DiagnosticLogger.log("translation.request.start endpoint=\(url.absoluteString) model=\(resolvedModel) textLength=\(text.count) thinkingDisabled=\(requestOptions.disableThinking) provider=\(requestOptions.providerName)")
+        logger.info("translation.request.start endpoint=\(url.absoluteString, privacy: .public) model=\(resolvedModel, privacy: .public) textLength=\(text.count, privacy: .public) stream=\(stream, privacy: .public)")
+        DiagnosticLogger.log("translation.request.start endpoint=\(url.absoluteString) model=\(resolvedModel) textLength=\(text.count) stream=\(stream) thinkingDisabled=\(requestOptions.disableThinking) provider=\(requestOptions.providerName)")
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 30
+        request.timeoutInterval = 18
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -81,13 +104,22 @@ final class TranslationClient {
                 ChatMessage(role: "user", content: text)
             ],
             temperature: 0.2,
-            stream: false,
+            stream: stream,
             thinking: requestOptions.disableThinking ? ThinkingConfig(type: "disabled") : nil,
             doSample: requestOptions.sendDoSample ? false : nil,
             maxTokens: requestOptions.maxTokens
         )
 
         request.httpBody = try JSONEncoder().encode(payload)
+
+        if stream, let onProgress {
+            return try await performStreamingRequest(
+                request,
+                startedAt: startedAt,
+                resolvedModel: resolvedModel,
+                onProgress: onProgress
+            )
+        }
 
         let data: Data
         let response: URLResponse
@@ -137,6 +169,94 @@ final class TranslationClient {
         logger.info("translation.request.success elapsed=\(elapsed, privacy: .public) outputLength=\(translation.count, privacy: .public)")
         DiagnosticLogger.log("translation.request.success elapsed=\(String(format: "%.2f", elapsed)) outputLength=\(translation.count)")
         return TranslationResult(text: translation, elapsed: elapsed, model: resolvedModel)
+    }
+
+    @MainActor
+    private func performStreamingRequest(
+        _ request: URLRequest,
+        startedAt: Date,
+        resolvedModel: String,
+        onProgress: @escaping @MainActor (TranslationProgress) -> Void
+    ) async throws -> TranslationResult {
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await URLSession.shared.bytes(for: request)
+        } catch {
+            let elapsed = Date().timeIntervalSince(startedAt)
+            logger.error("translation.stream.transport_error elapsed=\(elapsed, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            DiagnosticLogger.log("translation.stream.transport_error elapsed=\(String(format: "%.2f", elapsed)) error=\(error.localizedDescription)")
+            throw error
+        }
+
+        if let httpResponse = response as? HTTPURLResponse,
+           !(200..<300).contains(httpResponse.statusCode) {
+            var errorData = Data()
+            for try await byte in bytes {
+                errorData.append(byte)
+            }
+            let message = parseErrorMessage(from: errorData) ?? "翻译接口返回 HTTP \(httpResponse.statusCode)。"
+            let elapsed = Date().timeIntervalSince(startedAt)
+            logger.error("translation.stream.http_error status=\(httpResponse.statusCode, privacy: .public) elapsed=\(elapsed, privacy: .public) message=\(message, privacy: .public)")
+            DiagnosticLogger.log("translation.stream.http_error status=\(httpResponse.statusCode) elapsed=\(String(format: "%.2f", elapsed)) message=\(message)")
+            throw TranslationClientError.badResponse(statusCode: httpResponse.statusCode, message: message)
+        }
+
+        var content = ""
+        var fallbackData = Data()
+        var sawStreamLine = false
+
+        for try await rawLine in bytes.lines {
+            fallbackData.append(contentsOf: rawLine.utf8)
+            fallbackData.append(0x0A)
+
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard line.hasPrefix("data:") else { continue }
+            sawStreamLine = true
+
+            let jsonText = line.dropFirst(5).trimmingCharacters(in: .whitespacesAndNewlines)
+            if jsonText == "[DONE]" {
+                break
+            }
+            guard let jsonData = jsonText.data(using: .utf8),
+                  let chunk = try? JSONDecoder().decode(ChatCompletionStreamChunk.self, from: jsonData) else {
+                continue
+            }
+
+            let delta = chunk.choices.compactMap { choice in
+                choice.delta?.content ?? choice.message?.content
+            }.joined()
+            guard !delta.isEmpty else { continue }
+            content += delta
+            onProgress(TranslationProgress(
+                text: content,
+                elapsed: Date().timeIntervalSince(startedAt),
+                isFinal: false
+            ))
+        }
+
+        let elapsed = Date().timeIntervalSince(startedAt)
+        let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedContent.isEmpty {
+            onProgress(TranslationProgress(text: trimmedContent, elapsed: elapsed, isFinal: true))
+            logger.info("translation.stream.success elapsed=\(elapsed, privacy: .public) outputLength=\(trimmedContent.count, privacy: .public)")
+            DiagnosticLogger.log("translation.stream.success elapsed=\(String(format: "%.2f", elapsed)) outputLength=\(trimmedContent.count)")
+            return TranslationResult(text: trimmedContent, elapsed: elapsed, model: resolvedModel)
+        }
+
+        if !sawStreamLine,
+           let decoded = try? JSONDecoder().decode(ChatCompletionResponse.self, from: fallbackData),
+           let translation = decoded.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines),
+           !translation.isEmpty {
+            onProgress(TranslationProgress(text: translation, elapsed: elapsed, isFinal: true))
+            logger.info("translation.stream.fallback_json elapsed=\(elapsed, privacy: .public) outputLength=\(translation.count, privacy: .public)")
+            DiagnosticLogger.log("translation.stream.fallback_json elapsed=\(String(format: "%.2f", elapsed)) outputLength=\(translation.count)")
+            return TranslationResult(text: translation, elapsed: elapsed, model: resolvedModel)
+        }
+
+        logger.error("translation.stream.empty elapsed=\(elapsed, privacy: .public) bytes=\(fallbackData.count, privacy: .public)")
+        DiagnosticLogger.log("translation.stream.empty elapsed=\(String(format: "%.2f", elapsed)) bytes=\(fallbackData.count)")
+        throw TranslationClientError.emptyTranslation
     }
 
     private static func chatCompletionsURL(from endpoint: String) -> URL? {
@@ -284,8 +404,13 @@ private struct ChatCompletionStreamChunk: Decodable {
     let choices: [Choice]
 
     struct Choice: Decodable {
-        let delta: ChatMessage?
+        let delta: StreamDelta?
         let message: ChatMessage?
+    }
+
+    struct StreamDelta: Decodable {
+        let role: String?
+        let content: String?
     }
 }
 
