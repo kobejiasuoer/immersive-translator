@@ -245,7 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isLoading: true,
             source: .screenshotOCR,
             status: .loading,
-            message: "正在 OCR 识别"
+            message: "OCR：\(settingsStore.ocrMode.title) · \(settingsStore.ocrLanguagePreset.title)"
         )
         do {
             let text = try await OCRReader.recognizeText(
@@ -253,10 +253,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 mode: settingsStore.ocrMode,
                 languagePreset: settingsStore.ocrLanguagePreset
             )
+            DiagnosticLogger.log("ocr.recognition.complete mode=\(settingsStore.ocrMode.rawValue) languages=\(settingsStore.ocrLanguagePreset.rawValue) image=\(pixelSize) textLength=\(text.count)")
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 panelController.show(
                     original: "截图区域：\(pixelSize)",
-                    translation: "没有识别到可翻译文字。可以把内容放大后再框选，或只框文字主体，避开图片和复杂背景。",
+                    translation: "没有识别到可翻译文字。建议把内容放大后再框选，只框文字主体；如果是英文/中文截图，可以在设置里把 OCR 语言改成“英文”或“中英”。",
                     isLoading: false,
                     source: .screenshotOCR,
                     status: .warning,
@@ -268,7 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             panelController.show(
                 original: text,
-                translation: "已识别 \(text.count) 个字符，正在翻译。",
+                translation: "已识别 \(text.count) 个字符，正在翻译。若原文识别不准，可以在设置里切换 OCR 语言或模式。",
                 isLoading: true,
                 source: .screenshotOCR,
                 status: .loading,

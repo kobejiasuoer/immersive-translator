@@ -27,7 +27,7 @@ final class ScreenSelectionController {
 
     private func finish(screen: NSScreen, selection: CGRect) {
         closeWindows()
-        guard selection.width >= 8, selection.height >= 8 else {
+        guard selection.width >= 20, selection.height >= 12 else {
             onCancel(.tooSmall)
             return
         }
@@ -59,7 +59,9 @@ final class ScreenSelectionController {
         let scaleX = pixelWidth / screen.frame.width
         let scaleY = pixelHeight / screen.frame.height
         let screenBounds = CGRect(origin: .zero, size: screen.frame.size)
-        let clampedSelection = selection.standardized.intersection(screenBounds)
+        let clampedSelection = selection.standardized
+            .insetBy(dx: -6, dy: -6)
+            .intersection(screenBounds)
         guard clampedSelection.width >= 1, clampedSelection.height >= 1 else {
             return nil
         }
