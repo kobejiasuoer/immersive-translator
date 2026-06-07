@@ -11,6 +11,8 @@ final class ScreenSelectionController {
     }
 
     func begin() {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+
         windows = NSScreen.screens.map { screen in
             let window = ScreenSelectionWindow(screen: screen)
             window.selectionView.onComplete = { [weak self, weak window] rect in
@@ -22,6 +24,11 @@ final class ScreenSelectionController {
             }
             window.orderFrontRegardless()
             return window
+        }
+
+        if let targetWindow = windowUnderMouse() ?? windows.first {
+            targetWindow.makeKeyAndOrderFront(nil)
+            targetWindow.selectionView.window?.makeFirstResponder(targetWindow.selectionView)
         }
     }
 
@@ -95,6 +102,13 @@ final class ScreenSelectionController {
 
         return CGDisplayCreateImage(displayID, rect: rect)
     }
+
+    private func windowUnderMouse() -> ScreenSelectionWindow? {
+        let mouseLocation = NSEvent.mouseLocation
+        return windows.first { window in
+            window.targetScreen.frame.contains(mouseLocation)
+        }
+    }
 }
 
 enum ScreenSelectionCancelReason {
@@ -144,8 +158,12 @@ final class ScreenSelectionView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
     override func viewDidMoveToWindow() {
-        window?.makeKey()
+        window?.makeFirstResponder(self)
     }
 
     override func draw(_ dirtyRect: NSRect) {
