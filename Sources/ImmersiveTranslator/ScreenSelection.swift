@@ -26,26 +26,37 @@ final class ScreenSelectionController {
     }
 
     private func finish(screen: NSScreen, selection: CGRect) {
-        closeWindows()
         guard selection.width >= 20, selection.height >= 12 else {
+            releaseWindows()
             onCancel(.tooSmall)
             return
         }
 
+        hideWindows()
         guard let image = capture(screen: screen, selection: selection) else {
+            releaseWindows()
             onCancel(.captureFailed)
             return
         }
+        releaseWindows()
         onImage(image)
     }
 
     private func cancel() {
-        closeWindows()
+        releaseWindows()
         onCancel(.userCancelled)
     }
 
-    private func closeWindows() {
-        windows.forEach { $0.close() }
+    private func hideWindows() {
+        windows.forEach { window in
+            window.selectionView.onComplete = nil
+            window.selectionView.onCancel = nil
+            window.orderOut(nil)
+        }
+    }
+
+    private func releaseWindows() {
+        hideWindows()
         windows.removeAll()
     }
 
@@ -108,6 +119,9 @@ final class ScreenSelectionWindow: NSWindow {
         isOpaque = false
         ignoresMouseEvents = false
         level = .screenSaver
+        hasShadow = false
+        animationBehavior = .none
+        isReleasedWhenClosed = false
         acceptsMouseMovedEvents = true
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         contentView = selectionView

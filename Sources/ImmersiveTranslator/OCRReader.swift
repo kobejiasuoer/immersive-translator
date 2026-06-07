@@ -1,4 +1,4 @@
-import AppKit
+import CoreGraphics
 import Vision
 
 enum OCRError: LocalizedError {
@@ -62,29 +62,26 @@ private func prepareImageForRecognition(_ image: CGImage) -> CGImage {
     }
 
     let scale = min(3.0, CGFloat(minUsefulSide) / CGFloat(maxSide))
-    let targetSize = NSSize(width: CGFloat(width) * scale, height: CGFloat(height) * scale)
-    let bitmap = NSBitmapImageRep(
-        bitmapDataPlanes: nil,
-        pixelsWide: Int(targetSize.width.rounded()),
-        pixelsHigh: Int(targetSize.height.rounded()),
-        bitsPerSample: 8,
-        samplesPerPixel: 4,
-        hasAlpha: true,
-        isPlanar: false,
-        colorSpaceName: .deviceRGB,
+    let targetWidth = Int((CGFloat(width) * scale).rounded())
+    let targetHeight = Int((CGFloat(height) * scale).rounded())
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+
+    guard let context = CGContext(
+        data: nil,
+        width: targetWidth,
+        height: targetHeight,
+        bitsPerComponent: 8,
         bytesPerRow: 0,
-        bitsPerPixel: 0
-    )
+        space: colorSpace,
+        bitmapInfo: bitmapInfo
+    ) else {
+        return image
+    }
 
-    guard let bitmap else { return image }
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
-    NSGraphicsContext.current?.imageInterpolation = .high
-    NSImage(cgImage: image, size: NSSize(width: width, height: height))
-        .draw(in: NSRect(origin: .zero, size: targetSize))
-    NSGraphicsContext.restoreGraphicsState()
-
-    return bitmap.cgImage ?? image
+    context.interpolationQuality = .high
+    context.draw(image, in: CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight))
+    return context.makeImage() ?? image
 }
 
 private func minimumTextHeight(for image: CGImage) -> Float {
