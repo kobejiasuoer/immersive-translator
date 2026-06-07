@@ -90,7 +90,8 @@ final class TranslationPanelController {
         source: TranslationSource? = nil,
         status: TranslationPanelStatus? = nil,
         message: String? = nil,
-        elapsed: TimeInterval? = nil
+        elapsed: TimeInterval? = nil,
+        targetLanguage: String? = nil
     ) {
         let panel = panel ?? makePanel()
         self.panel = panel
@@ -100,7 +101,7 @@ final class TranslationPanelController {
         model.isLoading = isLoading
         model.sourceLabel = source?.displayName ?? "系统提示"
         model.modelLabel = settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines)
-        model.targetLanguage = settingsStore.targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+        model.targetLanguage = targetLanguage ?? settingsStore.displayTargetLanguage
         model.status = resolvedStatus(
             explicitStatus: status,
             isLoading: isLoading,

@@ -293,14 +293,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func translateText(_ text: String, source: TranslationSource, preflightElapsed: TimeInterval = 0) async {
         let startedAt = Date()
+        let expectedTargetLanguage = resolvedTargetLanguage(for: text)
         panelController.show(
             original: text,
-            translation: "正在发送给 \(settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines))。",
+            translation: "正在翻译到 \(expectedTargetLanguage)，使用 \(settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines))。",
             isLoading: true,
             source: source,
             status: .loading,
             message: source == .screenshotOCR ? "OCR 文本已拿到，正在翻译" : "正在翻译选中文本",
-            elapsed: preflightElapsed > 0 ? preflightElapsed : nil
+            elapsed: preflightElapsed > 0 ? preflightElapsed : nil,
+            targetLanguage: expectedTargetLanguage
         )
 
         do {
@@ -315,7 +317,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         source: source,
                         status: progress.isFinal ? .success : .loading,
                         message: progress.isFinal ? "译文已经准备好" : "正在流式显示译文",
-                        elapsed: progress.elapsed + preflightElapsed
+                        elapsed: progress.elapsed + preflightElapsed,
+                        targetLanguage: expectedTargetLanguage
                     )
                 }
             } else {
@@ -326,7 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             historyStore.add(
                 original: text,
                 translation: translation,
-                targetLanguage: settingsStore.targetLanguage,
+                targetLanguage: result.targetLanguage,
                 source: source
             )
             let unchanged = normalized(text) == normalized(translation)
@@ -343,7 +346,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 source: source,
                 status: unchanged ? .unchanged : .success,
                 message: message,
-                elapsed: totalElapsed
+                elapsed: totalElapsed,
+                targetLanguage: result.targetLanguage
             )
         } catch {
             panelController.show(
@@ -423,5 +427,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func formatSeconds(_ seconds: TimeInterval) -> String {
         String(format: "%.1fs", seconds)
+    }
+
+    private func resolvedTargetLanguage(for text: String) -> String {
+        switch settingsStore.translationDirection {
+        case .fixedTarget:
+            let target = settingsStore.targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+            return target.isEmpty ? "简体中文" : target
+        case .autoChineseEnglish:
+            return looksMostlyChinese(text) ? "English" : "简体中文"
+        }
+    }
+
+    private func looksMostlyChinese(_ text: String) -> Bool {
+        var chineseCount = 0
+        var letterCount = 0
+
+        for scalar in text.unicodeScalars {
+            if scalar.properties.isWhitespace || CharacterSet.punctuationCharacters.contains(scalar) {
+                continue
+            }
+
+            switch scalar.value {
+            case 0x4E00...0x9FFF, 0x3400...0x4DBF, 0xF900...0xFAFF:
+                chineseCount += 1
+            case 0x0041...0x005A, 0x0061...0x007A:
+                letterCount += 1
+            default:
+                continue
+            }
+        }
+
+        guard chineseCount > 0 else { return false }
+        return chineseCount >= 4 || chineseCount >= letterCount
     }
 }

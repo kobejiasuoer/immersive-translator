@@ -28,6 +28,7 @@ struct TranslationResult {
     let text: String
     let elapsed: TimeInterval
     let model: String
+    let targetLanguage: String
 }
 
 struct TranslationProgress {
@@ -71,8 +72,8 @@ final class TranslationClient {
         let apiKey = settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines)
-        let targetLanguage = settingsStore.targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedModel = model.isEmpty ? "gpt-4o-mini" : model
+        let targetLanguage = Self.targetLanguage(for: text, settingsStore: settingsStore)
 
         guard !apiKey.isEmpty else { throw TranslationClientError.missingAPIKey }
         guard let url = Self.chatCompletionsURL(from: endpoint) else { throw TranslationClientError.invalidEndpoint }
@@ -117,6 +118,7 @@ final class TranslationClient {
                 request,
                 startedAt: startedAt,
                 resolvedModel: resolvedModel,
+                targetLanguage: targetLanguage,
                 onProgress: onProgress
             )
         }
@@ -168,7 +170,7 @@ final class TranslationClient {
         }
         logger.info("translation.request.success elapsed=\(elapsed, privacy: .public) outputLength=\(translation.count, privacy: .public)")
         DiagnosticLogger.log("translation.request.success elapsed=\(String(format: "%.2f", elapsed)) outputLength=\(translation.count)")
-        return TranslationResult(text: translation, elapsed: elapsed, model: resolvedModel)
+        return TranslationResult(text: translation, elapsed: elapsed, model: resolvedModel, targetLanguage: targetLanguage)
     }
 
     @MainActor
@@ -176,6 +178,7 @@ final class TranslationClient {
         _ request: URLRequest,
         startedAt: Date,
         resolvedModel: String,
+        targetLanguage: String,
         onProgress: @escaping @MainActor (TranslationProgress) -> Void
     ) async throws -> TranslationResult {
         let bytes: URLSession.AsyncBytes
@@ -241,7 +244,7 @@ final class TranslationClient {
             onProgress(TranslationProgress(text: trimmedContent, elapsed: elapsed, isFinal: true))
             logger.info("translation.stream.success elapsed=\(elapsed, privacy: .public) outputLength=\(trimmedContent.count, privacy: .public)")
             DiagnosticLogger.log("translation.stream.success elapsed=\(String(format: "%.2f", elapsed)) outputLength=\(trimmedContent.count)")
-            return TranslationResult(text: trimmedContent, elapsed: elapsed, model: resolvedModel)
+            return TranslationResult(text: trimmedContent, elapsed: elapsed, model: resolvedModel, targetLanguage: targetLanguage)
         }
 
         if !sawStreamLine,
@@ -251,7 +254,7 @@ final class TranslationClient {
             onProgress(TranslationProgress(text: translation, elapsed: elapsed, isFinal: true))
             logger.info("translation.stream.fallback_json elapsed=\(elapsed, privacy: .public) outputLength=\(translation.count, privacy: .public)")
             DiagnosticLogger.log("translation.stream.fallback_json elapsed=\(String(format: "%.2f", elapsed)) outputLength=\(translation.count)")
-            return TranslationResult(text: translation, elapsed: elapsed, model: resolvedModel)
+            return TranslationResult(text: translation, elapsed: elapsed, model: resolvedModel, targetLanguage: targetLanguage)
         }
 
         logger.error("translation.stream.empty elapsed=\(elapsed, privacy: .public) bytes=\(fallbackData.count, privacy: .public)")
@@ -346,6 +349,39 @@ final class TranslationClient {
             sendDoSample: false,
             maxTokens: nil
         )
+    }
+
+    private static func targetLanguage(for text: String, settingsStore: SettingsStore) -> String {
+        switch settingsStore.translationDirection {
+        case .fixedTarget:
+            let targetLanguage = settingsStore.targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+            return targetLanguage.isEmpty ? "简体中文" : targetLanguage
+        case .autoChineseEnglish:
+            return looksMostlyChinese(text) ? "English" : "简体中文"
+        }
+    }
+
+    private static func looksMostlyChinese(_ text: String) -> Bool {
+        var chineseCount = 0
+        var letterCount = 0
+
+        for scalar in text.unicodeScalars {
+            if scalar.properties.isWhitespace || CharacterSet.punctuationCharacters.contains(scalar) {
+                continue
+            }
+
+            switch scalar.value {
+            case 0x4E00...0x9FFF, 0x3400...0x4DBF, 0xF900...0xFAFF:
+                chineseCount += 1
+            case 0x0041...0x005A, 0x0061...0x007A:
+                letterCount += 1
+            default:
+                continue
+            }
+        }
+
+        guard chineseCount > 0 else { return false }
+        return chineseCount >= 4 || chineseCount >= letterCount
     }
 
     private func parseErrorMessage(from data: Data) -> String? {

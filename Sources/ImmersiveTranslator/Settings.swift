@@ -28,6 +28,10 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(targetLanguage, forKey: Keys.targetLanguage) }
     }
 
+    @Published var translationDirection: TranslationDirection {
+        didSet { UserDefaults.standard.set(translationDirection.rawValue, forKey: Keys.translationDirection) }
+    }
+
     @Published var ocrMode: OCRRecognitionMode {
         didSet { UserDefaults.standard.set(ocrMode.rawValue, forKey: Keys.ocrMode) }
     }
@@ -55,11 +59,22 @@ final class SettingsStore: ObservableObject {
         endpoint = UserDefaults.standard.string(forKey: Keys.endpoint) ?? "https://api.openai.com/v1/chat/completions"
         model = UserDefaults.standard.string(forKey: Keys.model) ?? "gpt-4o-mini"
         targetLanguage = UserDefaults.standard.string(forKey: Keys.targetLanguage) ?? "简体中文"
+        translationDirection = TranslationDirection(rawValue: UserDefaults.standard.string(forKey: Keys.translationDirection) ?? "") ?? .autoChineseEnglish
         ocrMode = OCRRecognitionMode(rawValue: UserDefaults.standard.string(forKey: Keys.ocrMode) ?? "") ?? .accurate
         ocrLanguagePreset = OCRLanguagePreset(rawValue: UserDefaults.standard.string(forKey: Keys.ocrLanguagePreset) ?? "") ?? .autoMixed
         enableStreamingTranslation = UserDefaults.standard.object(forKey: Keys.enableStreamingTranslation) as? Bool ?? true
         selectionHotKeyPreset = SelectionHotKeyPreset(rawValue: UserDefaults.standard.string(forKey: Keys.selectionHotKeyPreset) ?? "") ?? .optionSpace
         ocrHotKeyPreset = OCRHotKeyPreset(rawValue: UserDefaults.standard.string(forKey: Keys.ocrHotKeyPreset) ?? "") ?? .controlOptionSpace
+    }
+
+    var displayTargetLanguage: String {
+        switch translationDirection {
+        case .autoChineseEnglish:
+            return "自动"
+        case .fixedTarget:
+            let target = targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+            return target.isEmpty ? "简体中文" : target
+        }
     }
 
     private static func loadAPIKey() -> (value: String, errorMessage: String?) {
@@ -97,11 +112,37 @@ final class SettingsStore: ObservableObject {
         static let endpoint = "endpoint"
         static let model = "model"
         static let targetLanguage = "targetLanguage"
+        static let translationDirection = "translationDirection"
         static let ocrMode = "ocrMode"
         static let ocrLanguagePreset = "ocrLanguagePreset"
         static let enableStreamingTranslation = "enableStreamingTranslation"
         static let selectionHotKeyPreset = "selectionHotKeyPreset"
         static let ocrHotKeyPreset = "ocrHotKeyPreset"
+    }
+}
+
+enum TranslationDirection: String, CaseIterable, Identifiable {
+    case autoChineseEnglish
+    case fixedTarget
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .autoChineseEnglish:
+            return "中英互译"
+        case .fixedTarget:
+            return "固定目标语言"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .autoChineseEnglish:
+            return "中文自动翻成英文，其他语言自动翻成简体中文。"
+        case .fixedTarget:
+            return "始终翻译到下面填写的目标语言。"
+        }
     }
 }
 
@@ -208,7 +249,21 @@ struct SettingsView: View {
                         labeledField("API Key", text: $settingsStore.apiKey, secure: true)
                         labeledField("接口地址", text: $settingsStore.endpoint)
                         labeledField("模型", text: $settingsStore.model)
-                        labeledField("目标语言", text: $settingsStore.targetLanguage)
+
+                        Picker("翻译方向", selection: $settingsStore.translationDirection) {
+                            ForEach(TranslationDirection.allCases) { direction in
+                                Text(direction.title).tag(direction)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text(settingsStore.translationDirection.detail)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        if settingsStore.translationDirection == .fixedTarget {
+                            labeledField("目标语言", text: $settingsStore.targetLanguage)
+                        }
                         Toggle("流式显示译文", isOn: $settingsStore.enableStreamingTranslation)
                     }
 
