@@ -140,6 +140,7 @@ final class ScreenSelectionView: NSView {
     private var currentPoint: CGPoint?
     private var hoverPoint: CGPoint?
     private var isDragging = false
+    private let accentColor = NSColor.systemTeal
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -148,29 +149,19 @@ final class ScreenSelectionView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.black.withAlphaComponent(0.36).setFill()
-        bounds.fill()
+        drawBaseOverlay()
 
         guard let selectionRect else {
             drawCrosshair(at: hoverPoint)
-            drawHint()
+            drawIdleHint(at: hoverPoint)
             return
         }
 
-        NSColor.clear.setFill()
-        selectionRect.fill(using: .clear)
-
-        NSColor.systemTeal.setStroke()
-        let path = NSBezierPath(rect: selectionRect)
-        path.lineWidth = 2.5
-        path.stroke()
-
-        NSColor.systemTeal.withAlphaComponent(0.14).setFill()
-        selectionRect.fill()
-
-        drawRuleOfThirds(in: selectionRect)
+        drawSelectionHole(selectionRect)
+        drawSelectionBorder(selectionRect)
+        drawCornerGuides(in: selectionRect)
         drawHandles(in: selectionRect)
-        drawSelectionSize(selectionRect)
+        drawSelectionHUD(selectionRect)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -219,46 +210,59 @@ final class ScreenSelectionView: NSView {
         return CGRect(x: x, y: y, width: width, height: height)
     }
 
-    private func drawSelectionSize(_ rect: CGRect) {
+    private func drawBaseOverlay() {
+        NSColor.black.withAlphaComponent(0.24).setFill()
+        bounds.fill()
+    }
+
+    private func drawSelectionHole(_ rect: CGRect) {
+        NSColor.black.withAlphaComponent(0.28).setFill()
+        let overlay = NSBezierPath(rect: bounds)
+        overlay.append(NSBezierPath(rect: rect))
+        overlay.windingRule = .evenOdd
+        overlay.fill()
+
+        NSColor.white.withAlphaComponent(0.04).setFill()
+        rect.fill()
+    }
+
+    private func drawSelectionBorder(_ rect: CGRect) {
+        accentColor.setStroke()
+        let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
+        path.lineWidth = 2
+        path.stroke()
+
+        NSColor.white.withAlphaComponent(0.65).setStroke()
+        let innerRect = rect.insetBy(dx: 1.5, dy: 1.5)
+        guard innerRect.width > 0, innerRect.height > 0 else { return }
+        let innerPath = NSBezierPath(roundedRect: innerRect, xRadius: 3, yRadius: 3)
+        innerPath.lineWidth = 1
+        innerPath.stroke()
+    }
+
+    private func drawSelectionHUD(_ rect: CGRect) {
         let scale = window?.screen?.backingScaleFactor ?? 1
         let pixelWidth = Int(rect.width * scale)
         let pixelHeight = Int(rect.height * scale)
-        let text = isDragging
-            ? "\(pixelWidth) x \(pixelHeight) px  ·  松开开始 OCR"
-            : "\(pixelWidth) x \(pixelHeight) px"
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .medium),
-            .foregroundColor: NSColor.white,
-            .backgroundColor: NSColor.black.withAlphaComponent(0.72)
-        ]
-        let attributed = NSAttributedString(string: " \(text) ", attributes: attributes)
-        let size = attributed.size()
-        let x = min(max(rect.minX, bounds.minX + 12), bounds.maxX - size.width - 12)
-        let y = rect.minY - size.height - 8 > bounds.minY + 12
-            ? rect.minY - size.height - 8
-            : min(rect.maxY + 8, bounds.maxY - size.height - 12)
-        attributed.draw(at: NSPoint(x: x, y: y))
+        let title = isDragging ? "松开开始 OCR" : "OCR 选区"
+        let subtitle = "\(pixelWidth) x \(pixelHeight) px  ·  Esc 取消"
+        drawPill(title: title, subtitle: subtitle, near: rect)
     }
 
-    private func drawHint() {
-        let text = "拖拽框选要翻译的文字区域 · Esc 取消"
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 18, weight: .semibold),
-            .foregroundColor: NSColor.white,
-            .backgroundColor: NSColor.black.withAlphaComponent(0.62)
-        ]
-        let attributed = NSAttributedString(string: " \(text) ", attributes: attributes)
-        let size = attributed.size()
-        let point = NSPoint(
-            x: bounds.midX - size.width / 2,
-            y: bounds.midY - size.height / 2
+    private func drawIdleHint(at point: CGPoint?) {
+        let anchor = point ?? CGPoint(x: bounds.midX, y: bounds.midY)
+        let hintRect = CGRect(x: anchor.x - 132, y: anchor.y + 18, width: 264, height: 62)
+            .clamped(to: bounds.insetBy(dx: 16, dy: 16))
+        drawPill(
+            title: "框选文字区域",
+            subtitle: "拖拽选择 · Esc 取消",
+            in: hintRect
         )
-        attributed.draw(at: point)
     }
 
     private func drawCrosshair(at point: CGPoint?) {
         guard let point else { return }
-        NSColor.white.withAlphaComponent(0.45).setStroke()
+        NSColor.white.withAlphaComponent(0.36).setStroke()
         let path = NSBezierPath()
         path.lineWidth = 1
         path.move(to: NSPoint(x: bounds.minX, y: point.y))
@@ -266,37 +270,46 @@ final class ScreenSelectionView: NSView {
         path.move(to: NSPoint(x: point.x, y: bounds.minY))
         path.line(to: NSPoint(x: point.x, y: bounds.maxY))
         path.stroke()
+
+        accentColor.withAlphaComponent(0.92).setFill()
+        NSBezierPath(ovalIn: CGRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6)).fill()
     }
 
-    private func drawRuleOfThirds(in rect: CGRect) {
-        guard rect.width >= 120, rect.height >= 80 else { return }
-        NSColor.white.withAlphaComponent(0.24).setStroke()
+    private func drawCornerGuides(in rect: CGRect) {
+        guard rect.width >= 28, rect.height >= 28 else { return }
+        accentColor.setStroke()
         let path = NSBezierPath()
-        path.lineWidth = 1
-        for fraction in [1.0 / 3.0, 2.0 / 3.0] {
-            let x = rect.minX + rect.width * fraction
-            path.move(to: NSPoint(x: x, y: rect.minY))
-            path.line(to: NSPoint(x: x, y: rect.maxY))
+        path.lineWidth = 3
+        let length = min(CGFloat(26), min(rect.width, rect.height) / 3)
 
-            let y = rect.minY + rect.height * fraction
-            path.move(to: NSPoint(x: rect.minX, y: y))
-            path.line(to: NSPoint(x: rect.maxX, y: y))
-        }
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY + length))
+        path.line(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.line(to: CGPoint(x: rect.minX + length, y: rect.minY))
+
+        path.move(to: CGPoint(x: rect.maxX - length, y: rect.minY))
+        path.line(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.line(to: CGPoint(x: rect.maxX, y: rect.minY + length))
+
+        path.move(to: CGPoint(x: rect.maxX, y: rect.maxY - length))
+        path.line(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.line(to: CGPoint(x: rect.maxX - length, y: rect.maxY))
+
+        path.move(to: CGPoint(x: rect.minX + length, y: rect.maxY))
+        path.line(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.line(to: CGPoint(x: rect.minX, y: rect.maxY - length))
+
         path.stroke()
     }
 
     private func drawHandles(in rect: CGRect) {
-        NSColor.systemTeal.setFill()
-        let handleSize: CGFloat = 7
+        guard rect.width >= 48, rect.height >= 36 else { return }
+        accentColor.setFill()
+        let handleSize: CGFloat = 5
         let points = [
             CGPoint(x: rect.minX, y: rect.minY),
-            CGPoint(x: rect.midX, y: rect.minY),
             CGPoint(x: rect.maxX, y: rect.minY),
-            CGPoint(x: rect.maxX, y: rect.midY),
             CGPoint(x: rect.maxX, y: rect.maxY),
-            CGPoint(x: rect.midX, y: rect.maxY),
-            CGPoint(x: rect.minX, y: rect.maxY),
-            CGPoint(x: rect.minX, y: rect.midY)
+            CGPoint(x: rect.minX, y: rect.maxY)
         ]
 
         for point in points {
@@ -308,5 +321,65 @@ final class ScreenSelectionView: NSView {
             )
             NSBezierPath(roundedRect: handleRect, xRadius: 2, yRadius: 2).fill()
         }
+    }
+
+    private func drawPill(title: String, subtitle: String, near rect: CGRect) {
+        let width: CGFloat = 236
+        let height: CGFloat = 54
+        var origin = CGPoint(x: rect.minX, y: rect.minY - height - 10)
+        if origin.y < bounds.minY + 12 {
+            origin.y = rect.maxY + 10
+        }
+        if origin.y + height > bounds.maxY - 12 {
+            origin.y = bounds.maxY - height - 12
+        }
+        if origin.x + width > bounds.maxX - 12 {
+            origin.x = bounds.maxX - width - 12
+        }
+        if origin.x < bounds.minX + 12 {
+            origin.x = bounds.minX + 12
+        }
+        drawPill(title: title, subtitle: subtitle, in: CGRect(origin: origin, size: CGSize(width: width, height: height)))
+    }
+
+    private func drawPill(title: String, subtitle: String, in rect: CGRect) {
+        let path = NSBezierPath(roundedRect: rect, xRadius: 12, yRadius: 12)
+        NSColor.black.withAlphaComponent(0.74).setFill()
+        path.fill()
+        NSColor.white.withAlphaComponent(0.14).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+
+        let titleAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
+            .foregroundColor: NSColor.white
+        ]
+        let subtitleAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11, weight: .regular),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.72)
+        ]
+        NSAttributedString(string: title, attributes: titleAttributes)
+            .draw(at: CGPoint(x: rect.minX + 14, y: rect.minY + 28))
+        NSAttributedString(string: subtitle, attributes: subtitleAttributes)
+            .draw(at: CGPoint(x: rect.minX + 14, y: rect.minY + 11))
+    }
+}
+
+private extension CGRect {
+    func clamped(to bounds: CGRect) -> CGRect {
+        var rect = self
+        if rect.minX < bounds.minX {
+            rect.origin.x = bounds.minX
+        }
+        if rect.minY < bounds.minY {
+            rect.origin.y = bounds.minY
+        }
+        if rect.maxX > bounds.maxX {
+            rect.origin.x = bounds.maxX - rect.width
+        }
+        if rect.maxY > bounds.maxY {
+            rect.origin.y = bounds.maxY - rect.height
+        }
+        return rect
     }
 }
