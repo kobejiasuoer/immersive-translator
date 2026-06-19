@@ -47,6 +47,16 @@ struct TranslationWaitStatusText {
 
     static func preConnection(elapsed: TimeInterval, waitsForFirstToken: Bool) -> TranslationWaitStatusText {
         let elapsedText = formatSeconds(elapsed)
+        // 连接前长时间无响应（通常是代理/网络中断，或被服务商限流挂起）：升级为更明确的提示，
+        // 让用户知道可以取消重试，而不是一直干等通用文案。
+        if elapsed >= 8 {
+            return TranslationWaitStatusText(
+                translation: waitsForFirstToken
+                    ? "请求已发出 \(elapsedText)，仍没有连上翻译服务。这通常是代理/VPN 不稳定、网络中断，或服务商限流把请求挂起。可以点“取消”后重试；若是国内接口，建议在代理软件里把该域名设为直连。"
+                    : "请求已发出 \(elapsedText)，仍没有连上翻译服务。这通常是代理/VPN 不稳定、网络中断，或服务商限流把请求挂起。可以点“取消”后重试；若是国内接口，建议在代理软件里把该域名设为直连。",
+                message: "连接响应很慢 · 已等待 \(elapsedText)，建议取消重试"
+            )
+        }
         return TranslationWaitStatusText(
             translation: waitsForFirstToken
                 ? "请求已经发出 \(elapsedText)，正在连接翻译服务。若这里停留很久，通常是网络、代理、DNS 或服务商入口较慢。"
@@ -228,9 +238,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.startTranslation(record.original, source: .retry)
         }
     )
-    private lazy var onboardingController = OnboardingWindowController(settingsStore: settingsStore) { [weak self] in
-        self?.settingsController.show()
-    }
+    private lazy var onboardingController = OnboardingWindowController(
+        settingsStore: settingsStore,
+        onOpenSettings: { [weak self] in
+            self?.settingsController.show()
+        },
+        onStartOCR: { [weak self] in
+            self?.startScreenSelection()
+        }
+    )
     private var hotKeyManager: HotKeyManager?
     private var screenSelector: ScreenSelectionController?
     private var ocrSessionCounter = 0
@@ -930,7 +946,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func startScreenSelection() {
-        guard ensureConfigured() else { return }
         guard PermissionPrompter.requestScreenCaptureIfNeeded() else {
             panelController.show(
                 original: "需要屏幕录制权限",
@@ -973,30 +988,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func recognizeImageForPreview(_ image: CGImage, sessionID: Int) async {
         let startedAt = Date()
         let pixelSize = "\(image.width) x \(image.height) px"
+        let configuredMode = settingsStore.ocrMode
+        let configuredPreset = settingsStore.ocrLanguagePreset
+        let effectiveRecognitionMode = OCRReader.effectiveMode(configuredMode, preset: configuredPreset)
         panelController.show(
             original: "截图区域：\(pixelSize)",
             translation: "正在用本机 Vision 识别文字。截图不会发送给翻译接口。",
             isLoading: true,
             source: .screenshotOCR,
             status: .loading,
-            message: "OCR：\(settingsStore.ocrMode.title) · \(settingsStore.ocrLanguagePreset.title)"
+            message: "OCR：\(effectiveRecognitionMode.title) · \(configuredPreset.title)"
         )
         do {
-            let text = try await OCRReader.recognizeText(
+            let outcome = try await OCRReader.recognizeText(
                 in: image,
-                mode: settingsStore.ocrMode,
-                languagePreset: settingsStore.ocrLanguagePreset
+                mode: configuredMode,
+                languagePreset: configuredPreset
             )
             let elapsed = Date().timeIntervalSince(startedAt)
             guard isCurrentOCRSession(sessionID) else { return }
 
-            DiagnosticLogger.log("ocr.recognition.complete session=\(sessionID) mode=\(settingsStore.ocrMode.rawValue) languages=\(settingsStore.ocrLanguagePreset.rawValue) image=\(pixelSize) textLength=\(text.count)")
+            DiagnosticLogger.log("ocr.recognition.complete session=\(sessionID) configuredMode=\(configuredMode.rawValue) configuredLanguages=\(configuredPreset.rawValue) usedMode=\(outcome.usedMode.rawValue) usedLanguages=\(outcome.usedPreset.rawValue) modeDowngraded=\(outcome.modeDowngraded) usedFallbackPreset=\(outcome.usedFallbackPreset) image=\(pixelSize) textLength=\(outcome.text.count)")
             pendingOCRPreview = PendingOCRPreview(sessionID: sessionID, preflightElapsed: elapsed)
             panelController.showOCRPreview(
-                original: text,
+                original: outcome.text,
                 imageDescription: pixelSize,
                 elapsed: elapsed,
-                sessionID: sessionID
+                sessionID: sessionID,
+                outcome: outcome
             )
         } catch {
             guard isCurrentOCRSession(sessionID) else { return }
@@ -1028,6 +1047,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             return
         }
+        guard ensureConfigured() else { return }
 
         pendingOCRPreview = nil
         startTranslation(trimmedText, source: .screenshotOCR, preflightElapsed: preview.preflightElapsed)
@@ -1407,7 +1427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsController.show()
             panelController.show(
                 original: "还没有配置 API Key",
-                translation: "我已经打开设置窗口。填入 OpenAI 或兼容服务的 API Key 后，就可以开始翻译。",
+                translation: "当前是云接口，需要填写对应服务商的 API Key 后才能翻译。我已经打开设置窗口；如果只是想先试用，也可以在设置里自己填一个 OpenAI 兼容的接口地址和 Key（本地服务如 Ollama 也可填 http://localhost:11434/v1/chat/completions 直接试）。",
                 isLoading: false,
                 status: .warning,
                 message: "需要先配置翻译接口",

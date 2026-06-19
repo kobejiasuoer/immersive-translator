@@ -43,7 +43,7 @@ private struct ProviderPresetsCheck {
         var failures: [String] = []
         let presets = TranslationProviderPreset.all
 
-        expect(presets.count >= 14, "provider presets should cover at least the documented common providers", failures: &failures)
+        expect(presets.count == 3, "provider presets should only expose the three built-in cloud presets", failures: &failures)
         expect(Set(presets.map(\.id)).count == presets.count, "provider preset ids should be unique", failures: &failures)
         expect(Set(presets.map(\.title)).count == presets.count, "provider preset titles should be unique", failures: &failures)
 
@@ -52,28 +52,23 @@ private struct ProviderPresetsCheck {
         }
 
         expect(
+            presets.contains { $0.id == "deepseek-v4-flash" && $0.endpoint == "https://api.deepseek.com/chat/completions" && $0.model == "deepseek-v4-flash" },
+            "DeepSeek V4 Flash preset should remain available",
+            failures: &failures
+        )
+        expect(
             presets.contains { $0.id == "openai-gpt-5-4-mini" && $0.model == "gpt-5.4-mini" },
             "OpenAI daily-use preset should remain available",
             failures: &failures
         )
         expect(
-            presets.contains { $0.id == "openrouter-auto" && $0.model == "openrouter/auto" },
-            "OpenRouter auto-router preset should remain available",
+            presets.contains { $0.id == "zhipu-glm-5-2" && $0.endpoint == "https://open.bigmodel.cn/api/paas/v4/chat/completions" && $0.model == "glm-5.2" },
+            "Zhipu GLM-5.2 preset should remain available with the official Chat Completions endpoint",
             failures: &failures
         )
         expect(
-            presets.contains { $0.id == "ollama-llama3-2" && !$0.endpoint.hasPrefix("https://") },
-            "local Ollama preset should remain a local http endpoint",
-            failures: &failures
-        )
-        expect(
-            presets.contains { $0.id == "lmstudio-local" && $0.endpoint == "http://localhost:1234/v1/chat/completions" && $0.model == "model-identifier" },
-            "LM Studio local preset should remain available with the documented localhost:1234 endpoint",
-            failures: &failures
-        )
-        expect(
-            presets.contains { $0.id == "vllm-local" && $0.endpoint == "http://localhost:8000/v1/chat/completions" && $0.model == "served-model-name" },
-            "vLLM local preset should remain available with the documented localhost:8000 endpoint",
+            !presets.contains { $0.id == "ollama-llama3-2" || $0.id == "lmstudio-local" || $0.id == "vllm-local" },
+            "local provider presets should no longer be exposed as built-in cards",
             failures: &failures
         )
 

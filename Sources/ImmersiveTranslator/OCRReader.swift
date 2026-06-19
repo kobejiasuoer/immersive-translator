@@ -13,38 +13,174 @@ enum OCRError: LocalizedError {
     }
 }
 
+struct OCRRecognitionOutcome {
+    let text: String
+    let configuredMode: OCRRecognitionMode
+    let configuredPreset: OCRLanguagePreset
+    let usedMode: OCRRecognitionMode
+    let usedPreset: OCRLanguagePreset
+
+    var modeDowngraded: Bool {
+        configuredMode == .fast && usedMode == .accurate
+    }
+
+    var usedFallbackPreset: Bool {
+        usedPreset != configuredPreset
+    }
+
+    var hasFallback: Bool {
+        modeDowngraded || usedFallbackPreset
+    }
+}
+
 enum OCRReader {
     static func recognizeText(
         in image: CGImage,
         mode: OCRRecognitionMode = .accurate,
         languagePreset: OCRLanguagePreset = .autoMixed
-    ) async throws -> String {
+    ) async throws -> OCRRecognitionOutcome {
         try await Task.detached(priority: .userInitiated) {
             let preparedImage = prepareImageForRecognition(image)
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = mode == .accurate ? .accurate : .fast
-            request.usesLanguageCorrection = mode == .accurate
-            request.recognitionLanguages = languagePreset.recognitionLanguages
-            request.minimumTextHeight = minimumTextHeight(for: preparedImage)
+            var lastError: Error?
+            var completedAttempt = false
 
-            let handler = VNImageRequestHandler(cgImage: preparedImage)
-            try handler.perform([request])
+            let attempts = makeRecognitionAttempts(mode: mode, languagePreset: languagePreset)
+            var usedAttempt = attempts.first
+                ?? OCRRecognitionAttempt(mode: mode, languagePreset: languagePreset)
+            var producedText = ""
 
-            guard let observations = request.results, !observations.isEmpty else {
-                return ""
+            for attempt in attempts {
+                do {
+                    let text = try performRecognition(in: preparedImage, attempt: attempt)
+                    completedAttempt = true
+                    if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        usedAttempt = attempt
+                        producedText = text
+                        break
+                    }
+                } catch {
+                    lastError = error
+                }
             }
 
-            let lines = observations
-                .compactMap { observation -> OCRLine? in
-                    guard let text = observation.topCandidates(1).first?.string else { return nil }
-                    let cleaned = cleanup(text)
-                    guard !cleaned.isEmpty else { return nil }
-                    return OCRLine(rect: observation.boundingBox, text: cleaned)
-                }
+            if producedText.isEmpty, !completedAttempt, let lastError {
+                throw lastError
+            }
 
-            return mergeLines(lines)
+            return OCRRecognitionOutcome(
+                text: producedText,
+                configuredMode: mode,
+                configuredPreset: languagePreset,
+                usedMode: usedAttempt.mode,
+                usedPreset: usedAttempt.languagePreset
+            )
         }.value
     }
+
+    static func effectiveMode(_ mode: OCRRecognitionMode, preset: OCRLanguagePreset) -> OCRRecognitionMode {
+        effectiveRecognitionMode(mode, for: preset)
+    }
+}
+
+private struct OCRRecognitionAttempt: Equatable {
+    let mode: OCRRecognitionMode
+    let languagePreset: OCRLanguagePreset
+}
+
+private func makeRecognitionAttempts(
+    mode: OCRRecognitionMode,
+    languagePreset: OCRLanguagePreset
+) -> [OCRRecognitionAttempt] {
+    var attempts: [OCRRecognitionAttempt] = []
+
+    let primaryMode = effectiveRecognitionMode(mode, for: languagePreset)
+    appendRecognitionAttempt(mode: primaryMode, languagePreset: languagePreset, to: &attempts)
+
+    for fallbackPreset in languagePreset.fallbackPresets {
+        appendRecognitionAttempt(mode: .accurate, languagePreset: fallbackPreset, to: &attempts)
+    }
+
+    return attempts
+}
+
+private func appendRecognitionAttempt(
+    mode: OCRRecognitionMode,
+    languagePreset: OCRLanguagePreset,
+    to attempts: inout [OCRRecognitionAttempt]
+) {
+    let attempt = OCRRecognitionAttempt(mode: mode, languagePreset: languagePreset)
+    guard !attempts.contains(attempt) else { return }
+    attempts.append(attempt)
+}
+
+private func effectiveRecognitionMode(_ mode: OCRRecognitionMode, for languagePreset: OCRLanguagePreset) -> OCRRecognitionMode {
+    guard mode == .fast else { return mode }
+    return supportsAllRecognitionLanguages(languagePreset.recognitionLanguages, mode: .fast) ? .fast : .accurate
+}
+
+private func performRecognition(in image: CGImage, attempt: OCRRecognitionAttempt) throws -> String {
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = recognitionLevel(for: attempt.mode)
+    request.usesLanguageCorrection = attempt.mode == .accurate
+
+    let languages = supportedRecognitionLanguages(
+        from: attempt.languagePreset.recognitionLanguages,
+        level: request.recognitionLevel
+    )
+    guard !languages.isEmpty else {
+        return ""
+    }
+
+    request.recognitionLanguages = languages
+    request.minimumTextHeight = minimumTextHeight(for: image)
+
+    let handler = VNImageRequestHandler(cgImage: image)
+    try handler.perform([request])
+
+    guard let observations = request.results, !observations.isEmpty else {
+        return ""
+    }
+
+    let lines = observations
+        .compactMap { observation -> OCRLine? in
+            guard let text = observation.topCandidates(1).first?.string else { return nil }
+            let cleaned = cleanup(text)
+            guard !cleaned.isEmpty else { return nil }
+            return OCRLine(rect: observation.boundingBox, text: cleaned)
+        }
+
+    return mergeLines(lines)
+}
+
+private func recognitionLevel(for mode: OCRRecognitionMode) -> VNRequestTextRecognitionLevel {
+    mode == .accurate ? .accurate : .fast
+}
+
+private func supportsAllRecognitionLanguages(_ languages: [String], mode: OCRRecognitionMode) -> Bool {
+    let level = recognitionLevel(for: mode)
+    guard let supported = supportedRecognitionLanguageSet(level: level) else {
+        return true
+    }
+    return languages.allSatisfy(supported.contains)
+}
+
+private func supportedRecognitionLanguages(
+    from languages: [String],
+    level: VNRequestTextRecognitionLevel
+) -> [String] {
+    guard let supported = supportedRecognitionLanguageSet(level: level) else {
+        return languages
+    }
+    return languages.filter(supported.contains)
+}
+
+private func supportedRecognitionLanguageSet(level: VNRequestTextRecognitionLevel) -> Set<String>? {
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = level
+    guard let languages = try? request.supportedRecognitionLanguages() else {
+        return nil
+    }
+    return Set(languages)
 }
 
 private struct OCRLine {

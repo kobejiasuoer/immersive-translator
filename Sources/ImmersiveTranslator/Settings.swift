@@ -246,6 +246,17 @@ enum OCRLanguagePreset: String, CaseIterable, Identifiable {
             return ["ko-KR", "en-US"]
         }
     }
+
+    var fallbackPresets: [OCRLanguagePreset] {
+        switch self {
+        case .autoMixed:
+            return []
+        case .japanese:
+            return [.autoMixed]
+        default:
+            return [.autoMixed, .japanese]
+        }
+    }
 }
 
 struct TranslationProviderPreset: Identifiable {
@@ -258,6 +269,14 @@ struct TranslationProviderPreset: Identifiable {
 
     static let all: [TranslationProviderPreset] = [
         TranslationProviderPreset(
+            id: "deepseek-v4-flash",
+            title: "DeepSeek · V4 Flash",
+            endpoint: "https://api.deepseek.com/chat/completions",
+            model: "deepseek-v4-flash",
+            detail: "偏低延迟和性价比，适合高频短句翻译。",
+            latencyHint: "慢请求通常和服务端排队或跨境网络有关，可稍后重试或换其它接口。"
+        ),
+        TranslationProviderPreset(
             id: "openai-gpt-5-4-mini",
             title: "OpenAI · GPT-5.4 Mini",
             endpoint: "https://api.openai.com/v1/chat/completions",
@@ -266,108 +285,12 @@ struct TranslationProviderPreset: Identifiable {
             latencyHint: "如果首字等待明显变长，优先检查网络到 api.openai.com 的连通性。"
         ),
         TranslationProviderPreset(
-            id: "deepseek-v4-flash",
-            title: "DeepSeek · V4 Flash",
-            endpoint: "https://api.deepseek.com/chat/completions",
-            model: "deepseek-v4-flash",
-            detail: "偏低延迟和性价比，适合高频短句翻译。",
-            latencyHint: "慢请求通常和服务端排队或跨境网络有关，可切到 Pro 或稍后重试。"
-        ),
-        TranslationProviderPreset(
-            id: "deepseek-v4-pro",
-            title: "DeepSeek · V4 Pro",
-            endpoint: "https://api.deepseek.com/chat/completions",
-            model: "deepseek-v4-pro",
-            detail: "更重质量，适合长段落、术语多或需要更自然表达的翻译。",
-            latencyHint: "质量优先时等待会更长；若首字偏慢，多半是模型排队，可切到 Flash 或开启流式显示。"
-        ),
-        TranslationProviderPreset(
-            id: "zhipu-glm-flash",
-            title: "智谱 · GLM-4 Flash",
+            id: "zhipu-glm-5-2",
+            title: "智谱 · GLM-5.2",
             endpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-            model: "glm-4-flash-250414",
-            detail: "国内访问友好，适合中文场景和多语言混排文本。",
-            latencyHint: "如果报 401/403，多半是 API Key 或开放平台权限；如果报 404，先核对模型名。"
-        ),
-        TranslationProviderPreset(
-            id: "gemini-2-5-flash",
-            title: "Google · Gemini 2.5 Flash",
-            endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-            model: "gemini-2.5-flash",
-            detail: "通过 Gemini OpenAI 兼容接口调用，适合轻量日常翻译和多语言 OCR 文本。",
-            latencyHint: "若 401/403，检查 Gemini API Key；若返回格式异常，先关闭复杂提示词后再验证。"
-        ),
-        TranslationProviderPreset(
-            id: "openrouter-auto",
-            title: "OpenRouter · Auto Router",
-            endpoint: "https://openrouter.ai/api/v1/chat/completions",
-            model: "openrouter/auto",
-            detail: "统一路由多家模型，适合想少折腾模型名、优先可用性的日常翻译。",
-            latencyHint: "如果首字变慢，通常是上游模型路由或供应商排队；可换成固定模型名再验证。"
-        ),
-        TranslationProviderPreset(
-            id: "siliconflow-glm-4-7",
-            title: "SiliconFlow · GLM-4.7",
-            endpoint: "https://api.siliconflow.cn/v1/chat/completions",
-            model: "Pro/zai-org/GLM-4.7",
-            detail: "硅基流动 OpenAI 兼容接口，适合中文场景、国内网络和多模型余额统一管理。",
-            latencyHint: "如果模型不可用或 403，先确认账号已开通该模型；慢请求通常和模型排队有关。"
-        ),
-        TranslationProviderPreset(
-            id: "dashscope-qwen-plus",
-            title: "阿里云百炼 · Qwen Plus",
-            endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-            model: "qwen-plus",
-            detail: "阿里云百炼 OpenAI 兼容接口，适合中文内容、产品文案和稳定日常翻译。",
-            latencyHint: "若 401/403，检查 DashScope API Key、服务开通和地域权限；若 404，核对模型名。"
-        ),
-        TranslationProviderPreset(
-            id: "groq-llama-3-3-70b",
-            title: "Groq · Llama 3.3 70B",
-            endpoint: "https://api.groq.com/openai/v1/chat/completions",
-            model: "llama-3.3-70b-versatile",
-            detail: "Groq 高速推理预设，适合英文内容、短句和需要低首字延迟的轻量翻译。",
-            latencyHint: "如果 429，通常是开发者计划 RPM/TPM 或并发限制；降低频率后再验证。"
-        ),
-        TranslationProviderPreset(
-            id: "xai-grok-4-3",
-            title: "xAI · Grok 4.3",
-            endpoint: "https://api.x.ai/v1/chat/completions",
-            model: "grok-4.3",
-            detail: "xAI Chat Completions 预设，适合英文内容和长句润色型翻译。",
-            latencyHint: "若 401/403，检查 xAI API Key 和模型权限；若首字偏慢，先确认模型可用性或切换低延迟预设。"
-        ),
-        TranslationProviderPreset(
-            id: "moonshot-kimi-k2",
-            title: "Moonshot · Kimi K2",
-            endpoint: "https://api.moonshot.cn/v1/chat/completions",
-            model: "kimi-k2",
-            detail: "Kimi / Moonshot OpenAI 兼容接口，适合中文长上下文和术语较多的内容。",
-            latencyHint: "如果 404 或模型不可用，先在 Kimi 控制台确认当前 Key 可调用的模型列表。"
-        ),
-        TranslationProviderPreset(
-            id: "ollama-llama3-2",
-            title: "本地 · Ollama Llama 3.2",
-            endpoint: "http://localhost:11434/v1/chat/completions",
-            model: "llama3.2",
-            detail: "本地 OpenAI 兼容接口，不需要真实 API Key，适合离线测试和本机模型调试。",
-            latencyHint: "首次使用前先运行 ollama pull llama3.2；慢请求通常是本机模型加载或机器性能瓶颈。"
-        ),
-        TranslationProviderPreset(
-            id: "lmstudio-local",
-            title: "本地 · LM Studio",
-            endpoint: "http://localhost:1234/v1/chat/completions",
-            model: "model-identifier",
-            detail: "LM Studio 本地 OpenAI 兼容接口，不需要真实 API Key；适合已经在 Developer 里启动本地服务器的模型。",
-            latencyHint: "先在 LM Studio Developer 里 Start Server 并加载模型，再把模型名替换为已加载模型的 identifier；慢请求通常是模型加载或本机性能瓶颈。"
-        ),
-        TranslationProviderPreset(
-            id: "vllm-local",
-            title: "本地 · vLLM",
-            endpoint: "http://localhost:8000/v1/chat/completions",
-            model: "served-model-name",
-            detail: "vLLM 本地 OpenAI 兼容接口，不需要真实 API Key；适合用 `vllm serve` 启动的本机或局域网模型服务。",
-            latencyHint: "先运行 `vllm serve <模型名>` 并确认 `/v1/models` 可访问，再把模型名替换为服务返回的模型 ID；慢请求通常是模型加载、显存/内存压力或批处理排队。"
+            model: "glm-5.2",
+            detail: "智谱新一代 GLM 文本模型，适合中文长句、多语言混排和质量优先的翻译。",
+            latencyHint: "GLM 5.2 默认可能有思考过程；本应用会为短翻译请求关闭 thinking，若 404 先确认模型权限和模型名。"
         )
     ]
 }
@@ -825,9 +748,10 @@ struct SettingsView: View {
                     }
 
                     settingsSection("翻译服务") {
-                        labeledField("API Key", text: $settingsStore.apiKey, secure: true)
+                        providerOnboardingGuide
                         labeledField("接口地址", text: $settingsStore.endpoint)
                         labeledField("模型", text: $settingsStore.model)
+                        labeledField(apiKeyFieldTitle, text: $settingsStore.apiKey, secure: true)
                         providerConfigurationSummary
 
                         Picker("翻译方向", selection: $settingsStore.translationDirection) {
@@ -888,7 +812,7 @@ struct SettingsView: View {
                         }
                         .pickerStyle(.segmented)
 
-                        Text("语言越少通常越快、误识别越少；混合适合临时看不准语言的截图。")
+                        Text("日文截图建议选“日文”或“混合”；快速模式遇到日文/中文/韩文会自动用准确模式识别。")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -1069,6 +993,63 @@ struct SettingsView: View {
         }
     }
 
+    private var providerOnboardingGuide: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: providerRequiresAPIKey ? "cloud" : "desktopcomputer")
+                    .foregroundStyle(providerRequiresAPIKey ? .blue : .green)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("先选接口类型，不必一上来就找 Key")
+                        .font(.subheadline.weight(.semibold))
+                    Text("内置三个云预设（DeepSeek、OpenAI、智谱），需要对应服务商的 API Key。想接其它服务商或本地 OpenAI 兼容服务，直接在下面填写接口地址和 Key 即可，本地兼容接口可不填真实 Key。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(providerOnboardingStatusText)
+                        .font(.footnote)
+                        .foregroundStyle(providerOnboardingStatusColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(providerOnboardingStatusColor.opacity(0.25), lineWidth: 1)
+        )
+    }
+
+    private var apiKeyFieldTitle: String {
+        providerRequiresAPIKey ? "API Key（云接口需要）" : "API Key（本地接口可留空）"
+    }
+
+    private var providerOnboardingStatusText: String {
+        let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        if endpoint.isEmpty {
+            return "接口地址还没填：选一个内置云预设，或自己填写其它服务商 / 本地 OpenAI 兼容地址，再决定要不要填 API Key。"
+        }
+        if !providerRequiresAPIKey {
+            return "当前是本地接口：确认本地服务已启动并加载模型后，可以直接测试当前接口或验证短翻译。"
+        }
+        if settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "当前是云接口且还没有 API Key：可以先测试入口连通性；真实翻译前需要填 Key。"
+        }
+        return "当前云接口已填写 API Key：建议先验证一次短翻译，确认模型、余额和权限都可用。"
+    }
+
+    private var providerOnboardingStatusColor: Color {
+        let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        if endpoint.isEmpty {
+            return .blue
+        }
+        if !providerRequiresAPIKey {
+            return .green
+        }
+        return settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .blue : .green
+    }
+
     private func labeledField(_ title: String, text: Binding<String>, secure: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
@@ -1134,6 +1115,10 @@ struct SettingsView: View {
         }
         if let url = providerEffectiveURL, !TranslationClient.requiresAPIKey(for: url) {
             return "当前是本地 OpenAI 兼容接口：可以不填真实 API Key；若请求慢，优先检查本机模型是否已拉取、是否正在加载。"
+        }
+        if providerRequiresAPIKey,
+           settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "当前是云接口：连通性测试可以先跑，真实翻译需要 API Key；如果只是先试用，也可自己填一个本地 OpenAI 兼容地址（如 http://localhost:11434/v1/chat/completions）直接试。"
         }
         if model.isEmpty {
             return "模型为空时会回退到默认模型；建议明确填写服务商支持的模型名，排查 404 会更轻松。"
@@ -1323,6 +1308,13 @@ struct SettingsView: View {
             return true
         }
         return TranslationClient.requiresAPIKey(for: providerEffectiveURL)
+    }
+
+    private var isZhipuProviderEndpoint: Bool {
+        guard let host = providerEffectiveURL?.host()?.lowercased() else {
+            return false
+        }
+        return host.contains("bigmodel.cn") || host.contains("z.ai")
     }
 
     private var isLocalProviderEndpoint: Bool {
@@ -1522,6 +1514,9 @@ struct SettingsView: View {
             if settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return "先选择一个 Provider 预设，或填写完整 Chat Completions 接口地址。"
             }
+            if !providerRequiresAPIKey {
+                return "本地接口不需要真实 API Key；先确认本地服务已启动，然后测试当前接口或验证短翻译。"
+            }
             if providerTranslationVerificationDisabled {
                 return "先测试当前接口；补齐 API Key 后再验证真实翻译请求。"
             }
@@ -1559,6 +1554,9 @@ struct SettingsView: View {
             statusCode: providerDiagnostic.statusCode,
             message: providerDiagnostic.message
         ) {
+            if let nextStep = zhipuProviderDiagnosticNextStep(for: issue) {
+                return nextStep
+            }
             return issue.diagnosticNextStep
         }
 
@@ -1588,6 +1586,9 @@ struct SettingsView: View {
             statusCode: providerDiagnostic.statusCode,
             message: providerDiagnostic.message
         ) {
+            if let nextStep = zhipuProviderDiagnosticNextStep(for: issue) {
+                return nextStep
+            }
             return issue.diagnosticNextStep
         }
 
@@ -1613,6 +1614,28 @@ struct SettingsView: View {
                 return "先修正上面的配置提示，再重新测试当前接口。"
             }
             return "检查网络、代理、防火墙和接口地址；如果是本地接口，确认服务已启动且端口正确。"
+        }
+    }
+
+    private func zhipuProviderDiagnosticNextStep(for issue: TranslationErrorIssue) -> String? {
+        guard isZhipuProviderEndpoint else { return nil }
+        let model = currentProviderDiagnosticModel
+
+        switch issue {
+        case .apiKey:
+            return "这是智谱接口：重新复制智谱开放平台 API Key，确认没有混用 Coding 专属 Key、其它服务商 Key 或旧项目 Key。"
+        case .modelName, .permission:
+            return "这是智谱接口：到智谱开放平台确认当前账号已开通 `\(model)`，并核对模型名是否和控制台可用模型列表一致。"
+        case .endpoint, .gatewayHTML:
+            return "这是智谱接口：通用翻译应使用 `https://open.bigmodel.cn/api/paas/v4/chat/completions`，不要填成控制台页面、Coding 专属端点或只到 `/api/paas/v4` 的根路径。"
+        case .requestParameter, .streamCompatibility:
+            return "这是智谱接口：优先重新选择智谱预设，让 App 自动关闭 thinking 并带上 GLM 兼容参数；仍失败时可先关闭流式显示再验证。"
+        case .billing, .rateLimit:
+            return "这是智谱接口：到智谱开放平台检查余额、套餐额度、RPM/TPM 和并发限制，稍后再验证短翻译。"
+        case .timeout, .serviceUnavailable:
+            return "这是智谱接口：先检查到 open.bigmodel.cn 的网络和代理；若入口正常但短翻译偏慢，可开启流式显示或临时切到 GLM-4 Flash。"
+        default:
+            return nil
         }
     }
 
@@ -2796,8 +2819,11 @@ struct SettingsView: View {
     }
 
     private func providerPresetNextStep(requiresAPIKey: Bool, hasAPIKey: Bool) -> String {
+        if !requiresAPIKey {
+            return "下一步：先确认本地服务已启动，然后测试当前接口；不需要真实 API Key。"
+        }
         if requiresAPIKey, !hasAPIKey {
-            return "下一步：先填写这个服务商的 API Key；也可以先测试当前接口确认网络入口是否可达。"
+            return "下一步：云接口需要这个服务商的 API Key；也可以先测试当前接口确认网络入口，或切到本地预设直接试。"
         }
         return "下一步：先测试当前接口确认网络，再验证翻译请求确认模型、余额和权限。"
     }

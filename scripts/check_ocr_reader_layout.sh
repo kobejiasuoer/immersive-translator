@@ -14,7 +14,60 @@ trap cleanup EXIT
 
 {
     printf 'import CoreGraphics\nimport Foundation\nimport Darwin\n\n'
+    cat <<'SWIFT'
+enum OCRRecognitionMode: String, CaseIterable, Identifiable {
+    case accurate
+    case fast
+
+    var id: String { rawValue }
+}
+
+enum OCRLanguagePreset: String, CaseIterable, Identifiable {
+    case autoMixed
+    case chineseEnglish
+    case english
+    case japanese
+    case korean
+
+    var id: String { rawValue }
+
+    var recognitionLanguages: [String] {
+        switch self {
+        case .autoMixed:
+            return ["en-US", "zh-Hans", "zh-Hant", "ja-JP", "ko-KR"]
+        case .chineseEnglish:
+            return ["zh-Hans", "zh-Hant", "en-US"]
+        case .english:
+            return ["en-US"]
+        case .japanese:
+            return ["ja-JP", "en-US"]
+        case .korean:
+            return ["ko-KR", "en-US"]
+        }
+    }
+
+    var fallbackPresets: [OCRLanguagePreset] {
+        switch self {
+        case .autoMixed:
+            return []
+        case .japanese:
+            return [.autoMixed]
+        default:
+            return [.autoMixed, .japanese]
+        }
+    }
+}
+
+private let fastRecognitionLanguageFixture = Set(["de-DE", "en-US", "es-ES", "fr-FR", "it-IT", "pt-BR"])
+
+private func supportsAllRecognitionLanguages(_ languages: [String], mode: OCRRecognitionMode) -> Bool {
+    guard mode == .fast else { return true }
+    return languages.allSatisfy(fastRecognitionLanguageFixture.contains)
+}
+SWIFT
     awk '
+        /^private struct OCRRecognitionAttempt/ { printing = 1 }
+        /^private func performRecognition/ { printing = 0 }
         /^private struct OCRLine / { printing = 1 }
         printing { print }
     ' "$SOURCE_PATH"
@@ -206,6 +259,53 @@ private struct OCRReaderLayoutCheck {
         ]
 
         var failures: [String] = []
+        let attemptCases: [(String, OCRRecognitionMode, OCRLanguagePreset, [OCRRecognitionAttempt])] = [
+            (
+                "fast Japanese falls back to accurate Japanese and mixed",
+                .fast,
+                .japanese,
+                [
+                    OCRRecognitionAttempt(mode: .accurate, languagePreset: .japanese),
+                    OCRRecognitionAttempt(mode: .accurate, languagePreset: .autoMixed)
+                ]
+            ),
+            (
+                "Chinese English preset can retry mixed then Japanese",
+                .accurate,
+                .chineseEnglish,
+                [
+                    OCRRecognitionAttempt(mode: .accurate, languagePreset: .chineseEnglish),
+                    OCRRecognitionAttempt(mode: .accurate, languagePreset: .autoMixed),
+                    OCRRecognitionAttempt(mode: .accurate, languagePreset: .japanese)
+                ]
+            ),
+            (
+                "English fast stays fast before mixed fallback",
+                .fast,
+                .english,
+                [
+                    OCRRecognitionAttempt(mode: .fast, languagePreset: .english),
+                    OCRRecognitionAttempt(mode: .accurate, languagePreset: .autoMixed),
+                    OCRRecognitionAttempt(mode: .accurate, languagePreset: .japanese)
+                ]
+            )
+        ]
+
+        for attemptCase in attemptCases {
+            let actual = makeRecognitionAttempts(mode: attemptCase.1, languagePreset: attemptCase.2)
+            if actual != attemptCase.3 {
+                failures.append(
+                    """
+                    \(attemptCase.0)
+                    expected attempts:
+                    \(attemptCase.3)
+                    actual attempts:
+                    \(actual)
+                    """
+                )
+            }
+        }
+
         for testCase in cases {
             let actual = mergeLines(testCase.lines)
             if actual != testCase.expected {

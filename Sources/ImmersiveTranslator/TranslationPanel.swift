@@ -136,6 +136,7 @@ final class TranslationPanelController {
         model.mode = .translation
         model.original = original
         model.ocrInitialOriginal = ""
+        model.ocrRecognitionFallbackHint = nil
         model.translation = translation
         model.isLoading = isLoading
         model.sourceLabel = source?.displayName ?? "系统提示"
@@ -192,7 +193,8 @@ final class TranslationPanelController {
         original: String,
         imageDescription: String,
         elapsed: TimeInterval,
-        sessionID: Int
+        sessionID: Int,
+        outcome: OCRRecognitionOutcome
     ) {
         let panel = panel ?? makePanel()
         self.panel = panel
@@ -205,11 +207,12 @@ final class TranslationPanelController {
         model.translation = ""
         model.isLoading = false
         model.sourceLabel = TranslationSource.screenshotOCR.displayName
-        model.modelLabel = "\(settingsStore.ocrMode.title) · \(settingsStore.ocrLanguagePreset.title) · \(imageDescription)"
+        model.modelLabel = "\(outcome.usedMode.title) · \(outcome.usedPreset.title) · \(imageDescription)"
+        model.ocrRecognitionFallbackHint = OCRRecognitionFallbackHint.make(from: outcome)
         model.targetLanguage = settingsStore.displayTargetLanguage
         model.status = trimmedOriginal.isEmpty ? .warning : .ocrPreview
         model.statusMessage = trimmedOriginal.isEmpty
-            ? "没有识别到可用文字。可以输入/粘贴、重新框选，或打开 OCR 设置调整识别语言和模式。"
+            ? "没有识别到可用文字。可以输入/粘贴、重新框选，或打开 OCR 设置调整识别语言和模式；日文请选“日文”或“混合”。"
             : "请确认识别文本，必要时可直接修正。"
         model.isFavorite = false
         model.isTranslationOutput = false
@@ -300,6 +303,7 @@ final class TranslationPanelController {
     private func makeRootView() -> TranslationPanelView {
         TranslationPanelView(
             model: model,
+            settingsStore: settingsStore,
             onRetry: { [weak self] in
                 guard let self else { return }
                 self.autoHideTask?.cancel()
@@ -466,6 +470,7 @@ final class TranslationPanelModel: ObservableObject {
     @Published var statusMessage = "我正在处理这段内容。"
     @Published var sourceLabel = "选中文本"
     @Published var modelLabel = ""
+    @Published var ocrRecognitionFallbackHint: OCRRecognitionFallbackHint?
     @Published var targetLanguage = ""
     @Published var elapsedText = ""
     @Published var showOriginal = false
@@ -479,6 +484,7 @@ final class TranslationPanelModel: ObservableObject {
 
 struct TranslationPanelView: View {
     @ObservedObject var model: TranslationPanelModel
+    @ObservedObject var settingsStore: SettingsStore
     let onRetry: () -> Void
     let onPinChanged: () -> Void
     let onAutoHideChanged: () -> Void
@@ -694,6 +700,14 @@ struct TranslationPanelView: View {
                     .foregroundStyle(.secondary)
             }
             .font(.caption)
+
+            if let fallbackHint = model.ocrRecognitionFallbackHint {
+                hintLine(
+                    systemName: fallbackHint.systemImage,
+                    text: fallbackHint.text,
+                    color: fallbackHint.color
+                )
+            }
 
             hintLine(
                 systemName: "keyboard",
@@ -952,10 +966,31 @@ struct TranslationPanelView: View {
     }
 
     private var ocrHintText: String {
+        if let configurationIssue = ocrTranslationConfigurationIssue {
+            return "截图只用于本机 OCR；\(configurationIssue)"
+        }
         if model.originalTrimmed.isEmpty {
             return "截图只用于本机 OCR；只有你输入或粘贴并确认后的文本才会发送给翻译接口。"
         }
         return "截图只用于本机 OCR；确认后才会把上面的文本发送给翻译接口。更多快捷键可以看下方按钮提示。"
+    }
+
+    private var ocrTranslationConfigurationIssue: String? {
+        let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !endpoint.isEmpty else {
+            return "OCR 已经可用；请先在设置里选择本地接口，或填写云接口地址和 API Key 后再翻译。"
+        }
+
+        guard let url = TranslationClient.chatCompletionsURL(from: endpoint) else {
+            return "OCR 已经可用；接口地址需要修正后才能翻译。"
+        }
+
+        if TranslationClient.requiresAPIKey(for: url),
+           settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "OCR 已经可用；当前云接口需要 API Key，也可以在设置里自己填一个 OpenAI 兼容接口地址和 Key 后再翻译。"
+        }
+
+        return nil
     }
 
     private func confirmOCRPreviewIfPossible() {
@@ -964,6 +999,25 @@ struct TranslationPanelView: View {
             model.notice = "先输入原文，或按 ⌘⌥V 粘贴替换后再翻译"
             model.ocrFocusToken += 1
             return
+        }
+        confirmOCRTextOrOpenTranslationSettings(text)
+    }
+
+    private func confirmOCRTextOrOpenTranslationSettings(
+        _ text: String,
+        readyNotice: String? = nil,
+        blockedNotice: String? = nil
+    ) {
+        if let configurationIssue = ocrTranslationConfigurationIssue {
+            model.notice = [blockedNotice, configurationIssue]
+                .compactMap { $0 }
+                .joined(separator: "；")
+            onOpenSettings()
+            return
+        }
+
+        if let readyNotice {
+            model.notice = readyNotice
         }
         onOCRConfirm(text)
     }
@@ -1027,9 +1081,12 @@ struct TranslationPanelView: View {
         if polished != source {
             model.original = polished
             model.ocrFocusToken += 1
-            model.notice = noticeWithOCRChange("已整理，正在翻译")
         }
-        onOCRConfirm(polished)
+        confirmOCRTextOrOpenTranslationSettings(
+            polished,
+            readyNotice: polished == source ? nil : noticeWithOCRChange("已整理，正在翻译"),
+            blockedNotice: polished == source ? nil : noticeWithOCRChange("已整理")
+        )
     }
 
     private func copyPolishedOCRPreviewParagraphs() {
@@ -1072,8 +1129,11 @@ struct TranslationPanelView: View {
 
         model.original = text
         model.ocrFocusToken += 1
-        model.notice = noticeWithOCRChange("已粘贴，正在翻译")
-        onOCRConfirm(text)
+        confirmOCRTextOrOpenTranslationSettings(
+            text,
+            readyNotice: noticeWithOCRChange("已粘贴，正在翻译"),
+            blockedNotice: noticeWithOCRChange("已粘贴")
+        )
     }
 
     private func restoreOCRPreviewOriginal() {
@@ -1205,6 +1265,42 @@ private extension TranslationPanelModel {
     }
 }
 
+struct OCRRecognitionFallbackHint {
+    let systemImage: String
+    let text: String
+    let color: Color
+
+    static func make(from outcome: OCRRecognitionOutcome) -> OCRRecognitionFallbackHint? {
+        guard outcome.hasFallback else { return nil }
+
+        let configuredMode = outcome.configuredMode.title
+        let configuredPreset = outcome.configuredPreset.title
+        let usedPreset = outcome.usedPreset.title
+
+        if outcome.modeDowngraded && outcome.usedFallbackPreset {
+            return OCRRecognitionFallbackHint(
+                systemImage: "arrow.triangle.swap",
+                text: "你选了\(configuredMode)模式 + “\(configuredPreset)”，但该语言在\(configuredMode)模式不可用，且\(configuredPreset)下没识别到文字，已自动用准确模式并回退到“\(usedPreset)”重新识别，可能稍慢。",
+                color: .orange
+            )
+        }
+
+        if outcome.modeDowngraded {
+            return OCRRecognitionFallbackHint(
+                systemImage: "speedometer",
+                text: "你选了\(configuredMode)模式，但“\(configuredPreset)”在\(configuredMode)模式下不可用，已自动改用准确模式识别，可能稍慢。",
+                color: .orange
+            )
+        }
+
+        return OCRRecognitionFallbackHint(
+            systemImage: "arrow.triangle.2.circlepath",
+            text: "本次在“\(configuredPreset)”下没识别到文字，已自动回退到“\(usedPreset)”重新识别。",
+            color: .orange
+        )
+    }
+}
+
 private struct OCRPreviewChangeHint {
     let systemImage: String
     let text: String
@@ -1267,7 +1363,7 @@ private struct OCRPreviewQualityHint {
         if stats.characterCount == 0 {
             return OCRPreviewQualityHint(
                 systemImage: "wand.and.rays",
-                text: "可以直接输入原文，或按 ⌘⌥V 用剪贴板替换；如果是误框选，按 Esc/⌘R 重新框选；如果经常识别不到，按 ⌘, 打开 OCR 设置调整识别语言或模式。",
+                text: "可以直接输入原文，或按 ⌘⌥V 用剪贴板替换；如果是日文，按 ⌘, 打开 OCR 设置选择“日文”或“混合”；如果是误框选，按 Esc/⌘R 重新框选。",
                 color: .orange
             )
         }

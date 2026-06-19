@@ -588,6 +588,10 @@ enum ErrorMessageFormatter {
             return "如果你用的是 OpenRouter 预设，请确认 API Key 有可用额度，模型 slug 可用；`openrouter/auto` 会路由到可用模型，但仍可能受上游供应商排队影响。"
         }
 
+        if containsAny(lowercased, ["bigmodel", "open.bigmodel.cn", "zhipu", "智谱", "z.ai/api/paas", "glm-5.2", "glm-4-flash"]) {
+            return "如果你用的是智谱预设，请确认接口地址是 `https://open.bigmodel.cn/api/paas/v4/chat/completions`，API Key 来自智谱开放平台，并且当前账号已开通所填 GLM 模型权限。"
+        }
+
         if containsAny(lowercased, ["siliconflow", "siliconflow.cn", "硅基流动"]) {
             return "如果你用的是 SiliconFlow 预设，请确认账号已开通该模型，并核对模型名是否和控制台模型广场一致。"
         }

@@ -268,6 +268,11 @@ private struct ErrorClassificationCheck {
                 expectedSnippets: ["接口连通成功", "API Key 无效或不属于当前接口", "接口原始提示"]
             ),
             (
+                name: "zhipu provider hint",
+                error: .badResponse(statusCode: 403, message: "open.bigmodel.cn permission denied for model glm-5.2"),
+                expectedSnippets: ["智谱预设", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "智谱开放平台", "GLM 模型权限"]
+            ),
+            (
                 name: "http 200 error json text too long hint",
                 error: .badResponse(statusCode: 200, message: "context_length_exceeded: prompt tokens exceed the maximum number of tokens"),
                 expectedSnippets: ["接口连通成功", "上下文、Token 或请求体大小限制", "缩小 OCR/选中文本范围", "接口原始提示"]

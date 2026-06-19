@@ -49,6 +49,14 @@ private struct TranslationWaitStatusCheck {
         )
 
         assertStatus(
+            name: "pre-connection long wait streaming",
+            status: TranslationWaitStatusText.preConnection(elapsed: 9.5, waitsForFirstToken: true),
+            translationSnippets: ["仍没有连上", "代理", "限流", "取消", "直连"],
+            messageSnippets: ["连接响应很慢", "建议取消重试"],
+            failures: &failures
+        )
+
+        assertStatus(
             name: "connected streaming",
             status: TranslationWaitStatusText.connected(elapsed: 0.8, waitsForFirstToken: true),
             translationSnippets: ["连接耗时 0.8s", "首个片段", "模型排队", "代理缓冲"],
