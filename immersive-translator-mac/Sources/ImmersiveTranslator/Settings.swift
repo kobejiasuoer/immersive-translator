@@ -147,6 +147,10 @@ final class SettingsStore: ObservableObject {
     /// 删除自定义 provider(常驻不可删);同步清 Keychain 槽;若删的是 active 则回退 deepseek。
     func deleteCustomProvider(_ id: String) {
         guard let target = providers.first(where: { $0.id == id }), !target.isBuiltin else { return }
+        // 若删的是当前 active: 先清空 editingAPIKey,避免 switchActiveProvider 把它落盘回待删 id。
+        if activeProviderID == id {
+            editingAPIKey = ""
+        }
         providers.removeAll { $0.id == id }
         KeychainStore.deleteAPIKey(for: id)
         if activeProviderID == id {
