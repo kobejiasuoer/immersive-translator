@@ -140,7 +140,7 @@ final class TranslationPanelController {
         model.translation = translation
         model.isLoading = isLoading
         model.sourceLabel = source?.displayName ?? "系统提示"
-        model.modelLabel = settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        model.modelLabel = settingsStore.activeProvider.model.trimmingCharacters(in: .whitespacesAndNewlines)
         model.targetLanguage = targetLanguage ?? settingsStore.displayTargetLanguage
         model.status = resolvedStatus(
             explicitStatus: status,
@@ -976,7 +976,7 @@ struct TranslationPanelView: View {
     }
 
     private var ocrTranslationConfigurationIssue: String? {
-        let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !endpoint.isEmpty else {
             return "OCR 已经可用；请先在设置里选择本地接口，或填写云接口地址和 API Key 后再翻译。"
         }
@@ -986,7 +986,7 @@ struct TranslationPanelView: View {
         }
 
         if TranslationClient.requiresAPIKey(for: url),
-           settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+           ((KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "")).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "OCR 已经可用；当前云接口需要 API Key，也可以在设置里自己填一个 OpenAI 兼容接口地址和 Key 后再翻译。"
         }
 

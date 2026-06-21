@@ -1108,7 +1108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let expectedTargetLanguage = resolvedTargetLanguage(for: text)
         panelController.show(
             original: text,
-            translation: "正在翻译到 \(expectedTargetLanguage)，使用 \(settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines))。",
+            translation: "正在翻译到 \(expectedTargetLanguage)，使用 \(settingsStore.activeProvider.model.trimmingCharacters(in: .whitespacesAndNewlines))。",
             isLoading: true,
             source: source,
             status: .loading,
@@ -1389,7 +1389,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func ensureConfigured() -> Bool {
-        let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !endpoint.isEmpty else {
             settingsController.show()
             panelController.show(
@@ -1423,7 +1423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if TranslationClient.requiresAPIKey(for: url),
-           settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+           ((KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "")).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             settingsController.show()
             panelController.show(
                 original: "还没有配置 API Key",

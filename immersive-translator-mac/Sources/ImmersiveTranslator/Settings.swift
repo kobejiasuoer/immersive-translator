@@ -1,32 +1,27 @@
 import AppKit
 import Carbon
+import ProviderCore
 import SwiftUI
 import UniformTypeIdentifiers
 
 final class SettingsStore: ObservableObject {
-    @Published var apiKey: String {
-        didSet {
-            do {
-                try KeychainStore.setString(apiKey, service: Keys.keychainService, account: Keys.apiKey)
-                UserDefaults.standard.removeObject(forKey: Keys.apiKey)
-                apiKeyStorageError = nil
-            } catch {
-                apiKeyStorageError = error.localizedDescription
-            }
-        }
+    // MARK: - Provider configuration (multi-provider)
+
+    @Published var providers: [ProviderProfile] {
+        didSet { persistProviders() }
+    }
+    @Published var activeProviderID: String {
+        didSet { UserDefaults.standard.set(activeProviderID, forKey: Keys.activeProviderID) }
+    }
+    @Published var editingAPIKey: String = ""
+
+    var activeProvider: ProviderProfile {
+        providers.first { $0.id == activeProviderID } ?? providers[0]
     }
 
     @Published var apiKeyStorageError: String?
     @Published var hotKeyRegistrationMessage: String?
     @Published var providerDiagnosticRequestID: UUID?
-
-    @Published var endpoint: String {
-        didSet { UserDefaults.standard.set(endpoint, forKey: Keys.endpoint) }
-    }
-
-    @Published var model: String {
-        didSet { UserDefaults.standard.set(model, forKey: Keys.model) }
-    }
 
     @Published var targetLanguage: String {
         didSet { UserDefaults.standard.set(targetLanguage, forKey: Keys.targetLanguage) }
@@ -65,11 +60,41 @@ final class SettingsStore: ObservableObject {
     }
 
     init() {
-        let apiKeyResult = Self.loadAPIKey()
-        apiKey = apiKeyResult.value
-        apiKeyStorageError = apiKeyResult.errorMessage
-        endpoint = UserDefaults.standard.string(forKey: Keys.endpoint) ?? "https://api.openai.com/v1/chat/completions"
-        model = UserDefaults.standard.string(forKey: Keys.model) ?? "gpt-5.4-mini"
+        // 用局部变量完成所有计算,避免在存储属性初始化前访问 self(didSet 会触发 self 访问)。
+
+        // 1. 加载 providers(从 UserDefaults 的 JSON;失败回退三常驻)
+        var loadedProviders: [ProviderProfile]
+        if let data = UserDefaults.standard.data(forKey: Keys.providers),
+           let decoded = try? JSONDecoder().decode([ProviderProfile].self, from: data),
+           !decoded.isEmpty {
+            loadedProviders = decoded
+        } else {
+            loadedProviders = ProviderProfile.builtinPresets
+        }
+        // 兜底:保证至少含三常驻
+        if !loadedProviders.contains(where: { $0.isBuiltin }) {
+            loadedProviders = ProviderProfile.builtinPresets + loadedProviders
+        }
+
+        // 2. activeProviderID 初值(迁移前先取存档,没有则 deepseek)
+        var resolvedActiveID = UserDefaults.standard.string(forKey: Keys.activeProviderID) ?? ProviderProfile.builtinPresets[0].id
+
+        // 3. 迁移旧 endpoint/model/activeProviderID(只跑一次,幂等)
+        ProviderMigration.runIfNeeded(providers: &loadedProviders, activeProviderID: &resolvedActiveID)
+
+        // 4. 迁移旧 Key(旧全局 account=apiKey → 当前 active 槽;仅当新槽为空时)
+        if let legacyKey = try? KeychainStore.string(service: Keys.keychainService, account: KeychainStore.legacyAccount),
+           !legacyKey.isEmpty,
+           KeychainStore.apiKey(for: resolvedActiveID) == nil {
+            KeychainStore.setAPIKey(legacyKey, for: resolvedActiveID)
+        }
+
+        // 5. active 合法性兜底
+        if !loadedProviders.contains(where: { $0.id == resolvedActiveID }) {
+            resolvedActiveID = ProviderProfile.builtinPresets[0].id
+        }
+
+        // 6. 先初始化无 didSet 的存储属性,再赋值带 didSet 的(providers/activeProviderID)
         targetLanguage = UserDefaults.standard.string(forKey: Keys.targetLanguage) ?? "简体中文"
         translationDirection = TranslationDirection(rawValue: UserDefaults.standard.string(forKey: Keys.translationDirection) ?? "") ?? .autoChineseEnglish
         ocrMode = OCRRecognitionMode(rawValue: UserDefaults.standard.string(forKey: Keys.ocrMode) ?? "") ?? .accurate
@@ -79,6 +104,11 @@ final class SettingsStore: ObservableObject {
         glossaryText = UserDefaults.standard.string(forKey: Keys.glossaryText) ?? ""
         selectionHotKeyShortcut = Self.loadSelectionHotKeyShortcut()
         ocrHotKeyShortcut = Self.loadOCRHotKeyShortcut()
+
+        // 最后赋值带 didSet 的存储属性(self 此时已完全初始化)
+        providers = loadedProviders
+        activeProviderID = resolvedActiveID
+        editingAPIKey = KeychainStore.apiKey(for: resolvedActiveID) ?? ""
     }
 
     var displayTargetLanguage: String {
@@ -91,32 +121,48 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    private static func loadAPIKey() -> (value: String, errorMessage: String?) {
-        let legacyKey = UserDefaults.standard.string(forKey: Keys.apiKey) ?? ""
+    // MARK: - Provider switching & persistence
 
-        do {
-            if let keychainKey = try KeychainStore.string(service: Keys.keychainService, account: Keys.apiKey),
-               !keychainKey.isEmpty {
-                UserDefaults.standard.removeObject(forKey: Keys.apiKey)
-                UserDefaults.standard.synchronize()
-                return (keychainKey, nil)
-            }
+    /// 切换当前 provider:先把编辑态 key 落盘到旧 id,再从新 id 加载。
+    /// 诊断状态(providerDiagnostic/providerPresetMessage)是 View 的 @State,
+    /// 由 SettingsView 的 .onChange(of: activeProviderID) 重置,不在这里处理。
+    func switchActiveProvider(to id: String) {
+        guard id != activeProviderID, providers.contains(where: { $0.id == id }) else { return }
+        persistEditingAPIKey(for: activeProviderID)
+        activeProviderID = id
+        editingAPIKey = KeychainStore.apiKey(for: id) ?? ""
+    }
 
-            if !legacyKey.isEmpty {
-                try KeychainStore.setString(legacyKey, service: Keys.keychainService, account: Keys.apiKey)
-                UserDefaults.standard.removeObject(forKey: Keys.apiKey)
-                UserDefaults.standard.synchronize()
-                return (legacyKey, nil)
-            }
-            UserDefaults.standard.removeObject(forKey: Keys.apiKey)
-            UserDefaults.standard.synchronize()
-            return ("", nil)
-        } catch {
-            if legacyKey.isEmpty {
-                UserDefaults.standard.removeObject(forKey: Keys.apiKey)
-                UserDefaults.standard.synchronize()
-            }
-            return (legacyKey, error.localizedDescription)
+    /// 失焦/切换/退出时把编辑态 key 落盘到指定 provider 槽。
+    func persistEditingAPIKey(for id: String) {
+        KeychainStore.setAPIKey(editingAPIKey, for: id)
+    }
+
+    /// 用户在当前 provider 自由填了模型名 → 追加到 customModels。
+    func recordCustomModel(_ model: String) {
+        guard let idx = providers.firstIndex(where: { $0.id == activeProviderID }) else { return }
+        providers[idx].appendCustomModel(model)
+    }
+
+    /// 删除自定义 provider(常驻不可删);同步清 Keychain 槽;若删的是 active 则回退 deepseek。
+    func deleteCustomProvider(_ id: String) {
+        guard let target = providers.first(where: { $0.id == id }), !target.isBuiltin else { return }
+        providers.removeAll { $0.id == id }
+        KeychainStore.deleteAPIKey(for: id)
+        if activeProviderID == id {
+            switchActiveProvider(to: ProviderProfile.builtinPresets[0].id)
+        }
+    }
+
+    /// 修改当前 active provider 的字段(供 UI 的 Binding set 使用)。
+    func updateActiveProvider(_ transform: (inout ProviderProfile) -> Void) {
+        guard let idx = providers.firstIndex(where: { $0.id == activeProviderID }) else { return }
+        transform(&providers[idx])
+    }
+
+    private func persistProviders() {
+        if let data = try? JSONEncoder().encode(providers) {
+            UserDefaults.standard.set(data, forKey: Keys.providers)
         }
     }
 
@@ -149,10 +195,9 @@ final class SettingsStore: ObservableObject {
     }
 
     private enum Keys {
-        static let apiKey = "apiKey"
         static let keychainService = "local.immersive-translator.mvp"
-        static let endpoint = "endpoint"
-        static let model = "model"
+        static let providers = "providers"
+        static let activeProviderID = "activeProviderID"
         static let targetLanguage = "targetLanguage"
         static let translationDirection = "translationDirection"
         static let ocrMode = "ocrMode"
@@ -257,42 +302,6 @@ enum OCRLanguagePreset: String, CaseIterable, Identifiable {
             return [.autoMixed, .japanese]
         }
     }
-}
-
-struct TranslationProviderPreset: Identifiable {
-    let id: String
-    let title: String
-    let endpoint: String
-    let model: String
-    let detail: String
-    let latencyHint: String
-
-    static let all: [TranslationProviderPreset] = [
-        TranslationProviderPreset(
-            id: "deepseek-v4-flash",
-            title: "DeepSeek · V4 Flash",
-            endpoint: "https://api.deepseek.com/chat/completions",
-            model: "deepseek-v4-flash",
-            detail: "偏低延迟和性价比，适合高频短句翻译。",
-            latencyHint: "慢请求通常和服务端排队或跨境网络有关，可稍后重试或换其它接口。"
-        ),
-        TranslationProviderPreset(
-            id: "openai-gpt-5-4-mini",
-            title: "OpenAI · GPT-5.4 Mini",
-            endpoint: "https://api.openai.com/v1/chat/completions",
-            model: "gpt-5.4-mini",
-            detail: "当前低延迟/成本优先的 OpenAI 预设，适合日常中英互译和 OCR 段落。",
-            latencyHint: "如果首字等待明显变长，优先检查网络到 api.openai.com 的连通性。"
-        ),
-        TranslationProviderPreset(
-            id: "zhipu-glm-5-2",
-            title: "智谱 · GLM-5.2",
-            endpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-            model: "glm-5.2",
-            detail: "智谱新一代 GLM 文本模型，适合中文长句、多语言混排和质量优先的翻译。",
-            latencyHint: "GLM 5.2 默认可能有思考过程；本应用会为短翻译请求关闭 thinking，若 404 先确认模型权限和模型名。"
-        )
-    ]
 }
 
 private enum ProviderConfigurationAdvisor {
@@ -734,6 +743,15 @@ struct SettingsView: View {
     @State private var customPromptMessage = ""
     @State private var glossaryMaintenanceMessage = ""
 
+    // 多 Provider UI 状态
+    @State private var showAddCustomProvider = false
+    @State private var pendingDeleteProvider: ProviderProfile?
+    @State private var newProviderName = ""
+    @State private var newProviderEndpoint = ""
+    @State private var newProviderModel = ""
+    @State private var showCustomModelInput = false
+    @State private var customModelInput = ""
+
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
@@ -749,9 +767,20 @@ struct SettingsView: View {
 
                     settingsSection("翻译服务") {
                         providerOnboardingGuide
-                        labeledField("接口地址", text: $settingsStore.endpoint)
-                        labeledField("模型", text: $settingsStore.model)
-                        labeledField(apiKeyFieldTitle, text: $settingsStore.apiKey, secure: true)
+
+                        providerSelector
+
+                        labeledField("接口地址", text: Binding(
+                            get: { settingsStore.activeProvider.endpoint },
+                            set: { newValue in settingsStore.updateActiveProvider { $0.endpoint = newValue } }
+                        ))
+                        labeledField("模型", text: Binding(
+                            get: { settingsStore.activeProvider.model },
+                            set: { newValue in settingsStore.updateActiveProvider { $0.model = newValue } }
+                        ))
+                        // 模型候选下拉(内置 + 自定义历史) + 自定义输入入口
+                        modelCandidatePicker
+                        labeledField(apiKeyFieldTitle, text: $settingsStore.editingAPIKey, secure: true)
                         providerConfigurationSummary
 
                         Picker("翻译方向", selection: $settingsStore.translationDirection) {
@@ -771,13 +800,7 @@ struct SettingsView: View {
                         Toggle("流式显示译文", isOn: $settingsStore.enableStreamingTranslation)
                     }
 
-                    settingsSection("常用配置") {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 246), spacing: 10)], spacing: 10) {
-                            ForEach(TranslationProviderPreset.all) { preset in
-                                providerPresetCard(preset)
-                            }
-                        }
-
+                    settingsSection("接口诊断") {
                         if !providerPresetMessage.isEmpty {
                             HStack(alignment: .top, spacing: 6) {
                                 Image(systemName: "checkmark.circle")
@@ -916,19 +939,17 @@ struct SettingsView: View {
             .background(.regularMaterial)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onChange(of: settingsStore.endpoint) { _ in
-            if consumeProviderPresetChangeSuppression() { return }
+        .onChange(of: settingsStore.activeProvider.endpoint) { _ in
             cancelProviderDiagnosticTasks()
             providerPresetMessage = ""
             markProviderDiagnosticNeedsRerun("接口地址已变更，建议重新测试当前接口。")
         }
-        .onChange(of: settingsStore.model) { _ in
-            if consumeProviderPresetChangeSuppression() { return }
+        .onChange(of: settingsStore.activeProvider.model) { _ in
             cancelProviderVerificationTask()
             providerPresetMessage = ""
             markProviderDiagnosticNeedsRerun("模型已变更，建议重新验证翻译请求。")
         }
-        .onChange(of: settingsStore.apiKey) { _ in
+        .onChange(of: settingsStore.editingAPIKey) { _ in
             cancelProviderVerificationTask()
             providerPresetMessage = ""
             markProviderDiagnosticNeedsRerun("API Key 已变更，建议重新验证翻译请求。")
@@ -957,6 +978,40 @@ struct SettingsView: View {
             cancelProviderVerificationTask()
             providerPresetMessage = ""
             markProviderDiagnosticNeedsRerun("术语表已变更，建议重新验证翻译请求。")
+        }
+        .sheet(isPresented: $showAddCustomProvider) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("添加自定义提供商").font(.headline)
+                TextField("名称（如 我的 Ollama）", text: $newProviderName)
+                    .textFieldStyle(.roundedBorder)
+                TextField("接口地址（https://... 或 http://localhost...）", text: $newProviderEndpoint)
+                    .textFieldStyle(.roundedBorder)
+                TextField("模型名（可留空，默认 gpt-3.5-turbo）", text: $newProviderModel)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button("取消") {
+                        newProviderName = ""
+                        newProviderEndpoint = ""
+                        newProviderModel = ""
+                        showAddCustomProvider = false
+                    }
+                    Button("添加") { addCustomProvider() }
+                    .disabled(newProviderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              || newProviderEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding()
+            .frame(width: 380)
+        }
+        .alert("删除自定义提供商", isPresented: Binding(
+            get: { pendingDeleteProvider != nil },
+            set: { if !$0 { pendingDeleteProvider = nil } }
+        )) {
+            Button("取消", role: .cancel) { pendingDeleteProvider = nil }
+            Button("删除", role: .destructive) { confirmDeleteCustomProvider() }
+        } message: {
+            Text("确认删除“\(pendingDeleteProvider?.displayName ?? "")”？其 API Key 会一并从钥匙串清除，常驻提供商（DeepSeek/智谱/OpenAI）不可删除。")
         }
         .onChange(of: settingsStore.providerDiagnosticRequestID) { _ in
             runRequestedProviderDiagnostic()
@@ -1026,28 +1081,28 @@ struct SettingsView: View {
     }
 
     private var providerOnboardingStatusText: String {
-        let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         if endpoint.isEmpty {
             return "接口地址还没填：选一个内置云预设，或自己填写其它服务商 / 本地 OpenAI 兼容地址，再决定要不要填 API Key。"
         }
         if !providerRequiresAPIKey {
             return "当前是本地接口：确认本地服务已启动并加载模型后，可以直接测试当前接口或验证短翻译。"
         }
-        if settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if (KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "当前是云接口且还没有 API Key：可以先测试入口连通性；真实翻译前需要填 Key。"
         }
         return "当前云接口已填写 API Key：建议先验证一次短翻译，确认模型、余额和权限都可用。"
     }
 
     private var providerOnboardingStatusColor: Color {
-        let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         if endpoint.isEmpty {
             return .blue
         }
         if !providerRequiresAPIKey {
             return .green
         }
-        return settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .blue : .green
+        return (KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .blue : .green
     }
 
     private func labeledField(_ title: String, text: Binding<String>, secure: Bool = false) -> some View {
@@ -1066,7 +1121,7 @@ struct SettingsView: View {
     }
 
     private var currentProviderHint: String {
-        let endpoint = settingsStore.endpoint.lowercased()
+        let endpoint = settingsStore.activeProvider.endpoint.lowercased()
         if endpoint.contains("deepseek") {
             return "DeepSeek 兼容接口"
         }
@@ -1108,8 +1163,8 @@ struct SettingsView: View {
     }
 
     private var providerDiagnosticsText: String {
-        let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        let model = settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = settingsStore.activeProvider.model.trimmingCharacters(in: .whitespacesAndNewlines)
         if endpoint.isEmpty {
             return "接口地址为空时无法发起请求；请选择预设或填写完整 Chat Completions 地址。"
         }
@@ -1117,7 +1172,7 @@ struct SettingsView: View {
             return "当前是本地 OpenAI 兼容接口：可以不填真实 API Key；若请求慢，优先检查本机模型是否已拉取、是否正在加载。"
         }
         if providerRequiresAPIKey,
-           settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+           (KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "当前是云接口：连通性测试可以先跑，真实翻译需要 API Key；如果只是先试用，也可自己填一个本地 OpenAI 兼容地址（如 http://localhost:11434/v1/chat/completions）直接试。"
         }
         if model.isEmpty {
@@ -1182,7 +1237,7 @@ struct SettingsView: View {
     }
 
     private var providerEffectiveURL: URL? {
-        let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !endpoint.isEmpty else { return nil }
         return TranslationClient.chatCompletionsURL(from: endpoint)
     }
@@ -1198,8 +1253,8 @@ struct SettingsView: View {
     }
 
     private var providerConfigurationHints: [ProviderConfigurationHint] {
-        let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        let model = settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = settingsStore.activeProvider.model.trimmingCharacters(in: .whitespacesAndNewlines)
         var hints: [ProviderConfigurationHint] = []
 
         if endpoint.isEmpty {
@@ -1263,7 +1318,7 @@ struct SettingsView: View {
             ))
         }
 
-        if settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if (KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             if providerRequiresAPIKey {
                 hints.append(ProviderConfigurationHint(
                     id: "empty-api-key",
@@ -1346,7 +1401,7 @@ struct SettingsView: View {
                     runProviderConnectionDiagnostic()
                 }
                 .controlSize(.small)
-                .disabled(isTestingProviderConnection || isVerifyingProviderTranslation || settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(isTestingProviderConnection || isVerifyingProviderTranslation || settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                 Button(isVerifyingProviderTranslation ? "验证中..." : "验证翻译请求") {
                     runProviderTranslationVerification()
@@ -1359,7 +1414,7 @@ struct SettingsView: View {
                         cancelProviderDiagnosticTasks()
                         providerDiagnostic = ProviderConnectionDiagnostic(
                             level: .warning,
-                            endpoint: settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
+                            endpoint: settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
                             message: "已取消当前 Provider 诊断。",
                             kind: .cancelled,
                             completedAt: Date()
@@ -1466,8 +1521,8 @@ struct SettingsView: View {
     }
 
     private var providerTranslationVerificationDisabled: Bool {
-        settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || (providerRequiresAPIKey && settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || (providerRequiresAPIKey && (KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     private var providerDiagnosticLatencyAssessment: ProviderLatencyAssessment? {
@@ -1511,7 +1566,7 @@ struct SettingsView: View {
 
         switch providerDiagnostic.level {
         case .idle:
-            if settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return "先选择一个 Provider 预设，或填写完整 Chat Completions 接口地址。"
             }
             if !providerRequiresAPIKey {
@@ -1640,8 +1695,8 @@ struct SettingsView: View {
     }
 
     private var providerDiagnosticReport: String {
-        let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        let model = settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = settingsStore.activeProvider.model.trimmingCharacters(in: .whitespacesAndNewlines)
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "<unknown>"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "<unknown>"
         let latencyAssessment = providerDiagnosticLatencyAssessment?.reportText ?? "<unknown>"
@@ -1708,7 +1763,7 @@ struct SettingsView: View {
             return "# 接口地址无法解析，请先修正设置里的接口地址。"
         }
 
-        let model = settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = settingsStore.activeProvider.model.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedModel = model.isEmpty ? "gpt-5.4-mini" : model
         let requiresAPIKey = TranslationClient.requiresAPIKey(for: url)
         let payload = providerDiagnosticCurlPayload(
@@ -1744,15 +1799,15 @@ struct SettingsView: View {
 
     private var providerConfigurationFingerprint: String {
         let components = [
-            settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
+            settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
             providerEffectiveURL?.absoluteString ?? "<invalid>",
-            settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines),
+            settingsStore.activeProvider.model.trimmingCharacters(in: .whitespacesAndNewlines),
             settingsStore.translationDirection.rawValue,
             settingsStore.targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines),
             settingsStore.enableStreamingTranslation ? "stream" : "buffered",
             providerCustomPromptReportText,
             providerGlossaryReportText,
-            providerRequiresAPIKey ? (settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "no-key" : "has-key") : "key-not-required"
+            providerRequiresAPIKey ? ((KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "no-key" : "has-key") : "key-not-required"
         ]
         var hash: UInt64 = 0xcbf29ce484222325
         for byte in components.joined(separator: "\u{1F}").utf8 {
@@ -1810,11 +1865,11 @@ struct SettingsView: View {
 
     private var providerAPIKeyReportText: String {
         if !providerRequiresAPIKey {
-            return settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return (KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? "not required for local endpoint"
                 : "yes (local endpoint also has a configured value)"
         }
-        return settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "no" : "yes"
+        return (KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "no" : "yes"
     }
 
     private var providerCustomPromptReportText: String {
@@ -2273,7 +2328,7 @@ struct SettingsView: View {
     private func markProviderDiagnosticNeedsRerun(_ message: String) {
         providerDiagnostic = ProviderConnectionDiagnostic(
             level: .idle,
-            endpoint: settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
+            endpoint: settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
             message: message,
             kind: .configuration,
             requestURL: providerEffectiveURL?.absoluteString,
@@ -2315,7 +2370,7 @@ struct SettingsView: View {
     }
 
     private func runProviderConnectionDiagnostic() {
-        let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !endpoint.isEmpty else {
             providerDiagnostic = ProviderConnectionDiagnostic(
                 level: .failure,
@@ -2366,7 +2421,7 @@ struct SettingsView: View {
                 guard providerDiagnosticRunID == runID else {
                     return
                 }
-                guard result.endpoint == settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines) else {
+                guard result.endpoint == settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines) else {
                     return
                 }
                 providerDiagnostic = result
@@ -2378,7 +2433,7 @@ struct SettingsView: View {
         cancelProviderConnectionTask()
         cancelProviderVerificationTask()
 
-        let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !endpoint.isEmpty else {
             providerDiagnostic = ProviderConnectionDiagnostic(
                 level: .failure,
@@ -2392,7 +2447,7 @@ struct SettingsView: View {
         }
 
         let requestURL = TranslationClient.chatCompletionsURL(from: endpoint)?.absoluteString
-        guard !providerRequiresAPIKey || !settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard !providerRequiresAPIKey || !(KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             providerDiagnostic = ProviderConnectionDiagnostic(
                 level: .failure,
                 endpoint: endpoint,
@@ -2405,8 +2460,8 @@ struct SettingsView: View {
             return
         }
 
-        let model = settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines)
-        let apiKey = settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = settingsStore.activeProvider.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = (KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let runID = UUID()
         let verificationText = "Provider diagnostic ping: translate this short sentence."
         providerTranslationRunID = runID
@@ -2476,7 +2531,7 @@ struct SettingsView: View {
     }
 
     private var currentProviderDiagnosticModel: String {
-        let model = settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = settingsStore.activeProvider.model.trimmingCharacters(in: .whitespacesAndNewlines)
         return model.isEmpty ? "gpt-5.4-mini (default fallback)" : model
     }
 
@@ -2495,9 +2550,9 @@ struct SettingsView: View {
 
     private func isCurrentProviderVerification(endpoint: String, model: String, apiKey: String, runID: UUID) -> Bool {
         providerTranslationRunID == runID
-            && endpoint == settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-            && model == settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines)
-            && apiKey == settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            && endpoint == settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            && model == settingsStore.activeProvider.model.trimmingCharacters(in: .whitespacesAndNewlines)
+            && apiKey == (KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func compactProviderDiagnosticPreview(_ text: String, maxLength: Int = 48) -> String {
@@ -2739,15 +2794,44 @@ struct SettingsView: View {
             || host == "0.0.0.0"
     }
 
-    private func providerPresetCard(_ preset: TranslationProviderPreset) -> some View {
-        let isSelected = settingsStore.endpoint == preset.endpoint && settingsStore.model == preset.model
+    // 服务商选择区:三常驻卡片 + 自定义列表 + 添加按钮
+    private var providerSelector: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                ForEach(settingsStore.providers.filter { $0.isBuiltin }) { profile in
+                    builtinProviderCard(profile)
+                }
+            }
+
+            let customProviders = settingsStore.providers.filter { !$0.isBuiltin }
+            if !customProviders.isEmpty {
+                Text("自定义").font(.caption).foregroundStyle(.secondary)
+                VStack(spacing: 6) {
+                    ForEach(customProviders) { profile in
+                        customProviderRow(profile)
+                    }
+                }
+            }
+
+            Button {
+                showAddCustomProvider = true
+            } label: {
+                Label("添加自定义提供商", systemImage: "plus")
+                    .font(.footnote)
+            }
+            .buttonStyle(.borderless)
+        }
+    }
+
+    private func builtinProviderCard(_ profile: ProviderProfile) -> some View {
+        let isSelected = settingsStore.activeProviderID == profile.id
 
         return Button {
-            applyProviderPreset(preset)
+            selectProvider(profile.id)
         } label: {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(preset.title)
+                    Text(profile.displayName)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                     Spacer()
@@ -2756,17 +2840,10 @@ struct SettingsView: View {
                             .foregroundStyle(.green)
                     }
                 }
-                Text(preset.model)
+                Text(profile.model)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
-                Text(preset.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(preset.latencyHint)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .padding(10)
@@ -2780,52 +2857,125 @@ struct SettingsView: View {
             )
         }
         .buttonStyle(.plain)
-        .help("填入 \(preset.model) 的接口和模型名，不会改动 API Key")
+        .help("切换到 \(profile.displayName)")
     }
 
-    private func applyProviderPreset(_ preset: TranslationProviderPreset) {
-        cancelProviderDiagnosticTasks()
-        providerPresetChangeSuppressionCount = [
-            settingsStore.endpoint != preset.endpoint,
-            settingsStore.model != preset.model
-        ].filter(\.self).count
-        settingsStore.endpoint = preset.endpoint
-        settingsStore.model = preset.model
+    private func customProviderRow(_ profile: ProviderProfile) -> some View {
+        let isSelected = settingsStore.activeProviderID == profile.id
+        return HStack(spacing: 8) {
+            Button {
+                selectProvider(profile.id)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(profile.displayName).font(.subheadline)
+                        Text("\(profile.endpoint) · \(profile.model)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                }
+            }
+            .buttonStyle(.plain)
 
-        let effectiveURL = TranslationClient.chatCompletionsURL(from: preset.endpoint)
-        let effectiveURLText = effectiveURL.map { TranslationClient.redactedURLString($0.absoluteString) } ?? preset.endpoint
-        let requiresAPIKey = effectiveURL.map(TranslationClient.requiresAPIKey(for:)) ?? true
-        let hasAPIKey = !settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let nextStep = providerPresetNextStep(requiresAPIKey: requiresAPIKey, hasAPIKey: hasAPIKey)
-
-        providerPresetMessage = "已套用 \(preset.title)：\(preset.model)。\(nextStep)"
-        providerDiagnostic = ProviderConnectionDiagnostic(
-            level: .idle,
-            endpoint: preset.endpoint,
-            message: "已套用 \(preset.title) 预设，尚未测试当前接口。实际请求地址：\(effectiveURLText)。\(nextStep)",
-            kind: .configuration,
-            requestURL: effectiveURLText,
-            model: preset.model
+            Button(role: .destructive) {
+                pendingDeleteProvider = profile
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.red.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+            .help("删除 \(profile.displayName)")
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.08) : Color.clear)
         )
+    }
+
+    private var modelCandidatePicker: some View {
+        HStack {
+            Picker("模型候选", selection: Binding(
+                get: { settingsStore.activeProvider.model },
+                set: { newValue in settingsStore.updateActiveProvider { $0.model = newValue } }
+            )) {
+                ForEach(settingsStore.activeProvider.modelCandidates, id: \.self) { candidate in
+                    Text(candidate).tag(candidate)
+                }
+            }
+            .labelsHidden()
+            Spacer()
+            Button("自定义...") {
+                customModelInput = ""
+                showCustomModelInput = true
+            }
+            .font(.footnote)
+            .buttonStyle(.borderless)
+        }
+        .sheet(isPresented: $showCustomModelInput) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("输入模型名").font(.headline)
+                TextField("如 deepseek-v4-turbo", text: $customModelInput)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button("取消") { showCustomModelInput = false }
+                    Button("确定") {
+                        let trimmed = customModelInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            settingsStore.updateActiveProvider { $0.model = trimmed }
+                            settingsStore.recordCustomModel(trimmed)
+                        }
+                        showCustomModelInput = false
+                    }
+                }
+            }
+            .padding()
+            .frame(width: 320)
+        }
+    }
+
+    // 统一处理"选中 provider":切换 + 重置诊断 View 状态。
+    // (providerDiagnostic/providerPresetMessage 是 View @State, 在这里重置)
+    private func selectProvider(_ id: String) {
+        cancelProviderDiagnosticTasks()
+        settingsStore.switchActiveProvider(to: id)
+        providerDiagnostic = .idle
+        providerPresetMessage = ""
         providerClipboardMessage = ""
     }
 
-    private func consumeProviderPresetChangeSuppression() -> Bool {
-        guard providerPresetChangeSuppressionCount > 0 else {
-            return false
-        }
-        providerPresetChangeSuppressionCount -= 1
-        return true
+    // MARK: - 自定义 provider 增删表单
+
+    private func addCustomProvider() {
+        let name = newProviderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = newProviderEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !endpoint.isEmpty else { return }
+        let model = newProviderModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let profile = ProviderProfile(
+            id: UUID().uuidString,
+            displayName: name,
+            endpoint: endpoint,
+            model: model.isEmpty ? "gpt-3.5-turbo" : model,
+            isBuiltin: false,
+            customModels: []
+        )
+        settingsStore.providers.append(profile)
+        selectProvider(profile.id)
+        newProviderName = ""
+        newProviderEndpoint = ""
+        newProviderModel = ""
+        showAddCustomProvider = false
     }
 
-    private func providerPresetNextStep(requiresAPIKey: Bool, hasAPIKey: Bool) -> String {
-        if !requiresAPIKey {
-            return "下一步：先确认本地服务已启动，然后测试当前接口；不需要真实 API Key。"
-        }
-        if requiresAPIKey, !hasAPIKey {
-            return "下一步：云接口需要这个服务商的 API Key；也可以先测试当前接口确认网络入口，或切到本地预设直接试。"
-        }
-        return "下一步：先测试当前接口确认网络，再验证翻译请求确认模型、余额和权限。"
+    private func confirmDeleteCustomProvider() {
+        guard let profile = pendingDeleteProvider else { return }
+        settingsStore.deleteCustomProvider(profile.id)
+        pendingDeleteProvider = nil
     }
 
     private var hotKeyConflictMessage: String? {

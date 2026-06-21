@@ -93,9 +93,9 @@ final class TranslationClient {
         stream: Bool,
         onProgress: (@MainActor (TranslationProgress) -> Void)?
     ) async throws -> TranslationResult {
-        let apiKey = settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let endpoint = settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        let model = settingsStore.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = ((KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "")).trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = settingsStore.activeProvider.model.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedModel = model.isEmpty ? "gpt-5.4-mini" : model
         let targetLanguage = Self.targetLanguage(for: text, settingsStore: settingsStore)
         let systemPrompt = Self.systemPrompt(

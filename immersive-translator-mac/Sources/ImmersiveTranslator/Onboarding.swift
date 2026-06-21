@@ -190,11 +190,11 @@ private struct OnboardingView: View {
     }
 
     private var apiKeyStepIsDone: Bool {
-        !apiKeyIsRequired || !settingsStore.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !apiKeyIsRequired || !((KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "")).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var apiKeyIsRequired: Bool {
-        TranslationClient.requiresAPIKey(for: settingsStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines))
+        TranslationClient.requiresAPIKey(for: settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private var providerStatusText: String {
