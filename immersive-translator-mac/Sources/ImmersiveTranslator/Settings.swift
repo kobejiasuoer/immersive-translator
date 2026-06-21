@@ -950,6 +950,9 @@ struct SettingsView: View {
             markProviderDiagnosticNeedsRerun("模型已变更，建议重新验证翻译请求。")
         }
         .onChange(of: settingsStore.editingAPIKey) { _ in
+            // 编辑态变化时落盘到当前 provider 槽,保证 TranslationClient 读到的持久值最新。
+            // switchActiveProvider 切换时也会落盘旧值,这里幂等。
+            settingsStore.persistEditingAPIKey(for: settingsStore.activeProviderID)
             cancelProviderVerificationTask()
             providerPresetMessage = ""
             markProviderDiagnosticNeedsRerun("API Key 已变更，建议重新验证翻译请求。")
