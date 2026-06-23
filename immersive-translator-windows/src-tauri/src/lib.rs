@@ -1,3 +1,5 @@
+mod clipboard;
+
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -16,7 +18,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![greet, clipboard::read_selection])
         .setup(|app| {
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
