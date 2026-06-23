@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
-  readSelection,
   translateStream,
   openSettings,
   onTranslationDelta,
@@ -84,18 +83,15 @@ export function TranslationPanel() {
     });
   }
 
-  async function triggerFromHotkey() {
+  // Rust 端在热键触发时先读取选中文本（焦点仍在原应用），再 show panel，
+  // 并把选中文本通过 panel:shown 事件传给前端。前端直接翻译，不再调用 readSelection。
+  async function triggerWithText(text: string) {
     const s = loadSettings();
     if (!hasValidSettings(s)) {
       setStatus("needsConfig");
       return;
     }
-    setStatus("reading");
-    setOriginal("");
-    setTranslated("");
-    setErrorMsg("");
-    const text = await readSelection();
-    if (!text) {
+    if (!text || !text.trim()) {
       setErrorMsg("没有读取到选中的文本。请先在任意应用里选中文本。");
       setRetryable(false);
       setStatus("error");
@@ -103,6 +99,9 @@ export function TranslationPanel() {
     }
     lastOriginalRef.current = text;
     setOriginal(text);
+    setTranslated("");
+    setErrorMsg("");
+    setStatus("translating");
     await doTranslate(text);
   }
 
@@ -112,10 +111,12 @@ export function TranslationPanel() {
     }
   }
 
-  // Rust 端在 panel.show() 后 emit "panel:shown"，前端监听后触发读取选中并翻译
+  // Rust 端在 panel.show() 后 emit "panel:shown"（payload 为选中文本），前端翻译
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    listen("panel:shown", () => triggerFromHotkey()).then((u) => (unlisten = u));
+    listen<string>("panel:shown", (event) => triggerWithText(event.payload ?? "")).then(
+      (u) => (unlisten = u),
+    );
     return () => unlisten?.();
   }, []);
 

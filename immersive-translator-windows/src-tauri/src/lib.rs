@@ -64,10 +64,13 @@ pub fn run() {
                         if panel.is_visible().unwrap_or(false) {
                             let _ = panel.hide();
                         } else {
+                            // 关键：先在焦点仍在原应用时读取选中（模拟 Ctrl+C），
+                            // 读取完成后再 show panel，避免 panel 抢焦点导致复制失败。
+                            let selected = clipboard::read_selection_impl().unwrap_or_default();
                             let _ = panel.show();
                             let _ = panel.set_focus();
-                            // 通知前端：panel 已显示，触发读取选中并翻译
-                            let _ = panel.emit("panel:shown", ());
+                            // 把选中文本随事件传给前端，前端直接翻译
+                            let _ = panel.emit("panel:shown", selected);
                         }
                     }
                 }
