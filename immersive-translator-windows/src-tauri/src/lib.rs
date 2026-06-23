@@ -4,7 +4,7 @@ mod translation;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Manager,
+    Emitter, Manager,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -53,6 +53,8 @@ pub fn run() {
                         } else {
                             let _ = panel.show();
                             let _ = panel.set_focus();
+                            // 通知前端：panel 已显示，触发读取选中并翻译
+                            let _ = panel.emit("panel:shown", ());
                         }
                     }
                 }
