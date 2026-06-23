@@ -1,7 +1,9 @@
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
+    Manager,
 };
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -13,6 +15,7 @@ fn greet(name: &str) -> String {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![greet])
         .setup(|app| {
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
@@ -32,6 +35,22 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
+
+            // 注册全局热键 Alt+Space，按下时切换 panel 窗口显示。
+            // 若 Alt+Space 被系统占用（Windows 窗口菜单热键），换成 Alt+Q。
+            app.global_shortcut().on_shortcut("Alt+Space", |app, _shortcut, event| {
+                if event.state == ShortcutState::Pressed {
+                    if let Some(panel) = app.get_webview_window("panel") {
+                        if panel.is_visible().unwrap_or(false) {
+                            let _ = panel.hide();
+                        } else {
+                            let _ = panel.show();
+                            let _ = panel.set_focus();
+                        }
+                    }
+                }
+            })?;
+
             Ok(())
         })
         .run(tauri::generate_context!())

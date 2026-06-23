@@ -11,7 +11,21 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [],
+    "windows": [
+      {
+        "label": "panel",
+        "title": "",
+        "width": 420,
+        "height": 260,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "center": true
+      }
+    ],
     "trayIcon": {
       "id": "main",
       "iconPath": "icons/tray-icon.png",
