@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { cursorPosition, getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
 import {
   translateStream,
   openSettings,
@@ -16,6 +17,8 @@ import { buildSystemPrompt } from "../core/promptBuilder";
 
 type Status = "idle" | "reading" | "translating" | "done" | "error" | "needsConfig";
 
+const panelWindow = getCurrentWindow();
+
 export function TranslationPanel() {
   const [status, setStatus] = useState<Status>("idle");
   const [original, setOriginal] = useState("");
@@ -24,8 +27,9 @@ export function TranslationPanel() {
   const [errorMsg, setErrorMsg] = useState("");
   const [retryable, setRetryable] = useState(false);
   const lastOriginalRef = useRef("");
+  const dragStateRef = useRef<{ offsetX: number; offsetY: number } | null>(null);
+  const dragMovePendingRef = useRef(false);
 
-  // 监听翻译事件
   useEffect(() => {
     let unDelta: (() => void) | undefined;
     let unDone: (() => void) | undefined;
@@ -72,19 +76,24 @@ export function TranslationPanel() {
     setTranslated("");
     setErrorMsg("");
 
-    await translateStream({
-      text,
-      endpoint: s.endpoint,
-      apiKey: s.apiKey,
-      model: s.model,
-      systemPrompt,
-      stream: s.stream,
-      windowLabel: "panel",
-    });
+    try {
+      await translateStream({
+        text,
+        endpoint: s.endpoint,
+        apiKey: s.apiKey,
+        model: s.model,
+        systemPrompt,
+        stream: s.stream,
+        windowLabel: "panel",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setErrorMsg(`翻译命令调用失败：${message}`);
+      setRetryable(true);
+      setStatus("error");
+    }
   }
 
-  // Rust 端在热键触发时先读取选中文本（焦点仍在原应用），再 show panel，
-  // 并把选中文本通过 panel:shown 事件传给前端。前端直接翻译，不再调用 readSelection。
   async function triggerWithText(text: string) {
     const s = loadSettings();
     if (!hasValidSettings(s)) {
@@ -111,7 +120,57 @@ export function TranslationPanel() {
     }
   }
 
-  // Rust 端在 panel.show() 后 emit "panel:shown"（payload 为选中文本），前端翻译
+  async function hidePanel() {
+    await panelWindow.hide();
+  }
+
+  async function startManualDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+
+    const [cursor, position] = await Promise.all([
+      cursorPosition(),
+      panelWindow.outerPosition(),
+    ]);
+
+    dragStateRef.current = {
+      offsetX: cursor.x - position.x,
+      offsetY: cursor.y - position.y,
+    };
+  }
+
+  async function moveDraggedPanel(event: React.PointerEvent<HTMLDivElement>) {
+    const dragState = dragStateRef.current;
+    if (!dragState || event.buttons !== 1 || dragMovePendingRef.current) {
+      return;
+    }
+
+    event.preventDefault();
+    dragMovePendingRef.current = true;
+    try {
+      const cursor = await cursorPosition();
+      await panelWindow.setPosition(
+        new PhysicalPosition(
+          Math.round(cursor.x - dragState.offsetX),
+          Math.round(cursor.y - dragState.offsetY),
+        ),
+      );
+    } finally {
+      dragMovePendingRef.current = false;
+    }
+  }
+
+  function stopManualDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    dragStateRef.current = null;
+  }
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen<string>("panel:shown", (event) => triggerWithText(event.payload ?? "")).then(
@@ -120,25 +179,48 @@ export function TranslationPanel() {
     return () => unlisten?.();
   }, []);
 
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        void hidePanel();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   return (
     <div style={panelStyle}>
       <div style={headerStyle}>
-        <span>ImmersiveTranslator</span>
-        <span>
+        <div
+          style={dragHandleStyle}
+          onPointerDown={(event) => void startManualDrag(event)}
+          onPointerMove={(event) => void moveDraggedPanel(event)}
+          onPointerUp={stopManualDrag}
+          onPointerCancel={stopManualDrag}
+          title="拖动移动窗口"
+        >
+          ImmersiveTranslator
+        </div>
+        <div style={actionsStyle}>
           {status === "done" && (
-            <button style={copyBtnStyle} onClick={() => navigator.clipboard.writeText(translated)}>
+            <button style={smallBtnStyle} onClick={() => navigator.clipboard.writeText(translated)}>
               复制
             </button>
           )}
           {status === "error" && retryable && (
-            <button style={copyBtnStyle} onClick={retry}>
-              重新翻译
+            <button style={smallBtnStyle} onClick={retry}>
+              重试
             </button>
           )}
-          <button style={copyBtnStyle} onClick={() => openSettings()} title="打开设置">
+          <button style={iconBtnStyle} onClick={() => openSettings()} title="打开设置">
             ⚙
           </button>
-        </span>
+          <button style={iconBtnStyle} onClick={() => void hidePanel()} title="关闭">
+            ×
+          </button>
+        </div>
       </div>
 
       {status === "needsConfig" && (
@@ -152,7 +234,7 @@ export function TranslationPanel() {
 
       {(status === "reading" || status === "translating") && (
         <div style={loadingStyle}>
-          {status === "reading" ? "正在读取选中文本…" : "翻译中…"}
+          {status === "reading" ? "正在读取选中文本..." : "翻译中..."}
           {status === "translating" && translated && (
             <div style={translatedStyle}>{translated}</div>
           )}
@@ -168,7 +250,7 @@ export function TranslationPanel() {
       )}
 
       {status === "idle" && (
-        <div style={idleStyle}>选中任意文本，按 Alt+Space 翻译。</div>
+        <div style={idleStyle}>选中任意文本，按 Ctrl+Shift+Q 翻译。</div>
       )}
 
       {status === "error" && <div style={errorStyle}>{errorMsg}</div>}
@@ -176,7 +258,6 @@ export function TranslationPanel() {
   );
 }
 
-// 把 Rust 错误事件转成 classifyTranslationError 的输入
 function toInput(e: ErrorEvent) {
   switch (e.kind) {
     case "network":
@@ -209,6 +290,18 @@ const headerStyle: React.CSSProperties = {
   marginBottom: 8,
   color: "#666",
   fontSize: 12,
+  gap: 8,
+};
+const dragHandleStyle: React.CSSProperties = {
+  flex: 1,
+  cursor: "move",
+  userSelect: "none",
+  padding: "5px 0",
+};
+const actionsStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
 };
 const originalStyle: React.CSSProperties = { color: "#888", fontSize: 12, marginBottom: 6 };
 const translatedStyle: React.CSSProperties = { lineHeight: 1.5 };
@@ -217,14 +310,18 @@ const errorStyle: React.CSSProperties = { color: "#c0392b", lineHeight: 1.5 };
 const loadingStyle: React.CSSProperties = { color: "#666" };
 const idleStyle: React.CSSProperties = { color: "#aaa", fontSize: 12 };
 const needsConfigStyle: React.CSSProperties = { color: "#555", textAlign: "center", padding: 8 };
-const copyBtnStyle: React.CSSProperties = {
+const smallBtnStyle: React.CSSProperties = {
   fontSize: 11,
   border: "1px solid #ddd",
   background: "#fff",
   borderRadius: 4,
   padding: "2px 8px",
   cursor: "pointer",
-  marginLeft: 4,
+};
+const iconBtnStyle: React.CSSProperties = {
+  ...smallBtnStyle,
+  width: 24,
+  padding: "2px 0",
 };
 const openSettingsBtnStyle: React.CSSProperties = {
   padding: "5px 14px",

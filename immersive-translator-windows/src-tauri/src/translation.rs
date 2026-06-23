@@ -3,6 +3,7 @@ use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TranslateRequest {
     pub text: String,
     pub endpoint: String, // OpenAI 兼容接口地址

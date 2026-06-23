@@ -42,6 +42,7 @@ pub fn run() {
 
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("ImmersiveTranslator")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -56,9 +57,8 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // 注册全局热键 Alt+Space，按下时切换 panel 窗口显示。
-            // 若 Alt+Space 被系统占用（Windows 窗口菜单热键），换成 Alt+Q。
-            app.global_shortcut().on_shortcut("Alt+Space", move |app, _shortcut, event| {
+            // 注册全局热键 Ctrl+Shift+Q，按下时切换 panel 窗口显示。
+            app.global_shortcut().on_shortcut("Ctrl+Shift+Q", move |app, _shortcut, event| {
                 use tauri::Manager;
                 if event.state != ShortcutState::Pressed {
                     return;
@@ -75,12 +75,12 @@ pub fn run() {
 
                 // 关键：enigo 的按键模拟在 Tauri 全局热键回调线程里会阻塞死锁，
                 // 必须 spawn 独立线程执行。同时：
-                // 1. 线程里先 sleep，让 Alt+Space 热键物理释放（避免 Alt 残留污染 Ctrl+C）
+                // 1. 线程里先 sleep，让 Ctrl+Shift+Q 热键物理释放（避免修饰键残留污染 Ctrl+C）
                 // 2. 复制时焦点仍在原应用（panel 还没 show）
                 // 3. 复制完成后再 show panel + emit 文本
                 let app_handle = app.clone();
                 std::thread::spawn(move || {
-                    // 等热键释放，避免 Alt 等修饰键残留
+                    // 等热键释放，避免修饰键残留
                     std::thread::sleep(std::time::Duration::from_millis(180));
 
                     let selected = clipboard::read_selection_impl().unwrap_or_default();

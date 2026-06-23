@@ -96,8 +96,8 @@ A: C++ Build Tools 没装或没勾「使用 C++ 的桌面开发」。回到第 2
 **Q: `npm create tauri-app` 报 Rust 相关错误？**
 A: 确认第 3 步 Rust 装好，重开终端让 PATH 生效。
 
-**Q: 热键（Alt+Space）注册失败？**
-A: 可能被其他程序占用（部分输入法/快捷启动器）。在 Task 4 验证时如果撞了，换成 `Alt+Q` 或 `Ctrl+Space` 之类试。
+**Q: 热键（Ctrl+Shift+Q）注册失败？**
+A: 可能被其他程序占用（部分输入法/快捷启动器）。如果撞了，可以换成 `Ctrl+Space` 或 `Ctrl+Alt+T` 之类试。
 
 **Q: WebView2 白屏？**
 A: 确认第 1 步 WebView2 Runtime 装好；Win10 尤其要检查。

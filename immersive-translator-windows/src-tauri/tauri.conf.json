@@ -37,11 +37,6 @@
         "center": true
       }
     ],
-    "trayIcon": {
-      "id": "main",
-      "iconPath": "icons/tray-icon.png",
-      "tooltip": "ImmersiveTranslator"
-    },
     "security": {
       "csp": null
     }
