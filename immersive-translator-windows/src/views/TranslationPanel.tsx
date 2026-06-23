@@ -3,18 +3,19 @@ import { listen } from "@tauri-apps/api/event";
 import {
   readSelection,
   translateStream,
+  openSettings,
   onTranslationDelta,
   onTranslationDone,
   onTranslationError,
   type DoneEvent,
   type ErrorEvent,
 } from "../lib/tauriBridge";
-import { loadSettings } from "../lib/settingsStore";
+import { loadSettings, hasValidSettings } from "../lib/settingsStore";
 import { classifyTranslationError } from "../core/errorMessageFormatter";
 import { resolveTargetLanguage } from "../core/languageDetect";
 import { buildSystemPrompt } from "../core/promptBuilder";
 
-type Status = "idle" | "reading" | "translating" | "done" | "error";
+type Status = "idle" | "reading" | "translating" | "done" | "error" | "needsConfig";
 
 export function TranslationPanel() {
   const [status, setStatus] = useState<Status>("idle");
@@ -57,15 +58,15 @@ export function TranslationPanel() {
   }, []);
 
   async function doTranslate(text: string) {
-    const settings = loadSettings();
+    const s = loadSettings();
     const target = resolveTargetLanguage(text, {
-      mode: settings.translationMode,
-      fixed: settings.fixedTarget,
+      mode: s.translationMode,
+      fixed: s.fixedTarget,
     });
     const systemPrompt = buildSystemPrompt({
       targetLanguage: target,
-      customStyle: settings.customStyle,
-      glossaryText: settings.glossaryText,
+      customStyle: s.customStyle,
+      glossaryText: s.glossaryText,
     });
 
     setStatus("translating");
@@ -74,16 +75,21 @@ export function TranslationPanel() {
 
     await translateStream({
       text,
-      endpoint: settings.endpoint,
-      apiKey: settings.apiKey,
-      model: settings.model,
+      endpoint: s.endpoint,
+      apiKey: s.apiKey,
+      model: s.model,
       systemPrompt,
-      stream: settings.stream,
+      stream: s.stream,
       windowLabel: "panel",
     });
   }
 
   async function triggerFromHotkey() {
+    const s = loadSettings();
+    if (!hasValidSettings(s)) {
+      setStatus("needsConfig");
+      return;
+    }
     setStatus("reading");
     setOriginal("");
     setTranslated("");
@@ -106,7 +112,7 @@ export function TranslationPanel() {
     }
   }
 
-  // Rust 端在 panel.show() 后 emit "panel:shown"，前端监听后触发翻译
+  // Rust 端在 panel.show() 后 emit "panel:shown"，前端监听后触发读取选中并翻译
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen("panel:shown", () => triggerFromHotkey()).then((u) => (unlisten = u));
@@ -117,17 +123,31 @@ export function TranslationPanel() {
     <div style={panelStyle}>
       <div style={headerStyle}>
         <span>ImmersiveTranslator</span>
-        {status === "done" && (
-          <button style={copyBtnStyle} onClick={() => navigator.clipboard.writeText(translated)}>
-            复制
+        <span>
+          {status === "done" && (
+            <button style={copyBtnStyle} onClick={() => navigator.clipboard.writeText(translated)}>
+              复制
+            </button>
+          )}
+          {status === "error" && retryable && (
+            <button style={copyBtnStyle} onClick={retry}>
+              重新翻译
+            </button>
+          )}
+          <button style={copyBtnStyle} onClick={() => openSettings()} title="打开设置">
+            ⚙
           </button>
-        )}
-        {status === "error" && retryable && (
-          <button style={copyBtnStyle} onClick={retry}>
-            重新翻译
-          </button>
-        )}
+        </span>
       </div>
+
+      {status === "needsConfig" && (
+        <div style={needsConfigStyle}>
+          <div style={{ marginBottom: 10 }}>尚未配置翻译接口。</div>
+          <button style={openSettingsBtnStyle} onClick={() => openSettings()}>
+            打开设置
+          </button>
+        </div>
+      )}
 
       {(status === "reading" || status === "translating") && (
         <div style={loadingStyle}>
@@ -144,6 +164,10 @@ export function TranslationPanel() {
           <div style={translatedStyle}>{translated}</div>
           <div style={metaStyle}>耗时 {(elapsedMs / 1000).toFixed(1)}s</div>
         </>
+      )}
+
+      {status === "idle" && (
+        <div style={idleStyle}>选中任意文本，按 Alt+Space 翻译。</div>
       )}
 
       {status === "error" && <div style={errorStyle}>{errorMsg}</div>}
@@ -190,11 +214,23 @@ const translatedStyle: React.CSSProperties = { lineHeight: 1.5 };
 const metaStyle: React.CSSProperties = { color: "#aaa", fontSize: 11, marginTop: 8 };
 const errorStyle: React.CSSProperties = { color: "#c0392b", lineHeight: 1.5 };
 const loadingStyle: React.CSSProperties = { color: "#666" };
+const idleStyle: React.CSSProperties = { color: "#aaa", fontSize: 12 };
+const needsConfigStyle: React.CSSProperties = { color: "#555", textAlign: "center", padding: 8 };
 const copyBtnStyle: React.CSSProperties = {
   fontSize: 11,
   border: "1px solid #ddd",
   background: "#fff",
   borderRadius: 4,
   padding: "2px 8px",
+  cursor: "pointer",
+  marginLeft: 4,
+};
+const openSettingsBtnStyle: React.CSSProperties = {
+  padding: "5px 14px",
+  border: "none",
+  background: "#2563eb",
+  color: "#fff",
+  borderRadius: 4,
+  fontSize: 13,
   cursor: "pointer",
 };

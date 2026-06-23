@@ -24,6 +24,17 @@
         "skipTaskbar": true,
         "visible": false,
         "center": true
+      },
+      {
+        "label": "settings",
+        "title": "ImmersiveTranslator 设置",
+        "width": 640,
+        "height": 580,
+        "resizable": true,
+        "minimizable": true,
+        "maximizable": false,
+        "visible": false,
+        "center": true
       }
     ],
     "trayIcon": {

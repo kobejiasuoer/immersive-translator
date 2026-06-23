@@ -39,3 +39,12 @@ export function loadSettings(): AppSettings {
 export function saveSettings(settings: AppSettings): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
 }
+
+/**
+ * 判断是否已配置好可用的接口。
+ * 阶段 1 验证用：apiKey 非空视为已配置（本地 Ollama 等免 key 接口另说，但这里简单按 apiKey 判断）。
+ */
+export function hasValidSettings(settings: AppSettings): boolean {
+  return settings.endpoint.trim() !== "" && settings.apiKey.trim() !== "";
+}
+

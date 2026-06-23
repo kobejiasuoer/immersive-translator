@@ -14,6 +14,16 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+/// 打开设置窗口（前端可调用）。对齐托盘「设置」菜单的行为。
+#[tauri::command]
+fn open_settings(app: tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(win) = app.get_webview_window("settings") {
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -23,6 +33,7 @@ pub fn run() {
             greet,
             clipboard::read_selection,
             translation::translate_stream,
+            open_settings,
         ])
         .setup(|app| {
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
@@ -36,8 +47,10 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => app.exit(0),
                     "settings" => {
-                        // 阶段 1 再实现打开设置窗口
-                        let _ = app;
+                        if let Some(win) = app.get_webview_window("settings") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
                     }
                     _ => {}
                 })

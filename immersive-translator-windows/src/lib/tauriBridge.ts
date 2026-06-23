@@ -33,6 +33,11 @@ export async function readSelection(): Promise<string> {
   return invoke<string>("read_selection");
 }
 
+/** 打开设置窗口。 */
+export async function openSettings(): Promise<void> {
+  await invoke("open_settings");
+}
+
 /** 发起翻译请求。结果通过事件回调返回。 */
 export async function translateStream(req: TranslateRequest): Promise<void> {
   await invoke("translate_stream", { req });
