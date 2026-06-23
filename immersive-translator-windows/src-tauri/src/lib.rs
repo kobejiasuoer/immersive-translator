@@ -58,22 +58,42 @@ pub fn run() {
 
             // 注册全局热键 Alt+Space，按下时切换 panel 窗口显示。
             // 若 Alt+Space 被系统占用（Windows 窗口菜单热键），换成 Alt+Q。
-            app.global_shortcut().on_shortcut("Alt+Space", |app, _shortcut, event| {
-                if event.state == ShortcutState::Pressed {
-                    if let Some(panel) = app.get_webview_window("panel") {
-                        if panel.is_visible().unwrap_or(false) {
-                            let _ = panel.hide();
-                        } else {
-                            // 关键：先在焦点仍在原应用时读取选中（模拟 Ctrl+C），
-                            // 读取完成后再 show panel，避免 panel 抢焦点导致复制失败。
-                            let selected = clipboard::read_selection_impl().unwrap_or_default();
-                            let _ = panel.show();
-                            let _ = panel.set_focus();
-                            // 把选中文本随事件传给前端，前端直接翻译
-                            let _ = panel.emit("panel:shown", selected);
-                        }
-                    }
+            app.global_shortcut().on_shortcut("Alt+Space", move |app, _shortcut, event| {
+                use tauri::Manager;
+                if event.state != ShortcutState::Pressed {
+                    return;
                 }
+                let panel = match app.get_webview_window("panel") {
+                    Some(p) => p,
+                    None => return,
+                };
+                // 已显示则隐藏（切换）
+                if panel.is_visible().unwrap_or(false) {
+                    let _ = panel.hide();
+                    return;
+                }
+
+                // 关键：enigo 的按键模拟在 Tauri 全局热键回调线程里会阻塞死锁，
+                // 必须 spawn 独立线程执行。同时：
+                // 1. 线程里先 sleep，让 Alt+Space 热键物理释放（避免 Alt 残留污染 Ctrl+C）
+                // 2. 复制时焦点仍在原应用（panel 还没 show）
+                // 3. 复制完成后再 show panel + emit 文本
+                let app_handle = app.clone();
+                std::thread::spawn(move || {
+                    // 等热键释放，避免 Alt 等修饰键残留
+                    std::thread::sleep(std::time::Duration::from_millis(180));
+
+                    let selected = clipboard::read_selection_impl().unwrap_or_default();
+
+                    // 切回主线程上下文操作窗口
+                    let panel = match app_handle.get_webview_window("panel") {
+                        Some(p) => p,
+                        None => return,
+                    };
+                    let _ = panel.show();
+                    let _ = panel.set_focus();
+                    let _ = panel.emit("panel:shown", selected);
+                });
             })?;
 
             Ok(())
