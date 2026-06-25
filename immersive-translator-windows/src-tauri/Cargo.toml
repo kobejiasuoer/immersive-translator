@@ -1,6 +1,6 @@
 [package]
 name = "immersive-translator-windows"
-version = "0.1.0"
+version = "0.1.1"
 description = "Tauri + TypeScript 实现的 Windows 版 ImmersiveTranslator"
 authors = ["yangbishang"]
 edition = "2021"
