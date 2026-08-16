@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  loadSettings,
   loadSettingsAsync,
+  savePersistedHotkey,
   saveSettingsAsync,
   DEFAULT_SETTINGS,
   hasValidSettings,
@@ -14,6 +17,7 @@ import {
   PROVIDER_PRESETS,
   findMatchingPreset,
   isLocalhostEndpoint,
+  normalizeEndpoint,
   type ProviderPreset,
 } from "../core/providerPresets";
 import {
@@ -22,7 +26,11 @@ import {
   normalizeHotkey,
   RECOMMENDED_HOTKEYS,
 } from "../core/hotkeyValidator";
-import { reregisterHotkey, testConnectivity } from "../lib/tauriBridge";
+import {
+  getActiveHotkey,
+  reregisterHotkey,
+  testConnectivity,
+} from "../lib/tauriBridge";
 import {
   ocrModelsReady,
   ocrDownloadModels,
@@ -34,51 +42,102 @@ import {
   type UpdateProgress,
   type UpdateStage,
 } from "../lib/updater";
-import { buildSanitizedCurl, buildDiagnosticReport } from "../core/errorMessageFormatter";
+import {
+  buildSanitizedCurl,
+  buildDiagnosticReport,
+  sanitizeDiagnosticText,
+} from "../core/errorMessageFormatter";
 import {
   glossaryStats,
   dedupAndNormalize,
   mergeGlossary,
 } from "../core/glossaryParser";
 
-/** 规范化 endpoint，对齐后端 translation.rs::normalize_endpoint。 */
-function normalizeEndpointPreview(endpoint: string): string {
-  const trimmed = endpoint.trim().replace(/\/+$/, "");
-  if (trimmed === "") return "";
-  if (trimmed.toLowerCase().endsWith("/chat/completions")) return trimmed;
-  if (trimmed.toLowerCase().endsWith("/v1")) return `${trimmed}/chat/completions`;
-  return `${trimmed}/v1/chat/completions`;
-}
-
 /**
  * 设置窗口。点托盘「设置」菜单打开。
  * 对齐 Mac 版设置字段。apiKey 经 DPAPI 加密存储，其余字段存 localStorage。
  */
 export function Settings() {
-  const [settings, setSettings] = useState<AppSettings>(() => ({
-    ...DEFAULT_SETTINGS,
-  }));
+  const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsLoadAttempt, setSettingsLoadAttempt] = useState(0);
+  const [credentialsLoaded, setCredentialsLoaded] = useState(false);
+  const [persistenceBusy, setPersistenceBusy] = useState(false);
+  const [registeredHotkey, setRegisteredHotkey] = useState(settings.hotkey);
   const [showWelcome, setShowWelcome] = useState(false);
+  const [appVersion, setAppVersion] = useState("未知");
+  const lastPersistedHotkeyRef = useRef(settings.hotkey);
+  const persistenceBusyRef = useRef(false);
+  const settingsRevisionRef = useRef(0);
 
   // 首次加载后：加载设置；若未关闭引导且接口未配好，显示欢迎横幅
   useEffect(() => {
     let active = true;
-    loadSettingsAsync().then((s) => {
-      if (!active) return;
-      setSettings(s);
-      if (!isOnboardingDismissed() && !hasValidSettings(s)) {
-        setShowWelcome(true);
-      }
-    });
+    setSettingsLoading(true);
+    setCredentialsLoaded(false);
+    Promise.all([loadSettingsAsync(), getActiveHotkey()])
+      .then(([s, activeHotkey]) => {
+        if (!active) return;
+        lastPersistedHotkeyRef.current = activeHotkey;
+        setRegisteredHotkey(activeHotkey);
+        settingsRevisionRef.current += 1;
+        setSettings(s);
+        setLoadError(null);
+        setCredentialsLoaded(true);
+        if (!isOnboardingDismissed() && !hasValidSettings(s)) {
+          setShowWelcome(true);
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setCredentialsLoaded(false);
+          setLoadError(
+            `读取安全设置失败：${String(error)}。当前已禁用保存和恢复默认。`,
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setSettingsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [settingsLoadAttempt]);
+
+  useEffect(() => {
+    let active = true;
+    getVersion()
+      .then((version) => {
+        if (active) setAppVersion(version);
+      })
+      .catch(() => {
+        // Browser-only previews do not expose the Tauri runtime.
+      });
     return () => {
       active = false;
     };
   }, []);
 
   function update<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
+    settingsRevisionRef.current += 1;
     setSettings((prev) => ({ ...prev, [key]: value }));
     setSaved(false);
+    setSaveError(null);
+  }
+
+  function beginPersistenceOperation(): boolean {
+    if (settingsLoading || !credentialsLoaded || persistenceBusyRef.current) return false;
+    persistenceBusyRef.current = true;
+    setPersistenceBusy(true);
+    return true;
+  }
+
+  function finishPersistenceOperation() {
+    persistenceBusyRef.current = false;
+    setPersistenceBusy(false);
   }
 
   // ---- 热键录制 ----
@@ -181,11 +240,26 @@ export function Settings() {
     setTestMsg(null);
     try {
       const r = await testConnectivity(settings.endpoint, settings.apiKey, settings.model);
-      setTestMsg({ text: r.message, ok: r.ok });
+      setTestMsg({
+        text: sanitizeDiagnosticText(r.message, settings.endpoint, settings.apiKey),
+        ok: r.ok,
+      });
     } catch (e) {
-      setTestMsg({ text: `测试失败：${e}`, ok: false });
+      setTestMsg({
+        text: `测试失败：${sanitizeDiagnosticText(String(e), settings.endpoint, settings.apiKey)}`,
+        ok: false,
+      });
     } finally {
       setTesting(false);
+    }
+  }
+
+  async function copyDiagnosticText(text: string, successMessage: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setTestMsg({ text: successMessage, ok: true });
+    } catch (error) {
+      setTestMsg({ text: `复制失败：${String(error)}`, ok: false });
     }
   }
 
@@ -197,6 +271,11 @@ export function Settings() {
       if (!recordingRef.current) return;
       e.preventDefault();
       e.stopPropagation();
+      if (e.key === "Escape") {
+        stopRecording();
+        setHotkeyMsg(null);
+        return;
+      }
       // 忽略单按修饰键
       const modKeys = ["Control", "Alt", "Shift", "Meta"];
       if (modKeys.includes(e.key)) return;
@@ -222,6 +301,7 @@ export function Settings() {
         setHotkeyMsg({ text: v.warning ?? "该组合不可用", ok: false });
         return;
       }
+      settingsRevisionRef.current += 1;
       setSettings((prev) => ({ ...prev, hotkey: norm }));
       setSaved(false);
       setHotkeyMsg(
@@ -230,20 +310,16 @@ export function Settings() {
       stopRecording();
     }
     window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      recordingRef.current = false;
+    };
   }, []);
 
   function startRecording() {
     recordingRef.current = true;
     setRecording(true);
     setHotkeyMsg({ text: "请按下新的组合键…（Esc 取消）", ok: true });
-    // Esc 取消
-    const onCancel = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        stopRecording();
-      }
-    };
-    window.addEventListener("keydown", onCancel, true);
   }
 
   function stopRecording() {
@@ -252,52 +328,172 @@ export function Settings() {
   }
 
   /** 应用并注册热键（保存设置时自动调用，也可单独点「应用」）。 */
-  async function applyHotkey() {
-    if (validation.blocking) {
-      setHotkeyMsg({ text: validation.warning ?? "热键无效", ok: false });
-      return false;
+  async function applyHotkey(hotkey: string): Promise<string | null> {
+    const hotkeyValidation = validateHotkey(hotkey);
+    if (hotkeyValidation.blocking) {
+      setHotkeyMsg({ text: hotkeyValidation.warning ?? "热键无效", ok: false });
+      return null;
     }
     try {
-      await reregisterHotkey(settings.hotkey);
-      setHotkeyMsg({ text: `热键已注册：${settings.hotkey}`, ok: true });
-      return true;
+      const registered = await reregisterHotkey(hotkey);
+      setRegisteredHotkey(registered);
+      setHotkeyMsg({ text: `热键已注册：${registered}`, ok: true });
+      return registered;
     } catch (e) {
       setHotkeyMsg({ text: String(e), ok: false });
-      return false;
+      return null;
+    }
+  }
+
+  async function restoreHotkeyAfterFailure(
+    hotkey: string,
+    error: unknown,
+    prefix: string,
+  ): Promise<string> {
+    try {
+      const restored = await reregisterHotkey(hotkey);
+      setRegisteredHotkey(restored);
+      setHotkeyMsg({ text: `已恢复原热键：${restored}`, ok: true });
+      return `${prefix}：${String(error)}`;
+    } catch (rollbackError) {
+      return `${prefix}：${String(error)}；恢复原热键失败：${String(rollbackError)}`;
+    }
+  }
+
+  async function handleApplyHotkey() {
+    if (!beginPersistenceOperation()) return;
+    const hotkey = settings.hotkey;
+    const rollbackHotkey = lastPersistedHotkeyRef.current;
+    setSaveError(null);
+    setSaved(false);
+    try {
+      const registered = await applyHotkey(hotkey);
+      if (registered !== null) {
+        try {
+          savePersistedHotkey(registered);
+        } catch (error) {
+          setSaveError(
+            await restoreHotkeyAfterFailure(
+              rollbackHotkey,
+              error,
+              "保存热键失败",
+            ),
+          );
+          return;
+        }
+        lastPersistedHotkeyRef.current = registered;
+        setSettings((current) =>
+          current.hotkey === hotkey ? { ...current, hotkey: registered } : current,
+        );
+      }
+    } finally {
+      finishPersistenceOperation();
     }
   }
 
   async function handleSave() {
-    // 保存设置；如果热键改过则重新注册
-    const hotkeyChanged = settings.hotkey !== DEFAULT_SETTINGS.hotkey;
-    await saveSettingsAsync(settings);
-    if (hotkeyChanged || validation.ok) {
-      await applyHotkey();
+    if (!beginPersistenceOperation()) return;
+    const settingsAtStart = settings;
+    const revisionAtStart = settingsRevisionRef.current;
+    const rollbackHotkey = lastPersistedHotkeyRef.current;
+    // Always re-register so resetting from a custom hotkey also restores the
+    // default. Do not claim the whole save succeeded when registration fails.
+    setSaveError(null);
+    setSaved(false);
+    try {
+      const registered = await applyHotkey(settingsAtStart.hotkey);
+      if (registered === null) return;
+
+      const settingsToPersist = { ...settingsAtStart, hotkey: registered };
+      try {
+        await saveSettingsAsync(settingsToPersist);
+      } catch (error) {
+        setSaveError(
+          await restoreHotkeyAfterFailure(rollbackHotkey, error, "保存设置失败"),
+        );
+        return;
+      }
+
+      lastPersistedHotkeyRef.current = registered;
+      setSettings((current) =>
+        current === settingsAtStart ? settingsToPersist : current,
+      );
+      setLoadError(null);
+      // 配置已有效时，自动关闭欢迎横幅
+      if (hasValidSettings(settingsToPersist)) {
+        setOnboardingDismissed(true);
+        setShowWelcome(false);
+      }
+      setSaved(settingsRevisionRef.current === revisionAtStart);
+    } finally {
+      finishPersistenceOperation();
     }
-    // 配置已有效时，自动关闭欢迎横幅
-    if (hasValidSettings(settings)) {
-      setOnboardingDismissed(true);
-      setShowWelcome(false);
-    }
-    setSaved(true);
   }
 
   async function handleClose() {
     await getCurrentWindow().hide();
   }
 
-  function handleResetDefaults() {
-    if (confirm("确定恢复默认设置？已保存的接口配置会被清空。")) {
-      const reset = { ...DEFAULT_SETTINGS };
-      void saveSettingsAsync(reset);
-      setSettings(reset);
-      setSaved(false);
+  async function handleResetDefaults() {
+    if (settingsLoading || !credentialsLoaded || persistenceBusyRef.current) return;
+    if (!confirm("确定恢复默认设置？已保存的接口配置会被清空。")) {
+      return;
+    }
+    if (!beginPersistenceOperation()) return;
+
+    const reset = { ...DEFAULT_SETTINGS };
+    const rollbackHotkey = lastPersistedHotkeyRef.current;
+    setSaveError(null);
+    setSaved(false);
+    try {
+      let registered: string;
+      try {
+        registered = await reregisterHotkey(reset.hotkey);
+        setRegisteredHotkey(registered);
+      } catch (error) {
+        setSaveError(`恢复默认设置失败：${String(error)}`);
+        return;
+      }
+      const settingsToPersist = { ...reset, hotkey: registered };
+      try {
+        await saveSettingsAsync(settingsToPersist);
+      } catch (error) {
+        setSaveError(
+          await restoreHotkeyAfterFailure(
+            rollbackHotkey,
+            error,
+            "恢复默认设置失败",
+          ),
+        );
+        return;
+      }
+      lastPersistedHotkeyRef.current = registered;
+      settingsRevisionRef.current += 1;
+      setSettings(settingsToPersist);
+      setLoadError(null);
+      setHotkeyMsg({ text: `热键已注册：${registered}`, ok: true });
+      setSaved(true);
+    } finally {
+      finishPersistenceOperation();
     }
   }
 
   return (
     <div style={pageStyle}>
       <h1 style={titleStyle}>ImmersiveTranslator 设置</h1>
+
+      {loadError && (
+        <div style={{ ...warnHintStyle, margin: "0 0 12px", overflowWrap: "anywhere" }}>
+          <div>{loadError}</div>
+          <button
+            style={{ ...secondaryBtnStyle, marginTop: 8 }}
+            disabled={settingsLoading}
+            onClick={() => setSettingsLoadAttempt((attempt) => attempt + 1)}
+          >
+            {settingsLoading ? "读取中…" : "重试读取"}
+          </button>
+        </div>
+      )}
 
       {showWelcome && (
         <div style={welcomeStyle}>
@@ -338,13 +534,16 @@ export function Settings() {
                 preset={p}
                 active={findMatchingPreset(settings.endpoint)?.id === p.id}
                 apiKeyMissing={settings.apiKey.trim() === "" && !(p.allowEmptyApiKey ?? false)}
-                onApply={() =>
+                onApply={() => {
+                  settingsRevisionRef.current += 1;
                   setSettings((prev) => ({
                     ...prev,
                     endpoint: p.endpoint,
                     model: p.model,
-                  }))
-                }
+                  }));
+                  setSaved(false);
+                  setSaveError(null);
+                }}
               />
             ))}
           </div>
@@ -360,7 +559,7 @@ export function Settings() {
           />
         </label>
         <div style={hintStyle}>
-          实际请求地址：<code>{normalizeEndpointPreview(settings.endpoint) || "（未填写）"}</code>
+          实际请求地址：<code>{normalizeEndpoint(settings.endpoint) || "（未填写）"}</code>
           <br />
           支持 OpenAI / DeepSeek / 智谱 / 通义等兼容接口。地址会自动补全 /v1/chat/completions。
         </div>
@@ -406,8 +605,7 @@ export function Settings() {
                 settings.model,
                 "hello",
               );
-              void navigator.clipboard.writeText(curl);
-              setTestMsg({ text: "脱敏 curl 已复制到剪贴板", ok: true });
+              void copyDiagnosticText(curl, "脱敏 curl 已复制到剪贴板");
             }}
           >
             复制脱敏 curl
@@ -422,10 +620,12 @@ export function Settings() {
                 stream: settings.stream,
                 translationMode: settings.translationMode,
                 fixedTarget: settings.fixedTarget,
-                appVersion: "0.1.0",
+                appVersion,
               });
-              void navigator.clipboard.writeText(report);
-              setTestMsg({ text: "诊断报告已复制到剪贴板（已脱敏，可安全分享）", ok: true });
+              void copyDiagnosticText(
+                report,
+                "诊断报告已复制到剪贴板（已自动脱敏，分享前请复核）",
+              );
             }}
           >
             生成诊断报告
@@ -628,13 +828,17 @@ export function Settings() {
           >
             {recording ? "录制中…（点击取消）" : "录制组合键"}
           </button>
-          <button style={secondaryBtnStyle} onClick={() => void applyHotkey()} disabled={!validation.ok}>
+          <button
+            style={secondaryBtnStyle}
+            onClick={() => void handleApplyHotkey()}
+            disabled={!validation.ok || settingsLoading || !credentialsLoaded || persistenceBusy}
+          >
             立即注册
           </button>
         </div>
         <div style={hintStyle}>
           按下热键会读取当前选中文字并弹出翻译浮窗。当前已注册：
-          <code>{settings.hotkey}</code>
+          <code>{registeredHotkey}</code>
         </div>
         {hotkeyMsg && (
           <div style={hotkeyMsg.ok ? savedHintStyle : warnHintStyle}>{hotkeyMsg.text}</div>
@@ -696,8 +900,17 @@ export function Settings() {
         </div>
       </section>
 
+      {saveError && (
+        <div style={{ ...warnHintStyle, margin: "0 0 8px", overflowWrap: "anywhere" }}>
+          {saveError}
+        </div>
+      )}
       <div style={actionsStyle}>
-        <button style={secondaryBtnStyle} onClick={handleResetDefaults}>
+        <button
+          style={secondaryBtnStyle}
+          disabled={settingsLoading || !credentialsLoaded || persistenceBusy}
+          onClick={() => void handleResetDefaults()}
+        >
           恢复默认
         </button>
         <span style={{ flex: 1 }} />
@@ -705,8 +918,12 @@ export function Settings() {
         <button style={secondaryBtnStyle} onClick={handleClose}>
           关闭
         </button>
-        <button style={primaryBtnStyle} onClick={handleSave}>
-          保存
+        <button
+          style={primaryBtnStyle}
+          disabled={settingsLoading || !credentialsLoaded || persistenceBusy}
+          onClick={() => void handleSave()}
+        >
+          {persistenceBusy ? "保存中…" : "保存"}
         </button>
       </div>
     </div>

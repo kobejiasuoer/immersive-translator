@@ -14,6 +14,18 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
+const DEFAULT_HOTKEY: &str = "Ctrl+Shift+Q";
+
+struct ActiveHotkey(Mutex<Shortcut>);
+
+impl Default for ActiveHotkey {
+    fn default() -> Self {
+        Self(Mutex::new(
+            Shortcut::from_str(DEFAULT_HOTKEY).expect("default hotkey must be valid"),
+        ))
+    }
+}
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -171,14 +183,93 @@ fn trigger_panel(app: &AppHandle) {
     });
 }
 
-/// 运行时切换全局热键。先注销全部，再注册新的，并持久化到 hotkey.txt。
+fn register_panel_hotkey(
+    app: &AppHandle,
+    shortcut: Shortcut,
+) -> Result<(), tauri_plugin_global_shortcut::Error> {
+    app.global_shortcut()
+        .on_shortcut(shortcut, |app, _shortcut, event| {
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+            trigger_panel(app);
+        })
+}
+
+fn persist_hotkey(app: &AppHandle, shortcut: Shortcut) -> Result<(), String> {
+    let appdata = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法定位应用数据目录: {error}"))?;
+    std::fs::create_dir_all(&appdata).map_err(|error| format!("无法创建应用数据目录: {error}"))?;
+    std::fs::write(appdata.join("hotkey.txt"), shortcut.into_string())
+        .map_err(|error| format!("无法保存热键: {error}"))
+}
+
+/// Register and persist the replacement before removing the current shortcut.
+/// If a later step fails, remove the replacement and restore the old persisted
+/// value so callers keep the previous working configuration.
+fn switch_registered_hotkey<FRegister, FUnregister, FPersist>(
+    current: Shortcut,
+    replacement: Shortcut,
+    mut register: FRegister,
+    mut unregister: FUnregister,
+    mut persist: FPersist,
+) -> Result<bool, String>
+where
+    FRegister: FnMut(Shortcut) -> Result<(), String>,
+    FUnregister: FnMut(Shortcut) -> Result<(), String>,
+    FPersist: FnMut(Shortcut) -> Result<(), String>,
+{
+    if current == replacement {
+        persist(replacement).map_err(|error| format!("保存热键失败: {error}"))?;
+        return Ok(false);
+    }
+
+    register(replacement).map_err(|error| format!("注册新热键失败: {error}"))?;
+    if let Err(error) = persist(replacement) {
+        let unregister_error = unregister(replacement).err();
+        let restore_error = persist(current).err();
+        return Err(format_rollback_error(
+            format!("保存新热键失败: {error}"),
+            unregister_error,
+            restore_error,
+        ));
+    }
+    if let Err(error) = unregister(current) {
+        let unregister_error = unregister(replacement).err();
+        let restore_error = persist(current).err();
+        return Err(format_rollback_error(
+            format!("注销旧热键失败: {error}"),
+            unregister_error,
+            restore_error,
+        ));
+    }
+
+    Ok(true)
+}
+
+fn format_rollback_error(
+    cause: String,
+    unregister_error: Option<String>,
+    restore_error: Option<String>,
+) -> String {
+    let mut message = cause;
+    match unregister_error {
+        Some(error) => message.push_str(&format!("；注销新热键失败: {error}")),
+        None => message.push_str("；已注销新热键"),
+    }
+    match restore_error {
+        Some(error) => message.push_str(&format!("；恢复旧配置失败: {error}")),
+        None => message.push_str("；已恢复旧配置"),
+    }
+    message
+}
+
+/// 运行时切换全局热键。新键注册成功后才注销旧键，并持久化到 hotkey.txt。
 /// 返回 Ok(normalized) 或 Err(原因)。
 #[tauri::command]
 fn reregister_hotkey(app: AppHandle, hotkey: String) -> Result<String, String> {
-    let gs = app.global_shortcut();
-    // 先全注销
-    let _ = gs.unregister_all();
-
     let trimmed = hotkey.trim();
     if trimmed.is_empty() {
         return Err("热键为空".into());
@@ -186,23 +277,36 @@ fn reregister_hotkey(app: AppHandle, hotkey: String) -> Result<String, String> {
     let shortcut =
         Shortcut::from_str(trimmed).map_err(|e| format!("无法解析热键「{trimmed}」: {e}"))?;
 
-    // 用 on_shortcut 注册 handler（每次注册需要新的 handler）
-    gs.on_shortcut(shortcut, move |app, _shortcut, event| {
-        if event.state != ShortcutState::Pressed {
-            return;
-        }
-        trigger_panel(app);
-    })
-    .map_err(|e| format!("注册热键失败「{trimmed}」（可能已被系统或其它程序占用）: {e}"))?;
-
-    // 持久化到 app_data_dir/hotkey.txt，供下次启动恢复
-    if let Ok(appdata) = app.path().app_data_dir() {
-        let _ = std::fs::create_dir_all(&appdata);
-        let path = appdata.join("hotkey.txt");
-        let _ = std::fs::write(&path, trimmed);
+    let active_state = app.state::<ActiveHotkey>();
+    let mut active = active_state
+        .0
+        .lock()
+        .map_err(|_| "热键状态不可用".to_string())?;
+    let previous = *active;
+    let switched = switch_registered_hotkey(
+        previous,
+        shortcut,
+        |candidate| register_panel_hotkey(&app, candidate).map_err(|error| error.to_string()),
+        |candidate| {
+            app.global_shortcut()
+                .unregister(candidate)
+                .map_err(|error| error.to_string())
+        },
+        |candidate| persist_hotkey(&app, candidate),
+    )
+    .map_err(|error| format!("应用热键失败「{trimmed}」: {error}"))?;
+    if switched {
+        *active = shortcut;
     }
+    drop(active);
 
     Ok(trimmed.to_string())
+}
+
+#[tauri::command]
+fn get_active_hotkey(state: tauri::State<'_, ActiveHotkey>) -> Result<String, String> {
+    let active = state.0.lock().map_err(|_| "热键状态不可用".to_string())?;
+    Ok((*active).into_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -212,6 +316,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .manage(ActiveHotkey::default())
         .manage(translation::CancelFlag::default())
         .manage(ocr::OcrEngine::default())
         .manage(PendingPanelPayload::default())
@@ -243,6 +348,7 @@ pub fn run() {
             open_ocr_overlay,
             show_ocr_result,
             reregister_hotkey,
+            get_active_hotkey,
         ])
         .setup(|app| {
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
@@ -268,23 +374,19 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // 注册默认全局热键 Ctrl+Shift+Q（启动占位；用户改键后由 reregister_hotkey 覆盖）。
-            // 热键按下后的实际逻辑见 trigger_panel。
-            app.global_shortcut()
-                .on_shortcut("Ctrl+Shift+Q", |app, _shortcut, event| {
-                    if event.state != ShortcutState::Pressed {
-                        return;
-                    }
-                    trigger_panel(app);
-                })?;
+            // 先注册默认键；用户保存的快捷键稍后通过事务式切换覆盖它。
+            register_panel_hotkey(app.handle(), Shortcut::from_str(DEFAULT_HOTKEY)?)?;
 
-            // 启动后用用户保存的热键覆盖默认（hotkey.txt 在 app_data_dir，前端 saveSettingsAsync 写入）。
+            // 启动后用后端保存在 app_data_dir/hotkey.txt 的用户热键覆盖默认值。
             if let Ok(appdata) = app.path().app_data_dir() {
                 let path = appdata.join("hotkey.txt");
                 if let Ok(hk) = std::fs::read_to_string(&path) {
                     let hk = hk.trim();
-                    if !hk.is_empty() && hk != "Ctrl+Shift+Q" {
-                        let _ = reregister_hotkey(app.handle().clone(), hk.to_string());
+                    if !hk.is_empty() && hk != DEFAULT_HOTKEY {
+                        if let Err(error) = reregister_hotkey(app.handle().clone(), hk.to_string())
+                        {
+                            eprintln!("[hotkey] ignored saved shortcut: {error}");
+                        }
                     }
                 }
             }
@@ -293,4 +395,194 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Call {
+        Register(u32),
+        Persist(u32),
+        Unregister(u32),
+    }
+
+    fn shortcut(value: &str) -> Shortcut {
+        Shortcut::from_str(value).unwrap()
+    }
+
+    #[test]
+    fn hotkey_switch_registers_replacement_before_removing_current() {
+        let current = shortcut(DEFAULT_HOTKEY);
+        let replacement = shortcut("Ctrl+Shift+T");
+        let calls = RefCell::new(Vec::new());
+
+        let switched = switch_registered_hotkey(
+            current,
+            replacement,
+            |value| {
+                calls.borrow_mut().push(Call::Register(value.id()));
+                Ok(())
+            },
+            |value| {
+                calls.borrow_mut().push(Call::Unregister(value.id()));
+                Ok(())
+            },
+            |value| {
+                calls.borrow_mut().push(Call::Persist(value.id()));
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(switched);
+        assert_eq!(
+            calls.into_inner(),
+            vec![
+                Call::Register(replacement.id()),
+                Call::Persist(replacement.id()),
+                Call::Unregister(current.id()),
+            ]
+        );
+    }
+
+    #[test]
+    fn hotkey_switch_keeps_current_when_replacement_registration_fails() {
+        let current = shortcut(DEFAULT_HOTKEY);
+        let replacement = shortcut("Ctrl+Shift+T");
+        let calls = RefCell::new(Vec::new());
+
+        let result = switch_registered_hotkey(
+            current,
+            replacement,
+            |value| {
+                calls.borrow_mut().push(Call::Register(value.id()));
+                Err("occupied".to_string())
+            },
+            |value| {
+                calls.borrow_mut().push(Call::Unregister(value.id()));
+                Ok(())
+            },
+            |value| {
+                calls.borrow_mut().push(Call::Persist(value.id()));
+                Ok(())
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(calls.into_inner(), vec![Call::Register(replacement.id())]);
+    }
+
+    #[test]
+    fn hotkey_switch_rolls_back_replacement_when_current_removal_fails() {
+        let current = shortcut(DEFAULT_HOTKEY);
+        let replacement = shortcut("Ctrl+Shift+T");
+        let calls = RefCell::new(Vec::new());
+
+        let result = switch_registered_hotkey(
+            current,
+            replacement,
+            |value| {
+                calls.borrow_mut().push(Call::Register(value.id()));
+                Ok(())
+            },
+            |value| {
+                calls.borrow_mut().push(Call::Unregister(value.id()));
+                if value == current {
+                    Err("cannot unregister current".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+            |value| {
+                calls.borrow_mut().push(Call::Persist(value.id()));
+                Ok(())
+            },
+        );
+
+        let error = result.unwrap_err();
+        assert!(error.contains("已注销新热键"));
+        assert!(error.contains("已恢复旧配置"));
+        assert_eq!(
+            calls.into_inner(),
+            vec![
+                Call::Register(replacement.id()),
+                Call::Persist(replacement.id()),
+                Call::Unregister(current.id()),
+                Call::Unregister(replacement.id()),
+                Call::Persist(current.id()),
+            ]
+        );
+    }
+
+    #[test]
+    fn hotkey_switch_rolls_back_replacement_when_persistence_fails() {
+        let current = shortcut(DEFAULT_HOTKEY);
+        let replacement = shortcut("Ctrl+Shift+T");
+        let calls = RefCell::new(Vec::new());
+
+        let result = switch_registered_hotkey(
+            current,
+            replacement,
+            |value| {
+                calls.borrow_mut().push(Call::Register(value.id()));
+                Ok(())
+            },
+            |value| {
+                calls.borrow_mut().push(Call::Unregister(value.id()));
+                Ok(())
+            },
+            |value| {
+                calls.borrow_mut().push(Call::Persist(value.id()));
+                if value == replacement {
+                    Err("disk full".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        let error = result.unwrap_err();
+        assert!(error.contains("保存新热键失败: disk full"));
+        assert!(error.contains("已注销新热键"));
+        assert!(error.contains("已恢复旧配置"));
+        assert_eq!(
+            calls.into_inner(),
+            vec![
+                Call::Register(replacement.id()),
+                Call::Persist(replacement.id()),
+                Call::Unregister(replacement.id()),
+                Call::Persist(current.id()),
+            ]
+        );
+    }
+
+    #[test]
+    fn hotkey_switch_is_noop_for_same_shortcut() {
+        let current = shortcut(DEFAULT_HOTKEY);
+        let calls = RefCell::new(Vec::new());
+
+        let switched = switch_registered_hotkey(
+            current,
+            current,
+            |value| {
+                calls.borrow_mut().push(Call::Register(value.id()));
+                Ok(())
+            },
+            |value| {
+                calls.borrow_mut().push(Call::Unregister(value.id()));
+                Ok(())
+            },
+            |value| {
+                calls.borrow_mut().push(Call::Persist(value.id()));
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(!switched);
+        assert_eq!(calls.into_inner(), vec![Call::Persist(current.id())]);
+    }
 }

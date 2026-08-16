@@ -18,7 +18,7 @@
 |------|------|------|
 | `Sources/ProviderCore/ProviderProfile.swift` | 数据模型 + 内置候选 + modelCandidates 合并 | 新建（library） |
 | `Sources/ProviderCore/ProviderMigration.swift` | 旧数据迁移 + host 归一化匹配 | 新建（library） |
-| `Sources/ProviderCore/DiagnosticLogger.swift` | 纯 Foundation 日志（供迁移记录） | 新建（library，从原 executable 复制） |
+| `Sources/ProviderCore/DiagnosticLogger.swift` | 纯 Foundation 日志（供迁移记录和 App 复用） | 新建（library，统一实现） |
 | `Tests/ProviderCoreTests/ProviderProfileTests.swift` | modelCandidates / recordCustomModel 测试 | 新建 |
 | `Tests/ProviderCoreTests/ProviderMigrationTests.swift` | normalizedHost / 迁移分支测试 | 新建 |
 | `Package.swift` | 增加 ProviderCore library target + testTarget | 修改 |
@@ -29,7 +29,7 @@
 | `Sources/ImmersiveTranslator/Onboarding.swift` | 同上，改读法 | 修改 |
 | `Sources/ImmersiveTranslator/App.swift` | ensureConfigured 改读法 | 修改 |
 
-**关于 DiagnosticLogger 复制：** 现有 `Sources/ImmersiveTranslator/DiagnosticLogger.swift` 保留不动（executable 还在用）。library 里放一份同名文件，因为 ProviderCore 依赖日志但不应反向依赖 executable。两份内容相同。
+**关于 DiagnosticLogger 归属：** 实现放在 `ProviderCore`，同时供迁移逻辑和 App target 使用；`Sources/ImmersiveTranslator/DiagnosticLogger.swift` 只保留一个兼容的 App-facing 转发层，避免两份日志实现逐渐分叉。
 
 ---
 

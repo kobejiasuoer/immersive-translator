@@ -124,18 +124,21 @@ function vendorHint(vendor: Vendor, status: number, code?: string, message?: str
 export function classifyTranslationError(
   input: TranslationErrorInput,
   endpoint?: string,
+  apiKey = "",
 ): ClassifiedError {
+  const safeEndpoint = endpoint ?? "";
   switch (input.kind) {
     case "network": {
+      const safeMessage = sanitizeDiagnosticText(input.message, safeEndpoint, apiKey);
       const isLocal = endpoint ? isLocalhostEndpoint(endpoint) : false;
       if (isLocal) {
         return {
-          message: `无法连接到本地接口：${input.message}。请确认本地服务（Ollama/LM Studio/vLLM）已启动。`,
+          message: `无法连接到本地接口：${safeMessage}。请确认本地服务（Ollama/LM Studio/vLLM）已启动。`,
           retryable: true,
         };
       }
       return {
-        message: `网络错误：${input.message}。请检查网络连接或接口地址是否可达（国内访问 OpenAI/Gemini 需代理）。`,
+        message: `网络错误：${safeMessage}。请检查网络连接或接口地址是否可达（国内访问 OpenAI/Gemini 需代理）。`,
         retryable: true,
       };
     }
@@ -151,20 +154,21 @@ export function classifyTranslationError(
 
     case "invalidResponse":
       return {
-        message: `接口返回格式不符合预期（非 JSON 或缺少 choices[0]）：${preview(input.preview)}`,
+        message: `接口返回格式不符合预期（非 JSON 或缺少 choices[0]）：${preview(sanitizeDiagnosticText(input.preview, safeEndpoint, apiKey))}`,
         retryable: false,
       };
 
     case "http": {
       const { status, body } = input;
-      const parsed = parseErrorBody(body);
-      const vendor = detectVendor(body, parsed.code);
+      const safeBody = sanitizeDiagnosticText(body, safeEndpoint, apiKey);
+      const parsed = parseErrorBody(safeBody);
+      const vendor = detectVendor(safeBody, parsed.code);
       const hint = vendorHint(vendor, status, parsed.code, parsed.message);
       // 把服务端错误消息拼进去（截断）
       const srvMsg = parsed.message ? ` 服务端消息：${preview(parsed.message, 80)}` : "";
 
       // 200 但内容不是预期 JSON
-      if (status === 200 && looksLikeHtml(body)) {
+      if (status === 200 && looksLikeHtml(safeBody)) {
         return {
           message: "接口返回了 HTML 而非 JSON，可能是接口地址错误或经过登录页/网关。",
           retryable: false,
@@ -226,9 +230,137 @@ export function classifyTranslationError(
   }
 }
 
+function isSensitiveQueryName(name: string): boolean {
+  const normalized = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const exactMatches = new Set([
+    "apikey",
+    "key",
+    "token",
+    "accesstoken",
+    "refreshtoken",
+    "secret",
+    "password",
+    "auth",
+    "authorization",
+    "credential",
+    "credentials",
+    "signature",
+    "sig",
+  ]);
+  return (
+    exactMatches.has(normalized) ||
+    normalized.includes("apikey") ||
+    normalized.includes("accesstoken") ||
+    normalized.includes("refreshtoken") ||
+    normalized.includes("authorization") ||
+    normalized.includes("credential") ||
+    normalized.endsWith("key") ||
+    normalized.endsWith("token") ||
+    normalized.endsWith("secret") ||
+    normalized.endsWith("password") ||
+    normalized.endsWith("signature") ||
+    normalized.endsWith("sig")
+  );
+}
+
+/** Removes credentials from endpoint metadata before it reaches the clipboard. */
+function redactEndpoint(endpoint: string): string {
+  const trimmed = endpoint.trim();
+  if (!trimmed) return trimmed;
+
+  try {
+    const url = new URL(trimmed);
+    if (url.username || url.password) {
+      url.username = "REDACTED";
+      url.password = "REDACTED";
+    }
+    for (const name of Array.from(url.searchParams.keys())) {
+      if (isSensitiveQueryName(name)) url.searchParams.set(name, "REDACTED");
+    }
+    // Fragments are never sent to the API and can carry copied credentials.
+    url.hash = "";
+    return url.toString();
+  } catch {
+    // An invalid URL can hide credentials in userinfo or a fragment that a
+    // regex-based query scrub would miss. Do not copy unverifiable metadata.
+    return "(invalid endpoint, hidden)";
+  }
+}
+
+const DIAGNOSTIC_ERROR_MAX_CHARS = 800;
+
 /**
- * 构造脱敏的 curl 命令，用于排查 / 反馈。
- * API Key 被替换为 sk-***REDACTED***。
+ * Scrub arbitrary error text before putting it in a copyable report. Error
+ * bodies are controlled by remote gateways, so they may contain a full URL,
+ * an Authorization header, or a provider key even when the UI only displays
+ * a short friendly message.
+ */
+function redactDiagnosticError(error: string, endpoint: string, apiKey: string): string {
+  const trimmed = error.trim();
+  if (!trimmed) return "";
+
+  // Replace the exact configured values first. This also covers malformed or
+  // scheme-less endpoints that the URL matcher below cannot parse reliably.
+  let safe = trimmed;
+  const rawEndpoint = endpoint.trim();
+  if (rawEndpoint) {
+    safe = safe.split(rawEndpoint).join(redactEndpoint(rawEndpoint));
+  }
+  const rawApiKey = apiKey.trim();
+  if (rawApiKey) {
+    safe = safe.split(rawApiKey).join("REDACTED");
+  }
+
+  // Redact credentials in URLs while retaining the host/path for diagnosis.
+  safe = safe.replace(/https?:\/\/[^\s"'<>]+/gi, (raw) => {
+    const trailingMatch = raw.match(/[),.;!?]+$/);
+    const trailing = trailingMatch?.[0] ?? "";
+    const url = trailing ? raw.slice(0, -trailing.length) : raw;
+    return `${redactEndpoint(url)}${trailing}`;
+  });
+
+  // Redact quoted JSON/HTTP values first while keeping JSON parseable.
+  safe = safe.replace(
+    /((?:["']?)(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|secret|credential|token|signature|sig)(?:["']?)\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/gi,
+    '$1"REDACTED"',
+  );
+  // Then cover unquoted assignments and headers.
+  safe = safe.replace(
+    /((?:["']?)(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|secret|credential|token|signature|sig)(?:["']?)\s*[:=]\s*)(Bearer\s+)?[^\s,"';&}\]]+/gi,
+    "$1$2REDACTED",
+  );
+
+  // Cover common provider key formats when a gateway emits an unlabelled
+  // diagnostic string (for example, `invalid key sk-...`).
+  safe = safe.replace(
+    /\b(?:sk|pk|rk|gsk|xai|AIza)[-_A-Za-z0-9]{8,}\b/g,
+    "REDACTED",
+  );
+  safe = safe.replace(
+    /\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
+    "REDACTED",
+  );
+  safe = safe.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer REDACTED");
+
+  const chars = Array.from(safe);
+  if (chars.length > DIAGNOSTIC_ERROR_MAX_CHARS) {
+    return `${chars.slice(0, DIAGNOSTIC_ERROR_MAX_CHARS).join("")}…（已截断）`;
+  }
+  return safe;
+}
+
+/** Shared boundary for user-visible errors and connectivity diagnostics. */
+export function sanitizeDiagnosticText(
+  value: string,
+  endpoint = "",
+  apiKey = "",
+): string {
+  return redactDiagnosticError(value, endpoint, apiKey);
+}
+
+/**
+ * 构造适用于 Windows PowerShell 的脱敏 curl 命令，用于排查 / 反馈。
+ * API Key 及 endpoint 中的凭证会被替换为 REDACTED。
  */
 export function buildSanitizedCurl(
   endpoint: string,
@@ -236,14 +368,25 @@ export function buildSanitizedCurl(
   model: string,
   sampleText: string,
 ): string {
-  const safeText = (sampleText || "hello").replace(/"/g, '\\"').slice(0, 60);
+  // PowerShell single-quoted strings escape an apostrophe by doubling it.
+  // This keeps $, backticks, semicolons, and command substitutions literal.
+  const powerShellQuote = (value: string): string => `'${value.replace(/'/g, "''")}'`;
+  const safeText = Array.from(sampleText || "hello").slice(0, 60).join("");
   const key = apiKey.trim() ? "sk-***REDACTED***" : "(空)";
-  return (
-    `curl -X POST '${endpoint || "https://api.example.com/v1/chat/completions"}' \\\n` +
-    `  -H 'Content-Type: application/json' \\\n` +
-    `  -H 'Authorization: Bearer ${key}' \\\n` +
-    `  -d '{"model":"${model}","messages":[{"role":"user","content":"${safeText}"}]}'`
+  const safeEndpoint = redactEndpoint(
+    endpoint || "https://api.example.com/v1/chat/completions",
   );
+  const payload = JSON.stringify({
+    model: model || "",
+    messages: [{ role: "user", content: safeText }],
+  });
+  const continuation = " `\n";
+  return [
+    `curl.exe -X POST --url ${powerShellQuote(safeEndpoint)}` + continuation,
+    `  -H ${powerShellQuote("Content-Type: application/json")}` + continuation,
+    `  -H ${powerShellQuote(`Authorization: Bearer ${key}`)}` + continuation,
+    `  --data-raw ${powerShellQuote(payload)}`,
+  ].join("");
 }
 
 /** 诊断报告入参。所有敏感字段会被脱敏。 */
@@ -267,8 +410,9 @@ export interface DiagnosticInput {
 export function buildDiagnosticReport(input: DiagnosticInput): string {
   const now = new Date().toISOString();
   const keyState = input.apiKey.trim()
-    ? `已配置（长度 ${input.apiKey.trim().length}，前 3 位 ${input.apiKey.trim().slice(0, 3)}***）`
+    ? `已配置（长度 ${input.apiKey.trim().length}，内容已脱敏）`
     : "未配置";
+  const safeEndpoint = redactEndpoint(input.endpoint);
   const lines = [
     "===== ImmersiveTranslator 诊断报告 =====",
     `生成时间：${now}`,
@@ -276,7 +420,7 @@ export function buildDiagnosticReport(input: DiagnosticInput): string {
     `平台：Windows (Tauri)`,
     "",
     "--- 配置摘要（已脱敏）---",
-    `接口地址：${input.endpoint || "(空)"}`,
+    `接口地址：${safeEndpoint || "(空)"}`,
     `模型：${input.model || "(空)"}`,
     `API Key：${keyState}`,
     `流式输出：${input.stream ? "开" : "关"}`,
@@ -284,7 +428,7 @@ export function buildDiagnosticReport(input: DiagnosticInput): string {
       (input.fixedTarget ? `（目标：${input.fixedTarget}）` : ""),
     "",
     "--- 最近错误 ---",
-    input.lastError?.trim() || "（无）",
+    redactDiagnosticError(input.lastError ?? "", input.endpoint, input.apiKey) || "（无）",
     "",
     "--- 复现命令（脱敏 curl）---",
     buildSanitizedCurl(input.endpoint, input.apiKey, input.model, "hello"),

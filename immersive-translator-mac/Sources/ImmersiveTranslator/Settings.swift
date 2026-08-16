@@ -14,6 +14,9 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(activeProviderID, forKey: Keys.activeProviderID) }
     }
     @Published var editingAPIKey: String = ""
+    /// False means the empty editing value is only a load-failure placeholder,
+    /// not an instruction to delete a credential.
+    private var editingAPIKeyLoaded = false
 
     var activeProvider: ProviderProfile {
         providers.first { $0.id == activeProviderID } ?? providers[0]
@@ -71,27 +74,57 @@ final class SettingsStore: ObservableObject {
         } else {
             loadedProviders = ProviderProfile.builtinPresets
         }
-        // 兜底:保证至少含三常驻
-        if !loadedProviders.contains(where: { $0.isBuiltin }) {
-            loadedProviders = ProviderProfile.builtinPresets + loadedProviders
-        }
-
         // 2. activeProviderID 初值(迁移前先取存档,没有则 deepseek)
         var resolvedActiveID = UserDefaults.standard.string(forKey: Keys.activeProviderID) ?? ProviderProfile.builtinPresets[0].id
 
+        // 内置 Provider 固定在前并按 id 补齐。只有在 Keychain 凭证槽能
+        // 安全复制时才规范化异常空白 id，避免配置与凭证失联。
+        loadedProviders = ProviderMigration.normalizeStoredProviders(
+            loadedProviders,
+            activeProviderID: &resolvedActiveID,
+            onProviderIDChange: { oldID, newID in
+                KeychainStore.copyAPIKeyIfNeeded(from: oldID, to: newID)
+            }
+        )
+
         // 3. 迁移旧 endpoint/model/activeProviderID(只跑一次,幂等)
-        ProviderMigration.runIfNeeded(providers: &loadedProviders, activeProviderID: &resolvedActiveID)
+        let providerMigrationRan = ProviderMigration.runIfNeeded(
+            providers: &loadedProviders,
+            activeProviderID: &resolvedActiveID,
+            onProviderIDChange: { oldID, newID in
+                KeychainStore.copyAPIKeyIfNeeded(from: oldID, to: newID)
+            },
+            markCompleted: false
+        )
 
-        // 4. 迁移旧 Key(旧全局 account=apiKey → 当前 active 槽;仅当新槽为空时)
-        if let legacyKey = try? KeychainStore.string(service: Keys.keychainService, account: KeychainStore.legacyAccount),
-           !legacyKey.isEmpty,
-           KeychainStore.apiKey(for: resolvedActiveID) == nil {
-            KeychainStore.setAPIKey(legacyKey, for: resolvedActiveID)
-        }
-
-        // 5. active 合法性兜底
+        // 4. active 合法性兜底，避免把旧 key 写入已失效的 provider ID 槽。
         if !loadedProviders.contains(where: { $0.id == resolvedActiveID }) {
             resolvedActiveID = ProviderProfile.builtinPresets[0].id
+        }
+
+        // 5. 迁移旧 Key(旧全局 account=apiKey → 当前 active 槽;仅当新槽为空时)
+        do {
+            let targetKey = try KeychainStore.apiKeyThrowing(for: resolvedActiveID)
+            let legacyKey = try KeychainStore.string(
+                service: Keys.keychainService,
+                account: KeychainStore.legacyAccount
+            )?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if targetKey == nil, let legacyKey, !legacyKey.isEmpty {
+                _ = KeychainStore.setAPIKey(legacyKey, for: resolvedActiveID)
+            }
+        } catch {
+            DiagnosticLogger.log("keychain.legacy-migration.read.failed error=\(error.localizedDescription)")
+        }
+
+        // Property observers do not run for initial assignments in init. Persist
+        // the repaired state explicitly, then commit migration flags so a crash
+        // cannot leave a completed flag pointing at pre-migration provider data.
+        if let encodedProviders = try? JSONEncoder().encode(loadedProviders) {
+            UserDefaults.standard.set(encodedProviders, forKey: Keys.providers)
+            UserDefaults.standard.set(resolvedActiveID, forKey: Keys.activeProviderID)
+            if providerMigrationRan {
+                ProviderMigration.markCompleted()
+            }
         }
 
         // 6. 先初始化无 didSet 的存储属性,再赋值带 didSet 的(providers/activeProviderID)
@@ -108,7 +141,15 @@ final class SettingsStore: ObservableObject {
         // 最后赋值带 didSet 的存储属性(self 此时已完全初始化)
         providers = loadedProviders
         activeProviderID = resolvedActiveID
-        editingAPIKey = KeychainStore.apiKey(for: resolvedActiveID) ?? ""
+        do {
+            editingAPIKey = try KeychainStore.apiKeyThrowing(for: resolvedActiveID) ?? ""
+            editingAPIKeyLoaded = true
+        } catch {
+            editingAPIKey = ""
+            editingAPIKeyLoaded = false
+            apiKeyStorageError = "无法读取当前 Provider 的凭证，请检查 Keychain 权限后重试。"
+            DiagnosticLogger.log("keychain.active-read.failed providerId=\(resolvedActiveID) error=\(error.localizedDescription)")
+        }
     }
 
     var displayTargetLanguage: String {
@@ -128,14 +169,35 @@ final class SettingsStore: ObservableObject {
     /// 由 SettingsView 的 .onChange(of: activeProviderID) 重置,不在这里处理。
     func switchActiveProvider(to id: String) {
         guard id != activeProviderID, providers.contains(where: { $0.id == id }) else { return }
-        persistEditingAPIKey(for: activeProviderID)
-        activeProviderID = id
-        editingAPIKey = KeychainStore.apiKey(for: id) ?? ""
+        do {
+            let nextAPIKey = try KeychainStore.apiKeyThrowing(for: id) ?? ""
+            guard persistEditingAPIKey(for: activeProviderID) else { return }
+            activeProviderID = id
+            editingAPIKeyLoaded = true
+            editingAPIKey = nextAPIKey
+        } catch {
+            apiKeyStorageError = "无法读取目标 Provider 的凭证，请检查 Keychain 权限后重试。"
+        }
     }
 
     /// 失焦/切换/退出时把编辑态 key 落盘到指定 provider 槽。
-    func persistEditingAPIKey(for id: String) {
-        KeychainStore.setAPIKey(editingAPIKey, for: id)
+    @discardableResult
+    func persistEditingAPIKey(for id: String) -> Bool {
+        // A failed read leaves an empty placeholder in the field. Do not turn
+        // that placeholder into a destructive delete during provider changes;
+        // a non-empty value is an explicit replacement entered by the user.
+        if !editingAPIKeyLoaded && editingAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            apiKeyStorageError = "当前 Provider 的凭证尚未成功读取，未执行空值覆盖。"
+            return false
+        }
+        let succeeded = KeychainStore.setAPIKey(editingAPIKey, for: id)
+        if succeeded {
+            editingAPIKeyLoaded = true
+            apiKeyStorageError = nil
+        } else {
+            apiKeyStorageError = "无法写入或校验当前 Provider 的凭证，请检查 Keychain 权限后重试。"
+        }
+        return succeeded
     }
 
     /// 用户在当前 provider 自由填了模型名 → 追加到 customModels。
@@ -147,15 +209,30 @@ final class SettingsStore: ObservableObject {
     /// 删除自定义 provider(常驻不可删);同步清 Keychain 槽;若删的是 active 则回退 deepseek。
     func deleteCustomProvider(_ id: String) {
         guard let target = providers.first(where: { $0.id == id }), !target.isBuiltin else { return }
-        // 若删的是当前 active: 先清空 editingAPIKey,避免 switchActiveProvider 把它落盘回待删 id。
-        if activeProviderID == id {
-            editingAPIKey = ""
+        let wasActive = activeProviderID == id
+        let fallbackID = ProviderProfile.builtinPresets[0].id
+        let fallbackAPIKey: String
+        if wasActive {
+            do {
+                fallbackAPIKey = try KeychainStore.apiKeyThrowing(for: fallbackID) ?? ""
+            } catch {
+                apiKeyStorageError = "无法读取备用 Provider 的凭证，配置未删除。"
+                return
+            }
+        } else {
+            fallbackAPIKey = ""
+        }
+        guard KeychainStore.deleteAPIKey(for: id) else {
+            apiKeyStorageError = "无法删除该 Provider 的凭证，配置未删除。"
+            return
         }
         providers.removeAll { $0.id == id }
-        KeychainStore.deleteAPIKey(for: id)
-        if activeProviderID == id {
-            switchActiveProvider(to: ProviderProfile.builtinPresets[0].id)
+        if wasActive {
+            activeProviderID = fallbackID
+            editingAPIKey = fallbackAPIKey
+            editingAPIKeyLoaded = true
         }
+        apiKeyStorageError = nil
     }
 
     /// 修改当前 active provider 的字段(供 UI 的 Binding set 使用)。
@@ -579,11 +656,7 @@ private enum ProviderConnectionBodyInspector {
     }
 
     private static func compactPreview(_ text: String, maxLength: Int = 120) -> String {
-        let compact = text
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard compact.count > maxLength else { return compact }
-        return "\(compact.prefix(maxLength))..."
+        TranslationClient.redactedDiagnosticText(text, maxLength: maxLength)
     }
 
     private static func looksLikeHTML(_ text: String) -> Bool {
@@ -1704,6 +1777,9 @@ struct SettingsView: View {
     private var providerDiagnosticReport: String {
         let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = settingsStore.activeProvider.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = (KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeMessage = TranslationClient.redactedDiagnosticText(providerDiagnostic.message, apiKey: apiKey)
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "<unknown>"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "<unknown>"
         let latencyAssessment = providerDiagnosticLatencyAssessment?.reportText ?? "<unknown>"
@@ -1716,7 +1792,7 @@ struct SettingsView: View {
             targetDescription = "\(settingsStore.translationDirection.title)：\(target.isEmpty ? "简体中文" : target)"
         }
 
-        return """
+        let report = """
         ImmersiveTranslator Provider Diagnostic
         App version: \(version) (\(build))
         macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)
@@ -1736,10 +1812,16 @@ struct SettingsView: View {
         Glossary: \(providerGlossaryReportText)
         Configuration fingerprint: \(providerConfigurationFingerprint)
         Result: \(providerDiagnostic.level.title)
-        Message: \(providerDiagnostic.message)
+        Message: \(safeMessage)
         Suggested next step: \(providerDiagnosticNextStepText ?? "<none>")
         Diagnostic log: \(DiagnosticLogger.logFileURL().path)
         """
+        return TranslationClient.redactedDiagnosticText(
+            report,
+            apiKey: apiKey,
+            maxLength: nil,
+            collapseWhitespace: false
+        )
     }
 
     private var providerDiagnosticSupportBundle: String {
@@ -1748,11 +1830,13 @@ struct SettingsView: View {
             .joined(separator: "\n")
         let diagnostics = providerDiagnosticReport
         let curl = providerDiagnosticCurlCommand
+        let apiKey = (KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        return """
+        let bundle = """
         ImmersiveTranslator Support Bundle
         Generated at: \(Self.providerDiagnosticISOFormatter.string(from: Date()))
-        Redaction: API Key is never included; sensitive URL query items are replaced with REDACTED; curl uses ${API_KEY} when auth is required.
+        Redaction: credentials, URL userinfo/fragments, and sensitive query items are removed or replaced with REDACTED; curl uses ${API_KEY} when auth is required.
 
         ## Diagnostic
         \(diagnostics)
@@ -1763,6 +1847,12 @@ struct SettingsView: View {
         ## Safe Reproduction curl
         \(curl)
         """
+        return TranslationClient.redactedDiagnosticText(
+            bundle,
+            apiKey: apiKey,
+            maxLength: nil,
+            collapseWhitespace: false
+        )
     }
 
     private var providerDiagnosticCurlCommand: String {
@@ -2521,10 +2611,18 @@ struct SettingsView: View {
                     return
                 }
                 let elapsed = Date().timeIntervalSince(startedAt)
+                let safeMessage = TranslationClient.redactedDiagnosticText(
+                    ErrorMessageFormatter.message(for: error),
+                    apiKey: apiKey
+                )
+                let safeError = TranslationClient.redactedDiagnosticText(
+                    error.localizedDescription,
+                    apiKey: apiKey
+                )
                 providerDiagnostic = ProviderConnectionDiagnostic(
                     level: .failure,
                     endpoint: endpoint,
-                    message: ErrorMessageFormatter.message(for: error),
+                    message: safeMessage,
                     kind: .translation,
                     completedAt: Date(),
                     elapsed: elapsed,
@@ -2532,7 +2630,7 @@ struct SettingsView: View {
                     requestURL: requestURL,
                     model: currentProviderDiagnosticModel
                 )
-                DiagnosticLogger.log("provider.translation_verification.failed error=\(error.localizedDescription)")
+                DiagnosticLogger.log("provider.translation_verification.failed error=\(safeError)")
             }
         }
     }
@@ -2573,6 +2671,15 @@ struct SettingsView: View {
     }
 
     private static func testProviderConnection(url: URL, originalEndpoint: String) async -> ProviderConnectionDiagnostic {
+        guard let url = TranslationClient.unauthenticatedDiagnosticURL(from: url) else {
+            return ProviderConnectionDiagnostic(
+                level: .failure,
+                endpoint: originalEndpoint,
+                message: "无法为连通性测试生成不含凭证的安全请求地址。请检查接口地址后重试。",
+                kind: .configuration,
+                completedAt: Date()
+            )
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = 6
@@ -2694,7 +2801,8 @@ struct SettingsView: View {
         } catch {
             let elapsed = Date().timeIntervalSince(startedAt)
             let elapsedText = String(format: "%.1fs", elapsed)
-            DiagnosticLogger.log("provider.diagnostic.error elapsed=\(elapsedText) endpoint=\(safeURLString) error=\(error.localizedDescription)")
+            let safeError = TranslationClient.redactedDiagnosticText(error.localizedDescription)
+            DiagnosticLogger.log("provider.diagnostic.error elapsed=\(elapsedText) endpoint=\(safeURLString) error=\(safeError)")
             if let urlError = error as? URLError {
                 return ProviderConnectionDiagnostic(
                     level: .failure,
@@ -2709,7 +2817,7 @@ struct SettingsView: View {
             return ProviderConnectionDiagnostic(
                 level: .failure,
                 endpoint: originalEndpoint,
-                message: "接口连接测试失败，用时 \(elapsedText)。详细信息：\(error.localizedDescription)",
+                message: "接口连接测试失败，用时 \(elapsedText)。详细信息：\(safeError)",
                 kind: .connection,
                 completedAt: Date(),
                 elapsed: elapsed,
@@ -2757,7 +2865,8 @@ struct SettingsView: View {
         case .clientCertificateRequired, .clientCertificateRejected:
             return "接口要求客户端证书认证。普通 OpenAI 兼容接口通常不需要证书，请检查代理、网关或企业网络配置。\(endpointSuffix)"
         default:
-            return "接口连接测试失败，用时 \(elapsedText)。\(endpointSuffix)详细信息：\(error.localizedDescription)"
+            let safeError = TranslationClient.redactedDiagnosticText(error.localizedDescription)
+            return "接口连接测试失败，用时 \(elapsedText)。\(endpointSuffix)详细信息：\(safeError)"
         }
     }
 

@@ -131,12 +131,39 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 
 /** 判断 endpoint 是否指向本地地址（允许留空 API Key）。 */
 export function isLocalhostEndpoint(endpoint: string): boolean {
-  const lower = endpoint.toLowerCase();
-  return (
-    lower.includes("://localhost") ||
-    lower.includes("://127.0.0.1") ||
-    lower.includes("://[::1]")
-  );
+  try {
+    const hostname = new URL(endpoint.trim()).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
+/** 规范化 endpoint；query 保留，fragment 丢弃，与 Rust 后端保持一致。 */
+export function normalizeEndpoint(endpoint: string): string {
+  const trimmed = endpoint.trim();
+  if (!trimmed) return "";
+
+  try {
+    const url = new URL(trimmed);
+    let path = url.pathname.replace(/\/+$/, "");
+    const lowerPath = path.toLowerCase();
+    if (lowerPath.endsWith("/chat/completions")) {
+      // Already complete.
+    } else if (lowerPath.endsWith("/v1") || lowerPath.endsWith("/api/paas/v4")) {
+      path += "/chat/completions";
+    } else {
+      path += "/v1/chat/completions";
+    }
+    url.pathname = path;
+    url.hash = "";
+    return url.toString();
+  } catch {
+    const fallback = trimmed.replace(/\/+$/, "");
+    if (fallback.toLowerCase().endsWith("/chat/completions")) return fallback;
+    if (fallback.toLowerCase().endsWith("/v1")) return `${fallback}/chat/completions`;
+    return `${fallback}/v1/chat/completions`;
+  }
 }
 
 /** 查找与当前 endpoint 匹配的预设（用于高亮"当前选中"）。 */

@@ -28,13 +28,13 @@ cargo --version
 
 两个命令都应输出版本号。如果报错说缺少 MSVC linker，回到第 2 步装 C++ Build Tools。
 
-## 4. Node.js（18 LTS 或更高）
+## 4. Node.js（20 或更高，推荐 22 LTS）
 
 - 安装：https://nodejs.org/ （推荐 LTS 版）。
 - 验证：
 
 ```powershell
-node --version   # 应 >= v18
+node --version   # 应 >= v20（CI 使用 v22）
 npm --version
 ```
 
@@ -49,14 +49,12 @@ git --version
 
 - 配置好 GitHub 认证（SSH key 或 HTTPS + credential manager），确保能 clone 本仓库。
 
-## 6. 克隆仓库 & 验证 monorepo 结构
+## 6. 克隆仓库 & 安装依赖
 
 ```powershell
-git clone git@github.com:kobejiasuoer/immersive-translator-macos.git immersive-translator
+git clone git@github.com:kobejiasuoer/immersive-translator.git immersive-translator
 cd immersive-translator
 ```
-
-> 注意：GitHub 仓库当前仍叫 `immersive-translator-macos`。后续在 GitHub Settings 里改名 `immersive-translator` 后，旧地址会自动重定向，clone 命令同步更新。
 
 验证目录结构：
 
@@ -66,35 +64,50 @@ dir
 
 应看到：`immersive-translator-mac/`、`immersive-translator-windows/`、`contracts/`、`docs/`。
 
-## 7. 跑通已预写的核心逻辑单测
-
-这是第一个真正的验证关卡——确认环境里 Node + Vitest 可用。
+安装 Windows 端依赖：
 
 ```powershell
 cd immersive-translator-windows
-# 先初始化 package.json 和装 vitest（工程骨架还没建，先手动补依赖）
-npm init -y
-npm install -D vitest typescript
-npm test
+npm ci
 ```
 
-> `src/core/` 下已经预写好 4 个核心逻辑模块和它们的测试。`npm test` 应全部通过（语言检测、术语表、提示词、错误分类）。如果通过，说明纯逻辑层和环境都 OK。
->
-> 注意：完整的 Tauri 工程脚手架（`package.json` 里的脚本、`vite.config.ts`、`vitest.config.ts`）要在实施计划的 Task 2 用 `npm create tauri-app` 创建，这里只是临时跑通核心单测。
+`package.json`、Vite、Vitest 和完整 Tauri 工程已经在仓库中，不要再运行 `npm init -y` 或 `npm create tauri-app`。
 
-## 8. 环境准备完成后
+## 7. 跑通前端单测和构建
 
-环境全部就绪后，对照实施计划 `docs/superpowers/plans/2026-06-19-windows-phase-0-1.md`，从 **Task 2（初始化 Tauri 工程）** 开始。
+这是第一个验证关卡，确认 Node、TypeScript 和 Rust 工程外的前端逻辑都可用。
 
-> Task 1（monorepo 改造）和核心逻辑代码（Task 5-9 的代码部分）已经在 Mac 上预写好并推送，不用重做。Windows 端需要做的是：Task 2 Tauri 脚手架 → Task 3 托盘 → Task 4 热键验证（阶段 0 终点）→ Task 10-11 Rust 端 → Task 12-14 前端串联和端到端验证。
+```powershell
+npm test
+npm run build
+```
+
+> `src/core/` 下的 Vitest 应全部通过；`npm run build` 会同时检查 TypeScript 类型和 Vite 生产构建。
+
+## 8. 启动和验证 Tauri 后端
+
+环境全部就绪后，可以直接启动完整应用：
+
+```powershell
+npm run tauri dev
+```
+
+也可以运行 Rust 单测和正式构建检查：
+
+```powershell
+cargo test --locked --manifest-path src-tauri/Cargo.toml
+npm run tauri build
+```
+
+OCR 模型在首次使用时下载到应用数据目录；请预留磁盘空间并保持网络可用。
 
 ## 常见问题
 
 **Q: `cargo build` 报「link.exe not found」？**
 A: C++ Build Tools 没装或没勾「使用 C++ 的桌面开发」。回到第 2 步。
 
-**Q: `npm create tauri-app` 报 Rust 相关错误？**
-A: 确认第 3 步 Rust 装好，重开终端让 PATH 生效。
+**Q: `npm ci` 或 `cargo test` 报工具链错误？**
+A: 确认 Node、Rust MSVC 和 C++ Build Tools 都已安装，重开「x64 Native Tools Command Prompt」让 PATH 生效。
 
 **Q: 热键（Ctrl+Shift+Q）注册失败？**
 A: 可能被其他程序占用（部分输入法/快捷启动器）。如果撞了，可以换成 `Ctrl+Space` 或 `Ctrl+Alt+T` 之类试。

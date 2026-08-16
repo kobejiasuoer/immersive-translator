@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SETTINGS_SOURCE="$ROOT_DIR/Sources/ImmersiveTranslator/Settings.swift"
 CLIENT_SOURCE="$ROOT_DIR/Sources/ImmersiveTranslator/TranslationClient.swift"
+PROVIDER_PROFILE_SOURCE="$ROOT_DIR/Sources/ProviderCore/ProviderProfile.swift"
+PROVIDER_MIGRATION_SOURCE="$ROOT_DIR/Sources/ProviderCore/ProviderMigration.swift"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ImmersiveTranslator-provider-presets.XXXXXX")"
 CHECK_PATH="$TMP_DIR/ProviderPresetsCheck.swift"
 BINARY_PATH="$TMP_DIR/check_provider_presets"
@@ -15,8 +17,14 @@ trap cleanup EXIT
 
 {
     printf 'import Foundation\n\n'
+    # Provider presets moved out of Settings.swift into the shared ProviderCore
+    # target during the multi-provider migration. Keep this check standalone by
+    # compiling the small model source into its temporary harness.
+    cat "$PROVIDER_PROFILE_SOURCE"
+    cat "$PROVIDER_MIGRATION_SOURCE"
+    printf '\n'
     awk '
-        /^struct TranslationProviderPreset[: ]/ { printing = 1 }
+        /^private enum ProviderConfigurationAdvisor[: ]/ { printing = 1 }
         /^private struct ProviderConnectionDiagnostic/ { printing = 0 }
         printing { print }
     ' "$SETTINGS_SOURCE"
@@ -41,42 +49,44 @@ SWIFT
 private struct ProviderPresetsCheck {
     static func main() {
         var failures: [String] = []
-        let presets = TranslationProviderPreset.all
+        let presets = ProviderProfile.builtinPresets
 
-        expect(presets.count == 3, "provider presets should only expose the three built-in cloud presets", failures: &failures)
+        expect(presets.count == 3, "provider presets should expose the three built-in cloud providers", failures: &failures)
         expect(Set(presets.map(\.id)).count == presets.count, "provider preset ids should be unique", failures: &failures)
-        expect(Set(presets.map(\.title)).count == presets.count, "provider preset titles should be unique", failures: &failures)
+        expect(Set(presets.map(\.displayName)).count == presets.count, "provider preset display names should be unique", failures: &failures)
 
         for preset in presets {
             validatePreset(preset, failures: &failures)
         }
 
         expect(
-            presets.contains { $0.id == "deepseek-v4-flash" && $0.endpoint == "https://api.deepseek.com/chat/completions" && $0.model == "deepseek-v4-flash" },
-            "DeepSeek V4 Flash preset should remain available",
+            presets.contains { $0.id == "deepseek" && $0.endpoint == "https://api.deepseek.com/chat/completions" && $0.model == "deepseek-v4-flash" },
+            "DeepSeek preset should remain available",
             failures: &failures
         )
         expect(
-            presets.contains { $0.id == "openai-gpt-5-4-mini" && $0.model == "gpt-5.4-mini" },
+            presets.contains { $0.id == "openai" && $0.endpoint == "https://api.openai.com/v1/chat/completions" && $0.model == "gpt-5.4-mini" },
             "OpenAI daily-use preset should remain available",
             failures: &failures
         )
         expect(
-            presets.contains { $0.id == "zhipu-glm-5-2" && $0.endpoint == "https://open.bigmodel.cn/api/paas/v4/chat/completions" && $0.model == "glm-5.2" },
-            "Zhipu GLM-5.2 preset should remain available with the official Chat Completions endpoint",
+            presets.contains { $0.id == "zhipu" && $0.endpoint == "https://open.bigmodel.cn/api/paas/v4/chat/completions" && $0.model == "glm-5.2" },
+            "Zhipu preset should remain available with the official Chat Completions endpoint",
             failures: &failures
         )
         expect(
-            !presets.contains { $0.id == "ollama-llama3-2" || $0.id == "lmstudio-local" || $0.id == "vllm-local" },
-            "local provider presets should no longer be exposed as built-in cards",
+            !presets.contains { isLocalEndpoint($0.endpoint) },
+            "local provider endpoints should not be exposed as built-in cloud presets",
             failures: &failures
         )
 
         checkRequiresAPIKeyRules(failures: &failures)
         checkDiagnosticURLRedaction(failures: &failures)
+        checkDiagnosticTextRedaction(failures: &failures)
         checkSensitiveQueryDetection(failures: &failures)
         checkConfigurationAdvisor(failures: &failures)
         checkLatencyAssessment(failures: &failures)
+        checkProviderMigrationNormalization(failures: &failures)
 
         if failures.isEmpty {
             print("ok: provider preset cases passed (\(presets.count) presets)")
@@ -86,13 +96,21 @@ private struct ProviderPresetsCheck {
         }
     }
 
-    private static func validatePreset(_ preset: TranslationProviderPreset, failures: inout [String]) {
-        let label = "\(preset.id) / \(preset.title)"
+    private static func validatePreset(_ preset: ProviderProfile, failures: inout [String]) {
+        let label = "\(preset.id) / \(preset.displayName)"
         expect(!preset.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "\(label): id should not be empty", failures: &failures)
-        expect(!preset.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "\(label): title should not be empty", failures: &failures)
+        expect(!preset.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "\(label): display name should not be empty", failures: &failures)
         expect(!preset.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "\(label): model should not be empty", failures: &failures)
-        expect(!preset.detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "\(label): detail should explain when to use it", failures: &failures)
-        expect(!preset.latencyHint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "\(label): latency hint should not be empty", failures: &failures)
+        expect(preset.isBuiltin, "\(label): built-in provider should be marked isBuiltin", failures: &failures)
+        expect(preset.customModels.isEmpty, "\(label): built-in provider should not persist custom model history", failures: &failures)
+
+        let candidates = preset.modelCandidates
+        expect(candidates.contains(preset.model), "\(label): current model should be offered in model candidates", failures: &failures)
+        expect(
+            !(ProviderProfile.builtinModelCandidates[preset.id] ?? []).isEmpty,
+            "\(label): built-in provider should define official model candidates",
+            failures: &failures
+        )
 
         guard let url = TranslationClient.chatCompletionsURL(from: preset.endpoint) else {
             failures.append("\(label): endpoint is not a valid Chat Completions URL: \(preset.endpoint)")
@@ -101,19 +119,17 @@ private struct ProviderPresetsCheck {
 
         expect(url.path.hasSuffix("/chat/completions"), "\(label): normalized URL should end in /chat/completions, got \(url.path)", failures: &failures)
 
-        let host = url.host?.lowercased() ?? ""
-        let isLocal = ["localhost", "127.0.0.1", "::1", "0.0.0.0"].contains(host)
-        if isLocal {
-            expect(!TranslationClient.requiresAPIKey(for: url), "\(label): local endpoint should not require API Key", failures: &failures)
-            expect(preset.detail.contains("本地") || preset.latencyHint.contains("本地") || preset.latencyHint.contains("ollama"), "\(label): local preset should explain local-model behavior", failures: &failures)
-        } else {
-            expect(url.scheme == "https", "\(label): cloud preset should use HTTPS, got \(url.absoluteString)", failures: &failures)
-            expect(TranslationClient.requiresAPIKey(for: url), "\(label): cloud endpoint should require API Key", failures: &failures)
-        }
+        expect(!isLocalEndpoint(preset.endpoint), "\(label): built-in cloud preset should not use a local endpoint", failures: &failures)
+        expect(url.scheme == "https", "\(label): cloud preset should use HTTPS, got \(url.absoluteString)", failures: &failures)
+        expect(TranslationClient.requiresAPIKey(for: url), "\(label): cloud endpoint should require API Key", failures: &failures)
+    }
 
-        let hintText = preset.latencyHint.lowercased()
-        let hasActionableHint = ["慢", "429", "401", "403", "404", "key", "api key", "模型", "权限", "排队", "网络", "延迟", "ollama", "pull"].contains { hintText.contains($0) }
-        expect(hasActionableHint, "\(label): latency hint should include an actionable diagnosis cue", failures: &failures)
+    private static func isLocalEndpoint(_ endpoint: String) -> Bool {
+        guard let url = TranslationClient.chatCompletionsURL(from: endpoint),
+              let host = url.host?.lowercased() else {
+            return false
+        }
+        return ["localhost", "127.0.0.1", "::1", "0.0.0.0"].contains(host)
     }
 
     private static func checkRequiresAPIKeyRules(failures: inout [String]) {
@@ -144,14 +160,30 @@ private struct ProviderPresetsCheck {
 
     private static func checkDiagnosticURLRedaction(failures: inout [String]) {
         let redacted = TranslationClient.redactedURLString(
-            "https://api.example.com/v1/chat/completions?api_key=sk-secret&model=ok&access-token=tok-secret#frag"
+            "https://visible-user:hidden-password@api.example.com/v1/chat/completions?api_key=sk-secret&model=ok&access-token=tok-secret#hidden-fragment"
         )
+        expect(!redacted.contains("visible-user"), "URL userinfo should be removed: \(redacted)", failures: &failures)
+        expect(!redacted.contains("hidden-password"), "URL password should be removed: \(redacted)", failures: &failures)
         expect(!redacted.contains("sk-secret"), "api_key query value should be redacted: \(redacted)", failures: &failures)
         expect(!redacted.contains("tok-secret"), "access token query value should be redacted: \(redacted)", failures: &failures)
+        expect(!redacted.contains("hidden-fragment"), "URL fragment should be removed: \(redacted)", failures: &failures)
         expect(redacted.contains("api_key=REDACTED"), "redacted URL should keep api_key name for debugging: \(redacted)", failures: &failures)
         expect(redacted.contains("access-token=REDACTED"), "redacted URL should keep access-token name for debugging: \(redacted)", failures: &failures)
         expect(redacted.contains("model=ok"), "non-sensitive query value should be preserved: \(redacted)", failures: &failures)
-        expect(redacted.hasSuffix("#frag"), "URL fragment should be preserved: \(redacted)", failures: &failures)
+        expect(redacted.contains("api.example.com/v1/chat/completions"), "host and path should remain useful for diagnostics: \(redacted)", failures: &failures)
+
+        if let credentialURL = URL(string: "https://visible-user:hidden-password@api.example.com/v1/chat/completions?api_key=sk-secret&api-version=2026-01-01&model=ok#hidden-fragment"),
+           let diagnosticURL = TranslationClient.unauthenticatedDiagnosticURL(from: credentialURL) {
+            let diagnosticText = diagnosticURL.absoluteString
+            expect(!diagnosticText.contains("visible-user"), "unauthenticated diagnostic URL should remove userinfo: \(diagnosticText)", failures: &failures)
+            expect(!diagnosticText.contains("hidden-password"), "unauthenticated diagnostic URL should remove passwords: \(diagnosticText)", failures: &failures)
+            expect(!diagnosticText.contains("api_key"), "unauthenticated diagnostic URL should remove credential query items: \(diagnosticText)", failures: &failures)
+            expect(!diagnosticText.contains("hidden-fragment"), "unauthenticated diagnostic URL should remove fragments: \(diagnosticText)", failures: &failures)
+            expect(diagnosticText.contains("api-version=2026-01-01"), "unauthenticated diagnostic URL should preserve routing query items: \(diagnosticText)", failures: &failures)
+            expect(diagnosticText.contains("model=ok"), "unauthenticated diagnostic URL should preserve non-sensitive query items: \(diagnosticText)", failures: &failures)
+        } else {
+            failures.append("should build an unauthenticated diagnostic URL from a valid endpoint")
+        }
 
         let googleKey = TranslationClient.redactedURLString(
             "https://example.com/openai/chat/completions?x-goog-api-key=real-key&pretty=true"
@@ -159,10 +191,76 @@ private struct ProviderPresetsCheck {
         expect(!googleKey.contains("real-key"), "x-goog-api-key should be redacted: \(googleKey)", failures: &failures)
         expect(googleKey.contains("pretty=true"), "safe query items should survive redaction: \(googleKey)", failures: &failures)
 
+        let signedURL = TranslationClient.redactedURLString(
+            "https://example.com/openai/chat/completions?x-amz-signature=signed-secret&debug=true"
+        )
+        expect(!signedURL.contains("signed-secret"), "signature query values should be redacted: \(signedURL)", failures: &failures)
+        expect(signedURL.contains("x-amz-signature=REDACTED"), "signature query name should remain visible: \(signedURL)", failures: &failures)
+
         let unchanged = "https://api.example.com/v1/chat/completions?model=gpt&debug=true"
         expect(
             TranslationClient.redactedURLString(unchanged) == unchanged,
             "URL without sensitive query names should stay unchanged",
+            failures: &failures
+        )
+    }
+
+    private static func checkDiagnosticTextRedaction(failures: inout [String]) {
+        let configuredKey = ["opaque", "provider", "credential", "test", "only"].joined(separator: "-")
+        let bearerToken = ["bearer", "credential", "test", "only"].joined(separator: "-")
+        let assignmentToken = ["assigned", "credential", "test", "only"].joined(separator: "-")
+        let opaqueKey = "sk-" + String(repeating: "x", count: 18)
+        let jwt = [
+            "eyJ" + String(repeating: "a", count: 12),
+            String(repeating: "b", count: 16),
+            String(repeating: "c", count: 16)
+        ].joined(separator: ".")
+        let raw = """
+        configured=\(configuredKey)
+        request=https://url-user:url-password@example.com/v1/chat/completions?api_key=url-secret&model=kept#url-fragment
+        Authorization: Bearer \(bearerToken)
+        x-api-key=\(assignmentToken)
+        opaque=\(opaqueKey)
+        jwt=\(jwt)
+        """
+        let redacted = TranslationClient.redactedDiagnosticText(raw, apiKey: configuredKey, maxLength: nil)
+
+        for secret in [
+            configuredKey,
+            "url-user",
+            "url-password",
+            "url-secret",
+            "url-fragment",
+            bearerToken,
+            assignmentToken,
+            opaqueKey,
+            jwt
+        ] {
+            expect(!redacted.contains(secret), "diagnostic text should redact \(secret): \(redacted)", failures: &failures)
+        }
+        expect(redacted.contains("example.com/v1/chat/completions"), "embedded URL host/path should remain visible: \(redacted)", failures: &failures)
+        expect(redacted.contains("model=kept"), "embedded URL safe query values should remain visible: \(redacted)", failures: &failures)
+        expect(redacted.contains("REDACTED"), "redacted diagnostics should use an explicit marker: \(redacted)", failures: &failures)
+        expect(!redacted.contains("\n"), "single diagnostic messages should collapse line breaks", failures: &failures)
+
+        let curlPlaceholder = TranslationClient.redactedDiagnosticText(
+            "Authorization: Bearer ${API_KEY}",
+            maxLength: nil
+        )
+        expect(
+            curlPlaceholder.contains("Bearer ${API_KEY}"),
+            "safe curl placeholder should survive redaction: \(curlPlaceholder)",
+            failures: &failures
+        )
+
+        let formatted = TranslationClient.redactedDiagnosticText(
+            "first line\nAuthorization: Bearer ${API_KEY}\nlast line",
+            maxLength: nil,
+            collapseWhitespace: false
+        )
+        expect(
+            formatted == "first line\nAuthorization: Bearer ${API_KEY}\nlast line",
+            "support bundle redaction should preserve safe multiline formatting: \(formatted)",
             failures: &failures
         )
     }
@@ -262,6 +360,64 @@ private struct ProviderPresetsCheck {
         )
     }
 
+    private static func checkProviderMigrationNormalization(failures: inout [String]) {
+        let canonical = "https://api.openai.com/v1/chat/completions"
+        let variants = [
+            "  HTTPS://api.openai.com/v1/chat/completions/  ",
+            "https://api.openai.com/v1/chat/completions",
+            "http://api.openai.com/v1/chat/completions/"
+        ]
+
+        for variant in variants {
+            expect(
+                ProviderMigration.matches(variant, canonical),
+                "provider migration should match endpoint spelling variant: \(variant)",
+                failures: &failures
+            )
+        }
+        expect(
+            ProviderMigration.normalizedHost(canonical) == "api.openai.com",
+            "provider migration should strip the canonical Chat Completions path",
+            failures: &failures
+        )
+        expect(
+            ProviderMigration.normalizedHost("\(canonical)/?api_key=legacy-secret#debug") == "api.openai.com",
+            "provider migration should ignore legacy query and fragment values",
+            failures: &failures
+        )
+
+        let malformed = ProviderProfile(
+            id: " custom-id ",
+            displayName: "Custom",
+            endpoint: "https://example.com/v1",
+            model: "custom-model",
+            isBuiltin: false,
+            customModels: []
+        )
+        var activeID = malformed.id
+        var copiedCredential = false
+        let repaired = ProviderMigration.normalizeStoredProviders(
+            ProviderProfile.builtinPresets + [malformed],
+            activeProviderID: &activeID,
+            onProviderIDChange: { oldID, newID in
+                copiedCredential = oldID == malformed.id && newID == "custom-id"
+                return true
+            }
+        )
+        expect(copiedCredential, "provider ID repair should migrate the matching credential slot", failures: &failures)
+        expect(repaired.last?.id == "custom-id", "unambiguous provider ID whitespace should be normalized", failures: &failures)
+        expect(activeID == "custom-id", "active provider should follow a normalized provider ID", failures: &failures)
+
+        var failedCopyActiveID = "custom-id"
+        let preserved = ProviderMigration.normalizeStoredProviders(
+            ProviderProfile.builtinPresets + [malformed],
+            activeProviderID: &failedCopyActiveID,
+            onProviderIDChange: { _, _ in false }
+        )
+        expect(preserved.last?.id == malformed.id, "failed credential copy should preserve the original provider ID", failures: &failures)
+        expect(failedCopyActiveID == malformed.id, "active provider should use the retained credential spelling", failures: &failures)
+    }
+
     private static func expect(_ condition: Bool, _ message: String, failures: inout [String]) {
         if !condition {
             failures.append(message)
@@ -271,8 +427,8 @@ private struct ProviderPresetsCheck {
 SWIFT
 } > "$CHECK_PATH"
 
-if ! grep -q "TranslationProviderPreset" "$CHECK_PATH"; then
-    echo "error: failed to extract TranslationProviderPreset from $SETTINGS_SOURCE" >&2
+if ! grep -q "ProviderProfile" "$CHECK_PATH"; then
+    echo "error: failed to extract ProviderProfile from $PROVIDER_PROFILE_SOURCE" >&2
     exit 1
 fi
 

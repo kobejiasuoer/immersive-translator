@@ -45,6 +45,18 @@ SWIFT
         /^private extension String / { printing = 1 }
         printing { print }
     ' "$CLIENT_SOURCE"
+    cat <<'SWIFT'
+
+private enum TranslationClient {
+SWIFT
+    awk '
+        /^    static func chatCompletionsURL/ { printing = 1 }
+        /^    private static func parseStreamedResponse/ { printing = 0 }
+        printing { print }
+    ' "$CLIENT_SOURCE"
+    cat <<'SWIFT'
+}
+SWIFT
     awk '
         /^private struct ProviderConnectionBodyInspection([: ]|$)/ { printing = 1 }
         /^private struct ProviderConfigurationHint([: ]|$)/ { printing = 0 }

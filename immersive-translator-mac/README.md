@@ -32,8 +32,8 @@ ImmersiveTranslator 是一个 macOS 原生菜单栏翻译工具。它想解决�
 从源码运行：
 
 ```bash
-git clone https://github.com/kobejiasuoer/immersive-translator-macos.git
-cd immersive-translator-macos
+git clone https://github.com/kobejiasuoer/immersive-translator.git
+cd immersive-translator/immersive-translator-mac
 swift run ImmersiveTranslator
 ```
 
@@ -58,7 +58,7 @@ open /Applications/ImmersiveTranslator.app
 可以从 GitHub Releases 下载预构建版本：
 
 ```text
-https://github.com/kobejiasuoer/immersive-translator-macos/releases
+https://github.com/kobejiasuoer/immersive-translator/releases
 ```
 
 当前 release 仍是开发构建，尚未使用 Apple Developer ID 正式签名和公证。macOS 可能会提示“无法验证开发者”，需要在“系统设置 -> 隐私与安全性”里手动允许打开。开发者更推荐从源码构建运行。
@@ -209,6 +209,14 @@ gpt-5.4-mini
 swift build
 ```
 
+Provider 核心单元测试：
+
+```bash
+./scripts/run_swift_tests.sh
+```
+
+完整 Xcode 环境会运行 XCTest；只有 Command Line Tools 时会自动退回有限的 ProviderCore 回归检查。CI 会强制执行完整 `swift test`，应用本身仍支持 macOS 13。
+
 OCR 段落整理回归检查：
 
 ```bash
@@ -308,13 +316,13 @@ Release App 构建：
 生成 release zip：
 
 ```bash
-./scripts/package_release.sh 0.1.0
+./scripts/package_release.sh 0.1.1
 ```
 
 发布前预检，不构建、不清理 `release/`：
 
 ```bash
-CHECK_ONLY=1 ./scripts/package_release.sh 0.1.0
+CHECK_ONLY=1 ./scripts/package_release.sh 0.1.1
 ```
 
 生成正式签名并公证的 release zip：
@@ -324,7 +332,7 @@ APP_BUNDLE_ID="com.example.ImmersiveTranslator" \
 CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
 NOTARIZE=1 \
 NOTARYTOOL_PROFILE="immersive-translator" \
-./scripts/package_release.sh 0.1.0
+./scripts/package_release.sh 0.1.1
 ```
 
 输出文件会放在 `release/`：
@@ -338,7 +346,7 @@ NOTARYTOOL_PROFILE="immersive-translator" \
 ```bash
 APP_BUNDLE_ID="com.example.ImmersiveTranslator" \
 APP_UPDATE_MANIFEST_URL="https://example.com/immersive-translator/update-manifest.json" \
-./scripts/package_release.sh 0.1.0
+./scripts/package_release.sh 0.1.1
 ```
 
 发布到静态托管或 GitHub Release 时，可以让脚本写入下载地址和发布说明：
@@ -346,24 +354,24 @@ APP_UPDATE_MANIFEST_URL="https://example.com/immersive-translator/update-manifes
 ```bash
 APP_BUNDLE_ID="com.example.ImmersiveTranslator" \
 RELEASE_BASE_URL="https://example.com/immersive-translator" \
-RELEASE_NOTES_URL="https://example.com/immersive-translator/releases/0.1.0" \
+RELEASE_NOTES_URL="https://example.com/immersive-translator/releases/0.1.1" \
 APP_UPDATE_MANIFEST_URL="https://example.com/immersive-translator/update-manifest.json" \
-./scripts/package_release.sh 0.1.0
+./scripts/package_release.sh 0.1.1
 ```
 
 `RELEASE_BASE_URL` 会用于生成 manifest 里的 `download_url`；如果需要完全自定义下载地址，也可以传入 `RELEASE_DOWNLOAD_URL`。
 
-仓库内置的 GitHub Actions 发布工作流会在推送 tag 或手动触发时自动复用 `./scripts/package_release.sh`，构建 release zip、sha256 和 `update-manifest.json`，并上传到 GitHub Release。以 `v0.1.0` 为例，最终会生成：
+仓库内置的 GitHub Actions 发布工作流会在推送 tag 或手动触发时自动复用 `./scripts/package_release.sh`，构建 release zip、sha256 和 `update-manifest.json`，并上传到 GitHub Release。以 `v0.1.1` 为例，最终会生成：
 
 - App 内置更新源：`https://github.com/<owner>/<repo>/releases/latest/download/update-manifest.json`
-- manifest 里的 `download_url`：`https://github.com/<owner>/<repo>/releases/download/v0.1.0/ImmersiveTranslator-0.1.0-macOS.zip`
-- manifest 里的 `release_notes_url`：`https://github.com/<owner>/<repo>/releases/tag/v0.1.0`
+- manifest 里的 `download_url`：`https://github.com/<owner>/<repo>/releases/download/v0.1.1/ImmersiveTranslator-0.1.1-macOS.zip`
+- manifest 里的 `release_notes_url`：`https://github.com/<owner>/<repo>/releases/tag/v0.1.1`
 
 这样旧版本 App 会始终读取 latest release 上的最新 manifest，而下载包和发布说明会落到本次 tag 对应的最终发布页。触发方式：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 也可以在 GitHub Actions 页面手动运行 `Release` 工作流，填写 `version`，可选填写 `tag`、`build`、`draft` 和 `prerelease`。如果不填写 `build`，工作流会使用 GitHub Actions run number 作为 `CFBundleVersion`。
@@ -431,7 +439,7 @@ NOTARYTOOL_PROFILE="immersive-translator" \
 APP_BUNDLE_ID="com.example.ImmersiveTranslator" \
 CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
 NOTARIZE=1 \
-./scripts/package_release.sh 0.1.0
+./scripts/package_release.sh 0.1.1
 ```
 
 ```bash
@@ -442,7 +450,7 @@ APPLE_APP_PASSWORD="app-specific-password" \
 APP_BUNDLE_ID="com.example.ImmersiveTranslator" \
 CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
 NOTARIZE=1 \
-./scripts/package_release.sh 0.1.0
+./scripts/package_release.sh 0.1.1
 ```
 
 ```bash
@@ -453,13 +461,13 @@ APP_STORE_CONNECT_ISSUER_ID="issuer-uuid" \
 APP_BUNDLE_ID="com.example.ImmersiveTranslator" \
 CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
 NOTARIZE=1 \
-./scripts/package_release.sh 0.1.0
+./scripts/package_release.sh 0.1.1
 ```
 
 校验发布包：
 
 ```bash
-shasum -a 256 -c release/ImmersiveTranslator-0.1.0-macOS.zip.sha256
+shasum -a 256 -c release/ImmersiveTranslator-0.1.1-macOS.zip.sha256
 spctl --assess --type execute --verbose=4 dist/ImmersiveTranslator.app
 ruby -rjson -e 'JSON.parse(File.read("release/update-manifest.json")); puts "manifest OK"'
 ```

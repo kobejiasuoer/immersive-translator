@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version, for example 0.1.0"
+        description: "Release version, for example 0.1.1"
         required: true
         type: string
       tag:
@@ -40,6 +40,9 @@ jobs:
   release:
     name: Build and publish release
     runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: immersive-translator-mac
     env:
       APP_NAME: ImmersiveTranslator
       APP_BUNDLE_ID: ${{ vars.APP_BUNDLE_ID || 'local.immersive-translator.mvp' }}
@@ -77,7 +80,7 @@ jobs:
             version="${WORKFLOW_INPUT_VERSION:-${release_tag#v}}"
           else
             if [[ -z "${WORKFLOW_INPUT_VERSION:-}" ]]; then
-              echo "::error::Manual releases must provide a version, for example 0.1.0."
+              echo "::error::Manual releases must provide a version, for example 0.1.1."
               exit 1
             fi
             version="$WORKFLOW_INPUT_VERSION"

@@ -67,16 +67,146 @@ struct ErrorEvent {
 
 /// 规范化接口地址：确保以 /chat/completions 结尾。对齐 Mac 版逻辑。
 fn normalize_endpoint(endpoint: &str) -> String {
-    let trimmed = endpoint.trim().trim_end_matches('/');
+    let trimmed = endpoint.trim();
     if trimmed.is_empty() {
         return String::new();
     }
-    if trimmed.ends_with("/chat/completions") {
-        trimmed.to_string()
-    } else if trimmed.ends_with("/v1") {
-        format!("{trimmed}/chat/completions")
+
+    let Ok(mut url) = reqwest::Url::parse(trimmed) else {
+        // Preserve the previous best-effort behavior; reqwest will return a
+        // useful invalid-URL error to the caller.
+        let fallback = trimmed.trim_end_matches('/');
+        return if fallback.ends_with("/chat/completions") {
+            fallback.to_string()
+        } else if fallback.ends_with("/v1") {
+            format!("{fallback}/chat/completions")
+        } else {
+            format!("{fallback}/v1/chat/completions")
+        };
+    };
+
+    let mut path = url.path().trim_end_matches('/').to_string();
+    let lower_path = path.to_ascii_lowercase();
+    if lower_path.ends_with("/chat/completions") {
+        // Already complete.
+    } else if lower_path.ends_with("/v1") || lower_path.ends_with("/api/paas/v4") {
+        path.push_str("/chat/completions");
     } else {
-        format!("{trimmed}/v1/chat/completions")
+        path.push_str("/v1/chat/completions");
+    }
+    url.set_path(&path);
+    // Fragments are client-side metadata and must not be sent to an API.
+    url.set_fragment(None);
+    url.to_string()
+}
+
+/// Incrementally decodes response bytes without dropping a UTF-8 scalar that
+/// happens to be split across two HTTP chunks.
+fn append_utf8_chunk(pending: &mut Vec<u8>, output: &mut String, chunk: &[u8]) {
+    pending.extend_from_slice(chunk);
+    loop {
+        let error = match std::str::from_utf8(pending.as_slice()) {
+            Ok(valid) => {
+                output.push_str(valid);
+                pending.clear();
+                return;
+            }
+            Err(error) => error,
+        };
+
+        let valid_up_to = error.valid_up_to();
+        if valid_up_to > 0 {
+            let valid = std::str::from_utf8(&pending[..valid_up_to])
+                .expect("valid_up_to must end on a UTF-8 boundary");
+            output.push_str(valid);
+            pending.drain(..valid_up_to);
+        }
+
+        if let Some(invalid_bytes) = error.error_len() {
+            output.push('\u{FFFD}');
+            pending.drain(..invalid_bytes.min(pending.len()));
+        } else {
+            // The remaining bytes are a valid prefix of an incomplete scalar.
+            return;
+        }
+    }
+}
+
+/// Return the next non-control SSE `data:` payload from the buffer.
+fn take_sse_data(buffer: &mut String) -> Option<String> {
+    loop {
+        let newline_idx = buffer.find('\n')?;
+        let line: String = buffer.drain(..=newline_idx).collect();
+        let trimmed = line.trim();
+        let Some(data) = trimmed.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data == "[DONE]" {
+            continue;
+        }
+        return Some(data.to_string());
+    }
+}
+
+fn terminate_sse_buffer(buffer: &mut String) {
+    if !buffer.is_empty() && !buffer.ends_with('\n') {
+        buffer.push('\n');
+    }
+}
+
+/// Consume all complete SSE lines currently buffered. A final newline is
+/// added by the caller when the server closes after an unterminated line.
+fn process_sse_buffer(
+    app: &AppHandle,
+    window_label: &str,
+    buffer: &mut String,
+    full_text: &mut String,
+    first_token_ms: &mut Option<u128>,
+    first_token_start: &Instant,
+    request_start: &Instant,
+) {
+    while let Some(data) = take_sse_data(buffer) {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) else {
+            continue;
+        };
+        // 思考模型可能把推理过程放在 reasoning_content / reasoning 字段，跳过。
+        let Some(content) = value["choices"][0]["delta"]["content"].as_str() else {
+            continue;
+        };
+        if content.is_empty() {
+            continue;
+        }
+
+        // Append before filtering so a <think> block split across deltas is
+        // removed only after its closing tag arrives.
+        full_text.push_str(content);
+        let display = strip_think_tags(full_text.as_str());
+        if display.trim().is_empty() {
+            // 全是思考内容，不更新展示，也不计作首个可见字符。
+            continue;
+        }
+
+        if first_token_ms.is_none() {
+            *first_token_ms = Some(first_token_start.elapsed().as_millis());
+            let _ = app.emit_to(
+                window_label,
+                "translation:status",
+                StatusEvent {
+                    phase: "streaming".into(),
+                    elapsed_ms: request_start.elapsed().as_millis(),
+                },
+            );
+        }
+
+        let _ = app.emit_to(
+            window_label,
+            "translation:delta",
+            DeltaEvent {
+                text: display,
+                elapsed_ms: request_start.elapsed().as_millis(),
+            },
+        );
     }
 }
 
@@ -252,6 +382,7 @@ pub async fn translate_stream(
         use futures_util::StreamExt;
         let mut stream = response.bytes_stream();
         let mut buffer = String::new();
+        let mut pending_utf8 = Vec::new();
         let mut full_text = String::new();
         let mut first_token_ms: Option<u128> = None;
 
@@ -284,62 +415,39 @@ pub async fn translate_stream(
                     return Ok(());
                 }
             };
-            buffer.push_str(std::str::from_utf8(&chunk).unwrap_or(""));
-            // 按行处理
-            while let Some(newline_idx) = buffer.find('\n') {
-                let line: String = buffer.drain(..=newline_idx).collect();
-                let trimmed = line.trim();
-                if !trimmed.starts_with("data:") {
-                    continue;
-                }
-                let data = trimmed.trim_start_matches("data:").trim();
-                if data == "[DONE]" {
-                    continue;
-                }
-                // 解析 JSON: choices[0].delta.content
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
-                    // 思考模型可能把推理过程放在 reasoning_content / reasoning 字段，跳过
-                    let content = v["choices"][0]["delta"]["content"].as_str();
-                    let content = match content {
-                        Some(c) => c,
-                        None => continue,
-                    };
-                    // 忽略空 delta（对齐 Mac：部分服务先发空 content 占位）
-                    if content.is_empty() {
-                        continue;
-                    }
-                    if first_token_ms.is_none() {
-                        first_token_ms = Some(first_token_start.elapsed().as_millis());
-                        // 阶段 3：streaming
-                        let _ = app.emit_to(
-                            window_label.as_str(),
-                            "translation:status",
-                            StatusEvent {
-                                phase: "streaming".into(),
-                                elapsed_ms: request_start.elapsed().as_millis(),
-                            },
-                        );
-                    }
-                    full_text.push_str(content);
-                    // 剥离 <think>…</think> 思考噪声（兼容未关思考的模型）
-                    let display = strip_think_tags(&full_text);
-                    if display.trim().is_empty() {
-                        // 全是思考内容，不更新展示，等真正正文
-                        continue;
-                    }
-                    let _ = app.emit_to(
-                        window_label.as_str(),
-                        "translation:delta",
-                        DeltaEvent {
-                            text: display,
-                            elapsed_ms: request_start.elapsed().as_millis(),
-                        },
-                    );
-                }
-            }
+            append_utf8_chunk(&mut pending_utf8, &mut buffer, &chunk);
+            process_sse_buffer(
+                &app,
+                window_label.as_str(),
+                &mut buffer,
+                &mut full_text,
+                &mut first_token_ms,
+                &first_token_start,
+                &request_start,
+            );
         }
 
-        if full_text.trim().is_empty() {
+        if !pending_utf8.is_empty() {
+            buffer.push_str(&String::from_utf8_lossy(&pending_utf8));
+        }
+
+        // Some compatible gateways close immediately after the JSON line and
+        // omit the terminating newline. Process that final line as well.
+        if !buffer.is_empty() {
+            terminate_sse_buffer(&mut buffer);
+            process_sse_buffer(
+                &app,
+                window_label.as_str(),
+                &mut buffer,
+                &mut full_text,
+                &mut first_token_ms,
+                &first_token_start,
+                &request_start,
+            );
+        }
+
+        let final_text = strip_think_tags(&full_text);
+        if final_text.trim().is_empty() {
             let _ = app.emit_to(
                 window_label.as_str(),
                 "translation:error",
@@ -355,7 +463,7 @@ pub async fn translate_stream(
                 window_label.as_str(),
                 "translation:done",
                 DoneEvent {
-                    text: strip_think_tags(&full_text),
+                    text: final_text,
                     elapsed_ms: request_start.elapsed().as_millis(),
                     connect_ms,
                     first_token_ms: first_token_ms.unwrap_or(0),
@@ -546,13 +654,11 @@ fn strip_think_tags(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut i = 0;
     let bytes = input.as_bytes();
-    let lower = input.to_lowercase();
-    let lb = lower.as_bytes();
     while i < bytes.len() {
         // 检测 <think> 开始
-        if input[i..].starts_with('<') && lb[i..].starts_with(b"<think") {
+        if starts_with_ascii_ignore_case(&bytes[i..], b"<think") {
             // 找到对应的 </think>
-            if let Some(end_rel) = lower[i..].find("</think>") {
+            if let Some(end_rel) = find_ascii_ignore_case(&bytes[i..], b"</think>") {
                 i += end_rel + "</think>".len();
                 continue;
             } else {
@@ -562,14 +668,31 @@ fn strip_think_tags(input: &str) -> String {
         }
         // 安全追加一个 UTF-8 字符
         let ch_start = i;
-        // 找到下一个字符边界
-        i += 1;
-        while i < bytes.len() && (bytes[i] & 0xC0) == 0x80 {
-            i += 1;
-        }
+        i += input[i..]
+            .chars()
+            .next()
+            .expect("i is always a character boundary")
+            .len_utf8();
         out.push_str(&input[ch_start..i]);
     }
     out
+}
+
+fn starts_with_ascii_ignore_case(value: &[u8], prefix: &[u8]) -> bool {
+    value.len() >= prefix.len()
+        && value[..prefix.len()]
+            .iter()
+            .zip(prefix)
+            .all(|(left, right)| left.eq_ignore_ascii_case(right))
+}
+
+fn find_ascii_ignore_case(value: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    value
+        .windows(needle.len())
+        .position(|window| starts_with_ascii_ignore_case(window, needle))
 }
 
 /// 取消当前正在进行的翻译（流式）。触发后流式循环在下一次 chunk 检查时退出。
@@ -612,6 +735,44 @@ mod tests {
     }
 
     #[test]
+    fn strip_think_handles_unicode_that_expands_when_lowercased() {
+        assert_eq!(strip_think_tags("İ<think>x</think>y"), "İy");
+    }
+
+    #[test]
+    fn utf8_decoder_preserves_scalar_split_across_chunks() {
+        let bytes = "data: 中文\n".as_bytes();
+        let split = bytes.iter().position(|byte| *byte >= 0x80).unwrap() + 1;
+        let mut pending = Vec::new();
+        let mut output = String::new();
+
+        append_utf8_chunk(&mut pending, &mut output, &bytes[..split]);
+        assert!(!pending.is_empty());
+        append_utf8_chunk(&mut pending, &mut output, &bytes[split..]);
+
+        assert!(pending.is_empty());
+        assert_eq!(output, "data: 中文\n");
+    }
+
+    #[test]
+    fn sse_final_line_without_newline_is_processed() {
+        let mut buffer = String::from("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}");
+        terminate_sse_buffer(&mut buffer);
+
+        assert_eq!(
+            take_sse_data(&mut buffer).as_deref(),
+            Some("{\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}"),
+        );
+    }
+
+    #[test]
+    fn think_only_content_is_empty_after_filtering() {
+        assert!(strip_think_tags("<think>internal reasoning</think>")
+            .trim()
+            .is_empty());
+    }
+
+    #[test]
     fn normalize_endpoint_appends_v1() {
         assert_eq!(
             normalize_endpoint("https://api.example.com"),
@@ -632,6 +793,22 @@ mod tests {
         assert_eq!(
             normalize_endpoint("https://api.example.com/v1/chat/completions/"),
             "https://api.example.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn normalize_endpoint_preserves_query_and_drops_fragment() {
+        assert_eq!(
+            normalize_endpoint("https://api.example.com/v1?api_key=secret&debug=1#local"),
+            "https://api.example.com/v1/chat/completions?api_key=secret&debug=1"
+        );
+    }
+
+    #[test]
+    fn normalize_endpoint_supports_zhipu_base_path() {
+        assert_eq!(
+            normalize_endpoint("https://open.bigmodel.cn/api/paas/v4"),
+            "https://open.bigmodel.cn/api/paas/v4/chat/completions"
         );
     }
 }
