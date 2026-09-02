@@ -21,6 +21,12 @@ xcuserdata/
 *.log
 diagnostic.log
 
+# Local installer output (built by tauri, not committed)
+release-builds/
+
+# WorkBuddy workspace memory (local only)
+.workbuddy/
+
 # Temporary files
 *.tmp
 *.swp

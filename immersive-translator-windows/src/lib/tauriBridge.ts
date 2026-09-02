@@ -112,11 +112,15 @@ export function onDownloadProgress(
 }
 
 /**
- * 运行时切换全局热键。注销旧键、注册新键、持久化到 hotkey.txt。
- * 返回规范化后的热键字符串；注册失败会 reject（含原因）。
+ * 运行时切换全局热键。先注销全部，再原子地注册翻译键 + OCR 键，
+ * 并分别持久化到 hotkey.txt / ocr_hotkey.txt。
+ * 任一注册失败会 reject（含原因）；此时默认键已被清掉，应提示用户。
  */
-export async function reregisterHotkey(hotkey: string): Promise<string> {
-  return invoke<string>("reregister_hotkey", { hotkey });
+export async function reregisterHotkeys(
+  translateHotkey: string,
+  ocrHotkey: string,
+): Promise<string> {
+  return invoke<string>("reregister_hotkeys", { translateHotkey, ocrHotkey });
 }
 
 // ---- 连通性测试 ----

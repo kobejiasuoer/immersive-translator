@@ -10,8 +10,10 @@ export interface AppSettings {
   customStyle: string;
   glossaryText: string;
   stream: boolean;
-  /** 全局热键，Tauri 格式如 "Ctrl+Shift+Q"。 */
+  /** 全局翻译热键，Tauri 格式如 "Ctrl+Shift+Q"。 */
   hotkey: string;
+  /** 截图 OCR 翻译热键，Tauri 格式如 "Ctrl+Shift+E"。 */
+  ocrHotkey: string;
 }
 
 const STORAGE_KEY = "immersive-translator-settings";
@@ -45,6 +47,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   glossaryText: "",
   stream: true,
   hotkey: "Ctrl+Shift+Q",
+  ocrHotkey: "Ctrl+Shift+E",
 };
 
 /** localStorage 里保存的非敏感字段（apiKey 走 DPAPI，不落明文）。 */

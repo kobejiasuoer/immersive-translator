@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ocrModelsReady, showOcrResult } from "../lib/tauriBridge";
+import { IconCrop, IconClose, IconAlertCircle, IconDownload } from "../ui/icons";
 
 /**
  * OCR 截图框选覆盖层。对齐 Mac ScreenSelection。
@@ -63,6 +64,11 @@ export function OcrOverlay() {
   }
 
   function onMouseDown(e: React.MouseEvent) {
+    // 错误提示态：点击任意处先关闭错误，不开始框选
+    if (errorMsg) {
+      setErrorMsg(null);
+      return;
+    }
     if (e.button !== 0 || modelMissing || processing) return;
     setErrorMsg(null);
     startRef.current = { x: e.clientX, y: e.clientY };
@@ -152,18 +158,25 @@ export function OcrOverlay() {
           ...rootStyle,
           backgroundImage: bgUrl ? `url(${bgUrl})` : undefined,
           backgroundSize: "cover",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          cursor: "pointer",
         }}
         onClick={() => void hideOverlay()}
       >
-        <div style={dimOverlayStyle} />
-        <div style={modelMissingBoxStyle}>
-          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>OCR 模型未下载</div>
-          <div style={{ fontSize: 13, color: "#666", marginBottom: 12 }}>
+        <div className="ocr-dim" />
+        <div className="ocr-center-card">
+          <div className="title">
+            <IconDownload size={18} />
+            OCR 模型未下载
+          </div>
+          <div className="desc">
             截图翻译需要先下载 PaddleOCR 模型（约 16MB）。
             <br />
             请到「设置 → 截图翻译 (OCR)」里点「下载中文模型」。
           </div>
-          <div style={{ fontSize: 12, color: "#999" }}>点击任意处关闭</div>
+          <div className="foot">点击任意处关闭</div>
         </div>
       </div>
     );
@@ -171,8 +184,8 @@ export function OcrOverlay() {
 
   return (
     <div
+      className="ocr-root"
       style={{
-        ...rootStyle,
         backgroundImage: bgUrl ? `url(${bgUrl})` : undefined,
         backgroundSize: "cover",
         cursor,
@@ -183,50 +196,65 @@ export function OcrOverlay() {
       onContextMenu={onContextMenu}
     >
       {/* 整体半透明遮罩（让用户知道进入截图模式）*/}
-      <div style={dimOverlayStyle} />
+      <div className="ocr-dim" style={{ background: "rgba(0,0,0,0.28)" }} />
+
+      {/* 顶部取消 */}
+      {!processing && (
+        <button
+          className="ocr-close"
+          onClick={() => void hideOverlay()}
+          onMouseDown={(e) => e.stopPropagation()}
+          title="取消截图 (Esc)"
+        >
+          <IconClose size={16} />
+          <span>取消</span>
+        </button>
+      )}
 
       {/* 初始提示 */}
       {!dragging && !rect && !processing && (
-        <div style={hintStyle}>拖拽选择要翻译的区域 · Esc 或右键取消</div>
+        <div className="ocr-hint">
+          <IconCrop size={14} />
+          拖拽选择要翻译的区域
+          <span className="kbd">Esc</span>
+          或
+          <span className="kbd">右键</span>
+          取消
+        </div>
       )}
 
-      {/* 拖拽选区：四块遮罩（选区镂空）+ 边框 */}
+      {/* 拖拽选区：box-shadow 遮罩外 + 描边 */}
       {dragging && rect && (
-        <>
-          {/* 用 box-shadow 做选区外遮罩，选区内透明 */}
-          <div
-            style={{
-              position: "absolute",
-              left: rect.x,
-              top: rect.y,
-              width: rect.w,
-              height: rect.h,
-              border: "2px solid #2563eb",
-              boxShadow: "0 0 0 9999px rgba(0,0,0,0.45)",
-              boxSizing: "border-box",
-            }}
-          >
-            <div style={sizeLabelStyle}>
-              {Math.round(rect.w)} × {Math.round(rect.h)}
-            </div>
+        <div
+          className="ocr-select"
+          style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+        >
+          <div className="ocr-size-badge">
+            {Math.round(rect.w)} × {Math.round(rect.h)}
           </div>
-        </>
+        </div>
       )}
 
       {/* 识别中 */}
       {processing && (
-        <div style={processingOverlayStyle}>
-          <div style={processingBoxStyle}>正在识别文字…</div>
+        <div style={centeredOverlayStyle}>
+          <div style={pillStyle}>
+            <span className="spinner" style={{ borderColor: "rgba(255,255,255,.35)", borderTopColor: "#fff" }} />
+            正在识别文字…
+          </div>
         </div>
       )}
 
       {/* 错误提示 */}
       {errorMsg && (
-        <div style={processingOverlayStyle} onClick={() => setErrorMsg(null)}>
-          <div style={errorBoxStyle}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>OCR 失败</div>
-            <div style={{ fontSize: 13, color: "#666" }}>{errorMsg}</div>
-            <div style={{ fontSize: 11, color: "#999", marginTop: 8 }}>点击关闭，可重新框选</div>
+        <div style={{ ...centeredOverlayStyle, pointerEvents: "auto" }} onClick={() => setErrorMsg(null)}>
+          <div className="ocr-center-card">
+            <div className="title" style={{ color: "var(--err)" }}>
+              <IconAlertCircle size={18} />
+              OCR 失败
+            </div>
+            <div className="desc">{errorMsg}</div>
+            <div className="foot">点击关闭，可重新框选</div>
           </div>
         </div>
       )}
@@ -244,40 +272,10 @@ interface Rect {
 const rootStyle: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "#1a1a1a",
+  background: "#14161c",
   overflow: "hidden",
 };
-const dimOverlayStyle: React.CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  background: "rgba(0,0,0,0.25)",
-  pointerEvents: "none",
-};
-const sizeLabelStyle: React.CSSProperties = {
-  position: "absolute",
-  top: -22,
-  left: 0,
-  background: "#2563eb",
-  color: "#fff",
-  fontSize: 12,
-  padding: "1px 6px",
-  borderRadius: 3,
-  whiteSpace: "nowrap",
-};
-const hintStyle: React.CSSProperties = {
-  position: "absolute",
-  top: "50%",
-  left: "50%",
-  transform: "translate(-50%, -50%)",
-  color: "#fff",
-  fontSize: 16,
-  background: "rgba(0,0,0,0.6)",
-  padding: "10px 20px",
-  borderRadius: 8,
-  pointerEvents: "none",
-  zIndex: 10,
-};
-const processingOverlayStyle: React.CSSProperties = {
+const centeredOverlayStyle: React.CSSProperties = {
   position: "absolute",
   inset: 0,
   display: "flex",
@@ -286,29 +284,15 @@ const processingOverlayStyle: React.CSSProperties = {
   pointerEvents: "none",
   zIndex: 10,
 };
-const processingBoxStyle: React.CSSProperties = {
+const pillStyle: React.CSSProperties = {
   color: "#fff",
-  fontSize: 16,
-  background: "rgba(0,0,0,0.7)",
-  padding: "12px 24px",
-  borderRadius: 8,
-};
-const errorBoxStyle: React.CSSProperties = {
-  background: "#fff",
-  borderRadius: 12,
-  padding: "20px 24px",
-  maxWidth: 400,
-  cursor: "pointer",
-  zIndex: 10,
-};
-const modelMissingBoxStyle: React.CSSProperties = {
-  position: "relative",
-  zIndex: 10,
-  background: "#fff",
-  borderRadius: 12,
-  padding: "24px 28px",
-  maxWidth: 420,
-  textAlign: "center",
-  cursor: "pointer",
-  margin: "auto",
+  fontSize: 14,
+  display: "flex",
+  alignItems: "center",
+  gap: 9,
+  background: "rgba(20,22,28,0.8)",
+  border: "1px solid rgba(255,255,255,0.16)",
+  padding: "10px 18px",
+  borderRadius: 999,
+  backdropFilter: "blur(6px)",
 };

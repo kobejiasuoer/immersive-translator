@@ -9,6 +9,20 @@ import {
   type HistoryRecord,
   type ExportFormat,
 } from "../lib/tauriBridge";
+import {
+  IconSearch,
+  IconStar,
+  IconTrash,
+  IconCopy,
+  IconCopyAll,
+  IconCheck,
+  IconClock,
+  IconCrop,
+  IconChevronDown,
+  IconAlert,
+} from "../ui/icons";
+
+type FavFilter = "all" | "favorites";
 
 /**
  * 翻译历史窗口。对齐 Mac TranslationHistoryView：
@@ -20,9 +34,9 @@ import {
 export function History() {
   const [records, setRecords] = useState<HistoryRecord[]>([]);
   const [query, setQuery] = useState("");
-  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [favFilter, setFavFilter] = useState<FavFilter>("all");
   const [loading, setLoading] = useState(true);
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
   useEffect(() => {
     const win = getCurrentWindow();
@@ -39,7 +53,9 @@ export function History() {
     setLoading(true);
     try {
       const list = await historyList(query);
-      setRecords(favoritesOnly ? list.filter((r) => r.isFavorite) : list);
+      setRecords(favFilter === "favorites" ? list.filter((r) => r.isFavorite) : list);
+    } catch (e) {
+      showToast(`加载失败：${e}`, false);
     } finally {
       setLoading(false);
     }
@@ -49,7 +65,7 @@ export function History() {
   useEffect(() => {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [favoritesOnly]);
+  }, [favFilter]);
 
   // 搜索输入防抖（避免每次按键都查）
   useEffect(() => {
@@ -58,9 +74,9 @@ export function History() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
 
-  function showToast(msg: string) {
-    setToast(msg);
-    setTimeout(() => setToast(""), 2000);
+  function showToast(msg: string, ok = true) {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 2000);
   }
 
   async function handleToggleFav(id: string) {
@@ -84,70 +100,99 @@ export function History() {
 
   async function handleExport(format: ExportFormat) {
     try {
-      const text = await historyExport(query || null, favoritesOnly, format);
+      const text = await historyExport(query || null, favFilter === "favorites", format);
       await navigator.clipboard.writeText(text);
       showToast(`已复制到剪贴板（${format.toUpperCase()}）`);
     } catch (e) {
-      showToast(`导出失败：${e}`);
+      showToast(`导出失败：${e}`, false);
     }
   }
 
   const hasRecords = records.length > 0;
 
   return (
-    <div style={pageStyle}>
-      <div style={toolbarStyle}>
-        <input
-          style={searchInputStyle}
-          placeholder="搜索原文 / 译文 / 语言，或输入「收藏」「ocr」"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <label style={favCheckStyle}>
+    <div className="history-page">
+      {/* 顶部：搜索 + 筛选 */}
+      <div className="history-toolbar">
+        <div className="search-box">
+          <IconSearch size={14} />
           <input
-            type="checkbox"
-            checked={favoritesOnly}
-            onChange={(e) => setFavoritesOnly(e.target.checked)}
+            className="input"
+            placeholder="搜索原文 / 译文 / 语言，或输入「收藏」「ocr」"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
           />
-          仅看收藏
-        </label>
+        </div>
+        <div className="seg">
+          <button
+            className={favFilter === "all" ? "active" : ""}
+            onClick={() => setFavFilter("all")}
+          >
+            全部
+          </button>
+          <button
+            className={favFilter === "favorites" ? "active" : ""}
+            onClick={() => setFavFilter("favorites")}
+          >
+            <IconStar size={12} filled />
+            收藏
+          </button>
+        </div>
         <div style={{ flex: 1 }} />
-        <button style={btnStyle} onClick={() => void refresh()}>
-          刷新
-        </button>
-        <button
-          style={{ ...btnStyle, color: "#b91c1c" }}
-          onClick={() => void handleClearNonFavorites()}
-          disabled={!hasRecords}
-        >
-          清空未收藏
-        </button>
-      </div>
-
-      <div style={exportBarStyle}>
-        <span style={{ fontSize: 12, color: "#666" }}>导出 / 复制：</span>
-        <button style={exportBtnStyle} onClick={() => void handleExport("csv")}>
-          CSV
-        </button>
-        <button style={exportBtnStyle} onClick={() => void handleExport("json")}>
-          JSON
-        </button>
-        <button style={exportBtnStyle} onClick={() => void handleExport("markdown")}>
-          Markdown
-        </button>
-        <button style={exportBtnStyle} onClick={() => void handleExport("text")}>
-          纯文本
-        </button>
-        <span style={{ marginLeft: "auto", fontSize: 12, color: "#888" }}>
+        <span style={{ fontSize: 12, color: "var(--text-3)" }}>
           {loading ? "加载中…" : `${records.length} 条`}
         </span>
       </div>
 
-      <div style={listStyle}>
-        {loading && <div style={emptyStyle}>加载中…</div>}
+      {/* 次栏：导出 + 清空 */}
+      <div className="history-subbar">
+        <span>导出 / 复制：</span>
+        <button className="btn btn-ghost btn-sm" onClick={() => void handleExport("csv")}>
+          CSV
+        </button>
+        <button className="btn btn-ghost btn-sm" onClick={() => void handleExport("json")}>
+          JSON
+        </button>
+        <button className="btn btn-ghost btn-sm" onClick={() => void handleExport("markdown")}>
+          Markdown
+        </button>
+        <button className="btn btn-ghost btn-sm" onClick={() => void handleExport("text")}>
+          纯文本
+        </button>
+        <div style={{ flex: 1 }} />
+        <button
+          className="btn btn-ghost btn-sm"
+          style={{ color: "var(--err)" }}
+          onClick={() => void handleClearNonFavorites()}
+          disabled={!hasRecords}
+        >
+          <IconTrash size={12} />
+          清空未收藏
+        </button>
+      </div>
+
+      {/* 列表 */}
+      <div className="history-list">
+        {loading && (
+          <div className="empty">
+            <div className="spinner" style={{ margin: "0 auto" }} />
+          </div>
+        )}
         {!loading && !hasRecords && (
-          <div style={emptyStyle}>
-            {query || favoritesOnly ? "没有匹配的记录" : "还没有翻译历史"}
+          <div className="empty">
+            {query || favFilter === "favorites" ? (
+              <>
+                <IconSearch size={26} />
+                <div className="empty-title">没有匹配的记录</div>
+                换个关键词或筛选条件试试
+              </>
+            ) : (
+              <>
+                <IconClock size={26} />
+                <div className="empty-title">还没有翻译历史</div>
+                选中文本按热键翻译后，会记录在这里
+              </>
+            )}
           </div>
         )}
         {!loading &&
@@ -157,11 +202,17 @@ export function History() {
               record={r}
               onToggleFav={() => handleToggleFav(r.id)}
               onDelete={() => handleDelete(r.id)}
+              onCopied={(msg) => showToast(msg)}
             />
           ))}
       </div>
 
-      {toast && <div style={toastStyle}>{toast}</div>}
+      {toast && (
+        <div className="toast">
+          {toast.ok ? <IconCheck size={13} /> : <IconAlert size={13} />}
+          {toast.msg}
+        </div>
+      )}
     </div>
   );
 }
@@ -170,37 +221,69 @@ function HistoryCard({
   record,
   onToggleFav,
   onDelete,
+  onCopied,
 }: {
   record: HistoryRecord;
   onToggleFav: () => void;
   onDelete: () => void;
+  onCopied: (msg: string) => void;
 }) {
   const time = useMemo(() => formatTime(record.createdAt), [record.createdAt]);
+  const [expanded, setExpanded] = useState(false);
+  const isOcr = record.source === "ocr";
+
+  async function copyTrans() {
+    await navigator.clipboard.writeText(record.translation);
+    onCopied("已复制译文");
+  }
+  async function copyBoth() {
+    await navigator.clipboard.writeText(`${record.original}\n\n${record.translation}`);
+    onCopied("已复制原文+译文");
+  }
+
   return (
-    <div style={cardStyle}>
-      <div style={cardMetaStyle}>
-        <span style={srcTagStyle(record.source)}>
-          {record.source === "selection" ? "选中" : "OCR"}
+    <div className={`history-card${expanded ? " expanded" : ""}`}>
+      <div className="meta">
+        <span className={`chip ${isOcr ? "chip-amber" : "chip-blue"}`}>
+          {isOcr ? <IconCrop size={10} /> : <IconSearch size={10} />}
+          {isOcr ? "OCR" : "选中"}
         </span>
-        <span style={langStyle}>{record.targetLanguage || "—"}</span>
-        <span style={timeStyle}>{time}</span>
-        <span style={modelStyle}>{record.model}</span>
-        <span style={elapsedStyle}>{(record.elapsedMs / 1000).toFixed(1)}s</span>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+        <span className="lang">{record.targetLanguage || "—"}</span>
+        <span>{time}</span>
+        <span className="model">{record.model}</span>
+        <span className="chip chip-gray">{(record.elapsedMs / 1000).toFixed(1)}s</span>
+        <span className="spacer" />
+        <div className="actions">
+          <button className="icon-btn" title="复制译文" onClick={() => void copyTrans()}>
+            <IconCopy size={14} />
+          </button>
+          <button className="icon-btn" title="复制原文+译文" onClick={() => void copyBoth()}>
+            <IconCopyAll size={14} />
+          </button>
           <button
-            style={iconBtnStyle}
+            className={`icon-btn${record.isFavorite ? " active" : ""}`}
             title={record.isFavorite ? "取消收藏" : "收藏"}
             onClick={onToggleFav}
           >
-            {record.isFavorite ? "★" : "☆"}
+            <IconStar size={14} filled={record.isFavorite} />
           </button>
-          <button style={iconBtnStyle} title="删除" onClick={onDelete}>
-            🗑
+          <button className="icon-btn" style={{ color: "var(--err)" }} title="删除" onClick={onDelete}>
+            <IconTrash size={14} />
           </button>
         </div>
       </div>
-      <div style={origStyle}>{record.original}</div>
-      <div style={transStyle}>{record.translation}</div>
+      <div className="orig">{record.original}</div>
+      <div className="trans">{record.translation}</div>
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 2 }}>
+        <button
+          className="btn btn-ghost btn-sm"
+          style={{ fontSize: 11, color: "var(--text-4)" }}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          <IconChevronDown size={12} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
+          {expanded ? "收起" : "展开全文"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -212,132 +295,3 @@ function formatTime(ms: number): string {
     d.getHours(),
   )}:${pad(d.getMinutes())}`;
 }
-
-// ---- styles ----
-const pageStyle: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  height: "100vh",
-  background: "#f7f7f8",
-  fontFamily: "-apple-system, 'Segoe UI', sans-serif",
-};
-const toolbarStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "10px 14px",
-  borderBottom: "1px solid #e5e5e5",
-  background: "#fff",
-};
-const searchInputStyle: React.CSSProperties = {
-  flex: 1,
-  minWidth: 200,
-  padding: "6px 10px",
-  border: "1px solid #d0d0d0",
-  borderRadius: 6,
-  fontSize: 13,
-};
-const favCheckStyle: React.CSSProperties = {
-  fontSize: 13,
-  color: "#444",
-  display: "flex",
-  alignItems: "center",
-  gap: 4,
-  cursor: "pointer",
-};
-const btnStyle: React.CSSProperties = {
-  padding: "6px 12px",
-  border: "1px solid #d0d0d0",
-  borderRadius: 6,
-  background: "#fff",
-  cursor: "pointer",
-  fontSize: 13,
-};
-const exportBarStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "8px 14px",
-  borderBottom: "1px solid #e5e5e5",
-  background: "#fafafa",
-};
-const exportBtnStyle: React.CSSProperties = {
-  padding: "3px 9px",
-  border: "1px solid #ccc",
-  borderRadius: 4,
-  background: "#fff",
-  cursor: "pointer",
-  fontSize: 12,
-};
-const listStyle: React.CSSProperties = {
-  flex: 1,
-  overflowY: "auto",
-  padding: 14,
-  display: "flex",
-  flexDirection: "column",
-  gap: 10,
-};
-const emptyStyle: React.CSSProperties = {
-  textAlign: "center",
-  color: "#999",
-  padding: 40,
-  fontSize: 13,
-};
-const cardStyle: React.CSSProperties = {
-  background: "#fff",
-  border: "1px solid #e5e5e5",
-  borderRadius: 8,
-  padding: "10px 12px",
-};
-const cardMetaStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  marginBottom: 6,
-  fontSize: 11,
-  color: "#888",
-};
-const srcTagStyle = (src: string): React.CSSProperties => ({
-  padding: "1px 6px",
-  borderRadius: 3,
-  fontSize: 10,
-  background: src === "ocr" ? "#fef3c7" : "#e0e7ff",
-  color: src === "ocr" ? "#92400e" : "#3730a3",
-});
-const langStyle: React.CSSProperties = { fontWeight: 600, color: "#555" };
-const timeStyle: React.CSSProperties = { color: "#999" };
-const modelStyle: React.CSSProperties = { fontFamily: "monospace", color: "#666" };
-const elapsedStyle: React.CSSProperties = { color: "#16a34a" };
-const origStyle: React.CSSProperties = {
-  fontSize: 13,
-  color: "#666",
-  whiteSpace: "pre-wrap",
-  wordBreak: "break-word",
-  marginBottom: 4,
-};
-const transStyle: React.CSSProperties = {
-  fontSize: 14,
-  color: "#1a1a1a",
-  whiteSpace: "pre-wrap",
-  wordBreak: "break-word",
-  lineHeight: 1.5,
-};
-const iconBtnStyle: React.CSSProperties = {
-  border: "none",
-  background: "transparent",
-  cursor: "pointer",
-  fontSize: 16,
-  padding: "2px 4px",
-  lineHeight: 1,
-};
-const toastStyle: React.CSSProperties = {
-  position: "fixed",
-  bottom: 20,
-  left: "50%",
-  transform: "translateX(-50%)",
-  background: "rgba(0,0,0,0.8)",
-  color: "#fff",
-  padding: "6px 14px",
-  borderRadius: 6,
-  fontSize: 13,
-};

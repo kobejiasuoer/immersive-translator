@@ -171,38 +171,70 @@ fn trigger_panel(app: &AppHandle) {
     });
 }
 
-/// 运行时切换全局热键。先注销全部，再注册新的，并持久化到 hotkey.txt。
-/// 返回 Ok(normalized) 或 Err(原因)。
+/// 截图 OCR 热键按下后的处理：直接进入截图 OCR 模式（截全屏 → overlay 框选）。
+/// 复用托盘「截图翻译(OCR)」的入口，下游识别/翻译链路不变。
+fn trigger_ocr(app: &AppHandle) {
+    open_ocr_overlay(app.clone());
+}
+
+/// 运行时切换全局热键。先注销全部，再原子地注册翻译键 + OCR 键，并分别持久化。
+/// 任一解析/注册失败则整体报错（此时默认键已被 unregister_all 清掉，
+/// 调用方应提示用户并建议重启以恢复默认）。返回 Ok("ok") 或 Err(原因)。
 #[tauri::command]
-fn reregister_hotkey(app: AppHandle, hotkey: String) -> Result<String, String> {
+fn reregister_hotkeys(
+    app: AppHandle,
+    translate_hotkey: String,
+    ocr_hotkey: String,
+) -> Result<String, String> {
     let gs = app.global_shortcut();
-    // 先全注销
+    // 先全注销，随后一次性把两个键都注册回来
     let _ = gs.unregister_all();
 
-    let trimmed = hotkey.trim();
-    if trimmed.is_empty() {
+    let translate_trimmed = translate_hotkey.trim();
+    let ocr_trimmed = ocr_hotkey.trim();
+    if translate_trimmed.is_empty() || ocr_trimmed.is_empty() {
         return Err("热键为空".into());
     }
-    let shortcut =
-        Shortcut::from_str(trimmed).map_err(|e| format!("无法解析热键「{trimmed}」: {e}"))?;
+    if translate_trimmed.eq_ignore_ascii_case(ocr_trimmed) {
+        return Err("翻译热键和截图 OCR 热键不能相同".into());
+    }
 
-    // 用 on_shortcut 注册 handler（每次注册需要新的 handler）
-    gs.on_shortcut(shortcut, move |app, _shortcut, event| {
+    // 解析两个快捷键（任一失败立即报错回滚）
+    let translate_shortcut = Shortcut::from_str(translate_trimmed)
+        .map_err(|e| format!("无法解析翻译热键「{translate_trimmed}」: {e}"))?;
+    let ocr_shortcut = Shortcut::from_str(ocr_trimmed)
+        .map_err(|e| format!("无法解析截图 OCR 热键「{ocr_trimmed}」: {e}"))?;
+
+    // 翻译键
+    gs.on_shortcut(translate_shortcut, move |app, _shortcut, event| {
         if event.state != ShortcutState::Pressed {
             return;
         }
         trigger_panel(app);
     })
-    .map_err(|e| format!("注册热键失败「{trimmed}」（可能已被系统或其它程序占用）: {e}"))?;
+    .map_err(|e| {
+        format!("注册翻译热键失败「{translate_trimmed}」（可能已被系统或其它程序占用）: {e}")
+    })?;
 
-    // 持久化到 app_data_dir/hotkey.txt，供下次启动恢复
+    // OCR 键
+    gs.on_shortcut(ocr_shortcut, move |app, _shortcut, event| {
+        if event.state != ShortcutState::Pressed {
+            return;
+        }
+        trigger_ocr(app);
+    })
+    .map_err(|e| {
+        format!("注册截图 OCR 热键失败「{ocr_trimmed}」（可能已被系统或其它程序占用）: {e}")
+    })?;
+
+    // 分别持久化到 app_data_dir 下的 hotkey.txt / ocr_hotkey.txt
     if let Ok(appdata) = app.path().app_data_dir() {
         let _ = std::fs::create_dir_all(&appdata);
-        let path = appdata.join("hotkey.txt");
-        let _ = std::fs::write(&path, trimmed);
+        let _ = std::fs::write(appdata.join("hotkey.txt"), translate_trimmed);
+        let _ = std::fs::write(appdata.join("ocr_hotkey.txt"), ocr_trimmed);
     }
 
-    Ok(trimmed.to_string())
+    Ok("ok".into())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -242,7 +274,7 @@ pub fn run() {
             open_history,
             open_ocr_overlay,
             show_ocr_result,
-            reregister_hotkey,
+            reregister_hotkeys,
         ])
         .setup(|app| {
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
@@ -268,8 +300,10 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // 注册默认全局热键 Ctrl+Shift+Q（启动占位；用户改键后由 reregister_hotkey 覆盖）。
-            // 热键按下后的实际逻辑见 trigger_panel。
+            // 注册默认全局热键（启动占位；用户改键后由 reregister_hotkeys 覆盖）：
+            //   Ctrl+Shift+Q —— 选中文字翻译
+            //   Ctrl+Shift+E —— 截图 OCR 翻译
+            // 热键按下后的实际逻辑见 trigger_panel / trigger_ocr。
             app.global_shortcut()
                 .on_shortcut("Ctrl+Shift+Q", |app, _shortcut, event| {
                     if event.state != ShortcutState::Pressed {
@@ -277,14 +311,31 @@ pub fn run() {
                     }
                     trigger_panel(app);
                 })?;
+            app.global_shortcut()
+                .on_shortcut("Ctrl+Shift+E", |app, _shortcut, event| {
+                    if event.state != ShortcutState::Pressed {
+                        return;
+                    }
+                    trigger_ocr(app);
+                })?;
 
-            // 启动后用用户保存的热键覆盖默认（hotkey.txt 在 app_data_dir，前端 saveSettingsAsync 写入）。
+            // 启动后用用户保存的热键覆盖默认（hotkey.txt / ocr_hotkey.txt 在 app_data_dir）。
+            // 任一文件存在且非默认值，就用 reregister_hotkeys 把两个键一起重新注册。
             if let Ok(appdata) = app.path().app_data_dir() {
-                let path = appdata.join("hotkey.txt");
-                if let Ok(hk) = std::fs::read_to_string(&path) {
-                    let hk = hk.trim();
-                    if !hk.is_empty() && hk != "Ctrl+Shift+Q" {
-                        let _ = reregister_hotkey(app.handle().clone(), hk.to_string());
+                let saved_translate = std::fs::read_to_string(appdata.join("hotkey.txt"))
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let saved_ocr = std::fs::read_to_string(appdata.join("ocr_hotkey.txt"))
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                if saved_translate.is_some() || saved_ocr.is_some() {
+                    let t = saved_translate.unwrap_or_else(|| "Ctrl+Shift+Q".into());
+                    let o = saved_ocr.unwrap_or_else(|| "Ctrl+Shift+E".into());
+                    // 两键相同或某键非法时跳过恢复，保留默认键不破坏启动
+                    if !t.eq_ignore_ascii_case(&o) {
+                        let _ = reregister_hotkeys(app.handle().clone(), t, o);
                     }
                 }
             }

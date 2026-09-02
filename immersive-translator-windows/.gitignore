@@ -27,3 +27,6 @@ test_ocr.png
 # 发布产物（构建后生成，通过 GitHub Release 分发，不入仓库）
 release-v*/
 
+# UI 静态预览稿（可由 scripts/gen-ui-preview.mjs 重新生成）
+ui-preview.html
+

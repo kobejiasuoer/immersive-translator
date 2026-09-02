@@ -121,9 +121,9 @@ function setEq(a: Set<string>, b: Set<string>): boolean {
 /** 推荐的替代组合，用于冲突时给建议。 */
 export const RECOMMENDED_HOTKEYS = [
   "Ctrl+Shift+Q",
+  "Ctrl+Shift+E",
   "Ctrl+Shift+T",
-  "Ctrl+Shift+D",
-  "Alt+Shift+T",
+  "Alt+Shift+S",
   "Ctrl+Alt+T",
 ];
 
