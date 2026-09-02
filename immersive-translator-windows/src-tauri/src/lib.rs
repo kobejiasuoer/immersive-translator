@@ -30,12 +30,6 @@ impl Default for ActiveHotkeys {
     }
 }
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
 #[derive(Clone, serde::Serialize)]
 struct PanelPayload {
     text: String,
@@ -636,7 +630,6 @@ pub fn run() {
         .manage(PendingPanelPayload::default())
         .manage(ActiveHotkeys::default())
         .invoke_handler(tauri::generate_handler![
-            greet,
             take_pending_panel_payload,
             clear_pending_panel_payload,
             clipboard::read_selection,
