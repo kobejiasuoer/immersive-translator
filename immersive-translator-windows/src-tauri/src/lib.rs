@@ -14,6 +14,22 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
+/// 默认全局热键：Ctrl+Shift+Q —— 选中文字翻译；Ctrl+Shift+E —— 截图 OCR 翻译。
+const DEFAULT_TRANSLATE_HOTKEY: &str = "Ctrl+Shift+Q";
+const DEFAULT_OCR_HOTKEY: &str = "Ctrl+Shift+E";
+
+/// 当前生效的（翻译热键, OCR 热键）对，用于热键切换时对比与回滚。
+struct ActiveHotkeys(Mutex<(Shortcut, Shortcut)>);
+
+impl Default for ActiveHotkeys {
+    fn default() -> Self {
+        Self(Mutex::new((
+            Shortcut::from_str(DEFAULT_TRANSLATE_HOTKEY).expect("default translate hotkey valid"),
+            Shortcut::from_str(DEFAULT_OCR_HOTKEY).expect("default ocr hotkey valid"),
+        )))
+    }
+}
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -177,19 +193,134 @@ fn trigger_ocr(app: &AppHandle) {
     open_ocr_overlay(app.clone());
 }
 
-/// 运行时切换全局热键。先注销全部，再原子地注册翻译键 + OCR 键，并分别持久化。
-/// 任一解析/注册失败则整体报错（此时默认键已被 unregister_all 清掉，
-/// 调用方应提示用户并建议重启以恢复默认）。返回 Ok("ok") 或 Err(原因)。
+/// 翻译热键的回调注册（事件去重：仅 Pressed 触发）。
+fn register_translate_shortcut(
+    app: &AppHandle,
+    shortcut: Shortcut,
+) -> Result<(), tauri_plugin_global_shortcut::Error> {
+    app.global_shortcut()
+        .on_shortcut(shortcut, move |app, _shortcut, event| {
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+            trigger_panel(app);
+        })
+}
+
+/// OCR 热键的回调注册。
+fn register_ocr_shortcut(
+    app: &AppHandle,
+    shortcut: Shortcut,
+) -> Result<(), tauri_plugin_global_shortcut::Error> {
+    app.global_shortcut()
+        .on_shortcut(shortcut, move |app, _shortcut, event| {
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+            trigger_ocr(app);
+        })
+}
+
+fn persist_hotkeys(app: &AppHandle, translate: Shortcut, ocr: Shortcut) -> Result<(), String> {
+    let appdata = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法定位应用数据目录: {error}"))?;
+    std::fs::create_dir_all(&appdata).map_err(|error| format!("无法创建应用数据目录: {error}"))?;
+    std::fs::write(appdata.join("hotkey.txt"), translate.into_string())
+        .map_err(|error| format!("无法保存翻译热键: {error}"))?;
+    std::fs::write(appdata.join("ocr_hotkey.txt"), ocr.into_string())
+        .map_err(|error| format!("无法保存截图 OCR 热键: {error}"))?;
+    Ok(())
+}
+
+/// 把（翻译热键, OCR 热键）从 current 切换到 replacement。
+///
+/// 安全语义（对齐远程单热键版的可回滚设计）：
+/// 1. 有变化的键**先注册新值**；任何注册失败 → 撤销本次已注册的新键，旧键原样保留；
+/// 2. 全部注册成功后**写持久化**；写失败 → 同样撤销已注册新键并报错；
+/// 3. 最后才**注销不再使用的旧键**；注销失败 → 尝试整体回滚到旧配置。
+///
+/// 全程不出现「先注销清空、后注册失败导致没有任何热键可用」的空窗。
+/// 返回 Ok(true) 表示真的切换过；Ok(false) 表示目标与当前一致（仅尝试持久化）。
+fn switch_hotkeys(
+    current: (Shortcut, Shortcut),
+    replacement: (Shortcut, Shortcut),
+    mut register_translate: impl FnMut(Shortcut) -> Result<(), String>,
+    mut register_ocr: impl FnMut(Shortcut) -> Result<(), String>,
+    mut unregister: impl FnMut(Shortcut) -> Result<(), String>,
+    mut persist: impl FnMut(Shortcut, Shortcut) -> Result<(), String>,
+) -> Result<bool, String> {
+    let (cur_t, cur_o) = current;
+    let (new_t, new_o) = replacement;
+
+    if cur_t == new_t && cur_o == new_o {
+        persist(new_t, new_o).map_err(|error| format!("保存热键失败: {error}"))?;
+        return Ok(false);
+    }
+
+    // —— 第 1 步：注册有变化的新键（逐个），记录成功项以便回滚 ——
+    let mut registered: Vec<Shortcut> = Vec::new();
+    if new_t != cur_t {
+        register_translate(new_t)
+            .map_err(|error| format!("注册翻译热键失败: {error}"))?;
+        registered.push(new_t);
+    }
+    if new_o != cur_o {
+        register_ocr(new_o).map_err(|error| {
+            for s in &registered {
+                let _ = unregister(*s);
+            }
+            format!("注册截图 OCR 热键失败: {error}")
+        })?;
+        registered.push(new_o);
+    }
+
+    // —— 第 2 步：持久化；失败则撤销刚注册的新键 ——
+    if let Err(error) = persist(new_t, new_o) {
+        for s in &registered {
+            let _ = unregister(*s);
+        }
+        return Err(format!("保存热键失败: {error}"));
+    }
+
+    // —— 第 3 步：注销不再使用的旧键；失败则尽力回滚到旧配置 ——
+    if (new_t != cur_t && unregister(cur_t).is_err())
+        || (new_o != cur_o && unregister(cur_o).is_err())
+    {
+        // 回滚：注销新键、恢复旧键、恢复旧持久化。任一步失败都并入错误信息。
+        let mut messages: Vec<String> = Vec::new();
+        for s in &registered {
+            if let Err(error) = unregister(*s) {
+                messages.push(format!("注销新键失败: {error}"));
+            }
+        }
+        if let Err(error) = register_translate(cur_t) {
+            messages.push(format!("恢复翻译热键失败: {error}"));
+        }
+        if let Err(error) = register_ocr(cur_o) {
+            messages.push(format!("恢复截图 OCR 热键失败: {error}"));
+        }
+        let _ = persist(cur_t, cur_o);
+        let mut msg = "注销旧热键失败，已尝试回滚".to_string();
+        for m in messages {
+            msg.push_str(&format!("；{m}"));
+        }
+        return Err(msg);
+    }
+
+    Ok(true)
+}
+
+/// 运行时切换两个全局热键。全程可回滚：任一失败都保证旧键仍生效，
+/// 不会出现「新键被占用导致两个键全部失效、只能重启恢复」的情况。
+/// 返回 Ok("ok") 或 Err(原因)。
 #[tauri::command]
 fn reregister_hotkeys(
     app: AppHandle,
     translate_hotkey: String,
     ocr_hotkey: String,
 ) -> Result<String, String> {
-    let gs = app.global_shortcut();
-    // 先全注销，随后一次性把两个键都注册回来
-    let _ = gs.unregister_all();
-
     let translate_trimmed = translate_hotkey.trim();
     let ocr_trimmed = ocr_hotkey.trim();
     if translate_trimmed.is_empty() || ocr_trimmed.is_empty() {
@@ -199,43 +330,222 @@ fn reregister_hotkeys(
         return Err("翻译热键和截图 OCR 热键不能相同".into());
     }
 
-    // 解析两个快捷键（任一失败立即报错回滚）
     let translate_shortcut = Shortcut::from_str(translate_trimmed)
         .map_err(|e| format!("无法解析翻译热键「{translate_trimmed}」: {e}"))?;
     let ocr_shortcut = Shortcut::from_str(ocr_trimmed)
         .map_err(|e| format!("无法解析截图 OCR 热键「{ocr_trimmed}」: {e}"))?;
 
-    // 翻译键
-    gs.on_shortcut(translate_shortcut, move |app, _shortcut, event| {
-        if event.state != ShortcutState::Pressed {
-            return;
-        }
-        trigger_panel(app);
-    })
-    .map_err(|e| {
-        format!("注册翻译热键失败「{translate_trimmed}」（可能已被系统或其它程序占用）: {e}")
+    let active = app.state::<ActiveHotkeys>();
+    let mut current = active
+        .0
+        .lock()
+        .map_err(|_| "热键状态不可用".to_string())?;
+    let switched = switch_hotkeys(
+        *current,
+        (translate_shortcut, ocr_shortcut),
+        |s| register_translate_shortcut(&app, s).map_err(|e| e.to_string()),
+        |s| register_ocr_shortcut(&app, s).map_err(|e| e.to_string()),
+        |s| {
+            app.global_shortcut()
+                .unregister(s)
+                .map_err(|e| e.to_string())
+        },
+        |t, o| persist_hotkeys(&app, t, o),
+    )
+    .map_err(|error| {
+        format!(
+            "应用热键失败「{translate_trimmed} / {ocr_trimmed}」: {error}"
+        )
     })?;
-
-    // OCR 键
-    gs.on_shortcut(ocr_shortcut, move |app, _shortcut, event| {
-        if event.state != ShortcutState::Pressed {
-            return;
-        }
-        trigger_ocr(app);
-    })
-    .map_err(|e| {
-        format!("注册截图 OCR 热键失败「{ocr_trimmed}」（可能已被系统或其它程序占用）: {e}")
-    })?;
-
-    // 分别持久化到 app_data_dir 下的 hotkey.txt / ocr_hotkey.txt
-    if let Ok(appdata) = app.path().app_data_dir() {
-        let _ = std::fs::create_dir_all(&appdata);
-        let _ = std::fs::write(appdata.join("hotkey.txt"), translate_trimmed);
-        let _ = std::fs::write(appdata.join("ocr_hotkey.txt"), ocr_trimmed);
+    if switched {
+        *current = (translate_shortcut, ocr_shortcut);
     }
-
     Ok("ok".into())
 }
+
+#[cfg(test)]
+mod hotkey_switch_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[derive(Debug, PartialEq, Eq, Clone)]
+    enum Call {
+        Register(u32),
+        Unregister(u32),
+        Persist(u32, u32),
+    }
+
+    fn shortcut(value: &str) -> Shortcut {
+        Shortcut::from_str(value).unwrap()
+    }
+
+    fn make_fns() -> (
+        Rc<RefCell<Vec<Call>>>,
+        impl FnMut(Shortcut) -> Result<(), String>,
+        impl FnMut(Shortcut) -> Result<(), String>,
+        impl FnMut(Shortcut) -> Result<(), String>,
+        impl FnMut(Shortcut, Shortcut) -> Result<(), String>,
+    ) {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let c1 = calls.clone();
+        let c2 = calls.clone();
+        let c3 = calls.clone();
+        let c4 = calls.clone();
+        (
+            calls.clone(),
+            move |s| {
+                c1.borrow_mut().push(Call::Register(s.id()));
+                Ok(())
+            },
+            move |s| {
+                c2.borrow_mut().push(Call::Register(s.id()));
+                Ok(())
+            },
+            move |s| {
+                c3.borrow_mut().push(Call::Unregister(s.id()));
+                Ok(())
+            },
+            move |t, o| {
+                c4.borrow_mut().push(Call::Persist(t.id(), o.id()));
+                Ok(())
+            },
+        )
+    }
+
+    #[test]
+    fn registers_replacements_before_unregistering_current() {
+        let (calls, rt, ro, un, ps) = make_fns();
+        let switched = switch_hotkeys(
+            (shortcut("Ctrl+Shift+Q"), shortcut("Ctrl+Shift+E")),
+            (shortcut("Alt+Shift+Q"), shortcut("Alt+Shift+E")),
+            rt, ro, un, ps,
+        )
+        .unwrap();
+        assert!(switched);
+        let list = calls.borrow().clone();
+        let id_alt_t = shortcut("Alt+Shift+Q").id();
+        let id_alt_o = shortcut("Alt+Shift+E").id();
+        let id_cur_t = shortcut("Ctrl+Shift+Q").id();
+        let id_cur_o = shortcut("Ctrl+Shift+E").id();
+        let idx_rt = list
+            .iter()
+            .position(|c| *c == Call::Register(id_alt_t))
+            .unwrap();
+        let idx_ro = list
+            .iter()
+            .position(|c| *c == Call::Register(id_alt_o))
+            .unwrap();
+        let idx_un_t = list
+            .iter()
+            .position(|c| *c == Call::Unregister(id_cur_t))
+            .unwrap();
+        let idx_un_o = list
+            .iter()
+            .position(|c| *c == Call::Unregister(id_cur_o))
+            .unwrap();
+        // 注册必须发生在注销之前
+        assert!(
+            idx_rt < idx_un_t && idx_ro < idx_un_o,
+            "register must precede unregister: {list:?}"
+        );
+        // 新键先注册、旧键后注销
+        assert!(idx_rt < idx_un_t && idx_ro < idx_un_o);
+    }
+
+    #[test]
+    fn noop_when_target_equals_current_only_persists() {
+        let (calls, rt, ro, un, ps) = make_fns();
+        let switched = switch_hotkeys(
+            (shortcut("Ctrl+Shift+Q"), shortcut("Ctrl+Shift+E")),
+            (shortcut("Ctrl+Shift+Q"), shortcut("Ctrl+Shift+E")),
+            rt, ro, un, ps,
+        )
+        .unwrap();
+        assert!(!switched);
+        assert_eq!(
+            calls.borrow().clone(),
+            vec![Call::Persist(
+                shortcut("Ctrl+Shift+Q").id(),
+                shortcut("Ctrl+Shift+E").id(),
+            )]
+        );
+    }
+
+    #[test]
+    fn rolls_back_new_registrations_when_persist_fails() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let c1 = calls.clone();
+        let c2 = calls.clone();
+        let c3 = calls.clone();
+        let result = switch_hotkeys(
+            (shortcut("Ctrl+Shift+Q"), shortcut("Ctrl+Shift+E")),
+            (shortcut("Alt+Shift+Q"), shortcut("Alt+Shift+E")),
+            move |s| {
+                c1.borrow_mut().push(Call::Register(s.id()));
+                Ok(())
+            },
+            move |s| {
+                c2.borrow_mut().push(Call::Register(s.id()));
+                Ok(())
+            },
+            move |s| {
+                c3.borrow_mut().push(Call::Unregister(s.id()));
+                Ok(())
+            },
+            |_, _| Err("disk full".into()),
+        );
+        assert!(result.is_err());
+        let id_alt_t = shortcut("Alt+Shift+Q").id();
+        let id_alt_o = shortcut("Alt+Shift+E").id();
+        assert_eq!(
+            calls.borrow().clone(),
+            vec![
+                Call::Register(id_alt_t),
+                Call::Register(id_alt_o),
+                Call::Unregister(id_alt_t),
+                Call::Unregister(id_alt_o),
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_current_when_replacement_registration_fails() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let c1 = calls.clone();
+        let c2 = calls.clone();
+        let result = switch_hotkeys(
+            (shortcut("Ctrl+Shift+Q"), shortcut("Ctrl+Shift+E")),
+            (shortcut("Alt+Shift+Q"), shortcut("Ctrl+Shift+E")),
+            move |s| {
+                c1.borrow_mut().push(Call::Register(s.id()));
+                if s.id() == shortcut("Alt+Shift+Q").id() {
+                    Err("occupied".into())
+                } else {
+                    Ok(())
+                }
+            },
+            move |s| {
+                let _ = s;
+                unreachable!("ocr unchanged, register must not be called")
+            },
+            |s| {
+                let _ = s;
+                Err("unregister must not be called".into())
+            },
+            |_, _| Err("persist must not be called".into()),
+        );
+        assert!(result.is_err());
+        // OCR 键未变不会进入注册/回滚分支；翻译键注册失败直接返回，不回滚也不持久化
+        assert_eq!(
+            calls.borrow().clone(),
+            vec![Call::Register(shortcut("Alt+Shift+Q").id())]
+        );
+        drop(c2);
+    }
+}
+
+
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -247,6 +557,7 @@ pub fn run() {
         .manage(translation::CancelFlag::default())
         .manage(ocr::OcrEngine::default())
         .manage(PendingPanelPayload::default())
+        .manage(ActiveHotkeys::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             take_pending_panel_payload,
