@@ -123,6 +123,11 @@ export async function reregisterHotkeys(
   return invoke<string>("reregister_hotkeys", { translateHotkey, ocrHotkey });
 }
 
+/** 返回后端当前实际注册并持久化的全局热键。 */
+export async function getActiveHotkey(): Promise<string> {
+  return invoke<string>("get_active_hotkey");
+}
+
 // ---- 连通性测试 ----
 
 export interface ConnectivityResult {
@@ -164,13 +169,9 @@ export function onTranslationCancelled(
 // ---- 安全存储（DPAPI）----
 // API Key 经 Rust 端 CryptProtectData 加密后落盘，不进 localStorage 明文。
 
-/** 读取已加密保存的 API Key 明文（不存在/解密失败返回空串）。 */
+/** 读取已加密保存的 API Key 明文；不存在返回空串，读取/解密失败会 reject。 */
 export async function secretGet(): Promise<string> {
-  try {
-    return await invoke<string>("secret_get");
-  } catch {
-    return "";
-  }
+  return invoke<string>("secret_get");
 }
 
 /** 加密保存 API Key；传空串会删除条目。 */

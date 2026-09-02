@@ -22,7 +22,10 @@ import {
   type TranslationPhase,
 } from "../lib/tauriBridge";
 import { loadSettingsAsync, hasValidSettings } from "../lib/settingsStore";
-import { classifyTranslationError } from "../core/errorMessageFormatter";
+import {
+  classifyTranslationError,
+  sanitizeDiagnosticText,
+} from "../core/errorMessageFormatter";
 import { resolveTargetLanguage } from "../core/languageDetect";
 import { buildSystemPrompt } from "../core/promptBuilder";
 import {
@@ -45,6 +48,8 @@ type PanelShownPayload = string | Partial<PanelPayload>;
 type ResizeDirection = "East" | "South" | "SouthEast";
 
 const panelWindow = getCurrentWindow();
+const SECURE_SETTINGS_LOAD_ERROR =
+  "安全存储读取失败，未覆盖凭证。请打开设置检查后重试。";
 
 /** 根据阶段 + 是否已有文字给出加载文案，对齐 Mac 的状态机语义。 */
 function phaseLabel(phase: TranslationPhase | null, text: string): string {
@@ -103,6 +108,7 @@ export function TranslationPanel() {
   const [panelSource, setPanelSource] = useState<PanelSource>("selection");
   const lastOriginalRef = useRef("");
   const lastEndpointRef = useRef("");
+  const lastApiKeyRef = useRef("");
   const lastSourceRef = useRef<PanelSource>("selection");
   const lastPanelPayloadRef = useRef("");
   const lastPanelPayloadAtRef = useRef(0);
@@ -114,6 +120,22 @@ export function TranslationPanel() {
   const lastResizeAtRef = useRef(0);
   /** 缩放抑制隐藏的缓冲窗口（毫秒）：onResized 每次刷新 lastResizeAt，失焦检查看距今是否在此窗口内。 */
   const RESIZE_HIDE_SUPPRESS_MS = 800;
+
+  function showSecureSettingsLoadError(error: unknown) {
+    console.error("[settings] secure storage read failed", error);
+    setErrorMsg(SECURE_SETTINGS_LOAD_ERROR);
+    setRetryable(false);
+    setStatus("error");
+  }
+
+  async function loadSettingsSafely() {
+    try {
+      return await loadSettingsAsync();
+    } catch (error) {
+      showSecureSettingsLoadError(error);
+      return null;
+    }
+  }
 
   useEffect(() => {
     let unDelta: (() => void) | undefined;
@@ -158,18 +180,22 @@ export function TranslationPanel() {
         }
         lastDoneHistoryKeyRef.current = historyKey;
         // 目标语言此刻未知（doTranslate 里算的），这里用 settings 简单推断
-        void loadSettingsAsync().then((s) =>
-          historyAdd(
-            trimmed,
-            transTrimmed,
-            resolveTargetLanguage(trimmed, { mode: s.translationMode, fixed: s.fixedTarget }),
-            lastSourceRef.current,
-            s.model,
-            e.elapsedMs,
+        void loadSettingsAsync()
+          .then((s) =>
+            historyAdd(
+              trimmed,
+              transTrimmed,
+              resolveTargetLanguage(trimmed, {
+                mode: s.translationMode,
+                fixed: s.fixedTarget,
+              }),
+              lastSourceRef.current,
+              s.model,
+              e.elapsedMs,
+            ),
           )
-            .then((rec) => setLastRecordId(rec.id))
-            .catch((err) => console.error("[history] add failed", err)),
-        );
+          .then((rec) => setLastRecordId(rec.id))
+          .catch((error) => console.error("[history] settings load or add failed", error));
       }
     }).then((u) => {
       if (active) unDone = u;
@@ -178,7 +204,11 @@ export function TranslationPanel() {
 
     onTranslationError((e: ErrorEvent) => {
       if (!active) return;
-      const classified = classifyTranslationError(toInput(e), lastEndpointRef.current);
+      const classified = classifyTranslationError(
+        toInput(e),
+        lastEndpointRef.current,
+        lastApiKeyRef.current,
+      );
       setErrorMsg(classified.message);
       setRetryable(classified.retryable);
       setStatus("error");
@@ -210,8 +240,10 @@ export function TranslationPanel() {
   }, []);
 
   async function doTranslate(text: string) {
-    const s = await loadSettingsAsync();
+    const s = await loadSettingsSafely();
+    if (s === null) return;
     lastEndpointRef.current = s.endpoint;
+    lastApiKeyRef.current = s.apiKey;
     const target = resolveTargetLanguage(text, {
       mode: s.translationMode,
       fixed: s.fixedTarget,
@@ -243,14 +275,21 @@ export function TranslationPanel() {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setErrorMsg(`翻译命令调用失败：${message}`);
+      setErrorMsg(
+        `翻译命令调用失败：${sanitizeDiagnosticText(
+          message,
+          s.endpoint,
+          s.apiKey,
+        )}`,
+      );
       setRetryable(true);
       setStatus("error");
     }
   }
 
   async function triggerWithText(text: string, source: PanelSource = "selection") {
-    const s = await loadSettingsAsync();
+    const s = await loadSettingsSafely();
+    if (s === null) return;
     if (!hasValidSettings(s)) {
       setStatus("needsConfig");
       return;
@@ -357,11 +396,19 @@ export function TranslationPanel() {
 
   useEffect(() => {
     let active = true;
-    void takePendingPanelPayload().then((payload) => {
-      if (active && payload) {
-        void handlePanelPayload(payload);
-      }
-    });
+    void takePendingPanelPayload()
+      .then(async (payload) => {
+        if (active && payload) {
+          await handlePanelPayload(payload);
+        }
+      })
+      .catch((error) => {
+        if (!active) return;
+        console.error("[panel] initial payload failed", error);
+        setErrorMsg("读取待翻译内容失败，请重试。");
+        setRetryable(true);
+        setStatus("error");
+      });
 
     let unlisten: (() => void) | undefined;
     listen<PanelShownPayload>("panel:shown", (event) => {
@@ -369,8 +416,15 @@ export function TranslationPanel() {
       const payload = event.payload;
       const text = typeof payload === "string" ? payload : payload.text ?? "";
       const source = typeof payload === "string" ? "selection" : payload.source ?? "selection";
-      void clearPendingPanelPayload();
-      void handlePanelPayload({ text, source });
+      void clearPendingPanelPayload().catch((error) =>
+        console.error("[panel] clear pending payload failed", error),
+      );
+      void handlePanelPayload({ text, source }).catch((error) => {
+        console.error("[panel] payload handling failed", error);
+        setErrorMsg("读取待翻译内容失败，请重试。");
+        setRetryable(true);
+        setStatus("error");
+      });
     }).then(
       (u) => {
         if (active) unlisten = u;

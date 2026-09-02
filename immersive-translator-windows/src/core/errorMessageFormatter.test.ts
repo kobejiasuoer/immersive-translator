@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { classifyTranslationError, buildSanitizedCurl, buildDiagnosticReport } from "./errorMessageFormatter";
+import {
+  classifyTranslationError,
+  buildSanitizedCurl,
+  buildDiagnosticReport,
+  sanitizeDiagnosticText,
+} from "./errorMessageFormatter";
 
 describe("classifyTranslationError", () => {
   it("classifies 401 as API Key problem, not retryable", () => {
@@ -64,6 +69,37 @@ describe("classifyTranslationError", () => {
     const result = classifyTranslationError({ kind: "invalidResponse", preview: "some garbage response" });
     expect(result.message).toContain("some garbage response");
     expect(result.retryable).toBe(false);
+  });
+
+  it("sanitizes provider credentials before showing HTTP error bodies", () => {
+    const endpoint = "https://user:pass@example.com/v1?api_key=query-secret";
+    const apiKey = "opaque-live-key";
+    const result = classifyTranslationError(
+      {
+        kind: "http",
+        status: 400,
+        body: `{"error":{"message":"failed ${apiKey}","signature":"sig-secret"}}`,
+      },
+      endpoint,
+      apiKey,
+    );
+
+    expect(result.message).toContain("failed REDACTED");
+    expect(result.message).not.toContain(apiKey);
+    expect(result.message).not.toContain("sig-secret");
+  });
+
+  it("sanitizes network error text at the UI boundary", () => {
+    const safe = sanitizeDiagnosticText(
+      "request failed: https://user:pass@example.com/v1?token=secret",
+      "https://user:pass@example.com/v1?token=secret",
+      "",
+    );
+
+    expect(safe).toContain("example.com");
+    expect(safe).not.toContain("user");
+    expect(safe).not.toContain("pass");
+    expect(safe).not.toContain("secret");
   });
 });
 
@@ -146,6 +182,7 @@ describe("buildSanitizedCurl", () => {
 
   it("includes endpoint and model", () => {
     const curl = buildSanitizedCurl("https://example.com/v1/chat/completions", "sk-x", "my-model", "hi");
+    expect(curl).toContain("curl.exe -X POST --url ");
     expect(curl).toContain("example.com");
     expect(curl).toContain("my-model");
   });
@@ -153,6 +190,40 @@ describe("buildSanitizedCurl", () => {
   it("escapes quotes in sample text", () => {
     const curl = buildSanitizedCurl("https://e.com", "sk", "m", 'say "hi"');
     expect(curl).toContain('\\"hi\\"');
+  });
+
+  it("keeps PowerShell metacharacters inside quoted arguments", () => {
+    const curl = buildSanitizedCurl(
+      "https://e.com/api/'quoted'",
+      "sk",
+      "model'; echo injected",
+      "say 'hi'; $(whoami)\nnext line",
+    );
+
+    // PowerShell represents an apostrophe inside a single-quoted string as ''.
+    expect(curl).toContain("''quoted''");
+    expect(curl).toContain("model''; echo injected");
+    // JSON encoding keeps the newline in the -d payload rather than creating
+    // a second shell command line.
+    expect(curl).not.toContain("\nnext line");
+    expect(curl).toContain(" `\n  -H ");
+    expect(curl).toContain("echo injected");
+    expect(curl).toContain("$(whoami)");
+  });
+
+  it("redacts credentials embedded in the endpoint", () => {
+    const curl = buildSanitizedCurl(
+      "https://user:password@example.com/v1/chat/completions?api_key=query-secret&debug=1#token-fragment",
+      "sk",
+      "m",
+      "hi",
+    );
+
+    expect(curl).toContain("REDACTED");
+    expect(curl).toContain("debug=1");
+    expect(curl).not.toContain("password");
+    expect(curl).not.toContain("query-secret");
+    expect(curl).not.toContain("token-fragment");
   });
 
   it("shows empty key marker when no key", () => {
@@ -172,8 +243,54 @@ describe("buildDiagnosticReport", () => {
       fixedTarget: "",
     });
     expect(report).toContain("长度 15");
-    expect(report).toContain("sk-***");
+    expect(report).toContain("内容已脱敏");
     expect(report).not.toContain("abcdef123456");
+  });
+
+  it("redacts endpoint query credentials in every report section", () => {
+    const report = buildDiagnosticReport({
+      endpoint: "https://e.com/v1?api_key=query-secret&trace=on#token-fragment",
+      apiKey: "sk-secret",
+      model: "m",
+      stream: true,
+      translationMode: "auto",
+      fixedTarget: "",
+    });
+
+    expect(report).toContain("api_key=REDACTED");
+    expect(report).toContain("trace=on");
+    expect(report).not.toContain("query-secret");
+    expect(report).not.toContain("token-fragment");
+  });
+
+  it("redacts provider signature query parameters", () => {
+    const curl = buildSanitizedCurl(
+      "https://storage.example.com/v1?X-Amz-Signature=aws-secret&x-goog-signature=google-secret&trace=1",
+      "",
+      "m",
+      "hi",
+    );
+
+    expect(curl).toContain("X-Amz-Signature=REDACTED");
+    expect(curl).toContain("x-goog-signature=REDACTED");
+    expect(curl).toContain("trace=1");
+    expect(curl).not.toContain("aws-secret");
+    expect(curl).not.toContain("google-secret");
+  });
+
+  it("hides invalid endpoint metadata instead of guessing at secrets", () => {
+    const report = buildDiagnosticReport({
+      endpoint: "https://user:secret@example .com/#token-fragment",
+      apiKey: "",
+      model: "m",
+      stream: false,
+      translationMode: "auto",
+      fixedTarget: "",
+    });
+
+    expect(report).toContain("(invalid endpoint, hidden)");
+    expect(report).not.toContain("secret");
+    expect(report).not.toContain("token-fragment");
   });
 
   it("includes endpoint and model", () => {
@@ -201,6 +318,56 @@ describe("buildDiagnosticReport", () => {
       lastError: "HTTP 401 Unauthorized",
     });
     expect(report).toContain("HTTP 401 Unauthorized");
+  });
+
+  it("redacts credentials and caps arbitrary last errors", () => {
+    const configuredEndpoint =
+      "https://user:pass@example.com/v1?api_key=query-secret#fragment";
+    const configuredApiKey = "opaque-live-key-value";
+    const secretError = [
+      "HTTP 401",
+      configuredEndpoint,
+      `Authorization: Bearer ${configuredApiKey}`,
+      "provider echoed sk-another-secret-value",
+      "trace=" + "x".repeat(900),
+    ].join(" ");
+    const report = buildDiagnosticReport({
+      endpoint: configuredEndpoint,
+      apiKey: configuredApiKey,
+      model: "m",
+      stream: true,
+      translationMode: "auto",
+      fixedTarget: "",
+      lastError: secretError,
+    });
+
+    expect(report).toContain("HTTP 401");
+    expect(report).toContain("example.com");
+    expect(report).toContain("REDACTED");
+    expect(report).toContain("（已截断）");
+    expect(report).not.toContain("pass@example.com");
+    expect(report).not.toContain("query-secret");
+    expect(report).not.toContain("#fragment");
+    expect(report).not.toContain(configuredApiKey);
+    expect(report).not.toContain("sk-another-secret-value");
+  });
+
+  it("redacts credentials from quoted JSON fields in last errors", () => {
+    const report = buildDiagnosticReport({
+      endpoint: "https://e.com",
+      apiKey: "",
+      model: "m",
+      stream: true,
+      translationMode: "auto",
+      fixedTarget: "",
+      lastError:
+        '{"signature":"abcdef123456789","api_key":"opaque-value-12345","message":"failed"}',
+    });
+
+    expect(report).toContain('"signature":"REDACTED"');
+    expect(report).toContain('"api_key":"REDACTED"');
+    expect(report).not.toContain("abcdef123456789");
+    expect(report).not.toContain("opaque-value-12345");
   });
 
   it("shows no-error placeholder", () => {

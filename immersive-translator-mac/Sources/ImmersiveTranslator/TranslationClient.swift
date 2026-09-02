@@ -150,6 +150,7 @@ final class TranslationClient {
                 startedAt: startedAt,
                 resolvedModel: resolvedModel,
                 targetLanguage: targetLanguage,
+                apiKey: apiKey,
                 onProgress: onProgress
             )
         }
@@ -159,6 +160,7 @@ final class TranslationClient {
             startedAt: startedAt,
             resolvedModel: resolvedModel,
             targetLanguage: targetLanguage,
+            apiKey: apiKey,
             onProgress: onProgress
         )
     }
@@ -169,6 +171,7 @@ final class TranslationClient {
         startedAt: Date,
         resolvedModel: String,
         targetLanguage: String,
+        apiKey: String,
         onProgress: (@MainActor (TranslationProgress) -> Void)?
     ) async throws -> TranslationResult {
         let bytes: URLSession.AsyncBytes
@@ -177,8 +180,9 @@ final class TranslationClient {
             (bytes, response) = try await URLSession.shared.bytes(for: request)
         } catch {
             let elapsed = Date().timeIntervalSince(startedAt)
-            logger.error("translation.request.transport_error elapsed=\(elapsed, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
-            DiagnosticLogger.log("translation.request.transport_error elapsed=\(String(format: "%.2f", elapsed)) error=\(error.localizedDescription)")
+            let safeError = Self.redactedDiagnosticText(error.localizedDescription, apiKey: apiKey)
+            logger.error("translation.request.transport_error elapsed=\(elapsed, privacy: .public) error=\(safeError, privacy: .public)")
+            DiagnosticLogger.log("translation.request.transport_error elapsed=\(String(format: "%.2f", elapsed)) error=\(safeError)")
             throw error
         }
 
@@ -191,13 +195,14 @@ final class TranslationClient {
                 }
             } catch {
                 let elapsed = Date().timeIntervalSince(startedAt)
-                logger.error("translation.request.error_body_error elapsed=\(elapsed, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
-                DiagnosticLogger.log("translation.request.error_body_error elapsed=\(String(format: "%.2f", elapsed)) error=\(error.localizedDescription)")
+                let safeError = Self.redactedDiagnosticText(error.localizedDescription, apiKey: apiKey)
+                logger.error("translation.request.error_body_error elapsed=\(elapsed, privacy: .public) error=\(safeError, privacy: .public)")
+                DiagnosticLogger.log("translation.request.error_body_error elapsed=\(String(format: "%.2f", elapsed)) error=\(safeError)")
                 throw error
             }
 
             let elapsed = Date().timeIntervalSince(startedAt)
-            let message = parseErrorMessage(from: errorData) ?? "翻译接口返回 HTTP \(httpResponse.statusCode)。"
+            let message = parseErrorMessage(from: errorData, apiKey: apiKey) ?? "翻译接口返回 HTTP \(httpResponse.statusCode)。"
             logger.error("translation.request.http_error status=\(httpResponse.statusCode, privacy: .public) elapsed=\(elapsed, privacy: .public) message=\(message, privacy: .public)")
             DiagnosticLogger.log("translation.request.http_error status=\(httpResponse.statusCode) elapsed=\(String(format: "%.2f", elapsed)) message=\(message)")
             throw TranslationClientError.badResponse(statusCode: httpResponse.statusCode, message: message)
@@ -219,14 +224,16 @@ final class TranslationClient {
             }
         } catch {
             let elapsed = Date().timeIntervalSince(startedAt)
-            logger.error("translation.request.body_error elapsed=\(elapsed, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
-            DiagnosticLogger.log("translation.request.body_error elapsed=\(String(format: "%.2f", elapsed)) error=\(error.localizedDescription)")
+            let safeError = Self.redactedDiagnosticText(error.localizedDescription, apiKey: apiKey)
+            logger.error("translation.request.body_error elapsed=\(elapsed, privacy: .public) error=\(safeError, privacy: .public)")
+            DiagnosticLogger.log("translation.request.body_error elapsed=\(String(format: "%.2f", elapsed)) error=\(safeError)")
             throw error
         }
 
         let elapsed = Date().timeIntervalSince(startedAt)
         let result: ChatCompletionResponse
-        if let message = TranslationResponseErrorParser.message(from: data) {
+        if let rawMessage = TranslationResponseErrorParser.message(from: data) {
+            let message = Self.redactedDiagnosticText(rawMessage, apiKey: apiKey)
             logger.error("translation.response.api_error status=200 elapsed=\(elapsed, privacy: .public) message=\(message, privacy: .public)")
             DiagnosticLogger.log("translation.response.api_error status=200 elapsed=\(String(format: "%.2f", elapsed)) message=\(message)")
             throw TranslationClientError.badResponse(statusCode: 200, message: message)
@@ -243,7 +250,7 @@ final class TranslationClient {
             DiagnosticLogger.log("translation.response.empty_stream elapsed=\(String(format: "%.2f", elapsed)) bytes=\(data.count)")
             throw TranslationClientError.emptyTranslation
         } else {
-            let preview = Self.responsePreview(from: data)
+            let preview = Self.responsePreview(from: data, apiKey: apiKey)
             let logPreview = preview ?? "<empty>"
             logger.error("translation.response.invalid elapsed=\(elapsed, privacy: .public) bytes=\(data.count, privacy: .public) preview=\(logPreview, privacy: .public)")
             DiagnosticLogger.log("translation.response.invalid elapsed=\(String(format: "%.2f", elapsed)) bytes=\(data.count) preview=\(logPreview)")
@@ -267,6 +274,7 @@ final class TranslationClient {
         startedAt: Date,
         resolvedModel: String,
         targetLanguage: String,
+        apiKey: String,
         onProgress: @escaping @MainActor (TranslationProgress) -> Void
     ) async throws -> TranslationResult {
         let bytes: URLSession.AsyncBytes
@@ -275,8 +283,9 @@ final class TranslationClient {
             (bytes, response) = try await URLSession.shared.bytes(for: request)
         } catch {
             let elapsed = Date().timeIntervalSince(startedAt)
-            logger.error("translation.stream.transport_error elapsed=\(elapsed, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
-            DiagnosticLogger.log("translation.stream.transport_error elapsed=\(String(format: "%.2f", elapsed)) error=\(error.localizedDescription)")
+            let safeError = Self.redactedDiagnosticText(error.localizedDescription, apiKey: apiKey)
+            logger.error("translation.stream.transport_error elapsed=\(elapsed, privacy: .public) error=\(safeError, privacy: .public)")
+            DiagnosticLogger.log("translation.stream.transport_error elapsed=\(String(format: "%.2f", elapsed)) error=\(safeError)")
             throw error
         }
 
@@ -286,7 +295,7 @@ final class TranslationClient {
             for try await byte in bytes {
                 errorData.append(byte)
             }
-            let message = parseErrorMessage(from: errorData) ?? "翻译接口返回 HTTP \(httpResponse.statusCode)。"
+            let message = parseErrorMessage(from: errorData, apiKey: apiKey) ?? "翻译接口返回 HTTP \(httpResponse.statusCode)。"
             let elapsed = Date().timeIntervalSince(startedAt)
             logger.error("translation.stream.http_error status=\(httpResponse.statusCode, privacy: .public) elapsed=\(elapsed, privacy: .public) message=\(message, privacy: .public)")
             DiagnosticLogger.log("translation.stream.http_error status=\(httpResponse.statusCode) elapsed=\(String(format: "%.2f", elapsed)) message=\(message)")
@@ -334,7 +343,8 @@ final class TranslationClient {
             guard let jsonData = jsonText.data(using: .utf8) else {
                 continue
             }
-            if let message = TranslationResponseErrorParser.message(from: jsonData) {
+            if let rawMessage = TranslationResponseErrorParser.message(from: jsonData) {
+                let message = Self.redactedDiagnosticText(rawMessage, apiKey: apiKey)
                 let elapsed = Date().timeIntervalSince(startedAt)
                 logger.error("translation.stream.api_error_chunk status=200 elapsed=\(elapsed, privacy: .public) message=\(message, privacy: .public)")
                 DiagnosticLogger.log("translation.stream.api_error_chunk status=200 elapsed=\(String(format: "%.2f", elapsed)) message=\(message)")
@@ -381,7 +391,8 @@ final class TranslationClient {
             return TranslationResult(text: trimmedContent, elapsed: elapsed, model: resolvedModel, targetLanguage: targetLanguage)
         }
 
-        if !sawStreamLine, let message = TranslationResponseErrorParser.message(from: fallbackData) {
+        if !sawStreamLine, let rawMessage = TranslationResponseErrorParser.message(from: fallbackData) {
+            let message = Self.redactedDiagnosticText(rawMessage, apiKey: apiKey)
             logger.error("translation.stream.api_error status=200 elapsed=\(elapsed, privacy: .public) message=\(message, privacy: .public)")
             DiagnosticLogger.log("translation.stream.api_error status=200 elapsed=\(String(format: "%.2f", elapsed)) message=\(message)")
             throw TranslationClientError.badResponse(statusCode: 200, message: message)
@@ -398,7 +409,7 @@ final class TranslationClient {
         }
 
         if !sawStreamLine, !fallbackData.isEmpty {
-            let preview = Self.responsePreview(from: fallbackData)
+            let preview = Self.responsePreview(from: fallbackData, apiKey: apiKey)
             let logPreview = preview ?? "<empty>"
             logger.error("translation.stream.invalid elapsed=\(elapsed, privacy: .public) bytes=\(fallbackData.count, privacy: .public) preview=\(logPreview, privacy: .public)")
             DiagnosticLogger.log("translation.stream.invalid elapsed=\(String(format: "%.2f", elapsed)) bytes=\(fallbackData.count) preview=\(logPreview)")
@@ -447,23 +458,47 @@ final class TranslationClient {
     }
 
     static func redactedURLString(_ value: String) -> String {
-        guard var components = URLComponents(string: value),
-              let queryItems = components.queryItems,
-              !queryItems.isEmpty else {
-            return value
+        guard var components = URLComponents(string: value) else {
+            return redactedMalformedURLString(value)
         }
 
         var didRedact = false
-        components.queryItems = queryItems.map { item in
-            guard isSensitiveQueryItemName(item.name) else {
-                return item
-            }
+        if components.user != nil || components.password != nil {
+            components.user = nil
+            components.password = nil
             didRedact = true
-            return URLQueryItem(name: item.name, value: "REDACTED")
+        }
+        if components.fragment != nil {
+            components.fragment = nil
+            didRedact = true
+        }
+        if let queryItems = components.queryItems, !queryItems.isEmpty {
+            components.queryItems = queryItems.map { item in
+                guard isSensitiveQueryItemName(item.name) else {
+                    return item
+                }
+                didRedact = true
+                return URLQueryItem(name: item.name, value: "REDACTED")
+            }
         }
 
         guard didRedact else { return value }
-        return components.url?.absoluteString ?? value
+        return components.string ?? "<redacted-invalid-url>"
+    }
+
+    static func unauthenticatedDiagnosticURL(from url: URL) -> URL? {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.user = nil
+        components.password = nil
+        components.fragment = nil
+
+        if let queryItems = components.queryItems {
+            let safeItems = queryItems.filter { !isSensitiveQueryItemName($0.name) }
+            components.queryItems = safeItems.isEmpty ? nil : safeItems
+        }
+        return components.url
     }
 
     static func sensitiveQueryItemNames(in value: String) -> [String] {
@@ -514,6 +549,145 @@ final class TranslationClient {
             || normalized.hasSuffix("token")
             || normalized.hasSuffix("secret")
             || normalized.hasSuffix("password")
+            || normalized.hasSuffix("signature")
+            || normalized.hasSuffix("sig")
+    }
+
+    static func redactedDiagnosticText(
+        _ value: String,
+        apiKey: String? = nil,
+        maxLength: Int? = 700,
+        collapseWhitespace: Bool = true
+    ) -> String {
+        var result = value
+        let cleanAPIKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !cleanAPIKey.isEmpty {
+            result = result.replacingOccurrences(of: cleanAPIKey, with: "REDACTED")
+
+            var queryAllowed = CharacterSet.urlQueryAllowed
+            queryAllowed.remove(charactersIn: "&=+#?")
+            if let encodedAPIKey = cleanAPIKey.addingPercentEncoding(withAllowedCharacters: queryAllowed),
+               encodedAPIKey != cleanAPIKey {
+                result = result.replacingOccurrences(
+                    of: encodedAPIKey,
+                    with: "REDACTED",
+                    options: .caseInsensitive
+                )
+            }
+        }
+
+        let authorizationPlaceholder = "<IMMERSIVE_TRANSLATOR_AUTHORIZATION_PLACEHOLDER>"
+        let apiKeyPlaceholder = "<IMMERSIVE_TRANSLATOR_API_KEY_PLACEHOLDER>"
+        result = result.replacingOccurrences(
+            of: "Bearer ${API_KEY}",
+            with: authorizationPlaceholder,
+            options: .caseInsensitive
+        )
+        result = result.replacingOccurrences(of: "${API_KEY}", with: apiKeyPlaceholder)
+        result = redactingHTTPURLs(in: result)
+        result = replacingRegexMatches(
+            in: result,
+            pattern: credentialAssignmentPattern,
+            template: "$1REDACTED",
+            options: [.caseInsensitive]
+        )
+        result = replacingRegexMatches(
+            in: result,
+            pattern: #"(\b(?:Bearer|Basic)[ \t]+)(?!REDACTED\b)(?!<[^>\r\n]+>)[^\s,;}\"']+"#,
+            template: "$1REDACTED",
+            options: [.caseInsensitive]
+        )
+
+        let opaqueCredentialPatterns = [
+            #"\bsk-[A-Za-z0-9][A-Za-z0-9._-]{7,}\b"#,
+            #"\bAIza[0-9A-Za-z_-]{20,}\b"#,
+            #"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"#,
+            #"\b(?:ghp_|github_pat_)[A-Za-z0-9_]{20,}\b"#,
+            #"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"#
+        ]
+        for pattern in opaqueCredentialPatterns {
+            result = replacingRegexMatches(
+                in: result,
+                pattern: pattern,
+                template: "REDACTED",
+                options: []
+            )
+        }
+
+        result = result
+            .replacingOccurrences(of: authorizationPlaceholder, with: "Bearer ${API_KEY}")
+            .replacingOccurrences(of: apiKeyPlaceholder, with: "${API_KEY}")
+        if collapseWhitespace {
+            result = result
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        guard let maxLength, maxLength >= 0, result.count > maxLength else {
+            return result
+        }
+        return "\(result.prefix(maxLength))..."
+    }
+
+    private static let credentialAssignmentPattern =
+        #"((?:[\"']?)[A-Za-z0-9_.-]*(?:api[-_]?key|access[-_]?token|refresh[-_]?token|auth(?:orization)?|credential(?:s)?|password|secret|signature|token|key|sig)(?:[\"']?)[ \t]*[:=][ \t]*[\"']?)(?:Bearer[ \t]+|Basic[ \t]+)?[^<>\"'&\s,;}]+"#
+
+    private static func redactedMalformedURLString(_ value: String) -> String {
+        let withoutFragment = value.firstIndex(of: "#").map { String(value[..<$0]) } ?? value
+        let withoutUserInfo = replacingRegexMatches(
+            in: withoutFragment,
+            pattern: #"(https?://)[^/@\s]+@"#,
+            template: "$1",
+            options: [.caseInsensitive]
+        )
+        return replacingRegexMatches(
+            in: withoutUserInfo,
+            pattern: credentialAssignmentPattern,
+            template: "$1REDACTED",
+            options: [.caseInsensitive]
+        )
+    }
+
+    private static func redactingHTTPURLs(in value: String) -> String {
+        guard let expression = try? NSRegularExpression(
+            pattern: #"https?://[^\s<>\"'\[\]{}()]+"#,
+            options: [.caseInsensitive]
+        ) else {
+            return value
+        }
+
+        var result = value
+        let matches = expression.matches(
+            in: value,
+            range: NSRange(value.startIndex..<value.endIndex, in: value)
+        )
+        for match in matches.reversed() {
+            guard let sourceRange = Range(match.range, in: value),
+                  let resultRange = Range(match.range, in: result) else {
+                continue
+            }
+            result.replaceSubrange(resultRange, with: redactedURLString(String(value[sourceRange])))
+        }
+        return result
+    }
+
+    private static func replacingRegexMatches(
+        in value: String,
+        pattern: String,
+        template: String,
+        options: NSRegularExpression.Options
+    ) -> String {
+        guard !value.isEmpty,
+              let expression = try? NSRegularExpression(pattern: pattern, options: options) else {
+            return value
+        }
+        return expression.stringByReplacingMatches(
+            in: value,
+            range: NSRange(value.startIndex..<value.endIndex, in: value),
+            withTemplate: template
+        )
     }
 
     private static func parseStreamedResponse(from data: Data) -> ChatCompletionResponse? {
@@ -554,9 +728,12 @@ final class TranslationClient {
         }
     }
 
-    private static func responsePreview(from data: Data) -> String? {
+    private static func responsePreview(from data: Data, apiKey: String) -> String? {
         guard !data.isEmpty else { return nil }
-        return String(data: data.prefix(240), encoding: .utf8) ?? "<non-utf8>"
+        guard let preview = String(data: data.prefix(240), encoding: .utf8) else {
+            return "<non-utf8>"
+        }
+        return redactedDiagnosticText(preview, apiKey: apiKey, maxLength: 240)
     }
 
     private static func requestOptions(endpoint: URL, model: String) -> RequestOptions {
@@ -696,15 +873,17 @@ final class TranslationClient {
         return sections.joined(separator: "\n\n")
     }
 
-    private func parseErrorMessage(from data: Data) -> String? {
+    private func parseErrorMessage(from data: Data, apiKey: String) -> String? {
+        let message: String?
         if let structuredMessage = TranslationResponseErrorParser.message(from: data) {
-            return structuredMessage
+            message = structuredMessage
+        } else if let object = try? JSONSerialization.jsonObject(with: data),
+                  let readableMessage = TranslationResponseErrorParser.readableMessage(from: object) {
+            message = readableMessage
+        } else {
+            message = Self.plainTextErrorMessage(from: data)
         }
-        if let object = try? JSONSerialization.jsonObject(with: data),
-           let message = TranslationResponseErrorParser.readableMessage(from: object) {
-            return message
-        }
-        return Self.plainTextErrorMessage(from: data)
+        return message.map { Self.redactedDiagnosticText($0, apiKey: apiKey) }
     }
 
     private static func plainTextErrorMessage(from data: Data) -> String? {

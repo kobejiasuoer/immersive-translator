@@ -14,7 +14,23 @@ public struct ProviderProfile: Identifiable, Codable, Equatable {
         self.endpoint = endpoint
         self.model = model
         self.isBuiltin = isBuiltin
-        self.customModels = customModels
+        self.customModels = Self.normalizedCustomModels(customModels)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, displayName, endpoint, model, isBuiltin, customModels
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decode(String.self, forKey: .id),
+            displayName: try container.decode(String.self, forKey: .displayName),
+            endpoint: try container.decode(String.self, forKey: .endpoint),
+            model: try container.decode(String.self, forKey: .model),
+            isBuiltin: try container.decode(Bool.self, forKey: .isBuiltin),
+            customModels: try container.decodeIfPresent([String].self, forKey: .customModels) ?? []
+        )
     }
 
     // 硬编码厂商官方模型,不进 UserDefaults
@@ -51,7 +67,9 @@ public struct ProviderProfile: Identifiable, Codable, Equatable {
         let builtin = Self.builtinModelCandidates[id] ?? []
         var seen = Set<String>()
         var result: [String] = []
-        for m in builtin + customModels {
+        // Include the currently selected model even when it came from a
+        // migrated/custom configuration and is not in either history list.
+        for m in [model] + builtin + customModels {
             let trimmed = m.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
             seen.insert(trimmed)
@@ -62,13 +80,28 @@ public struct ProviderProfile: Identifiable, Codable, Equatable {
 
     // 用户自由填了模型名 → 追加到 customModels(去重:对比内置 + 已有;超 8 条淘汰最旧)
     public mutating func appendCustomModel(_ model: String) {
+        customModels = Self.normalizedCustomModels(customModels)
         let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let builtin = Self.builtinModelCandidates[id] ?? []
         guard !builtin.contains(trimmed), !customModels.contains(trimmed) else { return }
         customModels.append(trimmed)
-        if customModels.count > 8 {
-            customModels.removeFirst()
+        customModels = Self.normalizedCustomModels(customModels)
+    }
+
+    private static func normalizedCustomModels(_ models: [String]) -> [String] {
+        var normalized: [String] = []
+        for model in models {
+            let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            if let existingIndex = normalized.firstIndex(of: trimmed) {
+                normalized.remove(at: existingIndex)
+            }
+            normalized.append(trimmed)
         }
+        if normalized.count > 8 {
+            normalized = Array(normalized.suffix(8))
+        }
+        return normalized
     }
 }

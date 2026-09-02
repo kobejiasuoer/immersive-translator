@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   PROVIDER_PRESETS,
   isLocalhostEndpoint,
+  normalizeEndpoint,
   findMatchingPreset,
 } from "./providerPresets";
 
@@ -45,11 +46,27 @@ describe("isLocalhostEndpoint", () => {
 
   it("rejects remote endpoints", () => {
     expect(isLocalhostEndpoint("https://api.openai.com/v1/chat/completions")).toBe(false);
+    expect(isLocalhostEndpoint("https://localhost.evil.example/v1/chat/completions")).toBe(false);
+    expect(isLocalhostEndpoint("https://127.0.0.1.evil.example/v1/chat/completions")).toBe(false);
     expect(isLocalhostEndpoint("")).toBe(false);
   });
 
   it("is case-insensitive", () => {
     expect(isLocalhostEndpoint("HTTP://LOCALHOST:11434/v1/chat/completions")).toBe(true);
+  });
+});
+
+describe("normalizeEndpoint", () => {
+  it("preserves query parameters while completing the path", () => {
+    expect(normalizeEndpoint("https://api.example.com/v1?api_key=secret&debug=1#local")).toBe(
+      "https://api.example.com/v1/chat/completions?api_key=secret&debug=1",
+    );
+  });
+
+  it("supports the Zhipu base path", () => {
+    expect(normalizeEndpoint("https://open.bigmodel.cn/api/paas/v4")).toBe(
+      "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+    );
   });
 });
 

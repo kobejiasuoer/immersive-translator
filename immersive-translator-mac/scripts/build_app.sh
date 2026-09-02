@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="ImmersiveTranslator"
-APP_VERSION="${APP_VERSION:-0.1.0}"
+APP_VERSION="${APP_VERSION:-0.1.1}"
 APP_BUILD="${APP_BUILD:-1}"
 APP_BUNDLE_ID="${APP_BUNDLE_ID:-local.immersive-translator.mvp}"
 APP_UPDATE_MANIFEST_URL="${APP_UPDATE_MANIFEST_URL:-}"

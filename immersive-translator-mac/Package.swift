@@ -25,6 +25,10 @@ let package = Package(
         .target(
             name: "ProviderCore",
             dependencies: []
+        ),
+        .testTarget(
+            name: "ProviderCoreTests",
+            dependencies: ["ProviderCore"]
         )
     ]
 )
