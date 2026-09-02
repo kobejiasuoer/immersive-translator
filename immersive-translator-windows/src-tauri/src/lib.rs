@@ -285,21 +285,38 @@ fn switch_hotkeys(
     }
 
     // —— 第 3 步：注销不再使用的旧键；失败则尽力回滚到旧配置 ——
-    if (new_t != cur_t && unregister(cur_t).is_err())
-        || (new_o != cur_o && unregister(cur_o).is_err())
-    {
-        // 回滚：注销新键、恢复旧键、恢复旧持久化。任一步失败都并入错误信息。
+    // 记录「已成功注销」的旧键：只有真正被移除的键才需要在回滚时恢复，
+    // 未变化的键绝不重复注册，避免插件「已注册」误报污染回滚信息。
+    let mut removed_old: Vec<Shortcut> = Vec::new();
+    let mut unregister_failed = false;
+    if new_t != cur_t {
+        match unregister(cur_t) {
+            Ok(()) => removed_old.push(cur_t),
+            Err(_) => unregister_failed = true,
+        }
+    }
+    if new_o != cur_o {
+        match unregister(cur_o) {
+            Ok(()) => removed_old.push(cur_o),
+            Err(_) => unregister_failed = true,
+        }
+    }
+    if unregister_failed {
         let mut messages: Vec<String> = Vec::new();
         for s in &registered {
             if let Err(error) = unregister(*s) {
                 messages.push(format!("注销新键失败: {error}"));
             }
         }
-        if let Err(error) = register_translate(cur_t) {
-            messages.push(format!("恢复翻译热键失败: {error}"));
-        }
-        if let Err(error) = register_ocr(cur_o) {
-            messages.push(format!("恢复截图 OCR 热键失败: {error}"));
+        for old in &removed_old {
+            let result = if *old == cur_t {
+                register_translate(*old)
+            } else {
+                register_ocr(*old)
+            };
+            if let Err(error) = result {
+                messages.push(format!("恢复旧键失败: {error}"));
+            }
         }
         let _ = persist(cur_t, cur_o);
         let mut msg = "注销旧热键失败，已尝试回滚".to_string();
@@ -543,7 +560,67 @@ mod hotkey_switch_tests {
         );
         drop(c2);
     }
+
+    #[test]
+    fn rolls_back_when_unregistering_current_fails() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let c1 = calls.clone();
+        let c2 = calls.clone();
+        let c3 = calls.clone();
+        let c4 = calls.clone();
+        let result = switch_hotkeys(
+            (shortcut("Ctrl+Shift+Q"), shortcut("Ctrl+Shift+E")),
+            (shortcut("Alt+Shift+Q"), shortcut("Alt+Shift+E")),
+            move |s| {
+                c1.borrow_mut().push(Call::Register(s.id()));
+                Ok(())
+            },
+            move |s| {
+                c2.borrow_mut().push(Call::Register(s.id()));
+                Ok(())
+            },
+            move |s| {
+                c3.borrow_mut().push(Call::Unregister(s.id()));
+                // 注销两个旧键都失败 → 触发回滚
+                let old_q = shortcut("Ctrl+Shift+Q").id();
+                let old_e = shortcut("Ctrl+Shift+E").id();
+                if s.id() == old_q || s.id() == old_e {
+                    Err("cannot unregister".into())
+                } else {
+                    Ok(())
+                }
+            },
+            move |t, o| {
+                c4.borrow_mut().push(Call::Persist(t.id(), o.id()));
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        let id_q = shortcut("Ctrl+Shift+Q").id();
+        let id_e = shortcut("Ctrl+Shift+E").id();
+        let id_alt_q = shortcut("Alt+Shift+Q").id();
+        let id_alt_e = shortcut("Alt+Shift+E").id();
+        assert_eq!(
+            calls.borrow().clone(),
+            vec![
+                // 第 1 步：先注册两个新键
+                Call::Register(id_alt_q),
+                Call::Register(id_alt_e),
+                // 第 2 步：持久化新键
+                Call::Persist(id_alt_q, id_alt_e),
+                // 第 3 步：尝试注销旧键（都失败 → 触发回滚）
+                Call::Unregister(id_q),
+                Call::Unregister(id_e),
+                // 回滚：撤销刚注册的新键（旧键注销失败说明旧键仍在生效，无需重复注册）
+                Call::Unregister(id_alt_q),
+                Call::Unregister(id_alt_e),
+                // 回滚：持久化恢复旧配置
+                Call::Persist(id_q, id_e),
+            ]
+        );
+    }
 }
+
 
 
 
