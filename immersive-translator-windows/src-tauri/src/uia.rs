@@ -6,23 +6,34 @@
 //!
 //! 失败时不抛错，只返回 Err —— 调用方应当回退到 Ctrl+C 模拟。
 
+use std::thread;
+use std::time::Duration;
+
 use windows::core::BSTR;
-use windows::Win32::Foundation::{HWND, POINT};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
     COINIT_DISABLE_OLE1DDE,
 };
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationTextPattern, IUIAutomationTextRangeArray,
-    UIA_TextPatternId,
+    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern,
+    IUIAutomationTextRangeArray, UIA_TextPatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW};
+
+/// 惰性构建 provider（如 Chrome / Edge / Electron）的重试间隔。
+/// Chromium 收到首个 UIA 请求后才开始构建 accessibility tree，
+/// 首次查询常常是空/不支持 TextPattern，稍后重试通常成功。
+const UIA_RETRY_DELAY: Duration = Duration::from_millis(150);
+const UIA_RETRY_MAX: usize = 3;
 
 /// 从前台窗口读取 UI Automation 暴露的选区文本。
 /// 多个不连续选区用换行拼接（UIA 的 TextPattern 在多选区时会返回多个 Range）。
 ///
-/// 策略：先尝试「焦点元素」（真正的输入框/编辑控件通常在这里暴露 TextPattern，
-/// 浏览器网页内部亦是如此）；失败再退回「前台窗口顶层元素」。
+/// 策略：
+/// 1. 先尝试「焦点元素」（输入框/浏览器内部文本控件在此暴露 TextPattern）；
+/// 2. 失败再退回「前台窗口顶层元素」；
+/// 3. 浏览器/现代控件首次请求会惰性构建 tree，因此整体失败会重试 N 次。
 pub fn read_selection_uia() -> Result<String, String> {
     // COM 初始化（STA 模式，UIA TextPattern 必须）。同一线程二次调用返回 RPC_E_CHANGED_MODE 时忽略。
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
@@ -32,31 +43,51 @@ pub fn read_selection_uia() -> Result<String, String> {
         return Err("前台窗口为空".into());
     }
 
-    // 创建 UIAutomation 单例
+    // 创建 UIAutomation 单例（每次热键重新创建一次，安全且廉价）
     let automation: IUIAutomation = unsafe {
         CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
             .map_err(|e| format!("UIAutomation 初始化失败: {e}"))?
     };
 
-    // 第一优先：焦点元素。文本被选中时输入框/网页控件持有焦点并暴露 TextPattern。
-    if let Ok(focused) = unsafe { automation.GetFocusedElement() } {
-        if let Ok(text) = extract_selection(&focused) {
-            log_foreground(hwnd);
-            return Ok(text);
+    let mut last_err = String::from("未尝试读取");
+    for attempt in 0..UIA_RETRY_MAX {
+        match read_selection_once(&automation, hwnd) {
+            Ok(text) => {
+                log_foreground(hwnd);
+                if attempt > 0 {
+                    eprintln!("[read_selection_uia] hit on retry #{attempt}");
+                }
+                return Ok(text);
+            }
+            Err(reason) => {
+                last_err = reason;
+                if attempt + 1 < UIA_RETRY_MAX {
+                    thread::sleep(UIA_RETRY_DELAY);
+                }
+            }
         }
-        eprintln!("[read_selection_uia] focused element no TextPattern selection");
     }
 
-    // 第二优先：前台窗口顶层元素。
+    Err(last_err)
+}
+
+/// 单次读取：focused → 顶层元素。任一拿到文本即返回。
+fn read_selection_once(automation: &IUIAutomation, hwnd: HWND) -> Result<String, String> {
+    // 第一优先：焦点元素
+    if let Ok(focused) = unsafe { automation.GetFocusedElement() } {
+        if let Ok(text) = extract_selection(&focused) {
+            return Ok(text);
+        }
+    }
+
+    // 第二优先：前台窗口顶层元素
     let element = unsafe { automation.ElementFromHandle(hwnd) }
         .map_err(|e| format!("UIAutomation 找不到前台元素: {e}"))?;
-    let text = extract_selection(&element)?;
-    log_foreground(hwnd);
-    Ok(text)
+    extract_selection(&element)
 }
 
 /// 从给定 UIA 元素提取 TextPattern 下的当前选区文本。
-fn extract_selection(element: &windows::Win32::UI::Accessibility::IUIAutomationElement) -> Result<String, String> {
+fn extract_selection(element: &IUIAutomationElement) -> Result<String, String> {
     // TextPattern：查当前支持的 Pattern。
     // 浏览器/WPF/WinForms/UWP 大多支持；记事本、Cmd、PowerShell 等 Win32 老控件不支持。
     let pattern: IUIAutomationTextPattern = unsafe {
@@ -74,11 +105,12 @@ fn extract_selection(element: &windows::Win32::UI::Accessibility::IUIAutomationE
     }
 
     // 拼接所有 range 的文本
+    // GetText(maxLength): maxLength=0 表示无限制，符合 UIA 标准。
     let mut combined = String::new();
     for i in 0..len {
         let range = unsafe { ranges.GetElement(i) }
             .map_err(|e| format!("GetElement({i}) 失败: {e}"))?;
-        let bstr: BSTR = unsafe { range.GetText(1024 * 1024) }
+        let bstr: BSTR = unsafe { range.GetText(0) }
             .map_err(|e| format!("GetText 失败: {e}"))?;
         // BSTR 实现了 Deref<Target=[u16]>，可直接转 String
         let text = String::from_utf16_lossy(&*bstr);
@@ -96,11 +128,6 @@ fn extract_selection(element: &windows::Win32::UI::Accessibility::IUIAutomationE
     }
 
     Ok(combined)
-}
-
-#[allow(dead_code)]
-fn point_zero() -> POINT {
-    POINT { x: 0, y: 0 }
 }
 
 fn log_foreground(hwnd: HWND) {
