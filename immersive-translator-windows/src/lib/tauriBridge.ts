@@ -66,7 +66,7 @@ export async function showOcrResult(text: string): Promise<void> {
   await invoke("show_ocr_result", { text });
 }
 
-export type PanelSource = "selection" | "ocr";
+export type PanelSource = "selection" | "ocr" | "error";
 
 export interface PanelPayload {
   text: string;

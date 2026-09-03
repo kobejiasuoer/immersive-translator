@@ -22,6 +22,7 @@ import {
   takePendingPanelPayload,
   type DoneEvent,
   type ErrorEvent,
+  type HistorySource,
   type PanelPayload,
   type PanelSource,
   type TranslationPhase,
@@ -167,7 +168,7 @@ export function TranslationPanel() {
   const lastOriginalRef = useRef("");
   const lastEndpointRef = useRef("");
   const lastApiKeyRef = useRef("");
-  const lastSourceRef = useRef<PanelSource>("selection");
+  const lastSourceRef = useRef<HistorySource>("selection");
   const lastPanelPayloadRef = useRef("");
   const lastPanelPayloadAtRef = useRef(0);
   const lastDoneHistoryKeyRef = useRef("");
@@ -365,6 +366,13 @@ export function TranslationPanel() {
       setStatus("needsConfig");
       return;
     }
+    if (source === "error") {
+      // Rust 端发来的错误：直接把错误消息当面板内容展示，不调翻译接口。
+      setErrorMsg(text || "发生未知错误");
+      setRetryable(false);
+      setStatus("error");
+      return;
+    }
     if (!text || !text.trim()) {
       setErrorMsg("没有读取到选中的文本。请先在任意应用里选中文本。");
       setRetryable(false);
@@ -372,7 +380,9 @@ export function TranslationPanel() {
       return;
     }
     lastOriginalRef.current = text;
-    lastSourceRef.current = source;
+    // source 在前面已 narrow 到 "selection" | "ocr"（error 已提前返回），
+    // 这里多走一层显式断言避免 ref 泛型与 PanelSource 冲突。
+    lastSourceRef.current = source === "ocr" ? "ocr" : "selection";
     setPanelSource(source);
     setOriginal(text);
     setTranslated("");
@@ -621,8 +631,9 @@ export function TranslationPanel() {
   const canCopy = status === "done" && !!translated;
   const canRetry = status === "error" && retryable;
 
-  /** 原文角标文案。 */
-  const sourceLabel = panelSource === "ocr" ? "OCR" : "选中";
+  /** 原文角标文案。错误态隐藏来源标签，避免误导。 */
+  const sourceLabel =
+    panelSource === "ocr" ? "OCR" : panelSource === "error" ? "" : "选中";
   const stateDot = {
     title: status === "translating" ? "翻译中" : status === "done" ? "完成" : "",
     className: status === "translating" ? "dot-pulse" : "",
