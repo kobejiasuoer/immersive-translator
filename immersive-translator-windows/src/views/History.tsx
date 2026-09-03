@@ -21,8 +21,15 @@ import {
   IconChevronDown,
   IconAlert,
 } from "../ui/icons";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 
 type FavFilter = "all" | "favorites";
+
+type ConfirmAction =
+  | { mode: "deleteOne"; id: string }
+  | { mode: "deleteBatch"; ids: string[] }
+  | { mode: "clearNonFavorites" }
+  | null;
 
 /**
  * 翻译历史窗口。对齐 Mac TranslationHistoryView：
@@ -37,6 +44,10 @@ export function History() {
   const [favFilter, setFavFilter] = useState<FavFilter>("all");
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  /** 批量选择：卡片勾选集合。 */
+  const [selection, setSelection] = useState<ReadonlySet<string>>(new Set());
+  /** 待确认的危险操作。 */
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
 
   useEffect(() => {
     const win = getCurrentWindow();
@@ -53,7 +64,15 @@ export function History() {
     setLoading(true);
     try {
       const list = await historyList(query);
-      setRecords(favFilter === "favorites" ? list.filter((r) => r.isFavorite) : list);
+      const shown = favFilter === "favorites" ? list.filter((r) => r.isFavorite) : list;
+      setRecords(shown);
+      // 结果变化后，把选择集里已不存在的 id 清理掉
+      setSelection((prev) => {
+        if (prev.size === 0) return prev;
+        const keep = new Set<string>();
+        for (const r of shown) if (prev.has(r.id)) keep.add(r.id);
+        return keep.size === prev.size ? prev : keep;
+      });
     } catch (e) {
       showToast(`加载失败：${e}`, false);
     } finally {
@@ -84,18 +103,65 @@ export function History() {
     await refresh();
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm("删除这条历史？")) return;
-    await historyDelete(id);
-    await refresh();
-    showToast("已删除");
+  // ---- 选择集操作 ----
+  const hasRecords = records.length > 0;
+  const selectedRecords = records.filter((r) => selection.has(r.id));
+  const allSelected = hasRecords && selection.size === records.length;
+
+  function toggleSelect(id: string) {
+    setSelection((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
-  async function handleClearNonFavorites() {
-    if (!confirm("清空所有未收藏的历史？此操作不可撤销。")) return;
-    const n = await historyClearNonFavorites();
-    await refresh();
-    showToast(`已清空 ${n} 条`);
+  function toggleSelectAll() {
+    setSelection(allSelected ? new Set() : new Set(records.map((r) => r.id)));
+  }
+
+  async function copySelectedTranslations() {
+    const text = selectedRecords.map((r) => r.translation).join("\n\n");
+    await navigator.clipboard.writeText(text);
+    showToast(`已复制 ${selectedRecords.length} 条译文`);
+  }
+
+  // ---- 危险操作：先弹内嵌确认 ----
+  function handleDelete(id: string) {
+    setConfirmAction({ mode: "deleteOne", id });
+  }
+
+  function handleDeleteSelected() {
+    if (selectedRecords.length === 0) return;
+    setConfirmAction({ mode: "deleteBatch", ids: selectedRecords.map((r) => r.id) });
+  }
+
+  function handleClearNonFavorites() {
+    setConfirmAction({ mode: "clearNonFavorites" });
+  }
+
+  async function runConfirmedAction() {
+    const action = confirmAction;
+    setConfirmAction(null);
+    if (!action) return;
+    try {
+      if (action.mode === "deleteOne") {
+        await historyDelete(action.id);
+        showToast("已删除");
+      } else if (action.mode === "deleteBatch") {
+        for (const id of action.ids) await historyDelete(id);
+        showToast(`已删除 ${action.ids.length} 条`);
+      } else {
+        const n = await historyClearNonFavorites();
+        showToast(`已清空 ${n} 条`);
+      }
+    } catch (e) {
+      showToast(`操作失败：${e}`, false);
+    } finally {
+      setSelection(new Set());
+      await refresh();
+    }
   }
 
   async function handleExport(format: ExportFormat) {
@@ -107,8 +173,6 @@ export function History() {
       showToast(`导出失败：${e}`, false);
     }
   }
-
-  const hasRecords = records.length > 0;
 
   return (
     <div className="history-page">
@@ -144,8 +208,21 @@ export function History() {
         </span>
       </div>
 
-      {/* 次栏：导出 + 清空 */}
+      {/* 次栏：选择 / 导出 / 清空 */}
       <div className="history-subbar">
+        {hasRecords && (
+          <label
+            className="favCheck"
+            style={{ display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer", marginRight: 4 }}
+          >
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={toggleSelectAll}
+            />
+            全选
+          </label>
+        )}
         <span>导出 / 复制：</span>
         <button className="btn btn-ghost btn-sm" onClick={() => void handleExport("csv")}>
           CSV
@@ -170,6 +247,27 @@ export function History() {
           清空未收藏
         </button>
       </div>
+
+      {/* 批量操作条：勾选后出现 */}
+      {selectedRecords.length > 0 && (
+        <div className="history-subbar" style={{ background: "var(--accent-softer)", borderTop: "none" }}>
+          <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+            已选 {selectedRecords.length} 条
+          </span>
+          <div style={{ flex: 1 }} />
+          <button className="btn btn-secondary btn-sm" onClick={() => void copySelectedTranslations()}>
+            <IconCopy size={12} />
+            复制所选译文
+          </button>
+          <button
+            className="btn btn-outline-danger btn-sm"
+            onClick={handleDeleteSelected}
+          >
+            <IconTrash size={12} />
+            删除所选
+          </button>
+        </div>
+      )}
 
       {/* 列表 */}
       <div className="history-list">
@@ -200,6 +298,8 @@ export function History() {
             <HistoryCard
               key={r.id}
               record={r}
+              selected={selection.has(r.id)}
+              onToggleSelect={() => toggleSelect(r.id)}
               onToggleFav={() => handleToggleFav(r.id)}
               onDelete={() => handleDelete(r.id)}
               onCopied={(msg) => showToast(msg)}
@@ -213,17 +313,44 @@ export function History() {
           {toast.msg}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmAction !== null}
+        title={
+          confirmAction?.mode === "clearNonFavorites"
+            ? "清空未收藏记录"
+            : confirmAction?.mode === "deleteBatch"
+              ? `删除所选 ${confirmAction.ids.length} 条记录`
+              : "删除这条记录"
+        }
+        message={
+          confirmAction?.mode === "clearNonFavorites" ? (
+            <>将删除所有<strong>未收藏</strong>的翻译历史，此操作不可撤销。</>
+          ) : confirmAction?.mode === "deleteBatch" ? (
+            <>将永久删除选中的 {confirmAction.ids.length} 条记录，此操作不可撤销。</>
+          ) : (
+            <>将永久删除这条记录，此操作不可撤销。</>
+          )
+        }
+        confirmText="删除"
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={() => void runConfirmedAction()}
+      />
     </div>
   );
 }
 
 function HistoryCard({
   record,
+  selected,
+  onToggleSelect,
   onToggleFav,
   onDelete,
   onCopied,
 }: {
   record: HistoryRecord;
+  selected: boolean;
+  onToggleSelect: () => void;
   onToggleFav: () => void;
   onDelete: () => void;
   onCopied: (msg: string) => void;
@@ -242,8 +369,15 @@ function HistoryCard({
   }
 
   return (
-    <div className={`history-card${expanded ? " expanded" : ""}`}>
+    <div className={`history-card${expanded ? " expanded" : ""}${selected ? " selected" : ""}`}>
       <div className="meta">
+        <input
+          type="checkbox"
+          className="hist-select"
+          checked={selected}
+          onChange={onToggleSelect}
+          title={selected ? "取消选择" : "选择"}
+        />
         <span className={`chip ${isOcr ? "chip-amber" : "chip-blue"}`}>
           {isOcr ? <IconCrop size={10} /> : <IconSearch size={10} />}
           {isOcr ? "OCR" : "选中"}

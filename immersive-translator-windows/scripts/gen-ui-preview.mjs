@@ -81,7 +81,22 @@ html, body { background: #e9ebf2 !important; overflow: auto !important; }
   <div class="block-label">历史窗口</div>
   <div class="history-page" style="border-radius:16px;overflow:hidden;border:1px solid var(--border);box-shadow:var(--shadow-float)">
     ${historyToolbar()}
+    ${historyBulkBar()}
     <div class="history-list" style="max-height:340px">${historyCards()}</div>
+  </div>
+
+  <div class="block-label">确认弹窗（替代原生 confirm）</div>
+  <div style="position:relative;height:250px;border-radius:16px;overflow:hidden;border:1px solid var(--border);background:var(--bg)">
+    <div class="modal-overlay" style="position:absolute;animation:none">
+      <div class="modal">
+        <div class="modal-title danger"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>删除这条记录</div>
+        <div class="modal-body">将永久删除这条记录，此操作不可撤销。</div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary">取消</button>
+          <button class="btn btn-danger-solid">删除</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 </body>
@@ -275,10 +290,21 @@ function historyToolbar() {
     </div>`;
 }
 
+function historyBulkBar() {
+  return `
+    <div class="history-subbar" style="background:var(--accent-softer);border-top:none">
+      <span style="color:var(--accent);font-weight:600">已选 2 条</span>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary btn-sm">${I.copy} 复制所选译文</button>
+      <button class="btn btn-outline-danger btn-sm">${I.trash} 删除所选</button>
+    </div>`;
+}
+
 function historyCards() {
-  const mk = (isOcr, lang, time, model, orig, trans) => `
-    <div class="history-card">
+  const mk = (isOcr, lang, time, model, orig, trans, sel = false) => `
+    <div class="history-card${sel?" selected":""}">
       <div class="meta">
+        <input type="checkbox" class="hist-select" ${sel?"checked":""}>
         <span class="chip ${isOcr?"chip-amber":"chip-blue"}">${isOcr?I.crop:I.search} ${isOcr?"OCR":"选中"}</span>
         <span class="lang">${lang}</span><span>${time}</span><span class="model">${model}</span>
         <span class="chip chip-gray">1.8s</span><span class="spacer"></span>
@@ -294,8 +320,8 @@ function historyCards() {
       <div style="display:flex;justify-content:center;margin-top:2px"><button class="btn btn-ghost btn-sm" style="font-size:11px;color:var(--text-4)">${I.down} 展开全文</button></div>
     </div>`;
   return [
-    mk(true,"简体中文","2026-09-02 18:42","glm-4-flash","Neural networks learn by adjusting millions of weights through backpropagation.","神经网络通过反向传播调整数百万个权重来学习，这是深度学习成功的基石。"),
-    mk(false,"English","2026-09-02 18:12","gpt-4o-mini","沉浸式翻译的核心是低打扰：译文紧贴原文，阅读不被切断。","The essence of immersive translation is low disruption: the translation hugs the source text so reading is never interrupted."),
+    mk(true,"简体中文","2026-09-02 18:42","glm-4-flash","Neural networks learn by adjusting millions of weights through backpropagation.","神经网络通过反向传播调整数百万个权重来学习，这是深度学习成功的基石。", true),
+    mk(false,"English","2026-09-02 18:12","gpt-4o-mini","沉浸式翻译的核心是低打扰：译文紧贴原文，阅读不被切断。","The essence of immersive translation is low disruption: the translation hugs the source text so reading is never interrupted.", true),
     mk(false,"简体中文","2026-09-01 22:05","deepseek-chat","The quick brown fox jumps over the lazy dog.","敏捷的棕色狐狸跃过懒狗。"),
   ].join("");
 }

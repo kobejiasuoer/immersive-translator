@@ -38,6 +38,7 @@ import {
 } from "../lib/updater";
 import { buildSanitizedCurl, buildDiagnosticReport } from "../core/errorMessageFormatter";
 import { glossaryStats, dedupAndNormalize, mergeGlossary } from "../core/glossaryParser";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import {
   IconCheck,
   IconAlert,
@@ -75,6 +76,8 @@ export function Settings() {
   const [appVersion, setAppVersion] = useState("");
   /** API Key 明文显隐。 */
   const [showKey, setShowKey] = useState(false);
+  /** 「恢复默认」确认弹窗。 */
+  const [confirmReset, setConfirmReset] = useState(false);
 
   // 首次加载后：加载设置；若未关闭引导且接口未配好，显示欢迎横幅
   useEffect(() => {
@@ -256,13 +259,16 @@ export function Settings() {
   }
 
   function handleResetDefaults() {
-    if (confirm("确定恢复默认设置？已保存的接口配置会被清空。")) {
-      const reset = { ...DEFAULT_SETTINGS };
-      void saveSettingsAsync(reset);
-      setSettings(reset);
-      setSavedSnapshot(reset);
-      setSaved(false);
-    }
+    setConfirmReset(true);
+  }
+
+  function doResetDefaults() {
+    setConfirmReset(false);
+    const reset = { ...DEFAULT_SETTINGS };
+    void saveSettingsAsync(reset);
+    setSettings(reset);
+    setSavedSnapshot(reset);
+    setSaved(false);
   }
 
   const cloudPresets = PROVIDER_PRESETS.filter((p) => !p.allowEmptyApiKey);
@@ -697,6 +703,15 @@ export function Settings() {
           </button>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmReset}
+        title="恢复默认设置"
+        message="将清空已保存的接口配置（endpoint / API Key / 模型等），并恢复全部默认值。确定继续？"
+        confirmText="恢复默认"
+        onCancel={() => setConfirmReset(false)}
+        onConfirm={doResetDefaults}
+      />
     </div>
   );
 
