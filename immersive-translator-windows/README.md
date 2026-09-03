@@ -5,6 +5,15 @@
 选中任意文本，按 `Ctrl+Shift+Q`，即可在浮窗中实时查看 AI 翻译结果。
 按 `Ctrl+Shift+E` 进入截图模式，框选屏幕区域后自动 OCR 识别并翻译。
 
+## 近期更新（v0.2.0）
+
+- **划词翻译改用 Windows UI Automation**（主路径）—— 直接读前台控件的 TextPattern，绕开浏览器拦截 Ctrl+C、输入法抢占等场景。自动 fallback 到 Ctrl+C 模拟（兼容老 Win32 控件）。读取对 Chromium 系应用（Chrome/Edge/Electron）惰性构建做了重试增强。
+- 双热键运行时切换改为「先注册新键 → 再注销旧键」的可回滚实现
+- 历史窗口支持勾选/批量删除/批量复制
+- 内嵌确认弹窗替换全部原生 `window.confirm`
+- 翻译浮窗位置与大小跨启动记忆
+- 全新应用图标 + 完整设计系统 + 暗色模式
+
 ## 功能
 
 ### 翻译核心
@@ -40,7 +49,7 @@
 | 构建 | Vite 6 |
 | 测试 | Vitest (TS) + cargo test (Rust) |
 | HTTP / SSE | reqwest (Rust) |
-| 剪贴板 & 键盘 | arboard + windows-sys SendInput |
+| 划词选区读取 | UI Automation（windows crate，TextPattern 主路径 + 浏览器惰性 tree 重试）+ arboard / windows-sys SendInput（Ctrl+C 兜底） |
 | OCR | paddle-ocr-rs + ort (ONNX Runtime, PaddleOCR v4) |
 | 安全存储 | Windows DPAPI (CryptProtectData) |
 | 截图 | Win32 GDI BitBlt |
