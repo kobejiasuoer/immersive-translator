@@ -7,6 +7,42 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW};
 
+use crate::uia;
+
+/// 调用方语义：
+/// - Ok(text)：选到了内容（已 trim），调用方直接使用
+/// - Err(NoSelection)：用户没选中任何东西，前端提示"请先选中文本"
+/// - Err(Other)：底层 API 不可用等系统问题，附带原因
+#[derive(Debug)]
+pub enum SelectionError {
+    NoSelection,
+    Other(String),
+}
+
+/// 主入口：先尝试 UIA（跨进程读取选区，浏览器/现代控件都支持）；
+/// UIA 失败（如老 Win32 控件不支持 TextPattern）再走 Ctrl+C 模拟。
+pub fn read_selection_text() -> Result<String, SelectionError> {
+    match uia::read_selection_uia() {
+        Ok(text) => {
+            eprintln!("[read_selection] uia path hit, len={}", text.chars().count());
+            Ok(text)
+        }
+        Err(reason) => {
+            eprintln!("[read_selection] uia miss: {reason} → fallback to Ctrl+C");
+            read_selection_via_clipboard()
+        }
+    }
+}
+
+/// 旧的 Ctrl+C 模拟路径，UIA 失败时兜底。
+fn read_selection_via_clipboard() -> Result<String, SelectionError> {
+    match read_selection_impl() {
+        Ok(s) if !s.is_empty() => Ok(s),
+        Ok(_) => Err(SelectionError::NoSelection),
+        Err(e) => Err(SelectionError::Other(e)),
+    }
+}
+
 const VK_C: u16 = 0x43;
 const VK_Q: u16 = 0x51;
 

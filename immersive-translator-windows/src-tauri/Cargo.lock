@@ -2232,6 +2232,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-updater",
  "tokio",
+ "windows",
  "windows-sys 0.59.0",
 ]
 

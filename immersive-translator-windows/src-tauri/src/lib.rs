@@ -4,6 +4,7 @@ mod ocr;
 mod screenshot;
 mod secret_store;
 mod translation;
+mod uia;
 
 use std::str::FromStr;
 use std::sync::Mutex;
@@ -170,11 +171,31 @@ fn trigger_panel(app: &AppHandle) {
     std::thread::spawn(move || {
         // 等热键释放，避免修饰键残留污染 Ctrl+C
         std::thread::sleep(std::time::Duration::from_millis(180));
-        let selected = clipboard::read_selection_impl().unwrap_or_default();
+        // 优先 UIA 路径读选区，失败 fallback 到 Ctrl+C 模拟。
+        // NoSelection → 前端显示"请先选中文本"；Other → 提示系统异常。
+        let (text, error_msg) = match clipboard::read_selection_text() {
+            Ok(t) => (t, None),
+            Err(clipboard::SelectionError::NoSelection) => {
+                (String::new(), Some("没有读取到选中的文本。请先在任意应用里选中文本。".into()))
+            }
+            Err(clipboard::SelectionError::Other(e)) => {
+                (String::new(), Some(format!("划词读取失败: {e}")))
+            }
+        };
+        if let Some(err) = error_msg {
+            show_panel_with_payload(
+                &app_handle,
+                PanelPayload {
+                    text: err,
+                    source: "error".into(),
+                },
+            );
+            return;
+        }
         show_panel_with_payload(
             &app_handle,
             PanelPayload {
-                text: selected,
+                text,
                 source: "selection".into(),
             },
         );
