@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { cursorPosition, getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
+import {
+  cursorPosition,
+  getCurrentWindow,
+  LogicalSize,
+  PhysicalPosition,
+} from "@tauri-apps/api/window";
 import {
   translateStream,
   cancelTranslation,
@@ -48,6 +53,59 @@ type PanelShownPayload = string | Partial<PanelPayload>;
 type ResizeDirection = "East" | "South" | "SouthEast";
 
 const panelWindow = getCurrentWindow();
+
+// ---- 浮窗位置/大小记忆（localStorage，物理像素 + 缩放比）----
+interface PanelGeometry {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  scale: number;
+}
+const PANEL_GEOMETRY_KEY = "immersive-translator-panel-geometry";
+
+function loadPanelGeometry(): PanelGeometry | null {
+  try {
+    const raw = localStorage.getItem(PANEL_GEOMETRY_KEY);
+    if (!raw) return null;
+    const g = JSON.parse(raw) as PanelGeometry;
+    if (
+      Number.isFinite(g.x) &&
+      Number.isFinite(g.y) &&
+      Number.isFinite(g.w) &&
+      Number.isFinite(g.h) &&
+      Number.isFinite(g.scale) &&
+      g.scale > 0
+    ) {
+      return g;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function savePanelGeometry(g: PanelGeometry) {
+  try {
+    localStorage.setItem(PANEL_GEOMETRY_KEY, JSON.stringify(g));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 读取窗口当前位置/尺寸并持久化（供下次启动恢复）。 */
+async function persistPanelGeometry() {
+  try {
+    const [pos, size, scale] = await Promise.all([
+      panelWindow.outerPosition(),
+      panelWindow.outerSize(),
+      panelWindow.scaleFactor(),
+    ]);
+    savePanelGeometry({ x: pos.x, y: pos.y, w: size.width, h: size.height, scale });
+  } catch {
+    /* ignore */
+  }
+}
 const SECURE_SETTINGS_LOAD_ERROR =
   "安全存储读取失败，未覆盖凭证。请打开设置检查后重试。";
 
@@ -120,6 +178,19 @@ export function TranslationPanel() {
   const lastResizeAtRef = useRef(0);
   /** 缩放抑制隐藏的缓冲窗口（毫秒）：onResized 每次刷新 lastResizeAt，失焦检查看距今是否在此窗口内。 */
   const RESIZE_HIDE_SUPPRESS_MS = 800;
+  /** 位置/大小记忆的防抖计时器。 */
+  const geometryTimerRef = useRef<number | null>(null);
+
+  /** 拖拽/缩放结束后（600ms 防抖）持久化浮窗几何信息。 */
+  function scheduleGeometrySave() {
+    if (geometryTimerRef.current !== null) {
+      window.clearTimeout(geometryTimerRef.current);
+    }
+    geometryTimerRef.current = window.setTimeout(() => {
+      geometryTimerRef.current = null;
+      void persistPanelGeometry();
+    }, 600);
+  }
 
   function showSecureSettingsLoadError(error: unknown) {
     console.error("[settings] secure storage read failed", error);
@@ -334,6 +405,7 @@ export function TranslationPanel() {
   }
 
   async function hidePanel() {
+    void persistPanelGeometry(); // 隐藏前保存当前位置，下次打开仍停在你放的位置
     await panelWindow.hide();
   }
 
@@ -382,6 +454,8 @@ export function TranslationPanel() {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     dragStateRef.current = null;
+    // 拖动结束：异步捕获最终位置并保存（不阻塞 UI）
+    void persistPanelGeometry();
   }
 
   async function startResize(direction: ResizeDirection, event: ReactPointerEvent<HTMLDivElement>) {
@@ -482,9 +556,36 @@ export function TranslationPanel() {
   useEffect(() => {
     const unlistenPromise = panelWindow.onResized(() => {
       lastResizeAtRef.current = Date.now();
+      scheduleGeometrySave(); // 缩放结束后防抖保存尺寸/位置
     });
     return () => {
+      if (geometryTimerRef.current !== null) {
+        window.clearTimeout(geometryTimerRef.current);
+      }
       void unlistenPromise.then((u) => u());
+    };
+  }, []);
+
+  // 启动时恢复上次保存的浮窗位置与尺寸（用户拖动/缩放后持久化）。
+  useEffect(() => {
+    const geometry = loadPanelGeometry();
+    if (!geometry) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        if (cancelled) return;
+        await panelWindow.setPosition(new PhysicalPosition(Math.round(geometry.x), Math.round(geometry.y)));
+        if (geometry.w > 0 && geometry.h > 0) {
+          await panelWindow.setSize(
+            new LogicalSize(geometry.w / geometry.scale, geometry.h / geometry.scale),
+          );
+        }
+      } catch {
+        /* 恢复失败则保持默认位置 */
+      }
+    })();
+    return () => {
+      cancelled = true;
     };
   }, []);
 
