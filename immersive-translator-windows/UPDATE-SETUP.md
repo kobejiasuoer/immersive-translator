@@ -8,25 +8,35 @@
 
 使用标准 minisign 工具生成（`-W` 无密码）。
 
-- **公钥 Key ID**：`01889121A3D88744`
+- **公钥 Key ID**：`3539AF5663363B72`
 - **公钥**（已写入 `tauri.conf.json` → `plugins.updater.pubkey`，用于客户端校验）：
   ```
-  RWREh9ijIZGIARsbtnlx/hivT0q/mx6YBL30g1PmtzUWGo3QPCO4na+O
+  RWRyOzZjVq85NZs8EXN9ghTfrS79aKH5ln4JBfUpqQSxsNbsYQ5W4VLF
   ```
 
 签名时需要环境变量：
 
+> **⚠️ @tauri-apps/cli ≥ 2.11 的坑**：新版 CLI 要求 `TAURI_SIGNING_PRIVATE_KEY`
+> 是「密钥文件整体 base64 编码后的单行字符串」，直接传文件原文会报
+> `failed to decode base64 secret key: Invalid symbol 32`。
+> 下面的命令已按新版 CLI 的要求包装。
+
 ```powershell
 # Windows PowerShell，构建前设置（CI 里配 secret）
-$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -Raw "$env:USERPROFILE\.tauri\immersive-translator-updater.key"
+$env:TAURI_SIGNING_PRIVATE_KEY = [Convert]::ToBase64String([IO.File]::ReadAllBytes("$env:USERPROFILE\.tauri\immersive-translator-updater.key"))
 $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""  # 空密码
 ```
 
 ```bash
 # bash / CI
-export TAURI_SIGNING_PRIVATE_KEY=$(cat ~/.tauri/immersive-translator-updater.key)
+export TAURI_SIGNING_PRIVATE_KEY=$(base64 -w0 ~/.tauri/immersive-translator-updater.key)
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""  # 空密码
 ```
+
+构建后可用 Python 快速核对签名与 `tauri.conf.json` 公钥是否同一对：
+解码 `.sig`（外层是 base64）取第 2 行再 base64 解码，其字节 2..10 的
+keynum 应等于公钥的 keynum（公钥同样解两层 base64 后取字节 2..10，
+当前为 `723b366356af3935`）。
 
 **私钥**：保存在安全的地方（密码管理器 / CI secret）。当前本地位置：
 - `~/.tauri/immersive-translator-updater.key`（主副本）
