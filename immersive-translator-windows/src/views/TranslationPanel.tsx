@@ -174,6 +174,8 @@ export function TranslationPanel() {
   const lastPanelPayloadRef = useRef("");
   const lastPanelPayloadAtRef = useRef(0);
   const lastDoneHistoryKeyRef = useRef("");
+  /** done 态原文编辑框（高度跟随内容）。 */
+  const origEditRef = useRef<HTMLTextAreaElement | null>(null);
   const dragStateRef = useRef<{ offsetX: number; offsetY: number } | null>(null);
   const dragMovePendingRef = useRef(false);
   /** 最近一次窗口缩放（含原生 startResizeDragging）的时间戳。
@@ -421,6 +423,17 @@ export function TranslationPanel() {
     }
   }
 
+  /** 用户已修改原文且尚未重新翻译（done 态显示「重新翻译」按钮）。 */
+  const canRetranslate =
+    status === "done" && !!original.trim() && original !== lastOriginalRef.current;
+
+  /** 用编辑后的原文重新发起翻译，保持原来源标签（选中/OCR）。 */
+  async function retranslateFromEditor() {
+    const text = original;
+    if (!text.trim()) return;
+    await triggerWithText(text, panelSource === "ocr" ? "ocr" : "selection");
+  }
+
   /** 短暂显示复制提示（2 秒后消失）。 */
   function flashCopied(msg: string) {
     setCopiedHint(msg);
@@ -536,9 +549,14 @@ export function TranslationPanel() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      // Esc：关闭浮窗
+      // Esc：正在编辑原文时先退出编辑，再按一次才关闭浮窗
       if (event.key === "Escape") {
         event.preventDefault();
+        const el = document.activeElement;
+        if (el instanceof HTMLTextAreaElement) {
+          el.blur();
+          return;
+        }
         void hidePanel();
         return;
       }
@@ -573,6 +591,14 @@ export function TranslationPanel() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [status, translated, original, retryable]);
+
+  // 原文编辑框高度跟随内容（上限内自动增高，超出内部滚动）。
+  useEffect(() => {
+    const el = origEditRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [original, status]);
 
   // 监听原生缩放（含右下角 startResizeDragging 与系统最大化的尺寸变化），
   // 持续刷新 lastResizeAt。原生缩放过程中 JS pointer 事件不触发，只能靠这个事件感知。
@@ -793,8 +819,36 @@ export function TranslationPanel() {
           <>
             {original && (
               <div className="orig-block">
-                <div className="orig-label">原文 · {sourceLabel}</div>
-                <div className="orig-text">{original}</div>
+                <div className="orig-label-row">
+                  <div className="orig-label">原文 · {sourceLabel}</div>
+                  <span className="orig-edit-hint">可编辑</span>
+                  {canRetranslate && (
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => void retranslateFromEditor()}
+                      title="用修改后的原文重新翻译 (Ctrl+Enter)"
+                    >
+                      <IconRetry size={12} />
+                      重新翻译
+                    </button>
+                  )}
+                </div>
+                <textarea
+                  ref={origEditRef}
+                  className="orig-text orig-text-edit"
+                  value={original}
+                  spellCheck={false}
+                  onChange={(event) => setOriginal(event.target.value)}
+                  onKeyDown={(event) => {
+                    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                      // 编辑框内 Ctrl+Enter 优先重新翻译，不触发全局「复制译文」
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void retranslateFromEditor();
+                    }
+                  }}
+                  aria-label="原文（可编辑，修改后 Ctrl+Enter 重新翻译）"
+                />
               </div>
             )}
             <div className="trans-block">

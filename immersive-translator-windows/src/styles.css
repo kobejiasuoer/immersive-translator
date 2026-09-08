@@ -1081,6 +1081,56 @@ input[type="radio"] {
   overflow-y: auto;
 }
 
+/* 原文标签行：标签 + 可编辑提示 + 重新翻译按钮 */
+.orig-label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+.orig-label-row .orig-label {
+  margin-bottom: 0;
+}
+.orig-edit-hint {
+  font-size: 10px;
+  color: var(--text-4);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  line-height: 14px;
+}
+.orig-label-row .btn {
+  margin-left: auto;
+}
+/* done 态原文可编辑：默认外观与只读文本一致，悬停/聚焦时底部虚线提示 */
+.orig-text-edit {
+  display: block;
+  width: 100%;
+  max-height: 200px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed transparent;
+  border-radius: 0;
+  padding: 0;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  resize: none;
+  outline: none;
+  overflow-y: auto;
+  user-select: text;
+  caret-color: var(--accent);
+}
+.orig-text-edit:hover {
+  border-bottom-color: var(--border);
+}
+.orig-text-edit:focus {
+  border-bottom-color: var(--accent);
+}
+
 /* 译文块 */
 .trans-label {
   display: flex;
