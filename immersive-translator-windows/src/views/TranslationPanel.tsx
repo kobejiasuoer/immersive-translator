@@ -165,6 +165,8 @@ export function TranslationPanel() {
   const [favToggled, setFavToggled] = useState(false);
   /** 来源（选中/OCR）角标。 */
   const [panelSource, setPanelSource] = useState<PanelSource>("selection");
+  /** 等待用户手动 Ctrl+C 的提示态（自动读取被安全软件拦截时）。 */
+  const [awaitCopyHint, setAwaitCopyHint] = useState(false);
   const lastOriginalRef = useRef("");
   const lastEndpointRef = useRef("");
   const lastApiKeyRef = useRef("");
@@ -362,6 +364,7 @@ export function TranslationPanel() {
   async function triggerWithText(text: string, source: PanelSource = "selection") {
     const s = await loadSettingsSafely();
     if (s === null) return;
+    setAwaitCopyHint(false);
     if (!hasValidSettings(s)) {
       setStatus("needsConfig");
       return;
@@ -371,6 +374,16 @@ export function TranslationPanel() {
       setErrorMsg(text || "发生未知错误");
       setRetryable(false);
       setStatus("error");
+      return;
+    }
+    if (source === "awaitCopy") {
+      // 自动读取未取得选区时的等待态：提示用户按真实 Ctrl+C，
+      // 后端监听到剪贴板变化后会再发 source=selection 的负载触发翻译。
+      setOriginal("");
+      setTranslated("");
+      setErrorMsg("");
+      setStatus("reading");
+      setAwaitCopyHint(true);
       return;
     }
     if (!text || !text.trim()) {
@@ -741,7 +754,12 @@ export function TranslationPanel() {
               </div>
             )}
             <div className="loading-line">
-              {status === "reading" ? (
+              {status === "reading" && awaitCopyHint ? (
+                <>
+                  <span className="spinner" />
+                  请按 Ctrl+C 复制选中的文字，复制后会自动翻译…
+                </>
+              ) : status === "reading" ? (
                 <>
                   <span className="spinner" />
                   正在读取选中文本…

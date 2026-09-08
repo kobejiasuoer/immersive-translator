@@ -7,6 +7,7 @@ mod translation;
 mod uia;
 
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem},
@@ -14,6 +15,7 @@ use tauri::{
     AppHandle, Emitter, Manager,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
 /// 默认全局热键：Ctrl+Shift+Q —— 选中文字翻译；Ctrl+Shift+E —— 截图 OCR 翻译。
 const DEFAULT_TRANSLATE_HOTKEY: &str = "Ctrl+Shift+Q";
@@ -40,17 +42,66 @@ struct PanelPayload {
 #[derive(Default)]
 struct PendingPanelPayload(Mutex<Option<PanelPayload>>);
 
+// 自动读取和手动复制等待共用一次会话，避免热键连按启动多个剪贴板监听。
+static SELECTION_RUNNING: AtomicBool = AtomicBool::new(false);
+
+struct SelectionGuard;
+
+impl Drop for SelectionGuard {
+    fn drop(&mut self) {
+        SELECTION_RUNNING.store(false, Ordering::Release);
+    }
+}
+
 fn show_panel_with_payload(app: &AppHandle, payload: PanelPayload) {
+    // awaitCopy 是等待态：面板不能抢焦点，否则用户的 Ctrl+C 会发进面板
+    // 而不是目标应用（其余场景照常聚焦）。
+    let take_focus = payload.source != "awaitCopy";
     let pending = app.state::<PendingPanelPayload>();
     *pending.0.lock().unwrap() = Some(payload.clone());
 
-    let Some(panel) = app.get_webview_window("panel") else {
-        eprintln!("[panel] panel window not found");
-        return;
+    let panel = match app.get_webview_window("panel") {
+        Some(p) => p,
+        None => {
+            // 启动瞬间 WebView2 数据目录被上一实例占用时个别窗口创建会失败
+            // （settings/history 出过同样问题）。panel 缺失时热键表现为
+            // "毫无反应"，这里按 tauri.conf.json 的原配置现场重建。
+            // 重建后前端挂载时会通过 take_pending_panel_payload 拿到本次负载。
+            eprintln!("[panel] panel window missing → rebuilding");
+            clipboard::diag_log("panel window missing → rebuilding");
+            let built = tauri::WebviewWindowBuilder::new(
+                app,
+                "panel",
+                tauri::WebviewUrl::App("index.html".into()),
+            )
+            .title("")
+            .inner_size(460.0, 360.0)
+            .min_inner_size(320.0, 220.0)
+            .resizable(true)
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .visible(false)
+            .center()
+            .build();
+            match built {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("[panel] rebuild failed: {e}");
+                    clipboard::diag_log(&format!("panel rebuild failed: {e}"));
+                    return;
+                }
+            }
+        }
     };
 
+    // Windows 的 show 本身可能激活窗口，只跳过 set_focus 不足以保留来源焦点。
+    let _ = panel.set_focusable(take_focus);
     let _ = panel.show();
-    let _ = panel.set_focus();
+    if take_focus {
+        let _ = panel.set_focus();
+    }
     let _ = panel.emit("panel:shown", payload);
 }
 
@@ -154,6 +205,33 @@ fn show_window(app: &tauri::AppHandle, label: &str) {
     if let Some(win) = app.get_webview_window(label) {
         let _ = win.show();
         let _ = win.set_focus();
+        return;
+    }
+    // 窗口缺失（如启动瞬间 WebView2 数据目录被上一实例占用，个别窗口创建失败）。
+    // 原先这里静默返回，表现为点托盘菜单"没有反应"；现在现场重建。
+    let spec = match label {
+        "settings" => Some(("ImmersiveTranslator 设置", 720.0, 660.0)),
+        "history" => Some(("翻译历史", 780.0, 620.0)),
+        _ => None,
+    };
+    let Some((title, w, h)) = spec else {
+        eprintln!("[show_window] window {label} missing and no rebuild spec");
+        return;
+    };
+    eprintln!("[show_window] window {label} missing → rebuilding");
+    clipboard::diag_log(&format!("window {label} missing → rebuilding"));
+    let built =
+        tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App("index.html".into()))
+            .title(title)
+            .inner_size(w, h)
+            .resizable(true)
+            .minimizable(true)
+            .maximizable(false)
+            .center()
+            .build();
+    if let Err(e) = built {
+        eprintln!("[show_window] rebuild {label} failed: {e}");
+        clipboard::diag_log(&format!("rebuild {label} failed: {e}"));
     }
 }
 
@@ -167,38 +245,88 @@ fn trigger_panel(app: &AppHandle) {
         let _ = panel.hide();
         return;
     }
+    if SELECTION_RUNNING.swap(true, Ordering::AcqRel) {
+        return;
+    }
     let app_handle = app.clone();
+    // 热键按下瞬间的前台窗口就是用户想翻译的目标应用。
+    // 后续读取流程有 1~2 秒延迟，期间前台可能被其他应用抢走
+    // （实测微信等会周期性抢焦点），必须现在把句柄记下来，
+    // Ctrl+C 兜底路径用它把目标窗口强制拉回前台再复制。
+    let target_hwnd = unsafe { GetForegroundWindow() } as isize;
+    clipboard::diag_log(&format!("hotkey fired, target_hwnd={target_hwnd:#x}"));
     std::thread::spawn(move || {
-        // 等热键释放，避免修饰键残留污染 Ctrl+C
-        std::thread::sleep(std::time::Duration::from_millis(180));
-        // 优先 UIA 路径读选区，失败 fallback 到 Ctrl+C 模拟。
-        // NoSelection → 前端显示"请先选中文本"；Other → 提示系统异常。
-        let (text, error_msg) = match clipboard::read_selection_text() {
-            Ok(t) => (t, None),
+        let _guard = SelectionGuard;
+        // 先模拟复制，失败再读取 UIA；两条都未取得选区时等待真实复制。
+        match clipboard::read_selection_text(target_hwnd) {
+            Ok(text) => {
+                show_panel_with_payload(
+                    &app_handle,
+                    PanelPayload {
+                        text,
+                        source: "selection".into(),
+                    },
+                );
+            }
             Err(clipboard::SelectionError::NoSelection) => {
-                (String::new(), Some("没有读取到选中的文本。请先在任意应用里选中文本。".into()))
+                // 立即弹面板提示（而不是干等），后台监听 8 秒
+                let seq_before_prompt = clipboard::clipboard_sequence();
+                show_panel_with_payload(
+                    &app_handle,
+                    PanelPayload {
+                        text: String::new(),
+                        source: "awaitCopy".into(),
+                    },
+                );
+                let cancelled = || {
+                    !panel.is_visible().unwrap_or(false)
+                        || unsafe { GetForegroundWindow() } as isize != target_hwnd
+                };
+                let result = clipboard::read_selection_via_user_copy(
+                    seq_before_prompt,
+                    std::time::Duration::from_secs(8),
+                    cancelled,
+                );
+                match result {
+                    Ok(Some(text)) => {
+                        show_panel_with_payload(
+                            &app_handle,
+                            PanelPayload {
+                                text,
+                                source: "selection".into(),
+                            },
+                        );
+                    }
+                    outcome => {
+                        // 不重新显示或聚焦已关闭的窗口，也不留下永久的“等待复制”。
+                        let _ = panel.set_focusable(true);
+                        if panel.is_visible().unwrap_or(false) {
+                            let payload = PanelPayload {
+                                text: if outcome.is_err() {
+                                    "等待复制超时，请在原窗口重新选中文字后按翻译快捷键；也可使用截图翻译。".into()
+                                } else {
+                                    "来源窗口已切换，本次划词已取消。请在目标窗口重新触发翻译。"
+                                        .into()
+                                },
+                                source: "error".into(),
+                            };
+                            *app_handle.state::<PendingPanelPayload>().0.lock().unwrap() =
+                                Some(payload.clone());
+                            let _ = panel.emit("panel:shown", payload);
+                        }
+                    }
+                }
             }
             Err(clipboard::SelectionError::Other(e)) => {
-                (String::new(), Some(format!("划词读取失败: {e}")))
+                show_panel_with_payload(
+                    &app_handle,
+                    PanelPayload {
+                        text: format!("划词读取失败: {e}"),
+                        source: "error".into(),
+                    },
+                );
             }
-        };
-        if let Some(err) = error_msg {
-            show_panel_with_payload(
-                &app_handle,
-                PanelPayload {
-                    text: err,
-                    source: "error".into(),
-                },
-            );
-            return;
         }
-        show_panel_with_payload(
-            &app_handle,
-            PanelPayload {
-                text,
-                source: "selection".into(),
-            },
-        );
     });
 }
 
@@ -277,8 +405,7 @@ fn switch_hotkeys(
     // —— 第 1 步：注册有变化的新键（逐个），记录成功项以便回滚 ——
     let mut registered: Vec<Shortcut> = Vec::new();
     if new_t != cur_t {
-        register_translate(new_t)
-            .map_err(|error| format!("注册翻译热键失败: {error}"))?;
+        register_translate(new_t).map_err(|error| format!("注册翻译热键失败: {error}"))?;
         registered.push(new_t);
     }
     if new_o != cur_o {
@@ -368,10 +495,7 @@ fn reregister_hotkeys(
         .map_err(|e| format!("无法解析截图 OCR 热键「{ocr_trimmed}」: {e}"))?;
 
     let active = app.state::<ActiveHotkeys>();
-    let mut current = active
-        .0
-        .lock()
-        .map_err(|_| "热键状态不可用".to_string())?;
+    let mut current = active.0.lock().map_err(|_| "热键状态不可用".to_string())?;
     let switched = switch_hotkeys(
         *current,
         (translate_shortcut, ocr_shortcut),
@@ -384,11 +508,7 @@ fn reregister_hotkeys(
         },
         |t, o| persist_hotkeys(&app, t, o),
     )
-    .map_err(|error| {
-        format!(
-            "应用热键失败「{translate_trimmed} / {ocr_trimmed}」: {error}"
-        )
-    })?;
+    .map_err(|error| format!("应用热键失败「{translate_trimmed} / {ocr_trimmed}」: {error}"))?;
     if switched {
         *current = (translate_shortcut, ocr_shortcut);
     }
@@ -451,7 +571,10 @@ mod hotkey_switch_tests {
         let switched = switch_hotkeys(
             (shortcut("Ctrl+Shift+Q"), shortcut("Ctrl+Shift+E")),
             (shortcut("Alt+Shift+Q"), shortcut("Alt+Shift+E")),
-            rt, ro, un, ps,
+            rt,
+            ro,
+            un,
+            ps,
         )
         .unwrap();
         assert!(switched);
@@ -491,7 +614,10 @@ mod hotkey_switch_tests {
         let switched = switch_hotkeys(
             (shortcut("Ctrl+Shift+Q"), shortcut("Ctrl+Shift+E")),
             (shortcut("Ctrl+Shift+Q"), shortcut("Ctrl+Shift+E")),
-            rt, ro, un, ps,
+            rt,
+            ro,
+            un,
+            ps,
         )
         .unwrap();
         assert!(!switched);
@@ -635,9 +761,6 @@ mod hotkey_switch_tests {
         );
     }
 }
-
-
-
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
