@@ -53,6 +53,65 @@ https://github.com/kobejiasuoer/immersive-translator/releases/latest/download/la
 
 每次发布新版本时，把 `latest.json` 和签名后的安装包上传到 GitHub Release。
 
+## Windows 安装包 Authenticode 代码签名（防杀软误拦）
+
+与上面的 updater minisign 签名（只用于自动更新校验）不同，本节解决的是另一个问题：
+**未经 Authenticode 签名的 exe 在企业环境极易被杀软/EDR 拦截**，典型表现就是安装时报
+`Error opening file for writing`（杀软把写入中的主程序锁住或隔离）。
+
+### 现状：自签开发证书（免费，适合内部分发）
+
+已接入构建流程：`tauri.conf.json → bundle.windows.signCommand` 会在构建时自动对
+主程序 exe 和 NSIS 安装包调用 `scripts/sign.ps1`（SHA-256 + DigiCert 时间戳）。
+
+相关文件：
+
+| 文件 | 作用 | 是否入仓库 |
+|---|---|---|
+| `scripts/generate-signing-cert.ps1` | 一次性生成自签证书（5 年期，CN=ImmersiveTranslator） | 是 |
+| `scripts/sign.ps1` | Tauri 回调的签名脚本；**证书不存在时警告并跳过**（CI 无证书也能出包） | 是 |
+| `signing/*.pfx` | 签名私钥 | **否**（.gitignore 已排除） |
+| `signing/*.cer` | 公开证书，分发给同事/IT 导入信任 | **否**（按文件分发） |
+| `signing/password.txt` | PFX 密码 | **否**（.gitignore 已排除） |
+
+首次在新机器上构建前，运行一次：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\generate-signing-cert.ps1
+```
+
+之后 `npm run tauri build` 会自动签名，无需额外操作。
+
+### 让目标电脑信任自签证书
+
+把 `signing/immersive-translator-codesign.cer` 发给同事，双击导入到
+「受信任的根证书颁发机构」和「受信任的发布者」（选"本地计算机"或"当前用户"均可）。
+公司域内可让 IT 通过 GPO 统一下发，一次搞定所有机器。
+
+> **注意**：目标电脑没导入证书前，签名只起到"文件已签名+带时间戳"的启发式加分作用，
+> SmartScreen 仍可能提示未知发布者，杀软仍可能拦截——那种情况还是要找 IT 加白名单。
+
+验证签名：
+
+```powershell
+Get-AuthenticodeSignature .\release-builds\ImmersiveTranslator_0.2.0_x64-setup.exe
+# 证书已受信的机器上 Status 应为 Valid；未导入证书的机器上为 UnknownError（自签未受信，属正常）
+```
+
+> **注意**：`target\release\` 下的裸 `immersive-translator-windows.exe` 在打包后会被
+> Tauri 还原成未签名的中间产物，显示 NotSigned 属正常。需要验证的是**分发物**：
+> 安装包本身和它内嵌的主程序 exe（用 7-Zip 解开安装包后 `Get-AuthenticodeSignature`）。
+
+### 升级为正式 CA 证书（对外分发时）
+
+- **Certum 开源代码签名证书**：约 €49/年起，个人可办，云签名（SimplySign），对开源项目最友好。
+- **SSL.com / Sectigo 等 OV 证书**：约 $200-300/年，需要企业资质，SmartScreen 信誉积累慢。
+- **Azure Trusted Signing**（$9.99/月）：2025-04 起仅限美加组织，**中国大陆不可用**，排除。
+
+买证书后把新证书导入 signing/ 目录（或改 `sign.ps1` 调用对应的云签名工具）即可，
+`signCommand` 流程不变。注意 2023-06 后 CA 签发证书的私钥必须存硬件 token 或云签，
+拿不到裸 PFX 文件，届时 `sign.ps1` 需按所选 CA 的签名工具调整。
+
 ## 发布流程
 
 ### 步骤 1：版本号
@@ -74,6 +133,11 @@ $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
 # 构建（生成 .nsis 安装包 + .sig 签名文件）
 cargo tauri build
 ```
+
+> 构建过程会自动做 Authenticode 签名（主程序 exe + 安装包），详见上文
+> 「Windows 安装包 Authenticode 代码签名」。本机没生成证书时仅警告跳过，不影响构建。
+> 注意 `.ps1` 脚本必须保存为 **UTF-8 with BOM**，否则 Windows PowerShell 5.1 会按
+> ANSI 读取中文注释导致解析报错。
 
 构建产物在 `src-tauri/target/release/bundle/nsis/`：
 - `ImmersiveTranslator_0.2.0_x64-setup.exe` — 安装包
