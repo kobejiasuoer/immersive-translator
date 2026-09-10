@@ -150,6 +150,12 @@ async fn open_history(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 打开沉浸阅读室窗口（前端可调用）。对齐托盘「沉浸阅读室」菜单的行为。
+#[tauri::command]
+fn open_reader(app: tauri::AppHandle) {
+    show_window(&app, "reader");
+}
+
 /// 进入截图 OCR 模式：显示全屏框选覆盖层。对齐 Mac 的 begin()。
 /// 进入截图 OCR 模式：
 /// 1. 确保 overlay 窗口隐藏
@@ -214,6 +220,7 @@ fn show_window(app: &tauri::AppHandle, label: &str) {
     let spec = match label {
         "settings" => Some(("ImmersiveTranslator 设置", 720.0, 660.0)),
         "history" => Some(("翻译历史", 780.0, 620.0)),
+        "reader" => Some(("沉浸阅读室", 1200.0, 800.0)),
         _ => None,
     };
     let Some((title, w, h)) = spec else {
@@ -803,6 +810,7 @@ pub fn run() {
             open_settings,
             open_history,
             open_ocr_overlay,
+            open_reader,
             show_ocr_result,
             reregister_hotkeys,
             reader_store::reader_list_articles,

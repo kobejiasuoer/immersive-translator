@@ -54,6 +54,26 @@ export function parseParagraphResponse(raw: string, expectedCount: number): stri
   return out;
 }
 
+/**
+ * 流式过程中的部分解析：只取已完整的编号行，未到的句子返回 null。
+ * 与 parseParagraphResponse 不同，这允许行数不足（流还在写）。
+ */
+export function parsePartialNumbered(raw: string, expectedCount: number): (string | null)[] {
+  const out: (string | null)[] = new Array(expectedCount).fill(null);
+  const lines = raw.replace(/\r\n?/g, "\n").split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || /^```/.test(trimmed)) continue;
+    const m = NUMBERED_LINE.exec(trimmed);
+    if (!m) continue;
+    const idx = Number(m[1]);
+    const text = m[2].trim();
+    if (!text || idx < 1 || idx > expectedCount) continue;
+    if (out[idx - 1] === null) out[idx - 1] = text;
+  }
+  return out;
+}
+
 /** 中文句子之间不加空格（§4 硬规则）。 */
 export function joinChineseLines(lines: string[]): string {
   return lines.map((l) => l.trim()).filter(Boolean).join("");

@@ -54,6 +54,19 @@
         "center": true
       },
       {
+        "label": "reader",
+        "title": "沉浸阅读室",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 620,
+        "resizable": true,
+        "minimizable": true,
+        "maximizable": true,
+        "visible": false,
+        "center": true
+      },
+      {
         "label": "ocr-overlay",
         "title": "",
         "fullscreen": true,

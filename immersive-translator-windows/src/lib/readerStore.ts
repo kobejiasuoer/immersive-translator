@@ -7,26 +7,17 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Article,
   ArticleSummary,
-  ReviewLogFile,
   VocabWord,
 } from "../core/readerTypes";
+import type { ReviewLogFile, ReviewStats } from "../core/readerSrs";
 
 export type {
   Article,
   ArticleSummary,
   ReviewLogFile,
+  ReviewStats,
   VocabWord,
 };
-
-export interface ReviewStats {
-  dueNow: number;
-  reviewedToday: number;
-  total: number;
-  streak: number;
-  learning: number;
-  familiar: number;
-  mastered: number;
-}
 
 export function readerListArticles(): Promise<ArticleSummary[]> {
   return invoke<ArticleSummary[]>("reader_list_articles");

@@ -1,0 +1,1351 @@
+/* ============================================================
+   沉浸阅读室 · 组件版式（docs/reading-room-handoff.md §5–§7）
+   令牌来自 styles.css（§3），此处只放阅读室专属组件样式。
+   仅 reader 窗口挂载 ReaderApp 时生效。
+   ============================================================ */
+
+/* ---------- 根骨架 ---------- */
+.reader-root {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+/* ---------- 顶栏 56px ---------- */
+.reader-topbar {
+  height: 56px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+.reader-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--accent-grad);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  flex: none;
+}
+.reader-appname {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.reader-topbar .sep {
+  color: var(--border-strong);
+}
+.reader-article-name {
+  font-size: 12.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+.reader-topbar .spacer {
+  flex: 1;
+}
+.reader-tb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font-family: inherit;
+  flex: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.reader-tb-btn:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+.reader-tb-btn.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ---------- 主体三栏 ---------- */
+.reader-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* ---------- 左栏书架 240px ---------- */
+.reader-shelf {
+  width: 240px;
+  flex: none;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.reader-shelf-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.reader-shelf-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.reader-shelf-item {
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  cursor: pointer;
+  background: transparent;
+  text-align: left;
+  font-family: inherit;
+  display: block;
+  width: 100%;
+  transition: background 0.15s ease;
+}
+.reader-shelf-item:hover {
+  background: var(--surface-2);
+}
+.reader-shelf-item.active {
+  background: var(--accent-soft);
+}
+.reader-shelf-item .t {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reader-shelf-item .m {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.reader-shelf-item .bar {
+  flex: 1;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+.reader-shelf-item .bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+}
+.reader-shelf-footer {
+  border-top: 1px solid var(--border);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.reader-shelf-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+}
+.reader-shelf-nav:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+.reader-shelf-nav.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.reader-shelf-nav .badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.reader-review-card {
+  padding: 10px;
+  border-radius: var(--radius-md);
+  background: var(--accent-softer);
+  border: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+.reader-review-card strong {
+  color: var(--accent);
+  font-size: 13px;
+}
+.reader-empty-shelf {
+  padding: 20px 14px;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.7;
+  text-align: center;
+}
+.reader-import-row {
+  padding: 4px 8px 8px;
+}
+
+/* ---------- 阅读舞台 ---------- */
+.reader-stage {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.reader-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* 阅读进度线 2px（真实进度） */
+.reader-progressline {
+  position: sticky;
+  top: 0;
+  height: 2px;
+  z-index: 5;
+  pointer-events: none;
+}
+.reader-progressline > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+/* 遮罩模式状态条 */
+.reader-maskbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.reader-maskbar .eye {
+  color: var(--accent);
+  display: inline-flex;
+}
+.reader-maskbar .title {
+  font-weight: 600;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+.reader-maskbar .count {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.reader-maskbar .hint {
+  flex: 1;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- 文章正文列 640px 居中 ---------- */
+.reader-article {
+  width: var(--read-col);
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 26px 0 56px;
+}
+.reader-article-head {
+  margin-bottom: 22px;
+}
+.reader-article-title {
+  font-family: var(--font-read-serif-en);
+  font-size: 30px;
+  line-height: 38px;
+  font-weight: 600;
+  color: var(--text-1);
+  margin: 0 0 6px;
+  overflow-wrap: break-word;
+}
+.reader-article-subtitle {
+  font-family: var(--font-read-serif-cn);
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--text-2);
+  margin: 0 0 12px;
+}
+.reader-article-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.reader-article-meta .resume-link {
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+}
+.reader-article-meta .resume-link:hover {
+  text-decoration: underline;
+}
+.reader-empty-state {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-3);
+  font-size: 13px;
+  text-align: center;
+  padding: 20px;
+}
+
+/* ---------- 句对（§5） ---------- */
+.reader-pairs {
+  display: flex;
+  flex-direction: column;
+}
+.pair {
+  padding: 10px 12px 10px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-radius: 10px;
+  scroll-margin-top: 60px;
+  position: relative;
+}
+.pair.paragraph-start {
+  margin-top: 14px;
+}
+.pair.paragraph-start:first-child {
+  margin-top: 0;
+}
+.pair-en {
+  font-family: var(--font-read-serif-en);
+  font-size: var(--read-en-size-cur, var(--read-en-size));
+  line-height: var(--read-en-lh-cur, var(--read-en-lh));
+  color: var(--text-1);
+  margin: 0;
+  overflow-wrap: break-word;
+  cursor: pointer;
+}
+.pair-cn {
+  font-family: var(--font-read-serif-cn);
+  font-size: var(--read-cn-size-cur, var(--read-cn-size));
+  line-height: var(--read-cn-lh-cur, var(--read-cn-lh));
+  color: var(--text-3);
+  margin: 0;
+  overflow-wrap: break-word;
+  cursor: pointer;
+}
+/* 当前朗读句：底色 + 左侧 3×64 竖条 */
+.pair.is-active {
+  background: var(--accent-soft);
+}
+.pair.is-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 12px;
+  width: 3px;
+  height: 64px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.pair.is-active .pair-cn {
+  color: var(--text-2);
+}
+/* 遮罩模式下朗读只高亮英文，中文保持遮罩（§6 屏 E） */
+.reader-mask-on .pair.is-active .pair-cn {
+  color: var(--text-3);
+}
+
+/* 对照模式（设置/视图菜单：仅英文 / 对照 / 仅中文） */
+.reader-contrast-en .pair-cn {
+  display: none;
+}
+.reader-contrast-zh .pair-en {
+  display: none;
+}
+
+/* 句级悬浮操作（朗读 / 重试 / 手改译文） */
+.pair-actions {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  display: none;
+  gap: 2px;
+  z-index: 2;
+}
+.pair:hover .pair-actions,
+.pair:focus-within .pair-actions {
+  display: inline-flex;
+}
+.pair .pair-actions .icon-btn {
+  width: 24px;
+  height: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+}
+.pair .pair-actions .icon-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.pair .pair-actions .icon-btn.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.pair-cn-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-4);
+  font-size: 12px;
+  cursor: default;
+}
+.pair.failed .pair-en {
+  cursor: pointer;
+}
+.pair-failed-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--err);
+  font-size: 12px;
+}
+.pair-failed-row button {
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+.pair-failed-row button:hover {
+  text-decoration: underline;
+}
+/* 译文手改输入框 */
+.pair-cn-edit {
+  font-family: var(--font-read-serif-cn);
+  font-size: var(--read-cn-size-cur, var(--read-cn-size));
+  line-height: var(--read-cn-lh-cur, var(--read-cn-lh));
+  color: var(--text-1);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  width: 100%;
+  resize: vertical;
+  outline: none;
+  cursor: text;
+}
+/* 翻译中段落骨架 */
+.reader-skeleton-line {
+  height: 15px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 40%, var(--surface-2) 60%);
+  background-size: 300% 100%;
+  animation: reader-shimmer 1.3s ease-in-out infinite;
+}
+@keyframes reader-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* ---------- 遮罩块（屏 E：26px 高、圆角 5、纯色块，不用 blur） ---------- */
+.cn-mask {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 5px;
+  background: var(--mask-block);
+  color: var(--text-4);
+  font-size: 12px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  user-select: none;
+  border: none;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: left;
+}
+.cn-mask:hover {
+  color: var(--text-2);
+}
+
+/* ---------- 播放条 72px ---------- */
+.reader-playbar {
+  height: 72px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  user-select: none;
+}
+.reader-transport {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.reader-play-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: none;
+  transition: background 0.15s ease, transform 0.05s ease;
+}
+.reader-play-btn:hover {
+  background: var(--accent-hover);
+}
+.reader-play-btn:active {
+  transform: scale(0.96);
+}
+.reader-skip-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: none;
+}
+.reader-skip-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+.reader-skip-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 进度条：可拖拽 + hover 预览（§9-10） */
+.reader-progress {
+  flex: 1;
+  min-width: 120px;
+  position: relative;
+  padding: 12px 0 14px;
+  cursor: pointer;
+}
+.reader-progress .track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  position: relative;
+}
+.reader-progress .fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.reader-progress .knob {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  box-shadow: var(--shadow-card);
+  transform: translate(-50%, -50%);
+}
+.reader-progress .preview {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  transform: translateX(-50%);
+  background: var(--text-1);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+  max-width: 280px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  z-index: 20;
+}
+.reader-progress .sentence-count {
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 5px;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.reader-playbar .right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.reader-rate-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.reader-rate-btn:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+
+/* ---------- 浮层菜单（视图 220 / 语速 / 帮助 / 主题） ---------- */
+.reader-pop-anchor {
+  position: relative;
+}
+.reader-pop {
+  position: fixed;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  z-index: 300;
+  padding: 6px;
+  min-width: 220px;
+}
+.reader-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--text-1);
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+}
+.reader-menu-item:hover {
+  background: var(--surface-2);
+}
+.reader-menu-item .check {
+  width: 16px;
+  color: var(--accent);
+  display: inline-flex;
+  flex: none;
+}
+.reader-menu-item .value {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+.reader-menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 5px 4px;
+}
+.reader-rate-menu {
+  padding: 4px 6px 6px;
+  min-width: 150px;
+}
+.reader-rate-menu .row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 6px;
+}
+.reader-rate-menu .row .t {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.reader-rate-menu .grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.reader-rate-menu .grid button {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--text-2);
+  padding: 4px 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.reader-rate-menu .grid button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+.reader-help-pop {
+  padding: 12px 14px;
+  width: 280px;
+  font-size: 12px;
+  line-height: 2;
+  color: var(--text-2);
+}
+.reader-help-pop .kbd {
+  margin: 0 1px;
+}
+
+/* ---------- 禅模式浮起控制 ---------- */
+.reader-zen-controls {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-float);
+  padding: 6px 10px;
+  z-index: 50;
+}
+
+/* ---------- 设置抽屉 380px（屏 B） ---------- */
+.reader-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.32);
+  z-index: 200;
+  animation: reader-fade-in 0.15s ease-out;
+}
+@keyframes reader-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.reader-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 380px;
+  max-width: 100vw;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-pop);
+  z-index: 201;
+  display: flex;
+  flex-direction: column;
+  animation: reader-drawer-in 0.18s ease-out;
+}
+@keyframes reader-drawer-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+.reader-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px 10px;
+}
+.reader-drawer-header .title {
+  font-size: 14px;
+  font-weight: 700;
+}
+.reader-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 18px 12px;
+}
+.reader-drawer-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--border);
+}
+.drawer-group-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 16px 0 6px;
+}
+.drawer-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  font-size: 13px;
+}
+.drawer-row .label {
+  flex: none;
+  width: 76px;
+  color: var(--text-2);
+}
+.drawer-row .control {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+.drawer-row select.reader-select {
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--text-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  max-width: 180px;
+  outline: none;
+  cursor: pointer;
+}
+.drawer-stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.drawer-stepper button {
+  width: 26px;
+  height: 24px;
+  border: none;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 14px;
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1;
+}
+.drawer-stepper button:hover:not(:disabled) {
+  color: var(--accent);
+}
+.drawer-stepper button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.drawer-stepper .val {
+  min-width: 34px;
+  text-align: center;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+input[type="range"].drawer-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  outline: none;
+  cursor: pointer;
+  flex: 1;
+  min-width: 90px;
+}
+input[type="range"].drawer-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+}
+.drawer-slider-val {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-2);
+  min-width: 40px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* 开关 */
+.reader-switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  border: none;
+  background: var(--border-strong);
+  cursor: pointer;
+  transition: background 0.15s ease;
+  flex: none;
+  padding: 0;
+}
+.reader-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.2);
+  transition: transform 0.15s ease;
+}
+.reader-switch.on {
+  background: var(--accent);
+}
+.reader-switch.on::after {
+  transform: translateX(14px);
+}
+/* 主题四宫格 */
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  padding: 2px 0 6px;
+}
+.theme-swatch {
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  height: 52px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text-2);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 5px;
+}
+.theme-swatch.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* ---------- 词典栏 380px（屏 C） ---------- */
+.reader-dict {
+  width: 380px;
+  flex: none;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.reader-dict .head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.reader-dict .head .grow {
+  flex: 1;
+  min-width: 0;
+}
+.reader-dict .dict-word {
+  font-family: var(--font-read-serif-en);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+}
+.reader-dict .phon-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+.reader-dict .section-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+.reader-dict .senses {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.reader-dict .sense {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-1);
+}
+.reader-dict .pos {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-style: italic;
+  font-weight: 600;
+  line-height: 1.6;
+  vertical-align: 1px;
+}
+.reader-dict .source-card {
+  background: var(--accent-softer);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-2);
+  cursor: pointer;
+  font-family: var(--font-read-serif-en);
+}
+.reader-dict .source-card:hover {
+  border-color: var(--accent);
+}
+.reader-dict .source-card .loc {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--accent);
+  font-family: var(--font-ui);
+}
+.reader-dict .coll-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.reader-dict .coll {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-1);
+}
+.reader-dict .coll .cn {
+  color: var(--text-3);
+  margin-left: 6px;
+}
+.reader-dict .forms {
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+.reader-dict .dict-actions {
+  display: flex;
+  gap: 8px;
+}
+.reader-dict .dict-empty {
+  font-size: 12.5px;
+  color: var(--text-3);
+  line-height: 1.6;
+  padding: 6px 0;
+}
+.reader-dict .skeleton-line {
+  height: 13px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 40%, var(--surface-2) 60%);
+  background-size: 300% 100%;
+  animation: reader-shimmer 1.3s ease-in-out infinite;
+}
+
+/* ---------- 跟读模式提示 ---------- */
+.reader-shadowing-tip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* ---------- 复习流（屏 D） ---------- */
+.review-layout {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.review-side {
+  width: 260px;
+  flex: none;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+.review-side .stat-card {
+  background: var(--accent-softer);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+.review-side .stat-num {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.review-side .stat-label {
+  font-size: 11.5px;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+.review-side .dist-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  margin-top: 6px;
+}
+.review-side .dist-row .name {
+  width: 40px;
+  flex: none;
+}
+.review-side .dist-row .bar {
+  flex: 1;
+  height: 6px;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.review-side .dist-row .bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+.review-side .dist-row .n {
+  width: 22px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+.review-main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  display: flex;
+}
+.review-card-col {
+  width: 640px;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 28px 16px 40px;
+}
+.review-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+  padding: 26px 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.review-card .card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.review-card .word-line {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.review-card .word {
+  font-family: var(--font-read-serif-en);
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--text-1);
+}
+.review-card .phonetic {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-3);
+}
+.review-card .sense-line {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-1);
+}
+.review-card .source-sentence {
+  background: var(--surface-2);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.review-card .source-sentence:hover {
+  border-left-color: var(--accent-hover);
+}
+.review-card .source-sentence .from {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.review-gradebar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.grade-btn {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: var(--radius-md);
+  padding: 9px 6px;
+  cursor: pointer;
+  font-family: inherit;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.grade-btn .name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.grade-btn .next {
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.grade-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-softer);
+}
+.grade-btn.forgot:hover {
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+.grade-btn.easy:hover {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+.review-card .shortcut-hints {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  font-size: 11px;
+  color: var(--text-4);
+}
+.review-done {
+  text-align: center;
+  padding: 60px 20px;
+}
+.review-done .big {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-1);
+  margin-bottom: 6px;
+}
+.review-done .sub {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+/* ---------- 通用浮层收口 ---------- */
+.reader-fade {
+  animation: reader-fade-in 0.12s ease-out;
+}
+
+/* ---------- 无衬线字体配对（屏 B「正文字体」） ---------- */
+[data-font="sans"] .pair-en,
+[data-font="sans"] .reader-article-title,
+[data-font="sans"] .review-card .word,
+[data-font="sans"] .reader-dict .dict-word {
+  font-family: var(--font-read-sans-en);
+}
+[data-font="sans"] .pair-cn,
+[data-font="sans"] .reader-article-subtitle {
+  font-family: var(--font-read-sans-cn);
+}

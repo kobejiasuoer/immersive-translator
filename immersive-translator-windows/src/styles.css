@@ -1612,6 +1612,89 @@ input[type="radio"] {
 }
 
 /* ============================================================
+   沉浸阅读室 · 设计令牌（docs/reading-room-handoff.md §3）
+   令牌 1:1 对齐设计稿；组件版式在 src/reader/reader.css。
+   data-theme 作用于阅读室根节点，不影响其他窗口
+   （其余窗口继续走 prefers-color-scheme）。
+   ============================================================ */
+
+:root {
+  /* §3 新增令牌 */
+  --accent-hl: #dde2fd;            /* 高亮描边 / 遮罩块（朗读中） */
+  --mask-block: var(--accent-hl);  /* 浅色下遮罩块用高亮底色 */
+
+  /* 阅读专属排版 */
+  --read-en-size: 19px;
+  --read-en-lh: 32px;
+  --read-cn-size: 15px;
+  --read-cn-lh: 26px;
+  --read-col: 640px;               /* 正文列固定宽，居中 */
+
+  /* 阅读字体（Web 字体由 ReaderApp 注入，本地字体兜底） */
+  --font-read-serif-en: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --font-read-serif-cn: "Noto Serif SC", "Source Serif 4", Georgia, serif;
+  --font-read-sans-en: "Inter", "Segoe UI", sans-serif;
+  --font-read-sans-cn: "Noto Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+}
+
+/* §3 [data-theme="dark"]（阅读室根节点作用域） */
+[data-theme="dark"] {
+  --accent: #7d8cff;
+  --accent-hover: #93a0ff;
+  --accent-soft: rgba(125, 140, 255, 0.16);
+  --accent-softer: rgba(125, 140, 255, 0.09);
+  --accent-hl: rgba(125, 140, 255, 0.3);
+  --bg: #1d1f26;
+  --surface: #262933;
+  --surface-2: #2e313c;
+  --border: #373b47;
+  --border-strong: #474c5a;
+  --text-1: #edeef4;
+  --text-2: #c4c9d6;
+  --text-3: #9399ab;
+  --text-4: #6f7688;
+  --mask-block: #333744;           /* 深色下遮罩块的底色 */
+}
+
+/* §3 护眼主题（文档仅给定底色 #f5efdf，其余按浅色板明度关系推导，见 decisions #7） */
+[data-theme="sepia"] {
+  --accent: #4c5ff0;
+  --accent-hover: #3f52e0;
+  --accent-soft: rgba(76, 95, 240, 0.12);
+  --accent-softer: rgba(76, 95, 240, 0.07);
+  --accent-hl: #e2e0f5;
+  --bg: #f5efdf;
+  --surface: #fbf7ec;
+  --surface-2: #f1ead7;
+  --border: #e4dac0;
+  --border-strong: #d2c6a6;
+  --text-1: #37301f;
+  --text-2: #5a5138;
+  --text-3: #857a5c;
+  --text-4: #a89d80;
+  --mask-block: #e8dfc8;
+}
+
+/* §3 纯黑（OLED）主题（文档仅给定底色 #0a0a0b，推导见 decisions #7） */
+[data-theme="oled"] {
+  --accent: #7d8cff;
+  --accent-hover: #93a0ff;
+  --accent-soft: rgba(125, 140, 255, 0.18);
+  --accent-softer: rgba(125, 140, 255, 0.1);
+  --accent-hl: rgba(125, 140, 255, 0.32);
+  --bg: #0a0a0b;
+  --surface: #131315;
+  --surface-2: #1a1a1d;
+  --border: #222226;
+  --border-strong: #2e2e33;
+  --text-1: #e8e9ee;
+  --text-2: #b9bdc9;
+  --text-3: #83899a;
+  --text-4: #565c6b;
+  --mask-block: #1e1e24;
+}
+
+/* ============================================================
    弹窗（确认框等）
    ============================================================ */
 .modal-overlay {

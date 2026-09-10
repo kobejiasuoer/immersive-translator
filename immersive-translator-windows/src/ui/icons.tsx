@@ -257,3 +257,93 @@ export const IconShuffle = (p: IconProps) => (
     <line x1="4" y1="4" x2="9" y2="9" />
   </svg>
 );
+
+/** 播放 */
+export const IconPlay = (p: IconProps) => (
+  <svg {...base(p)} fill="currentColor" stroke="none">
+    <path d="M7 4.5v15a.6.6 0 0 0 .9.5l12-7.5a.6.6 0 0 0 0-1L7.9 4a.6.6 0 0 0-.9.5Z" />
+  </svg>
+);
+
+/** 暂停 */
+export const IconPause = (p: IconProps) => (
+  <svg {...base(p)} fill="currentColor" stroke="none">
+    <rect x="6" y="4" width="4.2" height="16" rx="1.2" />
+    <rect x="13.8" y="4" width="4.2" height="16" rx="1.2" />
+  </svg>
+);
+
+/** 上一句 */
+export const IconPrev = (p: IconProps) => (
+  <svg {...base(p)} fill="currentColor" stroke="none">
+    <path d="M18 5.2v13.6a.7.7 0 0 1-1.1.6L8 13.4v5.1a1 1 0 0 1-2 0V5.5a1 1 0 0 1 2 0v5.1l8.9-6A.7.7 0 0 1 18 5.2Z" />
+  </svg>
+);
+
+/** 下一句 */
+export const IconNext = (p: IconProps) => (
+  <svg {...base(p)} fill="currentColor" stroke="none">
+    <path d="M6 5.2v13.6a.7.7 0 0 0 1.1.6l8.9-6v5.1a1 1 0 0 0 2 0V5.5a1 1 0 0 0-2 0v5.1L7.1 4.6A.7.7 0 0 0 6 5.2Z" />
+  </svg>
+);
+
+/** 月亮（深色主题） */
+export const IconMoon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
+  </svg>
+);
+
+/** 帮助 */
+export const IconHelp = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M9.2 9a2.9 2.9 0 0 1 5.6 1c0 1.8-2.4 2.2-2.8 3.5" />
+    <line x1="12" y1="17" x2="12.01" y2="17" />
+  </svg>
+);
+
+/** 发送到阅读室（书 + 向右箭头） */
+export const IconSendToReader = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3H8a3 3 0 0 1 3 3v12a2.5 2.5 0 0 0-2.5-2.5H3.5A1.5 1.5 0 0 1 2 14V4.5Z" />
+    <path d="M11 6a3 3 0 0 1 3-3h4.5A1.5 1.5 0 0 1 20 4.5V11" />
+    <line x1="14" y1="16" x2="22" y2="16" />
+    <polyline points="18 12.5 21.5 16 18 19.5" />
+  </svg>
+);
+
+/** 编辑（铅笔） */
+export const IconEdit = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z" />
+  </svg>
+);
+
+/** 定位（准星） */
+export const IconLocate = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="7" />
+    <line x1="12" y1="1.5" x2="12" y2="5" />
+    <line x1="12" y1="19" x2="12" y2="22.5" />
+    <line x1="1.5" y1="12" x2="5" y2="12" />
+    <line x1="19" y1="12" x2="22.5" y2="12" />
+  </svg>
+);
+
+/** 荧光/高亮笔 */
+export const IconHighlighter = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M12 15 5.5 8.5a2.1 2.1 0 0 1 0-3l1-1a2.1 2.1 0 0 1 3 0L16 11" />
+    <path d="M9.5 17.5 12 15l3.5 3.5H19a1 1 0 0 1 1 1v1.5H8L9.5 17.5Z" />
+    <line x1="2" y1="21.5" x2="6" y2="21.5" />
+  </svg>
+);
+
+/** 加号（书架导入） */
+export const IconPlus = (p: IconProps) => (
+  <svg {...base(p)}>
+    <line x1="12" y1="5" x2="12" y2="19" />
+    <line x1="5" y1="12" x2="19" y2="12" />
+  </svg>
+);

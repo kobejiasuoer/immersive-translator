@@ -207,7 +207,7 @@ pub struct VocabFile {
     pub review_log: ReviewLogFile,
 }
 
-/// 屏 D 左栏统计（与前端 readerSrs.reviewStats 同口径）。
+/// 屏 D 左栏统计（与前端 readerSrs.reviewStats 同口径、同结构）。
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewStats {
@@ -215,6 +215,12 @@ pub struct ReviewStats {
     pub reviewed_today: u32,
     pub total: u32,
     pub streak: u32,
+    pub distribution: MasteryDistribution,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MasteryDistribution {
     pub learning: u32,
     pub familiar: u32,
     pub mastered: u32,
@@ -462,9 +468,11 @@ fn compute_stats(file: &VocabFile, today: &str, now_ms: i64) -> ReviewStats {
         reviewed_today,
         total: file.words.len() as u32,
         streak,
-        learning,
-        familiar,
-        mastered,
+        distribution: MasteryDistribution {
+            learning,
+            familiar,
+            mastered,
+        },
     }
 }
 
@@ -557,9 +565,9 @@ mod tests {
         assert_eq!(stats.due_now, 1); // 只有 alpha 到期
         assert_eq!(stats.total, 4);
         assert_eq!(stats.reviewed_today, 2);
-        assert_eq!(stats.learning, 2); // alpha, beta
-        assert_eq!(stats.familiar, 1); // gamma (3 天)
-        assert_eq!(stats.mastered, 1); // delta (8 天)
+        assert_eq!(stats.distribution.learning, 2); // alpha, beta
+        assert_eq!(stats.distribution.familiar, 1); // gamma (3 天)
+        assert_eq!(stats.distribution.mastered, 1); // delta (8 天)
         assert_eq!(stats.streak, 2); // 今天 + 昨天
     }
 
