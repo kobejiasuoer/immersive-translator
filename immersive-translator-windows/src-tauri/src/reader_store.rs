@@ -259,10 +259,10 @@ fn load_articles(app: &AppHandle) -> Result<ArticlesFile, String> {
     let path = articles_path(app)?;
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
-        Err(_) => return Ok(ArticlesFile::default()),
+        Err(_) => return Ok(empty_articles_file()),
     };
     if text.trim().is_empty() {
-        return Ok(ArticlesFile::default());
+        return Ok(empty_articles_file());
     }
     let file: ArticlesFile = serde_json::from_str(&text).map_err(|e| format!("文章数据损坏: {e}"))?;
     check_schema(file.schema_version)?;
@@ -273,14 +273,31 @@ fn load_vocab(app: &AppHandle) -> Result<VocabFile, String> {
     let path = vocab_path(app)?;
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
-        Err(_) => return Ok(VocabFile::default()),
+        Err(_) => return Ok(empty_vocab_file()),
     };
     if text.trim().is_empty() {
-        return Ok(VocabFile::default());
+        return Ok(empty_vocab_file());
     }
     let file: VocabFile = serde_json::from_str(&text).map_err(|e| format!("生词数据损坏: {e}"))?;
     check_schema(file.schema_version)?;
     Ok(file)
+}
+
+/// 缺文件/空文件返回的默认结构必须带当前版本号，
+/// 否则首次保存会把 schemaVersion=0 写进盘，下次读取触发版本不兼容。
+fn empty_articles_file() -> ArticlesFile {
+    ArticlesFile {
+        schema_version: READER_SCHEMA_VERSION,
+        articles: Vec::new(),
+    }
+}
+
+fn empty_vocab_file() -> VocabFile {
+    VocabFile {
+        schema_version: READER_SCHEMA_VERSION,
+        words: Vec::new(),
+        review_log: ReviewLogFile::default(),
+    }
 }
 
 /// 主版本不同的数据要友好报错而不是静默清空（contracts/README.md 约定）。
@@ -323,6 +340,7 @@ pub fn reader_save_article(app: AppHandle, article: Article) -> Result<ArticleSu
     let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
     let id = article.id.clone();
     let mut file = load_articles(&app)?;
+    file.schema_version = READER_SCHEMA_VERSION;
     match file.articles.iter_mut().find(|a| a.id == id) {
         Some(existing) => *existing = article,
         None => file.articles.push(article),
@@ -368,6 +386,7 @@ pub fn reader_save_vocab_word(app: AppHandle, word: VocabWord) -> Result<(), Str
     let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
     let id = word.id.clone();
     let mut file = load_vocab(&app)?;
+    file.schema_version = READER_SCHEMA_VERSION;
     match file.words.iter_mut().find(|w| w.id == id) {
         Some(existing) => *existing = word,
         None => file.words.push(word),
@@ -404,6 +423,7 @@ pub fn reader_record_review(
 ) -> Result<ReviewStats, String> {
     let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
     let mut file = load_vocab(&app)?;
+    file.schema_version = READER_SCHEMA_VERSION;
     if let Some(entry) = file.review_log.days.iter_mut().find(|d| d.day == day) {
         entry.count += 1;
     } else {
