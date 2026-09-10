@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-共享 JSON 契约尚未接入运行时代码，当前不能把两端的内部数据文件直接互换：
+共享 JSON 契约尚未整体接入运行时代码，当前不能把两端的内部数据文件直接互换：
 
 - Provider 预设分别维护在 Mac 的 `ProviderProfile.swift` 和 Windows 的 `providerPresets.ts`，数量与字段并不完全一致。
 - Mac 历史文件是记录数组、ISO-8601 时间和 `screenshotOCR` 来源；Windows 历史文件带 `records` 包装、Unix 毫秒时间和 `ocr` 来源，并额外保存模型与耗时。
@@ -12,8 +12,14 @@
 
 在共同 schema、迁移器和双端兼容测试落地前，不应把本目录描述为运行时的单一事实来源。
 
+**例外——沉浸阅读室**：`reading-room.schema.json`（v1）已作为 Windows 端运行时格式
+（`reader_articles.json` / `reader_vocab.json` 顶层带 `schemaVersion: 1`；结构在
+`src-tauri/src/reader_store.rs` 与 `src/core/readerTypes.ts` 双侧同构）。
+Mac 端实现阅读室时应直接采用此 schema；版本不兼容时按下方约定友好报错。
+
 ## 文件
 
+- `reading-room.schema.json`（v1，已接入 Windows 运行时）：阅读室的文章/句对/生词 SRS/阅读设置。
 - `provider-presets.json`（计划）：Provider 预设表（OpenAI / DeepSeek / 智谱 / Gemini 等），用于避免模型名与接口地址漂移。
 - `history.schema.json`（计划）：对外历史记录 JSON schema，并配套两端导入迁移器与兼容性测试。
 
