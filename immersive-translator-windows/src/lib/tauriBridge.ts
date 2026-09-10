@@ -89,6 +89,18 @@ export async function clearPendingPanelPayload(): Promise<void> {
   await invoke("clear_pending_panel_payload");
 }
 
+// ---- 阅读室热键导入 ----
+
+export interface ReaderImportPayload {
+  text: string;
+  nonce: string;
+}
+
+/** 阅读室窗口挂载时取走热键送来的待导入文本（与 takePendingPanelPayload 同模式）。 */
+export async function takePendingReaderImport(): Promise<ReaderImportPayload | null> {
+  return invoke<ReaderImportPayload | null>("take_pending_reader_import");
+}
+
 // ---- OCR 模型管理 ----
 
 /** 检查 OCR 模型是否就绪（det + rec 存在）。 */
@@ -118,15 +130,15 @@ export function onDownloadProgress(
 }
 
 /**
- * 运行时切换全局热键。先注销全部，再原子地注册翻译键 + OCR 键，
- * 并分别持久化到 hotkey.txt / ocr_hotkey.txt。
- * 任一注册失败会 reject（含原因）；此时默认键已被清掉，应提示用户。
+ * 运行时切换全局热键（翻译 / 截图 OCR / 阅读室三键，两两互斥）。
+ * 可回滚：任一注册失败会 reject（含原因），旧键保持生效。
  */
 export async function reregisterHotkeys(
   translateHotkey: string,
   ocrHotkey: string,
+  readerHotkey: string,
 ): Promise<string> {
-  return invoke<string>("reregister_hotkeys", { translateHotkey, ocrHotkey });
+  return invoke<string>("reregister_hotkeys", { translateHotkey, ocrHotkey, readerHotkey });
 }
 
 /** 返回后端当前实际注册并持久化的全局热键。 */

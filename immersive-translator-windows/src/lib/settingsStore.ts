@@ -20,6 +20,8 @@ export interface AppSettings {
   hotkey: string;
   /** 截图 OCR 翻译热键，Tauri 格式如 "Ctrl+Shift+E"。 */
   ocrHotkey: string;
+  /** 沉浸阅读室热键，Tauri 格式如 "Ctrl+Shift+R"。 */
+  readerHotkey: string;
 }
 
 const STORAGE_KEY = "immersive-translator-settings";
@@ -55,6 +57,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dictCard: "auto",
   hotkey: "Ctrl+Shift+Q",
   ocrHotkey: "Ctrl+Shift+E",
+  readerHotkey: "Ctrl+Shift+R",
 };
 
 /** localStorage 里保存的非敏感字段（apiKey 走 DPAPI，不落明文）。 */

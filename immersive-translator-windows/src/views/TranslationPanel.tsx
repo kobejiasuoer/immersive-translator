@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import {
   cursorPosition,
   getCurrentWindow,
@@ -31,6 +32,8 @@ import {
   type TranslationPhase,
 } from "../lib/tauriBridge";
 import { loadSettingsAsync, hasValidSettings } from "../lib/settingsStore";
+import { readerSaveArticle } from "../lib/readerStore";
+import { buildArticleFromText } from "../core/articleBuilder";
 import {
   classifyTranslationError,
   sanitizeDiagnosticText,
@@ -67,6 +70,7 @@ import {
   IconBookOpen,
   IconList,
   IconShuffle,
+  IconSendToReader,
 } from "../ui/icons";
 
 type Status = "idle" | "reading" | "translating" | "done" | "error" | "needsConfig";
@@ -952,6 +956,30 @@ export function TranslationPanel() {
     setFavToggled((v) => !v);
   }
 
+  /**
+   * 发送到阅读室（§8.2）：把浮窗当前文本建成文章，送进沉浸阅读室精读。
+   * 抓取范围决策（decisions #2）：不做前台正文抓取，只送当前文本；
+   * 长文本直接成篇，短句也能成篇（单句阅读），提示语区分两种情况。
+   */
+  async function sendToReader() {
+    const text = (lastOriginalRef.current || original).trim();
+    if (!text) return;
+    try {
+      const article = buildArticleFromText(text, { sourceType: "paste" });
+      if (!article) {
+        flashCopied("没有可发送的内容");
+        return;
+      }
+      await readerSaveArticle(article);
+      await emit("reader:article-added", article.id);
+      await invoke("open_reader");
+      flashCopied(text.length > 200 ? "已送入阅读室" : "已发送所选内容");
+    } catch (error) {
+      console.error("[reader] send to reader failed", error);
+      flashCopied("发送到阅读室失败");
+    }
+  }
+
   /** 当前是否有可用操作按钮集（控制头部折叠）。 */
   const canCopy = status === "done" && !!resultText;
   const canRetry = status === "error" && retryable;
@@ -1022,6 +1050,15 @@ export function TranslationPanel() {
               <IconStar size={15} filled={favToggled} />
             </button>
           )}
+          {/* 发送到阅读室（§8.2）：位于「收藏」和「固定」之间，只新增不改旧行为 */}
+          <button
+            className="icon-btn"
+            onClick={() => void sendToReader()}
+            disabled={!original.trim()}
+            title="在阅读室精读 (Ctrl+Shift+R)"
+          >
+            <IconSendToReader size={15} />
+          </button>
           <button
             className={`icon-btn${pinned ? " active" : ""}`}
             onClick={() => setPinned((v) => !v)}

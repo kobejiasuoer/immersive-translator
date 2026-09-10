@@ -211,22 +211,27 @@ export function Settings() {
     }
   }
 
-  // ---- 热键互斥校验（两个热键不能相同）----
+  // ---- 热键互斥校验（三个热键两两不能相同）----
   const [hotkeyErrMsg, setHotkeyErrMsg] = useState<string | null>(null);
 
   async function registerAllHotkeys(): Promise<boolean> {
     const t = normalizeHotkey(settings.hotkey);
     const o = normalizeHotkey(settings.ocrHotkey);
-    if (t === o) {
-      setHotkeyErrMsg("翻译热键和截图 OCR 热键不能相同");
+    const r = normalizeHotkey(settings.readerHotkey);
+    if (t === o || t === r || o === r) {
+      setHotkeyErrMsg("翻译、截图 OCR、阅读室热键两两不能相同");
       return false;
     }
-    if (validateHotkey(t).blocking || validateHotkey(o).blocking) {
+    if (
+      validateHotkey(t).blocking ||
+      validateHotkey(o).blocking ||
+      validateHotkey(r).blocking
+    ) {
       setHotkeyErrMsg(null);
       return false;
     }
     try {
-      await reregisterHotkeys(t, o);
+      await reregisterHotkeys(t, o, r);
       setHotkeyErrMsg(null);
       return true;
     } catch (e) {
@@ -237,10 +242,12 @@ export function Settings() {
 
   async function handleSave() {
     // 与「进入页面时的快照」比较，判断热键是否真的被改过；
-    // 只有改过才整对重注册，避免「改回默认值后未重注册」的遗留 bug。
+    // 只有改过才整组重注册，避免「改回默认值后未重注册」的遗留 bug。
     const changed =
       savedSnapshot !== null &&
-      (settings.hotkey !== savedSnapshot.hotkey || settings.ocrHotkey !== savedSnapshot.ocrHotkey);
+      (settings.hotkey !== savedSnapshot.hotkey ||
+        settings.ocrHotkey !== savedSnapshot.ocrHotkey ||
+        settings.readerHotkey !== savedSnapshot.readerHotkey);
     await saveSettingsAsync(settings);
     setSavedSnapshot(settings);
     if (changed) {
@@ -649,6 +656,16 @@ export function Settings() {
             value={settings.ocrHotkey}
             onChange={(v) => {
               update("ocrHotkey", v);
+              setHotkeyErrMsg(null);
+            }}
+            onApply={() => void registerAllHotkeys()}
+          />
+          <HotkeyField
+            label="阅读室热键"
+            hint="选中文字按下热键，把这段内容送进沉浸阅读室精读。"
+            value={settings.readerHotkey}
+            onChange={(v) => {
+              update("readerHotkey", v);
               setHotkeyErrMsg(null);
             }}
             onApply={() => void registerAllHotkeys()}

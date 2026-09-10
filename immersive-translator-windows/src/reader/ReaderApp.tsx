@@ -12,6 +12,7 @@ import {
   onTranslationDelta,
   onTranslationDone,
   onTranslationError,
+  takePendingReaderImport,
   translateStream,
   ttsSpeakAdvanced,
 } from "../lib/tauriBridge";
@@ -94,6 +95,8 @@ export function ReaderApp() {
   const pendingTranslateRef = useRef(new Map<string, PendingTranslate>());
   const translateSeqRef = useRef(0);
   const toastTimerRef = useRef<number | null>(null);
+  /** 阅读室热键导入去重（挂载取件与事件送达两条路径共享同一 nonce）。 */
+  const importNonceRef = useRef("");
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -503,26 +506,50 @@ export function ReaderApp() {
       const list = await refreshArticleList();
       await refreshVocab();
       if (!active) return;
+      // 阅读室热键路径：窗口首次挂载时取走待导入文本（nonce 防与事件路径重复）。
+      try {
+        const pending = await takePendingReaderImport();
+        if (pending) {
+          importNonceRef.current = pending.nonce;
+          if (list.length > 0) await openArticle(list[0].id);
+          importPaste(pending.text);
+          return;
+        }
+      } catch (error) {
+        console.error("[reader] take pending import failed", error);
+      }
       if (list.length > 0) {
         void openArticle(list[0].id);
       }
     })();
 
     // 浮窗「发送到阅读室」时，若本窗口已打开则切换到新文章
-    let unlisten: (() => void) | undefined;
+    let unlistenArticle: (() => void) | undefined;
     listen("reader:article-added", () => {
       void (async () => {
         const list = await refreshArticleList();
         if (list.length > 0) void openArticle(list[0].id);
       })();
     }).then((u) => {
-      if (active) unlisten = u;
+      if (active) unlistenArticle = u;
+      else u();
+    });
+
+    // 阅读室热键路径（窗口已存在时）：事件送达，nonce 去重挂载路径
+    let unlistenImport: (() => void) | undefined;
+    listen<{ text: string; nonce: string }>("reader:import", (event) => {
+      if (event.payload.nonce === importNonceRef.current) return;
+      importNonceRef.current = event.payload.nonce;
+      importPaste(event.payload.text);
+    }).then((u) => {
+      if (active) unlistenImport = u;
       else u();
     });
 
     return () => {
       active = false;
-      unlisten?.();
+      unlistenArticle?.();
+      unlistenImport?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
