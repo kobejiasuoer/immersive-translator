@@ -1,6 +1,7 @@
 mod clipboard;
 mod history;
 mod ocr;
+mod reader_store;
 mod screenshot;
 mod secret_store;
 mod translation;
@@ -804,6 +805,15 @@ pub fn run() {
             open_ocr_overlay,
             show_ocr_result,
             reregister_hotkeys,
+            reader_store::reader_list_articles,
+            reader_store::reader_get_article,
+            reader_store::reader_save_article,
+            reader_store::reader_delete_article,
+            reader_store::reader_get_vocab,
+            reader_store::reader_save_vocab_word,
+            reader_store::reader_delete_vocab_word,
+            reader_store::reader_record_review,
+            reader_store::reader_stats,
         ])
         .setup(|app| {
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;

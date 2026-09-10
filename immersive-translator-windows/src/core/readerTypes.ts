@@ -1,0 +1,196 @@
+/**
+ * 沉浸阅读室的数据契约（对齐 docs/reading-room-handoff.md §10 与
+ * contracts/reading-room.schema.json 的 schemaVersion 1）。
+ *
+ * Article / SentencePair / VocabWord / ReaderSettings 同时是 Rust 侧
+ * reader_store.rs 的存储格式（camelCase 序列化），改动任何字段必须同步
+ * schema 与 Rust 结构体。
+ */
+
+export const READER_SCHEMA_VERSION = 1;
+
+/** 一篇文章的来源。epub / pdf 本轮未实现，仅预留枚举。 */
+export type ArticleSourceType = "paste" | "url" | "epub" | "pdf";
+
+/** 单句译文的翻译状态。 */
+export type SentenceZhState = "pending" | "done" | "failed" | "edited";
+
+/** 一个句对（最小朗读/高亮/遮罩单元）。 */
+export interface SentencePair {
+  /** 全文序号，从 0。 */
+  idx: number;
+  paragraphIdx: number;
+  en: string;
+  /** null = 尚未翻译。 */
+  zh: string | null;
+  zhState: SentenceZhState;
+  /** 遮罩模式下是否已揭开（运行时状态，随文章持久化）。 */
+  revealed?: boolean;
+}
+
+/** 阅读进度（持久化在文章记录里）。 */
+export interface ArticleProgress {
+  /** 上次朗读/阅读到达的句序号。 */
+  sentenceIdx: number;
+  /** 0–100。 */
+  percent: number;
+  secondsListened: number;
+}
+
+/** 一篇文章。 */
+export interface Article {
+  id: string;
+  /** 英文标题。 */
+  title: string;
+  /** 中文副标题。 */
+  titleCn?: string;
+  titleCnState: SentenceZhState;
+  sourceUrl?: string;
+  sourceType: ArticleSourceType;
+  /** 如 "B1 入门"，本轮不做分级判定，仅透传展示。 */
+  level?: string;
+  wordCount: number;
+  createdAt: number;
+  lastReadAt: number;
+  progress: ArticleProgress;
+  sentences: SentencePair[];
+  /** 按文章覆盖的阅读设置；缺字段回落全局默认。 */
+  settings?: Partial<ReaderSettings>;
+}
+
+/** 遮罩/复习等场景的生词来源定位。 */
+export interface VocabSource {
+  articleId: string;
+  sentenceIdx: number;
+}
+
+export interface VocabSense {
+  pos: string;
+  cn: string;
+}
+
+export interface VocabCollocation {
+  en: string;
+  cn: string;
+}
+
+/** 生词（SRS 状态与到期计数同源）。 */
+export interface VocabWord {
+  /** 归一化（小写、去首尾标点）后的唯一键。 */
+  id: string;
+  word: string;
+  phonetic?: string;
+  senses: VocabSense[];
+  forms?: string[];
+  collocations?: VocabCollocation[];
+  source: VocabSource;
+  srs: VocabSrsState;
+  addedAt: number;
+}
+
+export interface VocabSrsState {
+  ease: number;
+  intervalDays: number;
+  reps: number;
+  /** Unix 毫秒；到期判定唯一依据。 */
+  dueAt: number;
+  lapses: number;
+}
+
+/** 对照模式：仅英文 / 对照 / 仅中文。 */
+export type ContrastMode = "en" | "dual" | "zh";
+
+export type ReaderTheme = "light" | "dark" | "sepia" | "oled";
+
+/** 正文字体配对（屏 B 下拉）。 */
+export type ReaderFontPair = "serif" | "sans";
+
+/** 阅读设置。视图菜单管「显示什么」，这里管「怎么显示」。 */
+export interface ReaderSettings {
+  contrastMode: ContrastMode;
+  maskTranslation: boolean;
+  showProgress: boolean;
+  zenMode: boolean;
+  theme: ReaderTheme;
+  /** 14–24。 */
+  fontSize: number;
+  /** 行距倍数（作用于 --read-*-lh 的倍率）。 */
+  lineHeight: number;
+  fontPair: ReaderFontPair;
+  /** 系统音色名；空串 = 引擎默认。 */
+  voice: string;
+  /** 0.5–2.0。 */
+  rate: number;
+  /** 每句停顿 0–2000ms。 */
+  sentencePauseMs: number;
+  shadowingMode: boolean;
+}
+
+export const DEFAULT_READER_SETTINGS: ReaderSettings = {
+  contrastMode: "dual",
+  maskTranslation: false,
+  showProgress: true,
+  zenMode: false,
+  theme: "light",
+  fontSize: 19,
+  lineHeight: 1,
+  fontPair: "serif",
+  voice: "",
+  rate: 1,
+  sentencePauseMs: 0,
+  shadowingMode: false,
+};
+
+/** 屏 B 字号步进器范围。 */
+export const READER_FONT_SIZE_MIN = 14;
+export const READER_FONT_SIZE_MAX = 24;
+export const READER_RATE_MIN = 0.5;
+export const READER_RATE_MAX = 2;
+
+/**
+ * 合并全局默认与文章覆盖。只接受文章覆盖里类型合法的字段，
+ * 防止旧版本/坏数据把设置打穿（例如 fontSize 为字符串）。
+ */
+export function mergeReaderSettings(
+  globalSettings: ReaderSettings,
+  override?: Partial<ReaderSettings> | null,
+): ReaderSettings {
+  if (!override || typeof override !== "object") return { ...globalSettings };
+  const merged = { ...globalSettings };
+  const num = (v: unknown) => typeof v === "number" && Number.isFinite(v) ? v : undefined;
+  const bool = (v: unknown) => typeof v === "boolean" ? v : undefined;
+  const str = (v: unknown) => typeof v === "string" ? v : undefined;
+  const oneOf = <T extends string>(v: unknown, allowed: readonly T[]): T | undefined =>
+    str(v) !== undefined && (allowed as readonly string[]).includes(v as string)
+      ? (v as T)
+      : undefined;
+
+  merged.contrastMode = oneOf(override.contrastMode, ["en", "dual", "zh"]) ?? merged.contrastMode;
+  merged.maskTranslation = bool(override.maskTranslation) ?? merged.maskTranslation;
+  merged.showProgress = bool(override.showProgress) ?? merged.showProgress;
+  merged.zenMode = bool(override.zenMode) ?? merged.zenMode;
+  merged.theme = oneOf(override.theme, ["light", "dark", "sepia", "oled"]) ?? merged.theme;
+  const fontSize = num(override.fontSize);
+  if (fontSize !== undefined) {
+    merged.fontSize = Math.min(READER_FONT_SIZE_MAX, Math.max(READER_FONT_SIZE_MIN, Math.round(fontSize)));
+  }
+  const lineHeight = num(override.lineHeight);
+  if (lineHeight !== undefined && lineHeight >= 1 && lineHeight <= 2.4) {
+    merged.lineHeight = lineHeight;
+  }
+  merged.fontPair = oneOf(override.fontPair, ["serif", "sans"]) ?? merged.fontPair;
+  merged.voice = str(override.voice) ?? merged.voice;
+  const rate = num(override.rate);
+  if (rate !== undefined) {
+    merged.rate = Math.min(READER_RATE_MAX, Math.max(READER_RATE_MIN, rate));
+  }
+  const pause = num(override.sentencePauseMs);
+  if (pause !== undefined) {
+    merged.sentencePauseMs = Math.min(2000, Math.max(0, Math.round(pause)));
+  }
+  merged.shadowingMode = bool(override.shadowingMode) ?? merged.shadowingMode;
+  return merged;
+}
+
+/** 文章列表条目（不含句对正文，书架用）。 */
+export type ArticleSummary = Omit<Article, "sentences"> & { sentenceCount: number };
