@@ -1,6 +1,6 @@
 {
   "name": "immersive-translator-windows",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Tauri + React + TypeScript 实现的 Windows 版 ImmersiveTranslator。",
   "type": "module",
   "scripts": {
