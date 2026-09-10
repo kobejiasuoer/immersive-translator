@@ -1102,6 +1102,13 @@ input[type="radio"] {
 .orig-label-row .btn {
   margin-left: auto;
 }
+/* 朗读按钮：无「重新翻译」时自己靠右；有则紧随其后 */
+.orig-label-row .icon-btn-sm {
+  margin-left: auto;
+}
+.orig-label-row .btn + .icon-btn-sm {
+  margin-left: 0;
+}
 /* done 态原文可编辑：默认外观与只读文本一致，悬停/聚焦时底部虚线提示 */
 .orig-text-edit {
   display: block;
@@ -1344,6 +1351,237 @@ input[type="radio"] {
   margin-left: auto;
   display: flex;
   gap: 6px;
+}
+
+/* 快捷动作条（润色/解释语法/总结/换种说法） */
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.quick-actions .btn {
+  padding: 4px 8px;
+}
+
+/* 快捷动作结果区（独立于译文，方便对比） */
+.action-block {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.action-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+.action-block .trans-text {
+  font-size: 13px;
+}
+.action-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-3);
+  padding: 2px 0;
+}
+.action-error {
+  font-size: 12.5px;
+  color: var(--err);
+  word-break: break-word;
+}
+
+/* 紧凑版图标按钮（原文/译文行内、动作结果区内的朗读与收起） */
+.icon-btn-sm {
+  width: 24px;
+  height: 24px;
+}
+
+/* ---------- 词典卡片（划词单词/短语时替代平铺译文） ---------- */
+
+/* 卡片容器 */
+.dict-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 词条头部：词 + 音标 + 朗读 */
+.dict-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+.dict-word {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-1);
+  line-height: 1.25;
+}
+.dict-phonetic {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-3);
+  word-break: break-all;
+}
+.dict-phonetic-label {
+  margin-right: 3px;
+  color: var(--accent);
+  font-weight: 600;
+  font-family: var(--font-ui);
+}
+.dict-head .icon-btn-sm {
+  margin-left: auto;
+  align-self: center;
+}
+
+/* 核心释义（一行，历史记录同款文案） */
+.dict-core {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+/* 义项列表 */
+.dict-senses {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dict-sense {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.dict-gloss {
+  font-size: 13px;
+  color: var(--text-1);
+}
+.dict-pos {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-style: italic;
+  font-weight: 600;
+  line-height: 1.6;
+  vertical-align: 1px;
+}
+
+/* 例句（原文 + 译文，左边框缩进） */
+.dict-example {
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.dict-example-s {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.dict-example-t {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+/* 例句中查询词的高亮 */
+.dict-hl {
+  background: transparent;
+  color: var(--accent);
+  font-weight: 700;
+  padding: 0;
+}
+
+/* 词形 / 记忆提示 */
+.dict-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 12px;
+  color: var(--text-3);
+}
+.dict-extra-label {
+  margin-right: 6px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 卡片操作行（复制卡片 / 返回译文） */
+.dict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* 译文行「词典」按钮三态：querying=预取中（虚线弱化）/ ready=就绪（高亮+绿点）*/
+.dict-btn.querying {
+  border-style: dashed;
+  color: var(--text-3);
+}
+.dict-btn.ready {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+.dict-btn.current {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.dict-btn .spinner {
+  width: 11px;
+  height: 11px;
+}
+.dict-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  margin-left: 2px;
+}
+
+/* 查词加载骨架头部（词条名本地即有，可立刻显示） */
+.dict-skeleton-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.dict-loading-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+/* 查词被取消且无可展示卡片时的空态 */
+.dict-empty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 13px;
+  color: var(--text-3);
 }
 .error-title {
   display: flex;

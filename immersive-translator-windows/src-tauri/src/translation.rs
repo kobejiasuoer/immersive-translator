@@ -19,6 +19,8 @@ pub struct TranslateRequest {
     pub system_prompt: String,
     pub stream: bool,
     pub window_label: String, // 发送事件的目标窗口 label，默认 "panel"
+    #[serde(default)]
+    pub tag: String, // 请求标识，随事件原样回传；前端据此丢弃过期请求的事件
 }
 
 /// 流式阶段，对齐 Mac 版的状态机：
@@ -32,6 +34,7 @@ struct StatusEvent {
     phase: String,
     /// 已耗时（毫秒）
     elapsed_ms: u128,
+    tag: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -40,6 +43,7 @@ struct DeltaEvent {
     text: String,
     /// 从请求发出到当前的累计毫秒。
     elapsed_ms: u128,
+    tag: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -53,6 +57,7 @@ struct DoneEvent {
     /// 首字耗时（收到响应头到第一个可见文字）。
     first_token_ms: u128,
     model: String,
+    tag: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -63,6 +68,7 @@ struct ErrorEvent {
     body: String,
     /// 失败时已耗时（毫秒），用于面板展示。
     elapsed_ms: u128,
+    tag: String,
 }
 
 /// 规范化接口地址：确保以 /chat/completions 结尾。对齐 Mac 版逻辑。
@@ -160,6 +166,7 @@ fn terminate_sse_buffer(buffer: &mut String) {
 fn process_sse_buffer(
     app: &AppHandle,
     window_label: &str,
+    tag: &str,
     buffer: &mut String,
     full_text: &mut String,
     first_token_ms: &mut Option<u128>,
@@ -195,6 +202,7 @@ fn process_sse_buffer(
                 StatusEvent {
                     phase: "streaming".into(),
                     elapsed_ms: request_start.elapsed().as_millis(),
+                    tag: tag.to_string(),
                 },
             );
         }
@@ -205,6 +213,7 @@ fn process_sse_buffer(
             DeltaEvent {
                 text: display,
                 elapsed_ms: request_start.elapsed().as_millis(),
+                tag: tag.to_string(),
             },
         );
     }
@@ -273,6 +282,7 @@ pub async fn translate_stream(
     cancel.0.store(false, Ordering::SeqCst);
     let target = normalize_endpoint(&req.endpoint);
     let window_label = req.window_label.clone();
+    let tag = req.tag.clone();
     if target.is_empty() {
         let _ = app.emit_to(
             window_label.as_str(),
@@ -282,6 +292,7 @@ pub async fn translate_stream(
                 status: None,
                 body: "接口地址为空".into(),
                 elapsed_ms: 0,
+                tag: tag.clone(),
             },
         );
         return Err("接口地址为空".into());
@@ -296,6 +307,7 @@ pub async fn translate_stream(
         StatusEvent {
             phase: "connecting".into(),
             elapsed_ms: 0,
+            tag: tag.clone(),
         },
     );
 
@@ -327,6 +339,7 @@ pub async fn translate_stream(
                     status: None,
                     body: e.to_string(),
                     elapsed_ms: request_start.elapsed().as_millis(),
+                    tag: tag.clone(),
                 },
             );
             return Ok(());
@@ -340,6 +353,7 @@ pub async fn translate_stream(
                     status: None,
                     body: e.to_string(),
                     elapsed_ms: request_start.elapsed().as_millis(),
+                    tag: tag.clone(),
                 },
             );
             return Ok(());
@@ -359,6 +373,7 @@ pub async fn translate_stream(
                 status: Some(status),
                 body: body_text,
                 elapsed_ms: request_start.elapsed().as_millis(),
+                tag: tag.clone(),
             },
         );
         return Ok(());
@@ -371,6 +386,7 @@ pub async fn translate_stream(
         StatusEvent {
             phase: "waitingFirstToken".into(),
             elapsed_ms: connect_ms,
+            tag: tag.clone(),
         },
     );
 
@@ -395,6 +411,7 @@ pub async fn translate_stream(
                     serde_json::json!({
                         "partial": strip_think_tags(&full_text),
                         "elapsedMs": request_start.elapsed().as_millis(),
+                        "tag": tag,
                     }),
                 );
                 return Ok(());
@@ -410,6 +427,7 @@ pub async fn translate_stream(
                             status: None,
                             body: e.to_string(),
                             elapsed_ms: request_start.elapsed().as_millis(),
+                            tag: tag.clone(),
                         },
                     );
                     return Ok(());
@@ -419,6 +437,7 @@ pub async fn translate_stream(
             process_sse_buffer(
                 &app,
                 window_label.as_str(),
+                &tag,
                 &mut buffer,
                 &mut full_text,
                 &mut first_token_ms,
@@ -438,6 +457,7 @@ pub async fn translate_stream(
             process_sse_buffer(
                 &app,
                 window_label.as_str(),
+                &tag,
                 &mut buffer,
                 &mut full_text,
                 &mut first_token_ms,
@@ -456,6 +476,7 @@ pub async fn translate_stream(
                     status: None,
                     body: String::new(),
                     elapsed_ms: request_start.elapsed().as_millis(),
+                    tag: tag.clone(),
                 },
             );
         } else {
@@ -468,6 +489,7 @@ pub async fn translate_stream(
                     connect_ms,
                     first_token_ms: first_token_ms.unwrap_or(0),
                     model: req.model.clone(),
+                    tag: tag.clone(),
                 },
             );
         }
@@ -485,6 +507,7 @@ pub async fn translate_stream(
                         status: Some(200),
                         body: body_text,
                         elapsed_ms: request_start.elapsed().as_millis(),
+                        tag: tag.clone(),
                     },
                 );
                 return Ok(());
@@ -507,6 +530,7 @@ pub async fn translate_stream(
                     status: None,
                     body: String::new(),
                     elapsed_ms: request_start.elapsed().as_millis(),
+                    tag: tag.clone(),
                 },
             );
         } else {
@@ -521,6 +545,7 @@ pub async fn translate_stream(
                     connect_ms,
                     first_token_ms,
                     model: req.model.clone(),
+                    tag: tag.clone(),
                 },
             );
         }

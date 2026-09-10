@@ -206,3 +206,54 @@ export const IconCrop = (p: IconProps) => (
     <path d="M18 22V8a2 2 0 0 0-2-2H2" />
   </svg>
 );
+
+/** 朗读（喇叭） */
+export const IconVolume = (p: IconProps) => (
+  <svg {...base(p)}>
+    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+    <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+  </svg>
+);
+
+/** 润色（星光） */
+export const IconSparkles = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M12 3l-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z" />
+    <line x1="5" y1="3" x2="5" y2="5" />
+    <line x1="3" y1="4" x2="7" y2="4" />
+    <line x1="19" y1="17" x2="19" y2="19" />
+    <line x1="17" y1="18" x2="21" y2="18" />
+  </svg>
+);
+
+/** 解释语法（打开的书） */
+export const IconBookOpen = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+    <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+  </svg>
+);
+
+/** 总结（列表） */
+export const IconList = (p: IconProps) => (
+  <svg {...base(p)}>
+    <line x1="8" y1="6" x2="21" y2="6" />
+    <line x1="8" y1="12" x2="21" y2="12" />
+    <line x1="8" y1="18" x2="21" y2="18" />
+    <line x1="3" y1="6" x2="3.01" y2="6" />
+    <line x1="3" y1="12" x2="3.01" y2="12" />
+    <line x1="3" y1="18" x2="3.01" y2="18" />
+  </svg>
+);
+
+/** 换种说法（交错箭头） */
+export const IconShuffle = (p: IconProps) => (
+  <svg {...base(p)}>
+    <polyline points="16 3 21 3 21 8" />
+    <line x1="4" y1="20" x2="21" y2="3" />
+    <polyline points="21 16 21 21 16 21" />
+    <line x1="15" y1="15" x2="21" y2="21" />
+    <line x1="4" y1="4" x2="9" y2="9" />
+  </svg>
+);

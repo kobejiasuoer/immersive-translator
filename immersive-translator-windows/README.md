@@ -22,6 +22,8 @@
 - **截图 OCR 翻译** — 框选屏幕区域，PaddleOCR 识别文字后自动翻译（离线，0.5s 级响应）。支持全局热键（默认 `Ctrl+Shift+E`）一键唤起
 - **流式输出** — SSE 流式渲染，区分"连接中/等待首字/输出中"三阶段，显示连接/首字/总耗时拆分
 - **浮窗面板** — 可拉伸、固定(pin)、失焦自动隐藏、收藏到历史
+- **译文快速动作条** — 译文下方一键操作：朗读（Windows SAPI，原文/译文独立朗读，自动按语言选声音）、润色、解释语法、总结、换种说法。动作复用同一条流式管线，结果展示在独立结果区（可复制/停止），不污染翻译历史
+- **AI 词典卡片** — 划选单词/短语时默认仍出普通翻译，译文行「词典」按钮自动后台预取音标、多义项释义与例句，就绪后秒开卡片，可与译文双向切换（设置中可关闭）
 - **智能语言检测** — 中文自动译英，其他语言自动译中文；也可固定目标语言
 - **思考模式兼容** — DeepSeek/智谱/Qwen 推理模型自动关闭思考，剥离 `<think>` 噪声
 - **术语表** — 支持多种格式，导入/导出/去重/格式预检
@@ -52,6 +54,7 @@
 | 划词选区读取 | UI Automation（windows crate，TextPattern 主路径 + 浏览器惰性 tree 重试）+ arboard / windows-sys SendInput（Ctrl+C 兜底） |
 | OCR | paddle-ocr-rs + ort (ONNX Runtime, PaddleOCR v4) |
 | 安全存储 | Windows DPAPI (CryptProtectData) |
+| 朗读 (TTS) | Windows SAPI（ISpVoice COM，专用 STA 线程 + 代数打断） |
 | 截图 | Win32 GDI BitBlt |
 | 自动更新 | tauri-plugin-updater（签名校验 + GitHub Releases manifest） |
 

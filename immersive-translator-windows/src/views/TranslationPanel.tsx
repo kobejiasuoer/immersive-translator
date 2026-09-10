@@ -16,6 +16,9 @@ import {
   onTranslationDone,
   onTranslationError,
   onTranslationCancelled,
+  onTtsEnded,
+  ttsSpeak,
+  ttsStop,
   historyAdd,
   historyToggleFavorite,
   clearPendingPanelPayload,
@@ -32,8 +35,20 @@ import {
   classifyTranslationError,
   sanitizeDiagnosticText,
 } from "../core/errorMessageFormatter";
-import { resolveTargetLanguage } from "../core/languageDetect";
-import { buildSystemPrompt } from "../core/promptBuilder";
+import { resolveTargetLanguage, looksMostlyChinese } from "../core/languageDetect";
+import { isLookupText } from "../core/dictDetect";
+import {
+  parseDictResponse,
+  cardToText,
+  type DictCardData,
+} from "../core/dictCard";
+import {
+  buildSystemPrompt,
+  buildActionSystemPrompt,
+  buildDictionaryPrompt,
+  type QuickAction,
+} from "../core/promptBuilder";
+import { DictCard } from "./DictCard";
 import {
   IconCopy,
   IconCopyAll,
@@ -47,11 +62,41 @@ import {
   IconTranslate,
   IconCheck,
   IconAlertCircle,
+  IconVolume,
+  IconSparkles,
+  IconBookOpen,
+  IconList,
+  IconShuffle,
 } from "../ui/icons";
 
 type Status = "idle" | "reading" | "translating" | "done" | "error" | "needsConfig";
 type PanelShownPayload = string | Partial<PanelPayload>;
 type ResizeDirection = "East" | "South" | "SouthEast";
+
+/** 正在朗读的文本位置：原文 / 译文 / 动作结果 / 词典词条。 */
+type SpeakTarget = "original" | "translated" | "action" | "dict";
+
+type QuickActionStatus = "streaming" | "done" | "error";
+
+interface QuickActionState {
+  type: QuickAction;
+  status: QuickActionStatus;
+  text: string;
+  errorMsg: string;
+}
+
+/** 译文下方快捷动作条的定义（LLM prompt 变体）。 */
+const QUICK_ACTIONS: {
+  type: QuickAction;
+  label: string;
+  title: string;
+  Icon: typeof IconSparkles;
+}[] = [
+  { type: "polish", label: "润色", title: "在保持原意的前提下让译文更通顺自然", Icon: IconSparkles },
+  { type: "grammar", label: "解释语法", title: "拆解原文句子结构与语法点", Icon: IconBookOpen },
+  { type: "summarize", label: "总结", title: "用要点概括原文内容", Icon: IconList },
+  { type: "rephrase", label: "换种说法", title: "给出 3 种不同风格的备选译文", Icon: IconShuffle },
+];
 
 const panelWindow = getCurrentWindow();
 
@@ -167,6 +212,27 @@ export function TranslationPanel() {
   const [panelSource, setPanelSource] = useState<PanelSource>("selection");
   /** 等待用户手动 Ctrl+C 的提示态（自动读取被安全软件拦截时）。 */
   const [awaitCopyHint, setAwaitCopyHint] = useState(false);
+  /** 快捷动作（润色/语法/总结/换种说法）的运行状态，独立于主翻译结果展示。 */
+  const [quickAction, setQuickAction] = useState<QuickActionState | null>(null);
+  /** 词典卡片数据：后台预取完成且解析成功时存在。 */
+  const [dictCardData, setDictCardData] = useState<DictCardData | null>(null);
+  /** 词典预取状态：hidden=非词条/未开启；querying=后台查询中；ready=可秒开；error=可点击重试。 */
+  const [dictStatus, setDictStatus] = useState<
+    "hidden" | "querying" | "ready" | "error"
+  >("hidden");
+  /** done 态当前展示的视图：false=译文，true=词典卡片。 */
+  const [dictView, setDictView] = useState(false);
+  /** 正在朗读的位置；null 表示未在朗读。 */
+  const [speaking, setSpeaking] = useState<SpeakTarget | null>(null);
+  /** 当前事件归属：主翻译流还是快捷动作流。词典预取不经过 flowRef，按 tag 路由。 */
+  const flowRef = useRef<"translate" | "action">("translate");
+  /** 主流程（翻译/快捷动作）当前请求 tag；事件 tag 不匹配即视为过期请求，直接丢弃。 */
+  const mainTagRef = useRef("");
+  /** 词典预取请求 tag；与主流程并行跑，事件按各自的 tag 各行其路。 */
+  const dictTagRef = useRef("");
+  const requestSeqRef = useRef(0);
+  /** 最近一次朗读的代数；tts:ended 只处理与其匹配的事件。 */
+  const ttsGenRef = useRef<number | null>(null);
   const lastOriginalRef = useRef("");
   const lastEndpointRef = useRef("");
   const lastApiKeyRef = useRef("");
@@ -223,6 +289,12 @@ export function TranslationPanel() {
 
     onTranslationDelta((e) => {
       if (!active) return;
+      if (e.tag === dictTagRef.current) return; // 词典响应是 JSON，增量无渲染意义
+      if (e.tag !== mainTagRef.current) return; // 过期请求（已被新翻译/动作取代）
+      if (flowRef.current === "action") {
+        setQuickAction((q) => (q ? { ...q, text: e.text } : q));
+        return;
+      }
       setTranslated(e.text);
       setElapsedMs(e.elapsedMs);
     }).then((u) => {
@@ -232,6 +304,9 @@ export function TranslationPanel() {
 
     onTranslationStatus((e) => {
       if (!active) return;
+      if (e.tag === dictTagRef.current) return; // 预取不展示分阶段文案
+      if (e.tag !== mainTagRef.current) return;
+      if (flowRef.current !== "translate") return; // 动作流不展示分阶段文案
       setPhase(e.phase);
       setElapsedMs(e.elapsedMs);
     }).then((u) => {
@@ -241,38 +316,34 @@ export function TranslationPanel() {
 
     onTranslationDone((e: DoneEvent) => {
       if (!active) return;
-      setTranslated(e.text);
+      if (e.tag === dictTagRef.current) {
+        // 词典预取完成：解析出卡片置为就绪；模型判定非词条则收起入口；
+        // 解析失败给可重试态。词典不落历史，历史只记主翻译。
+        const query = lastOriginalRef.current.trim();
+        const result = parseDictResponse(e.text, query);
+        if (result.kind === "card") {
+          setDictCardData(result.card);
+          setDictStatus("ready");
+        } else if (result.kind === "notAWord") {
+          setDictStatus("hidden");
+          setDictView(false);
+        } else {
+          setDictStatus("error");
+        }
+        return;
+      }
+      if (e.tag !== mainTagRef.current) return;
+      if (flowRef.current === "action") {
+        // 动作结果只更新动作区，不覆盖译文、不落历史。
+        setQuickAction((q) => (q ? { ...q, status: "done", text: e.text } : q));
+        return;
+      }
       setElapsedMs(e.elapsedMs);
       setTiming({ connectMs: e.connectMs, firstTokenMs: e.firstTokenMs, totalMs: e.elapsedMs });
       setPhase("done");
+      setTranslated(e.text);
       setStatus("done");
-      // 落库到历史记录（fire-and-forget，失败不影响展示）
-      const trimmed = lastOriginalRef.current.trim();
-      const transTrimmed = e.text.trim();
-      if (trimmed && transTrimmed) {
-        const historyKey = `${lastSourceRef.current}\u0000${trimmed}\u0000${transTrimmed}\u0000${e.elapsedMs}`;
-        if (lastDoneHistoryKeyRef.current === historyKey) {
-          return;
-        }
-        lastDoneHistoryKeyRef.current = historyKey;
-        // 目标语言此刻未知（doTranslate 里算的），这里用 settings 简单推断
-        void loadSettingsAsync()
-          .then((s) =>
-            historyAdd(
-              trimmed,
-              transTrimmed,
-              resolveTargetLanguage(trimmed, {
-                mode: s.translationMode,
-                fixed: s.fixedTarget,
-              }),
-              lastSourceRef.current,
-              s.model,
-              e.elapsedMs,
-            ),
-          )
-          .then((rec) => setLastRecordId(rec.id))
-          .catch((error) => console.error("[history] settings load or add failed", error));
-      }
+      recordHistory(lastOriginalRef.current.trim(), e.text.trim(), e.elapsedMs);
     }).then((u) => {
       if (active) unDone = u;
       else u();
@@ -280,11 +351,22 @@ export function TranslationPanel() {
 
     onTranslationError((e: ErrorEvent) => {
       if (!active) return;
+      if (e.tag === dictTagRef.current) {
+        setDictStatus("error"); // 预取失败：按钮变可重试，不影响主翻译
+        return;
+      }
+      if (e.tag !== mainTagRef.current) return;
       const classified = classifyTranslationError(
         toInput(e),
         lastEndpointRef.current,
         lastApiKeyRef.current,
       );
+      if (flowRef.current === "action") {
+        setQuickAction((q) =>
+          q ? { ...q, status: "error", errorMsg: classified.message } : q,
+        );
+        return;
+      }
       setErrorMsg(classified.message);
       setRetryable(classified.retryable);
       setStatus("error");
@@ -296,6 +378,16 @@ export function TranslationPanel() {
     let unCancel: (() => void) | undefined;
     onTranslationCancelled((e) => {
       if (!active) return;
+      if (e.tag === dictTagRef.current) {
+        setDictStatus("error"); // 预取被停止：给重试入口
+        return;
+      }
+      if (e.tag !== mainTagRef.current) return;
+      if (flowRef.current === "action") {
+        // 用户取消动作：保留已生成的部分，动作区进入 done 态
+        setQuickAction((q) => (q ? { ...q, status: "done", text: e.partial } : q));
+        return;
+      }
       // 用户取消：保留已翻译的部分，进入 done 态
       setTranslated(e.partial);
       setElapsedMs(e.elapsedMs);
@@ -315,6 +407,44 @@ export function TranslationPanel() {
     };
   }, []);
 
+  /** 清空快捷动作状态并停止朗读（新翻译开始 / 面板关闭时调用）。 */
+  function resetQuickAction() {
+    flowRef.current = "translate";
+    setQuickAction(null);
+    stopSpeaking();
+  }
+
+  /** 翻译/查词完成后落库（fire-and-forget，失败不影响展示）。只依赖 ref 和 setter，闭包安全。 */
+  function recordHistory(original: string, translation: string, elapsed: number) {
+    if (!original || !translation) return;
+    const historyKey = `${lastSourceRef.current}\u0000${original}\u0000${translation}\u0000${elapsed}`;
+    if (lastDoneHistoryKeyRef.current === historyKey) {
+      return;
+    }
+    lastDoneHistoryKeyRef.current = historyKey;
+    // 目标语言此刻未知（doTranslate 里算的），这里用 settings 简单推断
+    void loadSettingsAsync()
+      .then((s) =>
+        historyAdd(
+          original,
+          translation,
+          resolveTargetLanguage(original, {
+            mode: s.translationMode,
+            fixed: s.fixedTarget,
+          }),
+          lastSourceRef.current,
+          s.model,
+          elapsed,
+        ),
+      )
+      .then((rec) => setLastRecordId(rec.id))
+      .catch((error) => console.error("[history] settings load or add failed", error));
+  }
+
+  /**
+   * 发起主流程翻译。默认永远是普通翻译（词条也不例外）；若开启词典卡片且文本
+   * 像词条，同时在后台预取词典（与主翻译并行，事件按 tag 各行其路）。
+   */
   async function doTranslate(text: string) {
     const s = await loadSettingsSafely();
     if (s === null) return;
@@ -330,6 +460,8 @@ export function TranslationPanel() {
       glossaryText: s.glossaryText,
     });
 
+    resetQuickAction();
+
     setStatus("translating");
     setTranslated("");
     setErrorMsg("");
@@ -338,18 +470,25 @@ export function TranslationPanel() {
     setLastRecordId(null);
     setFavToggled(false);
     lastDoneHistoryKeyRef.current = "";
+    // 词典视图复位；词条类文本置为查询中并后台预取
+    setDictView(false);
+    setDictCardData(null);
+    const wantsDict = s.dictCard === "auto" && isLookupText(text);
+    setDictStatus(wantsDict ? "querying" : "hidden");
 
-    try {
-      await translateStream({
-        text,
-        endpoint: s.endpoint,
-        apiKey: s.apiKey,
-        model: s.model,
-        systemPrompt,
-        stream: s.stream,
-        windowLabel: "panel",
-      });
-    } catch (error) {
+    const tag = `t${++requestSeqRef.current}`;
+    mainTagRef.current = tag;
+    // 不 await：主请求与词典预取并行，结果由事件按 tag 分发
+    translateStream({
+      text,
+      endpoint: s.endpoint,
+      apiKey: s.apiKey,
+      model: s.model,
+      systemPrompt,
+      stream: s.stream,
+      windowLabel: "panel",
+      tag,
+    }).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       setErrorMsg(
         `翻译命令调用失败：${sanitizeDiagnosticText(
@@ -360,6 +499,46 @@ export function TranslationPanel() {
       );
       setRetryable(true);
       setStatus("error");
+    });
+
+    if (wantsDict) {
+      void lookupDict(text);
+    }
+  }
+
+  /** 发起（或重试）词典预取查询。与主翻译并行，事件按 dictTagRef 路由，不落历史。 */
+  async function lookupDict(text: string) {
+    const s = await loadSettingsSafely();
+    if (s === null) return;
+    if (!hasValidSettings(s)) {
+      setDictStatus("hidden");
+      return;
+    }
+    const target = resolveTargetLanguage(text, {
+      mode: s.translationMode,
+      fixed: s.fixedTarget,
+    });
+    const tag = `d${++requestSeqRef.current}`;
+    dictTagRef.current = tag;
+    setDictCardData(null);
+    setDictStatus("querying");
+    try {
+      await translateStream({
+        text,
+        endpoint: s.endpoint,
+        apiKey: s.apiKey,
+        model: s.model,
+        systemPrompt: buildDictionaryPrompt({
+          targetLanguage: target,
+          customStyle: s.customStyle,
+          glossaryText: s.glossaryText,
+        }),
+        stream: s.stream,
+        windowLabel: "panel",
+        tag,
+      });
+    } catch {
+      setDictStatus("error");
     }
   }
 
@@ -367,6 +546,7 @@ export function TranslationPanel() {
     const s = await loadSettingsSafely();
     if (s === null) return;
     setAwaitCopyHint(false);
+    resetQuickAction();
     if (!hasValidSettings(s)) {
       setStatus("needsConfig");
       return;
@@ -440,10 +620,112 @@ export function TranslationPanel() {
     setTimeout(() => setCopiedHint(""), 2000);
   }
 
+  /** 停止朗读并复位朗读状态（面板隐藏、新翻译开始时调用）。 */
+  function stopSpeaking() {
+    ttsGenRef.current = null;
+    setSpeaking(null);
+    void ttsStop().catch((error) => console.error("[tts] stop failed", error));
+  }
+
+  /** 朗读一段文本；再次点击同一处即停止。中文文本自动选中文声音。 */
+  async function speakText(target: SpeakTarget, text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (speaking === target) {
+      stopSpeaking();
+      return;
+    }
+    try {
+      const gen = await ttsSpeak(trimmed, looksMostlyChinese(trimmed));
+      ttsGenRef.current = gen;
+      setSpeaking(target);
+    } catch (error) {
+      console.error("[tts] speak failed", error);
+      ttsGenRef.current = null;
+      setSpeaking(null);
+      const message = typeof error === "string" ? error : String(error);
+      flashCopied(`朗读失败：${message}`);
+    }
+  }
+
+  /** 运行快捷动作（润色/解释语法/总结/换种说法）：复用翻译流式管线，仅换系统提示词。 */
+  async function runQuickAction(type: QuickAction) {
+    if (status !== "done" || !translated.trim()) return;
+    if (quickAction?.status === "streaming") return;
+    const s = await loadSettingsSafely();
+    if (s === null) return;
+    if (!hasValidSettings(s)) {
+      setStatus("needsConfig");
+      return;
+    }
+    const source = (lastOriginalRef.current.trim() || original).trim();
+    if (!source) return;
+    const target = resolveTargetLanguage(source, {
+      mode: s.translationMode,
+      fixed: s.fixedTarget,
+    });
+    const systemPrompt = buildActionSystemPrompt(type, {
+      targetLanguage: target,
+      customStyle: s.customStyle,
+      glossaryText: s.glossaryText,
+    });
+    // polish 需要"原文 + 草稿译文"两段输入；其余动作直接基于原文。
+    const text =
+      type === "polish"
+        ? `<source>\n${source}\n</source>\n<draft_translation>\n${translated.trim()}\n</draft_translation>`
+        : source;
+
+    flowRef.current = "action";
+    const tag = `a${++requestSeqRef.current}`;
+    mainTagRef.current = tag;
+    setQuickAction({ type, status: "streaming", text: "", errorMsg: "" });
+
+    try {
+      await translateStream({
+        text,
+        endpoint: s.endpoint,
+        apiKey: s.apiKey,
+        model: s.model,
+        systemPrompt,
+        stream: s.stream,
+        windowLabel: "panel",
+        tag,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setQuickAction({
+        type,
+        status: "error",
+        text: "",
+        errorMsg: sanitizeDiagnosticText(message, s.endpoint, s.apiKey),
+      });
+    }
+  }
+
   async function hidePanel() {
     void persistPanelGeometry(); // 隐藏前保存当前位置，下次打开仍停在你放的位置
+    stopSpeaking();
     await panelWindow.hide();
   }
+
+  // 朗读结束事件：只处理与最新一次朗读匹配的代数（被打断的旧事件直接丢弃）。
+  useEffect(() => {
+    let active = true;
+    let unTts: (() => void) | undefined;
+    onTtsEnded((e) => {
+      if (!active) return;
+      if (ttsGenRef.current === null || e.gen !== ttsGenRef.current) return;
+      ttsGenRef.current = null;
+      setSpeaking(null);
+    }).then((u) => {
+      if (active) unTts = u;
+      else u();
+    });
+    return () => {
+      active = false;
+      unTts?.();
+    };
+  }, []);
 
   async function startManualDrag(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0) {
@@ -547,6 +829,9 @@ export function TranslationPanel() {
     };
   }, []);
 
+  /** done 态对外展示的"结果文本"：词典视图为格式化卡片文本，否则为译文。 */
+  const resultText = dictView && dictCardData ? cardToText(dictCardData) : translated;
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       // Esc：正在编辑原文时先退出编辑，再按一次才关闭浮窗
@@ -560,22 +845,22 @@ export function TranslationPanel() {
         void hidePanel();
         return;
       }
-      // Ctrl/Cmd + Enter：复制译文（done 时）
+      // Ctrl/Cmd + Enter：复制结果（done 时；词典模式为卡片文本）
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-        if (status === "done" && translated) {
+        if (status === "done" && resultText) {
           event.preventDefault();
-          void navigator.clipboard.writeText(translated);
-          flashCopied("已复制译文");
+          void navigator.clipboard.writeText(resultText);
+          flashCopied(dictView && dictCardData ? "已复制词典卡片" : "已复制译文");
         }
         return;
       }
-      // Ctrl/Cmd + Shift + C：复制组合（原文 + 译文）
+      // Ctrl/Cmd + Shift + C：复制组合（原文 + 结果）
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && (event.key === "C" || event.key === "c")) {
-        if (status === "done" && translated && original) {
+        if (status === "done" && resultText && original) {
           event.preventDefault();
-          const combo = `${original}\n\n${translated}`;
+          const combo = `${original}\n\n${resultText}`;
           void navigator.clipboard.writeText(combo);
-          flashCopied("已复制原文+译文");
+          flashCopied("已复制原文+结果");
         }
         return;
       }
@@ -590,7 +875,7 @@ export function TranslationPanel() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [status, translated, original, retryable]);
+  }, [status, translated, original, retryable, resultText]);
 
   // 原文编辑框高度跟随内容（上限内自动增高，超出内部滚动）。
   useEffect(() => {
@@ -651,6 +936,7 @@ export function TranslationPanel() {
         if (dragStateRef.current || sinceResize < RESIZE_HIDE_SUPPRESS_MS) {
           return; // 缩放缓冲期内或仍在拖动，不隐藏
         }
+        stopSpeaking(); // 浮窗隐藏即停止朗读
         void panelWindow.hide();
       }, 400);
     });
@@ -667,8 +953,10 @@ export function TranslationPanel() {
   }
 
   /** 当前是否有可用操作按钮集（控制头部折叠）。 */
-  const canCopy = status === "done" && !!translated;
+  const canCopy = status === "done" && !!resultText;
   const canRetry = status === "error" && retryable;
+  /** 译文行「词典」按钮：词条类文本且预取未被判非词条时显示。 */
+  const showDictButton = status === "done" && dictStatus !== "hidden";
 
   /** 原文角标文案。错误态隐藏来源标签，避免误导。 */
   const sourceLabel =
@@ -700,17 +988,17 @@ export function TranslationPanel() {
         </div>
 
         <div className="panel-actions">
-          {/* 原文+译文一键复制：常驻但仅 done 可用 */}
+          {/* 原文+结果一键复制：常驻但仅 done 可用 */}
           <button
             className="icon-btn"
             onClick={() => {
               if (canCopy && original) {
-                void navigator.clipboard.writeText(`${original}\n\n${translated}`);
-                flashCopied("已复制原文+译文");
+                void navigator.clipboard.writeText(`${original}\n\n${resultText}`);
+                flashCopied("已复制原文+结果");
               }
             }}
             disabled={!canCopy || !original}
-            title="复制原文+译文 (Ctrl+Shift+C)"
+            title="复制原文+结果 (Ctrl+Shift+C)"
           >
             <IconCopyAll size={15} />
           </button>
@@ -817,6 +1105,50 @@ export function TranslationPanel() {
 
         {status === "done" && (
           <>
+            {dictView ? (
+              dictCardData ? (
+                <DictCard
+                  card={dictCardData}
+                  query={original.trim()}
+                  speaking={speaking === "dict"}
+                  onSpeak={() => void speakText("dict", dictCardData.word || original)}
+                  onCopy={(text, hint) => {
+                    void navigator.clipboard.writeText(text);
+                    flashCopied(hint);
+                  }}
+                  onSwitchToTranslate={() => setDictView(false)}
+                />
+              ) : dictStatus === "error" ? (
+                <div className="dict-empty">
+                  <span className="dict-empty-text">词典查询失败</span>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => void lookupDict(original.trim())}
+                  >
+                    <IconRetry size={12} />
+                    重试
+                  </button>
+                </div>
+              ) : (
+                // 预取未就绪：骨架屏，就绪后自动出卡片
+                <div className="dict-card">
+                  <div className="dict-skeleton-head">
+                    <span className="dict-word">{original}</span>
+                    <span className="dict-loading-label">
+                      <span className="spinner" />
+                      查询词典…
+                    </span>
+                  </div>
+                  <div className="skeleton-block" aria-hidden>
+                    <span className="skeleton-line" style={{ width: "46%" }} />
+                    <span className="skeleton-line" style={{ width: "96%" }} />
+                    <span className="skeleton-line" style={{ width: "82%" }} />
+                    <span className="skeleton-line" style={{ width: "58%" }} />
+                  </div>
+                </div>
+              )
+            ) : (
+              <>
             {original && (
               <div className="orig-block">
                 <div className="orig-label-row">
@@ -832,6 +1164,14 @@ export function TranslationPanel() {
                       重新翻译
                     </button>
                   )}
+                  <button
+                    className={`icon-btn icon-btn-sm${speaking === "original" ? " active" : ""}`}
+                    onClick={() => void speakText("original", original)}
+                    disabled={!original.trim()}
+                    title={speaking === "original" ? "停止朗读原文" : "朗读原文"}
+                  >
+                    {speaking === "original" ? <IconStop size={14} /> : <IconVolume size={14} />}
+                  </button>
                 </div>
                 <textarea
                   ref={origEditRef}
@@ -858,23 +1198,149 @@ export function TranslationPanel() {
                   译文
                 </div>
                 <div className="trans-actions">
-                  {translated && (
+                  {showDictButton && (
                     <button
-                      className="btn btn-secondary btn-sm"
+                      className={`btn btn-secondary btn-sm dict-btn${
+                        dictStatus === "ready" ? " ready" : dictStatus === "querying" ? " querying" : ""
+                      }${dictView ? " current" : ""}`}
                       onClick={() => {
-                        void navigator.clipboard.writeText(translated);
-                        flashCopied("已复制译文");
+                        if (dictStatus === "error") {
+                          void lookupDict(original.trim());
+                          return;
+                        }
+                        setDictView(!dictView);
                       }}
-                      title="Ctrl+Enter"
+                      title={
+                        dictStatus === "querying"
+                          ? "词典查询中，点击先看骨架，就绪后自动出卡片"
+                          : dictStatus === "error"
+                            ? "词典查询失败，点击重试"
+                            : dictView
+                              ? "返回译文"
+                              : "查看词典卡片（音标/释义/例句，已就绪秒开）"
+                      }
                     >
-                      <IconCopy size={13} />
-                      复制译文
+                      {dictStatus === "querying" ? <span className="spinner" /> : <IconBookOpen size={12} />}
+                      词典
+                      {dictStatus === "ready" && !dictView && <span className="dict-dot" />}
                     </button>
+                  )}
+                  {translated && (
+                    <>
+                      <button
+                        className={`icon-btn icon-btn-sm${speaking === "translated" ? " active" : ""}`}
+                        onClick={() => void speakText("translated", translated)}
+                        title={speaking === "translated" ? "停止朗读译文" : "朗读译文"}
+                      >
+                        {speaking === "translated" ? <IconStop size={14} /> : <IconVolume size={14} />}
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(translated);
+                          flashCopied("已复制译文");
+                        }}
+                        title="Ctrl+Enter"
+                      >
+                        <IconCopy size={13} />
+                        复制译文
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
               <div className="trans-text">{translated}</div>
             </div>
+
+            {translated && (
+              <div className="quick-actions" role="toolbar" aria-label="译文快捷操作">
+                {QUICK_ACTIONS.map(({ type, label, title, Icon }) => (
+                  <button
+                    key={type}
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => void runQuickAction(type)}
+                    disabled={quickAction?.status === "streaming"}
+                    title={title}
+                  >
+                    <Icon size={13} />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {quickAction &&
+              (() => {
+                const def = QUICK_ACTIONS.find((d) => d.type === quickAction.type);
+                const label = def?.label ?? quickAction.type;
+                const Icon = def?.Icon ?? IconSparkles;
+                return (
+                  <div className="action-block">
+                    <div className="trans-row">
+                      <div className="action-label">
+                        <Icon size={11} />
+                        {label}
+                      </div>
+                      <div className="trans-actions">
+                        {quickAction.status === "streaming" && (
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => void cancelTranslation()}
+                            title="停止本次生成"
+                          >
+                            <IconStop size={12} />
+                            停止
+                          </button>
+                        )}
+                        {quickAction.status === "done" && quickAction.text && (
+                          <>
+                            <button
+                              className={`icon-btn icon-btn-sm${speaking === "action" ? " active" : ""}`}
+                              onClick={() => void speakText("action", quickAction.text)}
+                              title={speaking === "action" ? "停止朗读" : "朗读结果"}
+                            >
+                              {speaking === "action" ? <IconStop size={14} /> : <IconVolume size={14} />}
+                            </button>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => {
+                                void navigator.clipboard.writeText(quickAction.text);
+                                flashCopied("已复制结果");
+                              }}
+                            >
+                              <IconCopy size={13} />
+                              复制
+                            </button>
+                          </>
+                        )}
+                        <button
+                          className="icon-btn icon-btn-sm"
+                          onClick={() => setQuickAction(null)}
+                          title="收起结果"
+                        >
+                          <IconClose size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    {quickAction.status === "streaming" ? (
+                      quickAction.text ? (
+                        <div className="trans-text caret">{quickAction.text}</div>
+                      ) : (
+                        <div className="action-pending">
+                          <span className="spinner" />
+                          生成中…
+                        </div>
+                      )
+                    ) : quickAction.status === "error" ? (
+                      <div className="action-error">{quickAction.errorMsg || "生成失败，请重试。"}</div>
+                    ) : (
+                      <div className="trans-text">{quickAction.text}</div>
+                    )}
+                  </div>
+                );
+              })()}
+              </>
+            )}
             <div className="panel-meta">
               {timing ? (
                 <>

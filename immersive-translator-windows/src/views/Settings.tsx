@@ -478,6 +478,22 @@ export function Settings() {
 
           <div className="form-divider" />
 
+          <label className="form-row field-label" style={{ margin: 0, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={settings.dictCard === "auto"}
+              onChange={(e) => update("dictCard", e.target.checked ? "auto" : "off")}
+            />
+            <span style={{ display: "inline-flex", flexDirection: "column" }}>
+              词典卡片
+              <span className="hint" style={{ margin: 0 }}>
+                划选单个单词或短语时，浮窗自动切换为词典卡片（音标、多义项释义、例句）
+              </span>
+            </span>
+          </label>
+
+          <div className="form-divider" />
+
           <label className="field-label" style={{ display: "block" }}>
             自定义翻译风格（可选，追加到系统提示词）
             <textarea

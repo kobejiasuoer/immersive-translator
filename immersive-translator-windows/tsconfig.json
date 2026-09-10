@@ -18,7 +18,10 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+
+    /* TS 6 不再自动引入 @types，e2e 测试用到 process 需显式声明 */
+    "types": ["node"]
   },
   "include": ["src"]
 }

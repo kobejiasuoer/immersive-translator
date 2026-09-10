@@ -4,6 +4,7 @@ mod ocr;
 mod screenshot;
 mod secret_store;
 mod translation;
+mod tts;
 mod uia;
 
 use std::str::FromStr;
@@ -771,6 +772,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(translation::CancelFlag::default())
         .manage(ocr::OcrEngine::default())
+        .manage(tts::TtsState::default())
         .manage(PendingPanelPayload::default())
         .manage(ActiveHotkeys::default())
         .invoke_handler(tauri::generate_handler![
@@ -789,6 +791,8 @@ pub fn run() {
             secret_store::secret_get,
             secret_store::secret_set,
             secret_store::secret_exists,
+            tts::tts_speak,
+            tts::tts_stop,
             history::history_add,
             history::history_list,
             history::history_toggle_favorite,

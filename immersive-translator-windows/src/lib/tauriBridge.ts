@@ -9,11 +9,14 @@ export interface TranslateRequest {
   systemPrompt: string;
   stream: boolean;
   windowLabel: string;
+  /** 请求标识，随事件原样回传；面板据此丢弃过期请求的事件。 */
+  tag: string;
 }
 
 export interface DeltaEvent {
   text: string;
   elapsedMs: number;
+  tag: string;
 }
 
 export type TranslationPhase = "connecting" | "waitingFirstToken" | "streaming" | "done";
@@ -21,6 +24,7 @@ export type TranslationPhase = "connecting" | "waitingFirstToken" | "streaming" 
 export interface StatusEvent {
   phase: TranslationPhase;
   elapsedMs: number;
+  tag: string;
 }
 
 export interface DoneEvent {
@@ -31,6 +35,7 @@ export interface DoneEvent {
   /** 首字耗时（收到响应头到第一个可见文字）。 */
   firstTokenMs: number;
   model: string;
+  tag: string;
 }
 
 export interface ErrorEvent {
@@ -39,6 +44,7 @@ export interface ErrorEvent {
   body: string;
   /** 失败时已耗时（毫秒）。 */
   elapsedMs: number;
+  tag: string;
 }
 
 /** 读取当前选中文本（模拟 Ctrl+C）。 */
@@ -156,6 +162,7 @@ export async function cancelTranslation(): Promise<void> {
 export interface CancelledEvent {
   partial: string;
   elapsedMs: number;
+  tag: string;
 }
 
 export function onTranslationCancelled(
@@ -261,4 +268,28 @@ export function onTranslationDone(handler: (e: DoneEvent) => void): Promise<Unli
 
 export function onTranslationError(handler: (e: ErrorEvent) => void): Promise<UnlistenFn> {
   return listen<ErrorEvent>("translation:error", (event) => handler(event.payload));
+}
+
+// ---- 朗读（TTS，Windows SAPI）----
+
+/**
+ * 朗读一段文本。chinese 决定后端优先选中文声音还是非中文声音。
+ * 返回本次朗读的代数：onTtsEnded 只应处理与最新代数匹配的事件。
+ */
+export async function ttsSpeak(text: string, chinese: boolean): Promise<number> {
+  return invoke<number>("tts_speak", { text, chinese });
+}
+
+/** 停止当前朗读。 */
+export async function ttsStop(): Promise<void> {
+  await invoke("tts_stop");
+}
+
+export interface TtsEndedEvent {
+  gen: number;
+}
+
+/** 朗读结束（自然播完或被打断）。gen 用于丢弃过期那次的结束事件。 */
+export function onTtsEnded(handler: (e: TtsEndedEvent) => void): Promise<UnlistenFn> {
+  return listen<TtsEndedEvent>("tts:ended", (event) => handler(event.payload));
 }

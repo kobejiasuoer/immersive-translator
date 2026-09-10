@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   historyList,
@@ -85,6 +85,21 @@ export function History() {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [favFilter]);
+
+  // 窗口关闭是 hide()，重开不会重新挂载：聚焦时刷新，避免浮窗期间的新记录不显示。
+  const refreshRef = useRef(refresh);
+  useEffect(() => {
+    refreshRef.current = refresh;
+  });
+  useEffect(() => {
+    const win = getCurrentWindow();
+    const unlistenP = win.onFocusChanged(({ payload: focused }) => {
+      if (focused) void refreshRef.current();
+    });
+    return () => {
+      void unlistenP.then((u) => u());
+    };
+  }, []);
 
   // 搜索输入防抖（避免每次按键都查）
   useEffect(() => {

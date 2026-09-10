@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildSystemPrompt } from "./promptBuilder";
+import { buildSystemPrompt, buildActionSystemPrompt, buildDictionaryPrompt } from "./promptBuilder";
 import { parseGlossary } from "./glossaryParser";
 
 describe("buildSystemPrompt", () => {
@@ -58,5 +58,81 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("s79");
     expect(prompt).not.toContain("s99");
     expect(parsed.toSend).toHaveLength(80);
+  });
+});
+
+describe("buildActionSystemPrompt", () => {
+  const glossaryInput = { targetLanguage: "简体中文", customStyle: "Use formal tone", glossaryText: "hello = 你好" };
+
+  it("polish references source and draft_translation and injects glossary + style", () => {
+    const prompt = buildActionSystemPrompt("polish", glossaryInput);
+    expect(prompt).toContain("<source>");
+    expect(prompt).toContain("<draft_translation>");
+    expect(prompt).toContain("Local glossary");
+    expect(prompt).toContain("hello -> 你好");
+    expect(prompt).toContain("User translation style preference");
+    expect(prompt).toContain("Use formal tone");
+  });
+
+  it("grammar explains in target language without glossary or style", () => {
+    const prompt = buildActionSystemPrompt("grammar", glossaryInput);
+    expect(prompt).toContain("简体中文");
+    expect(prompt).toContain("<text>");
+    expect(prompt).not.toContain("Local glossary");
+    expect(prompt).not.toContain("User translation style preference");
+  });
+
+  it("summarize caps bullet count and skips glossary", () => {
+    const prompt = buildActionSystemPrompt("summarize", glossaryInput);
+    expect(prompt).toContain("at most 3");
+    expect(prompt).not.toContain("Local glossary");
+  });
+
+  it("rephrase asks for 3 numbered alternatives with glossary", () => {
+    const prompt = buildActionSystemPrompt("rephrase", glossaryInput);
+    expect(prompt).toContain("3 alternative translations");
+    expect(prompt).toContain('"1." "2." "3."');
+    expect(prompt).toContain("Local glossary");
+  });
+
+  it("falls back to 简体中文 when targetLanguage is empty", () => {
+    for (const action of ["polish", "grammar", "summarize", "rephrase"] as const) {
+      const prompt = buildActionSystemPrompt(action, { targetLanguage: "", customStyle: "", glossaryText: "" });
+      expect(prompt).toContain("简体中文");
+    }
+  });
+});
+
+describe("buildDictionaryPrompt", () => {
+  it("includes the JSON contract keys and target language", () => {
+    const prompt = buildDictionaryPrompt({ targetLanguage: "简体中文", customStyle: "", glossaryText: "" });
+    expect(prompt).toContain("dictionary engine");
+    expect(prompt).toContain("简体中文");
+    for (const key of ['"word"', '"phonetics"', '"translation"', '"senses"', '"inflections"', '"etymology"', '"not_a_word"']) {
+      expect(prompt).toContain(key);
+    }
+  });
+
+  it("caps senses and examples", () => {
+    const prompt = buildDictionaryPrompt({ targetLanguage: "简体中文", customStyle: "", glossaryText: "" });
+    expect(prompt).toContain("At most 4 senses");
+    expect(prompt).toContain("at most 2 short examples");
+  });
+
+  it("includes glossary when provided", () => {
+    const prompt = buildDictionaryPrompt({ targetLanguage: "简体中文", customStyle: "", glossaryText: "hello = 你好" });
+    expect(prompt).toContain("Local glossary");
+    expect(prompt).toContain("hello -> 你好");
+  });
+
+  it("omits glossary when empty and never injects custom style", () => {
+    const prompt = buildDictionaryPrompt({ targetLanguage: "简体中文", customStyle: "用口语风格", glossaryText: "  " });
+    expect(prompt).not.toContain("Local glossary");
+    expect(prompt).not.toContain("口语风格");
+  });
+
+  it("falls back to 简体中文 when targetLanguage is empty", () => {
+    const prompt = buildDictionaryPrompt({ targetLanguage: "", customStyle: "", glossaryText: "" });
+    expect(prompt).toContain("简体中文");
   });
 });

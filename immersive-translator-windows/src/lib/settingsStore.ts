@@ -2,6 +2,9 @@ import type { TranslationMode } from "../core/languageDetect";
 import { isLocalhostEndpoint } from "../core/providerPresets";
 import { secretGet, secretSet } from "./tauriBridge";
 
+/** 词典卡片模式：auto = 选中单词/短语时自动切换；off = 始终普通翻译。 */
+export type DictCardMode = "auto" | "off";
+
 export interface AppSettings {
   endpoint: string;
   apiKey: string;
@@ -11,6 +14,8 @@ export interface AppSettings {
   customStyle: string;
   glossaryText: string;
   stream: boolean;
+  /** 词典卡片模式（划选单词/短语时浮窗切换为词典样式）。 */
+  dictCard: DictCardMode;
   /** 全局翻译热键，Tauri 格式如 "Ctrl+Shift+Q"。 */
   hotkey: string;
   /** 截图 OCR 翻译热键，Tauri 格式如 "Ctrl+Shift+E"。 */
@@ -47,6 +52,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   customStyle: "",
   glossaryText: "",
   stream: true,
+  dictCard: "auto",
   hotkey: "Ctrl+Shift+Q",
   ocrHotkey: "Ctrl+Shift+E",
 };
