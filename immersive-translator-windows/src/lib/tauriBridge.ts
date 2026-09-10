@@ -287,9 +287,65 @@ export async function ttsStop(): Promise<void> {
 
 export interface TtsEndedEvent {
   gen: number;
+  track?: string;
 }
 
 /** 朗读结束（自然播完或被打断）。gen 用于丢弃过期那次的结束事件。 */
 export function onTtsEnded(handler: (e: TtsEndedEvent) => void): Promise<UnlistenFn> {
   return listen<TtsEndedEvent>("tts:ended", (event) => handler(event.payload));
+}
+
+// ---- 朗读扩展（沉浸阅读室）：独立音轨 / 语速 / 音色 / boundary 事件 ----
+
+export type TtsTrack = "sentence" | "word";
+
+export interface ReaderSpeakOptions {
+  /** word 音轨独立于句子朗读，查词发音不打断正在读的句子。 */
+  track?: TtsTrack;
+  /** 语速 0.5–2.0，默认 1.0。 */
+  rate?: number;
+  /** 系统音色名（ttsVoices 返回的 name），空则引擎默认。 */
+  voice?: string;
+  /** 事件目标窗口 label，默认 "panel"。阅读室传 "reader"。 */
+  target?: string;
+}
+
+/** 带完整参数的朗读（阅读室用）。返回本次朗读代数。 */
+export async function ttsSpeakAdvanced(text: string, chinese: boolean, opts: ReaderSpeakOptions = {}): Promise<number> {
+  return invoke<number>("tts_speak", {
+    text,
+    chinese,
+    track: opts.track ?? null,
+    rate: opts.rate ?? null,
+    voice: opts.voice ? opts.voice : null,
+    target: opts.target ?? null,
+  });
+}
+
+/** 停止指定音轨（默认 sentence）。 */
+export async function ttsStopTrack(track: TtsTrack = "sentence"): Promise<void> {
+  await invoke("tts_stop", { track });
+}
+
+/** SAPI word/sentence boundary 事件（真实语音边界，§9-1）。 */
+export interface TtsBoundaryEvent {
+  gen: number;
+  track: string;
+  kind: "word" | "sentence";
+  charStart: number;
+  charLength: number;
+}
+
+export function onTtsBoundary(handler: (e: TtsBoundaryEvent) => void): Promise<UnlistenFn> {
+  return listen<TtsBoundaryEvent>("tts:boundary", (event) => handler(event.payload));
+}
+
+export interface TtsVoiceInfo {
+  name: string;
+  chinese: boolean;
+}
+
+/** 枚举系统 SAPI 音色（设置面板音色下拉）。 */
+export async function ttsVoices(): Promise<TtsVoiceInfo[]> {
+  return invoke<TtsVoiceInfo[]>("tts_voices");
 }
