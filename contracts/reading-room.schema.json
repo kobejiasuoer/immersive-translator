@@ -18,6 +18,23 @@
       "type": "string",
       "enum": ["pending", "done", "failed", "edited"]
     },
+    "chunkType": {
+      "type": "string",
+      "enum": ["collocation", "phrasal", "idiom", "pattern"],
+      "description": "词块类型：搭配 / 短语动词 / 习语 / 句式框架"
+    },
+    "sentenceChunk": {
+      "type": "object",
+      "required": ["text", "chunkType", "gloss"],
+      "description": "句内标注的词块；text 必须是所在句 en 的连续子串",
+      "properties": {
+        "text": { "type": "string" },
+        "chunkType": { "$ref": "#/$defs/chunkType" },
+        "gloss": { "type": "string", "description": "中文释义（一句话）" },
+        "pattern": { "type": "string", "description": "槽位记法，如 take on sth" },
+        "trap": { "type": "string", "description": "直译陷阱，如 \"不是 make momentum\"" }
+      }
+    },
     "sentencePair": {
       "type": "object",
       "required": ["idx", "paragraphIdx", "en", "zh", "zhState"],
@@ -27,7 +44,8 @@
         "en": { "type": "string" },
         "zh": { "type": ["string", "null"], "description": "null = 尚未翻译" },
         "zhState": { "$ref": "#/$defs/sentenceZhState" },
-        "revealed": { "type": "boolean", "description": "遮罩模式下是否已揭开" }
+        "revealed": { "type": "boolean", "description": "遮罩模式下是否已揭开" },
+        "chunks": { "type": "array", "items": { "$ref": "#/$defs/sentenceChunk" } }
       }
     },
     "articleProgress": {
@@ -56,7 +74,9 @@
         "voice": { "type": "string", "description": "系统 TTS 音色名；空串 = 引擎默认" },
         "rate": { "type": "number", "minimum": 0.5, "maximum": 2 },
         "sentencePauseMs": { "type": "number", "minimum": 0, "maximum": 2000 },
-        "shadowingMode": { "type": "boolean" }
+        "shadowingMode": { "type": "boolean" },
+        "chunkHighlight": { "type": "boolean", "description": "词块高亮：翻译完成后自动跑 LLM 词块标注" },
+        "showVocabMarks": { "type": "boolean", "description": "生词再现标记：正文中标记已收藏的词/词块" }
       }
     },
     "article": {
@@ -78,6 +98,11 @@
         "lastReadAt": { "type": "integer", "description": "Unix 毫秒" },
         "progress": { "$ref": "#/$defs/articleProgress" },
         "sentences": { "type": "array", "items": { "$ref": "#/$defs/sentencePair" } },
+        "chunkState": {
+          "type": "string",
+          "enum": ["pending", "done", "failed"],
+          "description": "词块标注进度；缺省 = 从未标注"
+        },
         "settings": { "$ref": "#/$defs/readerSettings" }
       }
     },
@@ -98,6 +123,11 @@
       "properties": {
         "id": { "type": "string", "description": "归一化（小写、去首尾标点）后的唯一键" },
         "word": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": ["word", "chunk"],
+          "description": "生词条目类别；缺省视为 word（老数据无需迁移）"
+        },
         "phonetic": { "type": "string" },
         "senses": {
           "type": "array",
@@ -111,6 +141,9 @@
           }
         },
         "forms": { "type": "array", "items": { "type": "string" } },
+        "chunkType": { "$ref": "#/$defs/chunkType", "description": "kind=chunk 时的词块类型" },
+        "pattern": { "type": "string", "description": "槽位记法" },
+        "trap": { "type": "string", "description": "直译陷阱" },
         "collocations": {
           "type": "array",
           "items": {

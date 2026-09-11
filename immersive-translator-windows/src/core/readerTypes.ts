@@ -15,6 +15,34 @@ export type ArticleSourceType = "paste" | "url" | "epub" | "pdf";
 /** 单句译文的翻译状态。 */
 export type SentenceZhState = "pending" | "done" | "failed" | "edited";
 
+/** 词块类型：搭配 / 短语动词 / 习语 / 句式框架。 */
+export type ChunkType = "collocation" | "phrasal" | "idiom" | "pattern";
+
+export const CHUNK_TYPE_LABELS: Record<ChunkType, string> = {
+  collocation: "搭配",
+  phrasal: "短语动词",
+  idiom: "习语",
+  pattern: "句式",
+};
+
+/**
+ * 句内标注的一个词块。en 不可变（只允许编辑译文），所以标注不过期；
+ * text 必须是 en 的连续子串，解析时强校验，匹配不上就丢弃（宁漏勿错）。
+ */
+export interface SentenceChunk {
+  text: string;
+  chunkType: ChunkType;
+  /** 中文释义（一句话）。 */
+  gloss: string;
+  /** 槽位记法，如 "take on sth" / "attribute X to Y"。 */
+  pattern?: string;
+  /** 直译陷阱，如 "不是 make momentum"。 */
+  trap?: string;
+}
+
+/** 一篇文章的词块标注状态。 */
+export type ArticleChunkState = "pending" | "done" | "failed";
+
 /** 一个句对（最小朗读/高亮/遮罩单元）。 */
 export interface SentencePair {
   /** 全文序号，从 0。 */
@@ -26,6 +54,8 @@ export interface SentencePair {
   zhState: SentenceZhState;
   /** 遮罩模式下是否已揭开（运行时状态，随文章持久化）。 */
   revealed?: boolean;
+  /** LLM 标注的词块（en 定稿后写入）。 */
+  chunks?: SentenceChunk[];
 }
 
 /** 阅读进度（持久化在文章记录里）。 */
@@ -54,6 +84,8 @@ export interface Article {
   lastReadAt: number;
   progress: ArticleProgress;
   sentences: SentencePair[];
+  /** 词块标注进度；缺省 = 从未标注。 */
+  chunkState?: ArticleChunkState;
   /** 按文章覆盖的阅读设置；缺字段回落全局默认。 */
   settings?: Partial<ReaderSettings>;
 }
@@ -74,15 +106,25 @@ export interface VocabCollocation {
   cn: string;
 }
 
+/** 生词条目类别：单词 / 词块。缺省视为 "word"（老数据无需迁移）。 */
+export type VocabKind = "word" | "chunk";
+
 /** 生词（SRS 状态与到期计数同源）。 */
 export interface VocabWord {
   /** 归一化（小写、去首尾标点）后的唯一键。 */
   id: string;
   word: string;
+  kind?: VocabKind;
   phonetic?: string;
   senses: VocabSense[];
   forms?: string[];
   collocations?: VocabCollocation[];
+  /** kind=chunk 时的词块类型。 */
+  chunkType?: ChunkType;
+  /** 槽位记法。 */
+  pattern?: string;
+  /** 直译陷阱。 */
+  trap?: string;
   source: VocabSource;
   srs: VocabSrsState;
   addedAt: number;
@@ -128,6 +170,10 @@ export interface ReaderSettings {
   /** 每句停顿 0–2000ms。 */
   sentencePauseMs: number;
   shadowingMode: boolean;
+  /** 词块高亮：文章翻译完成后自动跑 LLM 词块标注（会额外消耗 token）。 */
+  chunkHighlight: boolean;
+  /** 生词再现标记：正文中标记已收藏的词/词块（纯本地计算）。 */
+  showVocabMarks: boolean;
 }
 
 export const DEFAULT_READER_SETTINGS: ReaderSettings = {
@@ -144,6 +190,8 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   rate: 1,
   sentencePauseMs: 0,
   shadowingMode: false,
+  chunkHighlight: true,
+  showVocabMarks: true,
 };
 
 /** 屏 B 字号步进器范围。 */
@@ -195,6 +243,8 @@ export function mergeReaderSettings(
     merged.sentencePauseMs = Math.min(2000, Math.max(0, Math.round(pause)));
   }
   merged.shadowingMode = bool(override.shadowingMode) ?? merged.shadowingMode;
+  merged.chunkHighlight = bool(override.chunkHighlight) ?? merged.chunkHighlight;
+  merged.showVocabMarks = bool(override.showVocabMarks) ?? merged.showVocabMarks;
   return merged;
 }
 

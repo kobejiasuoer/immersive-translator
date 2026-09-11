@@ -36,6 +36,38 @@ pub enum SentenceZhState {
     Edited,
 }
 
+/// 词块类型：搭配 / 短语动词 / 习语 / 句式框架。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChunkType {
+    Collocation,
+    Phrasal,
+    Idiom,
+    Pattern,
+}
+
+/// 句内标注的一个词块。text 必须是 en 的连续子串（前端解析时强校验）。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SentenceChunk {
+    pub text: String,
+    pub chunk_type: ChunkType,
+    pub gloss: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trap: Option<String>,
+}
+
+/// 一篇文章的词块标注状态。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ArticleChunkState {
+    Pending,
+    Done,
+    Failed,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SentencePair {
@@ -47,6 +79,8 @@ pub struct SentencePair {
     pub zh_state: SentenceZhState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revealed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunks: Option<Vec<SentenceChunk>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -89,6 +123,10 @@ pub struct ReaderSettingsOverride {
     pub sentence_pause_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadowing_mode: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_highlight: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_vocab_marks: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -109,6 +147,9 @@ pub struct Article {
     pub last_read_at: i64,
     pub progress: ArticleProgress,
     pub sentences: Vec<SentencePair>,
+    /// 词块标注进度；缺省 = 从未标注
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_state: Option<ArticleChunkState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<ReaderSettingsOverride>,
 }
@@ -164,12 +205,22 @@ pub struct VocabSource {
     pub sentence_idx: u32,
 }
 
+/// 生词条目类别：单词 / 词块。缺省视为 word（老数据无需迁移）。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum VocabKind {
+    Word,
+    Chunk,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct VocabWord {
     /// 归一化后的唯一键
     pub id: String,
     pub word: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<VocabKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phonetic: Option<String>,
     #[serde(default)]
@@ -178,6 +229,12 @@ pub struct VocabWord {
     pub forms: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collocations: Option<Vec<VocabCollocation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_type: Option<ChunkType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trap: Option<String>,
     pub source: VocabSource,
     pub srs: VocabSrsState,
     pub added_at: i64,
@@ -602,14 +659,79 @@ mod tests {
         assert_eq!(stats.streak, 2); // 今天 + 昨天
     }
 
+    #[test]
+    fn chunk_fields_roundtrip() {
+        // 前端会整体覆盖 Article / VocabWord，新增可选字段必须完整往返。
+        let json = r#"{
+            "id": "take on momentum",
+            "word": "take on momentum",
+            "kind": "chunk",
+            "phonetic": null,
+            "senses": [{ "pos": "搭配", "cn": "获得动力" }],
+            "chunkType": "collocation",
+            "pattern": "take on sth",
+            "trap": "不是 make momentum",
+            "source": { "articleId": "a1", "sentenceIdx": 3 },
+            "srs": { "ease": 2.5, "intervalDays": 0, "reps": 0, "dueAt": 1, "lapses": 0 },
+            "addedAt": 0
+        }"#;
+        let word: VocabWord = serde_json::from_str(json).expect("chunk vocab 反序列化");
+        assert_eq!(word.kind.as_ref(), Some(&VocabKind::Chunk));
+        assert_eq!(word.chunk_type.as_ref(), Some(&ChunkType::Collocation));
+        assert_eq!(word.pattern.as_deref(), Some("take on sth"));
+        assert_eq!(word.trap.as_deref(), Some("不是 make momentum"));
+        let out = serde_json::to_value(&word).unwrap();
+        assert_eq!(out["kind"], "chunk");
+        assert_eq!(out["chunkType"], "collocation");
+
+        let article_json = r#"{
+            "id": "a1", "title": "T", "titleCnState": "done", "sourceType": "paste",
+            "wordCount": 10, "createdAt": 0, "lastReadAt": 0,
+            "progress": { "sentenceIdx": 0, "percent": 0, "secondsListened": 0 },
+            "chunkState": "done",
+            "sentences": [{
+                "idx": 0, "paragraphIdx": 0, "en": "It took on momentum.", "zh": null,
+                "zhState": "pending",
+                "chunks": [{ "text": "took on momentum", "chunkType": "collocation",
+                             "gloss": "获得动力", "pattern": "take on sth" }]
+            }]
+        }"#;
+        let article: Article = serde_json::from_str(article_json).expect("chunk article 反序列化");
+        assert_eq!(article.chunk_state.as_ref(), Some(&ArticleChunkState::Done));
+        let chunks = article.sentences[0].chunks.as_deref().unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].chunk_type, ChunkType::Collocation);
+        assert_eq!(chunks[0].trap, None);
+        let out = serde_json::to_value(&article).unwrap();
+        assert_eq!(out["chunkState"], "done");
+        assert_eq!(out["sentences"][0]["chunks"][0]["chunkType"], "collocation");
+
+        // 老数据（无新字段）必须照常加载。
+        let legacy: Article = serde_json::from_str(
+            r#"{
+                "id": "a2", "title": "T", "titleCnState": "done", "sourceType": "paste",
+                "wordCount": 1, "createdAt": 0, "lastReadAt": 0,
+                "progress": { "sentenceIdx": 0, "percent": 0, "secondsListened": 0 },
+                "sentences": [{ "idx": 0, "paragraphIdx": 0, "en": "Hi.", "zh": null, "zhState": "pending" }]
+            }"#,
+        )
+        .expect("老文章无 chunk 字段可加载");
+        assert_eq!(legacy.chunk_state, None);
+        assert_eq!(legacy.sentences[0].chunks, None);
+    }
+
     fn vocab(id: &str, due_at: i64, interval_days: f64) -> VocabWord {
         VocabWord {
             id: id.into(),
             word: id.into(),
+            kind: None,
             phonetic: None,
             senses: vec![],
             forms: None,
             collocations: None,
+            chunk_type: None,
+            pattern: None,
+            trap: None,
             source: VocabSource {
                 article_id: "a1".into(),
                 sentence_idx: 0,

@@ -46,4 +46,21 @@ describe("mergeReaderSettings", () => {
     expect(merged.maskStyle).toBe("frost");
     expect(mergeReaderSettings(DEFAULT_READER_SETTINGS, { maskStyle: 3 as never }).maskStyle).toBe("blank");
   });
+
+  it("词块开关：布尔覆盖生效，非法类型拒绝回落全局", () => {
+    expect(DEFAULT_READER_SETTINGS.chunkHighlight).toBe(true);
+    expect(DEFAULT_READER_SETTINGS.showVocabMarks).toBe(true);
+    const merged = mergeReaderSettings(DEFAULT_READER_SETTINGS, {
+      chunkHighlight: false,
+      showVocabMarks: false,
+    });
+    expect(merged.chunkHighlight).toBe(false);
+    expect(merged.showVocabMarks).toBe(false);
+    const bad = mergeReaderSettings(DEFAULT_READER_SETTINGS, {
+      chunkHighlight: "off" as never,
+      showVocabMarks: 0 as never,
+    });
+    expect(bad.chunkHighlight).toBe(true);
+    expect(bad.showVocabMarks).toBe(true);
+  });
 });
