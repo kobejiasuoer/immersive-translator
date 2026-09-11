@@ -87,6 +87,27 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose }: Props) {
             </div>
           </div>
           <div className="drawer-row">
+            <span className="label">遮罩样式</span>
+            <div className="control">
+              <div className="seg" title="译文遮罩的隐藏样式（开关在视图菜单；关闭遮罩时不可选）">
+                <button
+                  className={settings.maskStyle === "blank" ? "active" : ""}
+                  disabled={!settings.maskTranslation}
+                  onClick={() => onPatch({ maskStyle: "blank" })}
+                >
+                  留白显影
+                </button>
+                <button
+                  className={settings.maskStyle === "frost" ? "active" : ""}
+                  disabled={!settings.maskTranslation}
+                  onClick={() => onPatch({ maskStyle: "frost" })}
+                >
+                  毛玻璃
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="drawer-row">
             <span className="label">正文字号</span>
             <div className="control">
               <div className="drawer-stepper">

@@ -37,4 +37,13 @@ describe("mergeReaderSettings", () => {
     expect(merged.sentencePauseMs).toBe(0); // 负数收紧到下限
     expect(merged.lineHeight).toBe(1); // 超范围拒绝
   });
+
+  it("遮罩样式：合法枚举采纳，非法拒绝回落全局", () => {
+    expect(mergeReaderSettings(DEFAULT_READER_SETTINGS, { maskStyle: "frost" }).maskStyle).toBe("frost");
+    const merged = mergeReaderSettings({ ...DEFAULT_READER_SETTINGS, maskStyle: "frost" }, {
+      maskStyle: "grid" as never,
+    });
+    expect(merged.maskStyle).toBe("frost");
+    expect(mergeReaderSettings(DEFAULT_READER_SETTINGS, { maskStyle: 3 as never }).maskStyle).toBe("blank");
+  });
 });

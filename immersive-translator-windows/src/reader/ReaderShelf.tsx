@@ -14,7 +14,7 @@ interface Props {
   onSelect: (id: string) => void;
   onOpenReview: () => void;
   onDelete: (id: string) => void;
-  onImportPaste: (text: string) => void;
+  onOpenImport: () => void;
 }
 
 export function ReaderShelf({
@@ -26,14 +26,9 @@ export function ReaderShelf({
   onSelect,
   onOpenReview,
   onDelete,
-  onImportPaste,
+  onOpenImport,
 }: Props) {
   const todayTotal = reviewedToday + dueNow;
-
-  function handleImport() {
-    const text = window.prompt("粘贴英文文章（空行分段）：");
-    if (text && text.trim()) onImportPaste(text);
-  }
 
   return (
     <aside className="reader-shelf">
@@ -42,8 +37,8 @@ export function ReaderShelf({
         <button
           className="reader-tb-btn"
           style={{ width: 22, height: 22 }}
-          onClick={handleImport}
-          title="粘贴导入文章"
+          onClick={onOpenImport}
+          title="导入文章（粘贴 / 打开 .txt）"
         >
           <IconPlus size={13} />
         </button>

@@ -60,6 +60,7 @@ import { PlayBar } from "./PlayBar";
 import { SettingsDrawer } from "./SettingsDrawer";
 import { DictColumn, type DictPanelState } from "./DictColumn";
 import { ReviewView } from "./ReviewView";
+import { ImportDialog } from "./ImportDialog";
 import { usePlayback } from "./usePlayback";
 import { IconNext, IconPause, IconPlay, IconPrev } from "../ui/icons";
 
@@ -83,6 +84,7 @@ export function ReaderApp() {
   const [toast, setToast] = useState("");
   const [translating, setTranslating] = useState<{ done: number; total: number } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [viewMenuAnchor, setViewMenuAnchor] = useState<{ top: number; right: number } | null>(null);
   const [dict, setDict] = useState<DictPanelState>({ status: "closed" });
   const [peekAll, setPeekAll] = useState(false);
@@ -568,8 +570,11 @@ export function ReaderApp() {
 
   // ---- 导入 / 删除 ----
   const importPaste = useCallback(
-    (text: string) => {
-      const built = buildArticleFromText(text, { sourceType: "paste" });
+    (text: string, title?: string) => {
+      const built = buildArticleFromText(text, {
+        sourceType: "paste",
+        ...(title ? { title } : {}),
+      });
       if (!built) {
         showToast("没有识别到正文内容");
         return;
@@ -808,7 +813,7 @@ export function ReaderApp() {
             onSelect={(id) => void openArticle(id)}
             onOpenReview={() => setView("review")}
             onDelete={deleteArticle}
-            onImportPaste={importPaste}
+            onOpenImport={() => setImportOpen(true)}
           />
         )}
 
@@ -839,7 +844,7 @@ export function ReaderApp() {
               onRetryParagraph={retryParagraph}
               onEditTranslation={editTranslation}
               onJumpTo={(idx) => playback.jumpTo(idx)}
-              onImportPaste={importPaste}
+              onOpenImport={() => setImportOpen(true)}
               onRetryTitle={retryTitle}
             />
             <DictColumn
@@ -900,6 +905,16 @@ export function ReaderApp() {
           onPatch={patchSettings}
           onReset={resetSettings}
           onClose={() => setDrawerOpen(false)}
+        />
+      )}
+
+      {importOpen && (
+        <ImportDialog
+          onClose={() => setImportOpen(false)}
+          onImport={(text, title) => {
+            setImportOpen(false);
+            importPaste(text, title);
+          }}
         />
       )}
 

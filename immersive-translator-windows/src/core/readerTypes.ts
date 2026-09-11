@@ -100,6 +100,9 @@ export interface VocabSrsState {
 /** 对照模式：仅英文 / 对照 / 仅中文。 */
 export type ContrastMode = "en" | "dual" | "zh";
 
+/** 译文遮罩样式：blank = 留白显影（悬停出胶囊），frost = 毛玻璃（模糊→揭开）。 */
+export type MaskStyle = "blank" | "frost";
+
 export type ReaderTheme = "light" | "dark" | "sepia" | "oled";
 
 /** 正文字体配对（屏 B 下拉）。 */
@@ -109,6 +112,7 @@ export type ReaderFontPair = "serif" | "sans";
 export interface ReaderSettings {
   contrastMode: ContrastMode;
   maskTranslation: boolean;
+  maskStyle: MaskStyle;
   showProgress: boolean;
   zenMode: boolean;
   theme: ReaderTheme;
@@ -129,6 +133,7 @@ export interface ReaderSettings {
 export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   contrastMode: "dual",
   maskTranslation: false,
+  maskStyle: "blank",
   showProgress: true,
   zenMode: false,
   theme: "light",
@@ -167,6 +172,7 @@ export function mergeReaderSettings(
 
   merged.contrastMode = oneOf(override.contrastMode, ["en", "dual", "zh"]) ?? merged.contrastMode;
   merged.maskTranslation = bool(override.maskTranslation) ?? merged.maskTranslation;
+  merged.maskStyle = oneOf(override.maskStyle, ["blank", "frost"]) ?? merged.maskStyle;
   merged.showProgress = bool(override.showProgress) ?? merged.showProgress;
   merged.zenMode = bool(override.zenMode) ?? merged.zenMode;
   merged.theme = oneOf(override.theme, ["light", "dark", "sepia", "oled"]) ?? merged.theme;

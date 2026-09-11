@@ -46,6 +46,7 @@
       "properties": {
         "contrastMode": { "type": "string", "enum": ["en", "dual", "zh"] },
         "maskTranslation": { "type": "boolean" },
+        "maskStyle": { "type": "string", "enum": ["blank", "frost"], "description": "遮罩样式：blank=留白显影，frost=毛玻璃" },
         "showProgress": { "type": "boolean" },
         "zenMode": { "type": "boolean" },
         "theme": { "type": "string", "enum": ["light", "dark", "sepia", "oled"] },

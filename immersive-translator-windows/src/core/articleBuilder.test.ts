@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildArticleFromText, countWords, normalizeWordKey } from "./articleBuilder";
+import {
+  buildArticleFromText,
+  countWords,
+  detectTitleFromText,
+  normalizeWordKey,
+} from "./articleBuilder";
 
 const SAMPLE = `The Speed of Reading
 
@@ -45,6 +50,40 @@ describe("buildArticleFromText", () => {
 
   it("空文本返回 null", () => {
     expect(buildArticleFromText("   \n  ")).toBeNull();
+  });
+
+  it("显式标题与识别首行相同时，首行仍不进正文", () => {
+    const article = buildArticleFromText(SAMPLE, { title: "The Speed of Reading" });
+    expect(article!.title).toBe("The Speed of Reading");
+    expect(article!.sentences[0].en).toBe(
+      "Reading speed was the goal, and comprehension was the test.",
+    );
+  });
+
+  it("显式标题与首行不同时，整段进正文、标题原样采用", () => {
+    const article = buildArticleFromText("Hotels and OTAs are not fooling anybody.", {
+      title: "我的读书笔记",
+    });
+    expect(article!.title).toBe("我的读书笔记");
+    expect(article!.sentences[0].en).toBe("Hotels and OTAs are not fooling anybody.");
+  });
+
+  it("显式标题为空白时回落到自动识别", () => {
+    const article = buildArticleFromText(SAMPLE, { title: "   " });
+    expect(article!.title).toBe("The Speed of Reading");
+  });
+});
+
+describe("detectTitleFromText", () => {
+  it("首行短且无句末标点时返回首行", () => {
+    expect(detectTitleFromText(SAMPLE)).toBe("The Speed of Reading");
+  });
+  it("首行带句末标点或超长时返回 null", () => {
+    expect(detectTitleFromText("First sentence goes here. Second one.")).toBeNull();
+    expect(detectTitleFromText("a".repeat(81))).toBeNull();
+  });
+  it("空文本返回 null", () => {
+    expect(detectTitleFromText("  ")).toBeNull();
   });
 });
 

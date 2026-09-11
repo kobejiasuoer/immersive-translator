@@ -509,28 +509,77 @@
   100% { background-position: -100% 0; }
 }
 
-/* ---------- 遮罩块（屏 E：26px 高、圆角 5、纯色块，不用 blur） ---------- */
-.cn-mask {
+/* ---------- 译文遮罩（屏 E）----------
+   两种可选样式（settings.maskStyle）：
+   A blank  留白显影：隐藏时按真实译文占位（visibility:hidden），
+            悬停浮现「显示译文」胶囊，点按揭开；
+   C frost  毛玻璃：译文一直在，模糊 + 低透明度盖住，点按「显影」。
+   揭开/暂显（peekAll）只切换 .revealed 类，因此都带过渡动画。 */
+.cn-slot {
+  position: relative;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.cn-slot:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+.cn-slot .zh-ghost {
+  position: absolute;
+  left: 0;
+  top: 1px;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 5px;
-  background: var(--mask-block);
-  color: var(--text-4);
-  font-size: 12px;
+  height: 24px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
   font-family: var(--font-ui);
-  cursor: pointer;
-  user-select: none;
-  border: none;
-  max-width: 100%;
-  overflow: hidden;
-  white-space: nowrap;
-  text-align: left;
+  font-size: 11.5px;
+  font-weight: 500;
+  opacity: 0;
+  transform: translateY(2px);
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
 }
-.cn-mask:hover {
-  color: var(--text-2);
+.cn-slot:hover .zh-ghost,
+.cn-slot:focus-visible .zh-ghost {
+  opacity: 1;
+  transform: none;
+}
+.cn-slot p {
+  visibility: hidden;
+}
+.cn-slot.revealed .zh-ghost {
+  display: none;
+}
+.cn-slot.revealed p {
+  visibility: visible;
+  animation: cn-reveal 0.4s ease;
+}
+@keyframes cn-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.cn-frost {
+  cursor: pointer;
+  filter: blur(9px);
+  opacity: 0.35;
+  user-select: none;
+  transition: filter 0.45s ease, opacity 0.45s ease;
+}
+.cn-frost:hover {
+  filter: blur(6px);
+  opacity: 0.5;
+}
+.cn-frost.revealed {
+  filter: blur(0);
+  opacity: 1;
+  user-select: auto;
+  cursor: pointer;
 }
 
 /* ---------- 播放条 72px ---------- */
@@ -1348,4 +1397,144 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
 [data-font="sans"] .pair-cn,
 [data-font="sans"] .reader-article-subtitle {
   font-family: var(--font-read-sans-cn);
+}
+
+/* ---------- 导入弹窗（书架 + / 空书架首屏共用，替代 window.prompt） ---------- */
+.reader-import-modal {
+  width: 640px;
+  max-width: calc(100vw - 48px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  animation: reader-modal-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+}
+@keyframes reader-modal-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.reader-import-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 20px 24px 0;
+}
+.reader-import-head h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+.reader-import-head p {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.reader-import-body {
+  padding: 16px 24px 4px;
+}
+.reader-import-label {
+  display: block;
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.reader-import-title-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 13.5px;
+  color: var(--text-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 8px 12px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.reader-import-title-input:focus {
+  border-color: var(--accent);
+}
+.reader-import-title-input::placeholder {
+  color: var(--text-4);
+}
+.reader-import-area {
+  width: 100%;
+  min-height: 216px;
+  resize: vertical;
+  margin-top: 14px;
+  font-family: var(--font-read-serif-en);
+  font-size: 14.5px;
+  line-height: 1.85;
+  color: var(--text-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 13px 15px;
+  outline: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.reader-import-area:focus {
+  border-color: var(--accent);
+  background: var(--surface);
+}
+.reader-import-area::placeholder {
+  color: var(--text-4);
+}
+.reader-import-error {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--err);
+}
+.reader-import-chip {
+  margin-top: 10px;
+  font-size: 12.5px;
+  border-radius: 9px;
+  padding: 7px 12px;
+  background: var(--accent-softer);
+  border: 1px dashed var(--accent-soft);
+  color: var(--text-2);
+  animation: fade-in 0.2s ease;
+}
+.reader-import-chip b {
+  color: var(--accent);
+  font-weight: 600;
+}
+.reader-import-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding: 0 2px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.reader-import-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px 20px;
+}
+.reader-import-txt-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 8px 10px;
+  border-radius: 8px;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.reader-import-txt-btn:hover {
+  color: var(--accent);
+  background: var(--accent-softer);
+}
+
+/* 遮罩样式选择（设置抽屉）：遮罩关闭时置灰 */
+.seg button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }

@@ -49,12 +49,27 @@ function pickTitle(text: string, firstSentence: string | undefined): string {
   return `${base.slice(0, TITLE_FALLBACK_MAX).trimEnd()}…`;
 }
 
+/** 导入弹窗的首行标题预览：首行 ≤80 字符且不带句末终结符才可作标题。 */
+export function detectTitleFromText(text: string): string | null {
+  const firstLine = text.trim().split(/\r?\n/, 1)[0]?.trim() ?? "";
+  if (!firstLine || firstLine.length > TITLE_MAX_FROM_FIRST_LINE) return null;
+  if (/[.!?…]$/.test(firstLine)) return null;
+  return firstLine;
+}
+
 /**
  * 从纯文本建文章。正文按段落切句；标题行（当被采用为首行时）不重复进正文。
+ * `options.title`：导入弹窗里用户显式给出的标题 —— 与识别出的首行相同时仍按
+ * 首行规则摘出标题；不同时整段文本都进正文，标题原样采用。
  */
 export function buildArticleFromText(
   text: string,
-  options: { sourceType?: ArticleSourceType; sourceUrl?: string; now?: number } = {},
+  options: {
+    sourceType?: ArticleSourceType;
+    sourceUrl?: string;
+    now?: number;
+    title?: string;
+  } = {},
 ): Article | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
@@ -64,7 +79,11 @@ export function buildArticleFromText(
     !!firstLine &&
     firstLine.length <= TITLE_MAX_FROM_FIRST_LINE &&
     !/[.!?…]$/.test(firstLine);
-  const bodyText = titleAsFirstLine ? trimmed.slice(firstLine.length).trim() : trimmed;
+  const explicitTitle = options.title?.trim() ?? "";
+  const bodyText =
+    titleAsFirstLine && (!explicitTitle || explicitTitle === firstLine)
+      ? trimmed.slice(firstLine.length).trim()
+      : trimmed;
 
   const paragraphs = splitParagraphs(bodyText);
   if (paragraphs.length === 0) return null;
@@ -81,7 +100,9 @@ export function buildArticleFromText(
       });
     }
   }
-  const title = pickTitle(titleAsFirstLine ? `${firstLine}\n${bodyText}` : trimmed, sentences[0]?.en);
+  const title = explicitTitle
+    ? explicitTitle
+    : pickTitle(titleAsFirstLine ? `${firstLine}\n${bodyText}` : trimmed, sentences[0]?.en);
 
   const now = options.now ?? Date.now();
   return {

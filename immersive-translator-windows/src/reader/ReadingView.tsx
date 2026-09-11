@@ -29,7 +29,7 @@ interface Props {
   onRetryParagraph: (paragraphIdx: number) => void;
   onEditTranslation: (idx: number, zh: string) => void;
   onJumpTo: (idx: number) => void;
-  onImportPaste: (text: string) => void;
+  onOpenImport: () => void;
   onRetryTitle: () => void;
 }
 
@@ -113,7 +113,7 @@ export function ReadingView(props: Props) {
   if (!article) {
     return (
       <div className="reader-stage">
-        <EmptyState onImportPaste={props.onImportPaste} />
+        <EmptyState onOpenImport={props.onOpenImport} />
       </div>
     );
   }
@@ -136,11 +136,11 @@ export function ReadingView(props: Props) {
             <span className="eye">
               <IconEyeOff size={14} />
             </span>
-            <span className="title">译文遮罩 · 自测模式</span>
+            <span className="title">译文遮罩</span>
             <span className="count">
               {revealedCount} / {maskableCount} 已揭开
             </span>
-            <span className="hint">点单句揭开 · 按住 H 临时显示全部 · 播放时只高亮英文</span>
+            <span className="hint">点单句揭开 · 揭开后点中文定位 · 按住 H 临时显示全部</span>
             <button className="btn btn-secondary btn-sm" onClick={props.onRevealAll}>
               全部揭开
             </button>
@@ -193,7 +193,9 @@ export function ReadingView(props: Props) {
               const prev = sentences[s.idx - 1];
               const isParaStart = !prev || prev.paragraphIdx !== s.paragraphIdx;
               const isActive = s.idx === activeIdx;
-              const masked = maskOn && !!s.zh && !s.revealed && !peekAll;
+              // 罩层挂点：有译文且非失败、非编辑中。揭开/暂显（H）只切换样式类。
+              const maskSlot = maskOn && !!s.zh && s.zhState !== "failed" && editingIdx !== s.idx;
+              const maskShown = maskSlot && (!!s.revealed || peekAll);
               return (
                 <div
                   key={s.idx}
@@ -210,15 +212,38 @@ export function ReadingView(props: Props) {
                     {s.en}
                   </p>
 
-                  {masked ? (
-                    <button
-                      className="cn-mask"
-                      onClick={() => props.onReveal(s.idx)}
-                      title="点按查看译文"
-                    >
-                      <IconEyeOff size={12} />
-                      点按查看译文
-                    </button>
+                  {maskSlot ? (
+                    settings.maskStyle === "frost" ? (
+                      // 方案 C · 毛玻璃：译文一直在，模糊盖住；点击「显影」
+                      <p
+                        className={`pair-cn cn-frost${maskShown ? " revealed" : ""}`}
+                        onClick={() => (maskShown ? props.onJumpTo(s.idx) : props.onReveal(s.idx))}
+                        title={maskShown ? "点中文定位到对应英文句" : "点按显示译文"}
+                      >
+                        {s.zh}
+                      </p>
+                    ) : (
+                      // 方案 A · 留白显影：隐藏时无痕占位，悬停浮现「显示译文」
+                      <div
+                        className={`cn-slot${maskShown ? " revealed" : ""}`}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={maskShown ? "点按定位对应英文句" : "显示译文"}
+                        onClick={() => (maskShown ? props.onJumpTo(s.idx) : props.onReveal(s.idx))}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            if (maskShown) props.onJumpTo(s.idx);
+                            else props.onReveal(s.idx);
+                          }
+                        }}
+                      >
+                        <span className="zh-ghost" aria-hidden>
+                          显示译文
+                        </span>
+                        <p className="pair-cn">{s.zh}</p>
+                      </div>
+                    )
                   ) : s.zhState === "pending" ? (
                     translating || s.zh ? (
                       s.zh ? (
@@ -307,8 +332,7 @@ function wordAtPoint(x: number, y: number, container: HTMLElement): string | nul
   return word.length > 0 && word.length <= 40 ? word : null;
 }
 
-function EmptyState({ onImportPaste }: { onImportPaste: (text: string) => void }) {
-  const [draft, setDraft] = useState("");
+function EmptyState({ onOpenImport }: { onOpenImport: () => void }) {
   return (
     <div className="reader-scroll">
       <div className="reader-empty-state" style={{ height: "100%" }}>
@@ -321,23 +345,8 @@ function EmptyState({ onImportPaste }: { onImportPaste: (text: string) => void }
           <span className="kbd"> Ctrl</span>+<span className="kbd">Shift</span>+
           <span className="kbd">R</span>。也可以直接粘贴：
         </div>
-        <textarea
-          className="textarea"
-          style={{ width: 460, maxWidth: "86%", height: 120, marginTop: 8 }}
-          placeholder={"粘贴英文文章，空行分段。\n例：The Speed of Reading\n\nReading speed was the goal, and comprehension was the test."}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-        />
-        <button
-          className="btn btn-primary"
-          style={{ marginTop: 10 }}
-          disabled={!draft.trim()}
-          onClick={() => {
-            onImportPaste(draft);
-            setDraft("");
-          }}
-        >
-          导入并开始阅读
+        <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={onOpenImport}>
+          粘贴导入文章
         </button>
       </div>
     </div>

@@ -68,6 +68,8 @@ pub struct ReaderSettingsOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mask_translation: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask_style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_progress: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zen_mode: Option<bool>,
