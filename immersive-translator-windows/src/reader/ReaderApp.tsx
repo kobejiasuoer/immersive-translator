@@ -52,6 +52,12 @@ import {
   entryToVocab,
   parseReaderDictResponse,
 } from "../core/readerDict";
+import {
+  buildChunkAnnotateSystemPrompt,
+  buildChunkBatchInput,
+  chunkBatches,
+  parseChunkResponse,
+} from "../core/chunkAnnotate";
 import "./reader.css";
 import { ReaderTopBar, ViewMenu } from "./ReaderTopBar";
 import { ReaderShelf } from "./ReaderShelf";
@@ -83,6 +89,7 @@ export function ReaderApp() {
   const [view, setView] = useState<ViewRoute>("reading");
   const [toast, setToast] = useState("");
   const [translating, setTranslating] = useState<{ done: number; total: number } | null>(null);
+  const [chunking, setChunking] = useState<{ done: number; total: number } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [viewMenuAnchor, setViewMenuAnchor] = useState<{ top: number; right: number } | null>(null);
@@ -99,6 +106,13 @@ export function ReaderApp() {
   const toastTimerRef = useRef<number | null>(null);
   /** 阅读室热键导入去重（挂载取件与事件送达两条路径共享同一 nonce）。 */
   const importNonceRef = useRef("");
+  /** 词块标注并发闸（同一时刻只允许一篇文章在标）。 */
+  const annotatingRef = useRef(false);
+  /** ensureAnnotated 读实时合并设置，避免渲染闭包过期。 */
+  const globalSettingsRef = useRef(globalSettings);
+  useEffect(() => {
+    globalSettingsRef.current = globalSettings;
+  }, [globalSettings]);
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -262,6 +276,59 @@ export function ReaderApp() {
     [scheduleSave],
   );
 
+  // ---- 词块标注（文章翻译完成后按批跑；切走文章即停） ----
+  const ensureAnnotated = useCallback(async () => {
+    const a = articleRef.current;
+    if (!a || annotatingRef.current) return;
+    // 设置读实时合并值：开关状态可能来自全局默认或文章覆盖。
+    if (!mergeReaderSettings(globalSettingsRef.current, a.settings).chunkHighlight) return;
+    if (a.chunkState === "done") return;
+    const s = await loadSettingsAsync().catch(() => null);
+    if (!s || !hasValidSettings(s)) return; // 翻译路径已提示过配接口
+    annotatingRef.current = true;
+    try {
+      const firstEn = a.sentences[0]?.en ?? a.title;
+      const target = resolveTargetLanguage(firstEn, { mode: s.translationMode, fixed: s.fixedTarget });
+      const batches = chunkBatches(a.sentences.map((st) => ({ idx: st.idx, en: st.en })));
+      if (batches.length === 0) {
+        patchArticle((cur) => ({ ...cur, chunkState: "done" }));
+        return;
+      }
+      const system = buildChunkAnnotateSystemPrompt(target);
+      setChunking({ done: 0, total: batches.length });
+      let marked = 0;
+      let anyError = false;
+      let done = 0;
+      for (const batch of batches) {
+        if (articleRef.current?.id !== a.id) return; // 切走文章，整批终止
+        const tag = `rc${++translateSeqRef.current}`;
+        const res = await requestTranslate(buildChunkBatchInput(batch), system, tag);
+        if (res.status === "done") {
+          const byIdx = parseChunkResponse(res.text, batch);
+          if (byIdx.size > 0) {
+            marked += [...byIdx.values()].reduce((n, list) => n + list.length, 0);
+            patchArticle((cur) => ({
+              ...cur,
+              sentences: cur.sentences.map((st) => {
+                const chunks = byIdx.get(st.idx);
+                return chunks ? { ...st, chunks } : st;
+              }),
+            }));
+          }
+        } else {
+          anyError = true;
+        }
+        done += 1;
+        setChunking(done < batches.length ? { done, total: batches.length } : null);
+      }
+      patchArticle((cur) => ({ ...cur, chunkState: anyError && marked === 0 ? "failed" : "done" }));
+      if (anyError && marked === 0) showToast("词块标注失败，可在设置里重试");
+    } finally {
+      annotatingRef.current = false;
+      setChunking(null);
+    }
+  }, [patchArticle, requestTranslate, showToast]);
+
   // ---- 设置（全局 + 文章覆盖，见 §6 屏 B 职责划分） ----
   const patchSettings = useCallback(
     (patch: Partial<ReaderSettings>) => {
@@ -269,8 +336,12 @@ export function ReaderApp() {
       setGlobalSettings(merged);
       saveGlobalReaderSettings(merged);
       patchArticle((a) => ({ ...a, settings: { ...(a.settings ?? {}), ...patch } }));
+      // 开关从关到开：当前文章立刻补标（scheduleSave 已同步 articleRef）。
+      if (patch.chunkHighlight === true && articleRef.current?.chunkState !== "done") {
+        void ensureAnnotated();
+      }
     },
-    [globalSettings, patchArticle],
+    [globalSettings, patchArticle, ensureAnnotated],
   );
 
   const resetSettings = useCallback(() => {
@@ -300,7 +371,11 @@ export function ReaderApp() {
       }
       const pendingGroups = [...groups.entries()].sort((a, b) => a[0] - b[0]);
       const titlePending = input.titleCnState === "pending";
-      if (!titlePending && pendingGroups.length === 0) return;
+      if (!titlePending && pendingGroups.length === 0) {
+        // 已翻完的老文章打开时在此补跑词块标注。
+        void ensureAnnotated();
+        return;
+      }
 
       setTranslating({ done: 0, total: pendingGroups.length });
 
@@ -372,6 +447,8 @@ export function ReaderApp() {
         setTranslating(done < pendingGroups.length ? { done, total: pendingGroups.length } : null);
       }
       setTranslating(null);
+      // 翻译完成后紧接词块标注（同一请求路由顺序执行，不与翻译并发）。
+      void ensureAnnotated();
 
       function markParagraphFailed(group: SentencePair[]) {
         patchArticle((a) => ({
@@ -382,7 +459,7 @@ export function ReaderApp() {
         }));
       }
     },
-    [requestTranslate, patchArticle, showToast],
+    [requestTranslate, patchArticle, showToast, ensureAnnotated],
   );
 
   const retryParagraph = useCallback(
@@ -825,6 +902,7 @@ export function ReaderApp() {
               settings={effectiveSettings}
               activeIdx={playback.activeIdx}
               translating={translating}
+              chunking={chunking}
               peekAll={peekAll}
               searchMatchIdx={searchMatchIdx}
               onReveal={(idx) =>

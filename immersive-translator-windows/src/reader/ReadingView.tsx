@@ -18,6 +18,8 @@ interface Props {
   settings: ReaderSettings;
   activeIdx: number;
   translating: { done: number; total: number } | null;
+  /** 词块标注进度（翻译完成后跑，与 translating 互斥显示）。 */
+  chunking: { done: number; total: number } | null;
   /** 遮罩模式下按住 H 的临时全显（不改变已揭开状态）。 */
   peekAll: boolean;
   searchMatchIdx: number | null;
@@ -38,7 +40,7 @@ interface Props {
 const WORD_CHARS = /[A-Za-z0-9'’-]/;
 
 export function ReadingView(props: Props) {
-  const { article, settings, activeIdx, translating, peekAll, searchMatchIdx } = props;
+  const { article, settings, activeIdx, translating, chunking, peekAll, searchMatchIdx } = props;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pairRefs = useRef(new Map<number, HTMLDivElement>());
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
@@ -183,6 +185,11 @@ export function ReadingView(props: Props) {
               {translating && (
                 <span className="chip chip-amber">
                   翻译中 {translating.done}/{translating.total} 段
+                </span>
+              )}
+              {!translating && chunking && (
+                <span className="chip chip-amber">
+                  词块标注中 {chunking.done}/{chunking.total} 批
                 </span>
               )}
               {showResume && !translating && (
