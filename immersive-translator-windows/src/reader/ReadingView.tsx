@@ -22,7 +22,9 @@ interface Props {
   peekAll: boolean;
   searchMatchIdx: number | null;
   onReveal: (idx: number) => void;
+  onMask: (idx: number) => void;
   onRevealAll: () => void;
+  onMaskAll: () => void;
   onSelection: (idx: number, text: string) => void;
   onWordClick: (idx: number, word: string) => void;
   onSpeakSentence: (idx: number) => void;
@@ -140,10 +142,17 @@ export function ReadingView(props: Props) {
             <span className="count">
               {revealedCount} / {maskableCount} 已揭开
             </span>
-            <span className="hint">点单句揭开 · 揭开后点中文定位 · 按住 H 临时显示全部</span>
-            <button className="btn btn-secondary btn-sm" onClick={props.onRevealAll}>
-              全部揭开
-            </button>
+            <span className="hint">点单句揭开 / 再点遮住 · 按住 H 临时显示全部</span>
+            {revealedCount < maskableCount && (
+              <button className="btn btn-secondary btn-sm" onClick={props.onRevealAll}>
+                全部揭开
+              </button>
+            )}
+            {revealedCount > 0 && (
+              <button className="btn btn-secondary btn-sm" onClick={props.onMaskAll}>
+                全部遮住
+              </button>
+            )}
           </div>
         )}
 
@@ -214,26 +223,26 @@ export function ReadingView(props: Props) {
 
                   {maskSlot ? (
                     settings.maskStyle === "frost" ? (
-                      // 方案 C · 毛玻璃：译文一直在，模糊盖住；点击「显影」
+                      // 方案 C · 毛玻璃：译文一直在，模糊盖住；点击「显影」，再点重新遮住
                       <p
                         className={`pair-cn cn-frost${maskShown ? " revealed" : ""}`}
-                        onClick={() => (maskShown ? props.onJumpTo(s.idx) : props.onReveal(s.idx))}
-                        title={maskShown ? "点中文定位到对应英文句" : "点按显示译文"}
+                        onClick={() => (maskShown ? props.onMask(s.idx) : props.onReveal(s.idx))}
+                        title={maskShown ? "点按重新遮住" : "点按显示译文"}
                       >
                         {s.zh}
                       </p>
                     ) : (
-                      // 方案 A · 留白显影：隐藏时无痕占位，悬停浮现「显示译文」
+                      // 方案 A · 留白显影：隐藏时无痕占位，悬停浮现「显示译文」；揭开后再点重新遮住
                       <div
                         className={`cn-slot${maskShown ? " revealed" : ""}`}
                         role="button"
                         tabIndex={0}
-                        aria-label={maskShown ? "点按定位对应英文句" : "显示译文"}
-                        onClick={() => (maskShown ? props.onJumpTo(s.idx) : props.onReveal(s.idx))}
+                        aria-label={maskShown ? "点按重新遮住译文" : "显示译文"}
+                        onClick={() => (maskShown ? props.onMask(s.idx) : props.onReveal(s.idx))}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
-                            if (maskShown) props.onJumpTo(s.idx);
+                            if (maskShown) props.onMask(s.idx);
                             else props.onReveal(s.idx);
                           }
                         }}

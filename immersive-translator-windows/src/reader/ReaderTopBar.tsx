@@ -142,7 +142,7 @@ export function ReaderTopBar({ articleName, settings, onPatchSettings, onOpenDra
               <span className="kbd">Esc</span> 关闭浮层
             </div>
             <div style={{ marginTop: 6, color: "var(--text-3)" }}>
-              译文遮罩开启时，朗读只高亮英文；点中文遮罩块可单句揭开。
+              译文遮罩开启时，朗读只高亮英文；点单句揭开，再点一次重新遮住。
             </div>
           </div>
         )}

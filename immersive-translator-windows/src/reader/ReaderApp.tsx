@@ -833,10 +833,22 @@ export function ReaderApp() {
                   sentences: a.sentences.map((st) => (st.idx === idx ? { ...st, revealed: true } : st)),
                 }))
               }
+              onMask={(idx) =>
+                patchArticle((a) => ({
+                  ...a,
+                  sentences: a.sentences.map((st) => (st.idx === idx ? { ...st, revealed: false } : st)),
+                }))
+              }
               onRevealAll={() =>
                 patchArticle((a) => ({
                   ...a,
                   sentences: a.sentences.map((st) => (st.zh ? { ...st, revealed: true } : st)),
+                }))
+              }
+              onMaskAll={() =>
+                patchArticle((a) => ({
+                  ...a,
+                  sentences: a.sentences.map((st) => (st.zh ? { ...st, revealed: false } : st)),
                 }))
               }
               onSelection={(idx, text) => void lookup(text, idx)}
