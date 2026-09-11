@@ -384,12 +384,12 @@ fn trigger_reader(app: &AppHandle) {
                         .map(|d| d.as_nanos())
                         .unwrap_or(0)
                 );
-                let payload = ReaderImportPayload { text, nonce: nonce.clone() };
-                *app_handle
-                    .state::<PendingReaderImport>()
-                    .0
-                    .lock()
-                    .unwrap() = Some(payload.clone());
+                let payload = ReaderImportPayload {
+                    text,
+                    nonce: nonce.clone(),
+                };
+                *app_handle.state::<PendingReaderImport>().0.lock().unwrap() =
+                    Some(payload.clone());
                 show_reader_window(&app_handle);
                 // 窗口已存在时不会重新挂载，事件路径负责送达；nonce 去重。
                 let _ = app_handle.emit_to("reader", "reader:import", payload);
@@ -430,7 +430,9 @@ fn show_reader_window(app: &AppHandle) {
 
 /// 阅读室窗口挂载时取走待导入文本（与 panel 的 take_pending_panel_payload 同模式）。
 #[tauri::command]
-fn take_pending_reader_import(state: tauri::State<'_, PendingReaderImport>) -> Option<ReaderImportPayload> {
+fn take_pending_reader_import(
+    state: tauri::State<'_, PendingReaderImport>,
+) -> Option<ReaderImportPayload> {
     state.0.lock().unwrap().take()
 }
 
@@ -616,10 +618,7 @@ fn reregister_hotkeys(
     let r_shortcut = parse((r, "阅读室热键"))?;
 
     let active = app.state::<ActiveHotkeys>();
-    let mut current = active
-        .0
-        .lock()
-        .map_err(|_| "热键状态不可用".to_string())?;
+    let mut current = active.0.lock().map_err(|_| "热键状态不可用".to_string())?;
     let mut slots = vec![
         HotkeySlot {
             name: "翻译热键",
@@ -742,19 +741,34 @@ mod hotkey_switch_tests {
             ],
             &[],
         );
-        let switched =
-            switch_hotkeys(&mut slots, make_unregister(&calls, &[]), make_persist(&calls))
-                .unwrap();
+        let switched = switch_hotkeys(
+            &mut slots,
+            make_unregister(&calls, &[]),
+            make_persist(&calls),
+        )
+        .unwrap();
         assert!(switched);
         let list = calls.borrow().clone();
         let id_alt_t = shortcut("Alt+Shift+Q").id();
         let id_alt_o = shortcut("Alt+Shift+E").id();
         let id_cur_t = shortcut("Ctrl+Shift+Q").id();
         let id_cur_o = shortcut("Ctrl+Shift+E").id();
-        let idx_rt = list.iter().position(|c| *c == Call::Register(id_alt_t)).unwrap();
-        let idx_un_t = list.iter().position(|c| *c == Call::Unregister(id_cur_t)).unwrap();
-        let idx_ro = list.iter().position(|c| *c == Call::Register(id_alt_o)).unwrap();
-        let idx_un_o = list.iter().position(|c| *c == Call::Unregister(id_cur_o)).unwrap();
+        let idx_rt = list
+            .iter()
+            .position(|c| *c == Call::Register(id_alt_t))
+            .unwrap();
+        let idx_un_t = list
+            .iter()
+            .position(|c| *c == Call::Unregister(id_cur_t))
+            .unwrap();
+        let idx_ro = list
+            .iter()
+            .position(|c| *c == Call::Register(id_alt_o))
+            .unwrap();
+        let idx_un_o = list
+            .iter()
+            .position(|c| *c == Call::Unregister(id_cur_o))
+            .unwrap();
         // 注册必须发生在注销之前
         assert!(
             idx_rt < idx_un_t && idx_ro < idx_un_o,
@@ -773,9 +787,12 @@ mod hotkey_switch_tests {
             ],
             &[],
         );
-        let switched =
-            switch_hotkeys(&mut slots, make_unregister(&calls, &[]), make_persist(&calls))
-                .unwrap();
+        let switched = switch_hotkeys(
+            &mut slots,
+            make_unregister(&calls, &[]),
+            make_persist(&calls),
+        )
+        .unwrap();
         assert!(!switched);
         assert_eq!(
             calls.borrow().clone(),
@@ -832,7 +849,11 @@ mod hotkey_switch_tests {
             ],
             &["Alt+Shift+Q"],
         );
-        let result = switch_hotkeys(&mut slots, make_unregister(&calls, &[]), make_persist(&calls));
+        let result = switch_hotkeys(
+            &mut slots,
+            make_unregister(&calls, &[]),
+            make_persist(&calls),
+        );
         assert!(result.is_err());
         // OCR 键未变化不进入注册/回滚分支；翻译键注册失败直接返回，不回滚也不持久化
         assert_eq!(calls.borrow().clone(), vec![]);
@@ -892,9 +913,12 @@ mod hotkey_switch_tests {
             ],
             &[],
         );
-        let switched =
-            switch_hotkeys(&mut slots, make_unregister(&calls, &[]), make_persist(&calls))
-                .unwrap();
+        let switched = switch_hotkeys(
+            &mut slots,
+            make_unregister(&calls, &[]),
+            make_persist(&calls),
+        )
+        .unwrap();
         assert!(switched);
         let id_old_r = shortcut("Ctrl+Shift+R").id();
         let id_new_r = shortcut("Ctrl+Alt+R").id();
@@ -925,13 +949,26 @@ mod hotkey_switch_tests {
             ],
             &[],
         );
-        let switched =
-            switch_hotkeys(&mut slots, make_unregister(&calls, &[]), make_persist(&calls))
-                .unwrap();
+        let switched = switch_hotkeys(
+            &mut slots,
+            make_unregister(&calls, &[]),
+            make_persist(&calls),
+        )
+        .unwrap();
         assert!(switched);
         let list = calls.borrow().clone();
-        assert_eq!(list.iter().filter(|c| matches!(c, Call::Register(_))).count(), 3);
-        assert_eq!(list.iter().filter(|c| matches!(c, Call::Unregister(_))).count(), 3);
+        assert_eq!(
+            list.iter()
+                .filter(|c| matches!(c, Call::Register(_)))
+                .count(),
+            3
+        );
+        assert_eq!(
+            list.iter()
+                .filter(|c| matches!(c, Call::Unregister(_)))
+                .count(),
+            3
+        );
         let persist = list
             .iter()
             .find_map(|c| match c {

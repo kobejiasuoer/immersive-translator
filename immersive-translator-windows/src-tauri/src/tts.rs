@@ -25,7 +25,7 @@ use tauri::{AppHandle, Emitter, State};
 use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::Media::Speech::{
     ISpEventSource, ISpObjectToken, ISpVoice, SpVoice, SPEI_SENTENCE_BOUNDARY, SPEI_WORD_BOUNDARY,
-    SPVOICESTATUS, SPF_ASYNC, SPF_PURGEBEFORESPEAK, SPEVENT,
+    SPEVENT, SPF_ASYNC, SPF_PURGEBEFORESPEAK, SPVOICESTATUS,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
@@ -71,7 +71,9 @@ fn map_rate(rate: f64) -> i32 {
     if rate <= 0.0 || !rate.is_finite() {
         return 0;
     }
-    ((rate.ln() / std::f64::consts::LN_2) * 10.0).round().clamp(-10.0, 10.0) as i32
+    ((rate.ln() / std::f64::consts::LN_2) * 10.0)
+        .round()
+        .clamp(-10.0, 10.0) as i32
 }
 
 struct VoiceEntry {
@@ -174,7 +176,14 @@ fn tts_worker(
 
     while let Ok(cmd) = rx.recv() {
         match cmd {
-            TtsCommand::Speak { text, chinese, gen, target, rate, voice: voice_name } => {
+            TtsCommand::Speak {
+                text,
+                chinese,
+                gen,
+                target,
+                rate,
+                voice: voice_name,
+            } => {
                 // 代数已被后续朗读/停止推进：本次直接跳过，但仍发结束事件保持前端配对。
                 if interrupt.load(Ordering::SeqCst) == gen {
                     unsafe {
@@ -289,7 +298,11 @@ fn drain_boundary_events(
         // SAPI 用 wParam 存长度、lParam 存起点；防御性钳制到文本范围内。
         let raw_start = event.lParam.0 as i64;
         let raw_len = event.wParam.0 as i64;
-        let char_start = if raw_start < 0 { 0 } else { raw_start.min(text_len as i64) };
+        let char_start = if raw_start < 0 {
+            0
+        } else {
+            raw_start.min(text_len as i64)
+        };
         let char_length = raw_len.clamp(0, text_len as i64 - char_start);
         let _ = app.emit_to(
             target,
@@ -413,29 +426,26 @@ pub fn tts_voices() -> Result<Vec<TtsVoiceInfo>, String> {
     let (tx, rx) = channel::<Result<Vec<TtsVoiceInfo>, String>>();
     std::thread::Builder::new()
         .name("tts-enum".to_string())
-        .spawn(move || {
-            unsafe {
-                let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-                if hr.is_err() {
-                    let _ = tx.send(Err(format!("TTS COM 初始化失败：{hr}")));
-                    return;
-                }
-                let result = (|| -> Result<Vec<TtsVoiceInfo>, String> {
-                    let voice: ISpVoice =
-                        CoCreateInstance(&SpVoice, None, CLSCTX_INPROC_SERVER)
-                            .map_err(|e| format!("创建 SpVoice 失败：{e}"))?;
-                    Ok(enumerate_voices(&voice)
-                        .map_err(|e| format!("枚举音色失败：{e}"))?
-                        .into_iter()
-                        .map(|v| TtsVoiceInfo {
-                            name: v.name,
-                            chinese: lcid_is_chinese(&v.lang),
-                        })
-                        .collect())
-                })();
-                let _ = tx.send(result);
-                windows::Win32::System::Com::CoUninitialize();
+        .spawn(move || unsafe {
+            let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            if hr.is_err() {
+                let _ = tx.send(Err(format!("TTS COM 初始化失败：{hr}")));
+                return;
             }
+            let result = (|| -> Result<Vec<TtsVoiceInfo>, String> {
+                let voice: ISpVoice = CoCreateInstance(&SpVoice, None, CLSCTX_INPROC_SERVER)
+                    .map_err(|e| format!("创建 SpVoice 失败：{e}"))?;
+                Ok(enumerate_voices(&voice)
+                    .map_err(|e| format!("枚举音色失败：{e}"))?
+                    .into_iter()
+                    .map(|v| TtsVoiceInfo {
+                        name: v.name,
+                        chinese: lcid_is_chinese(&v.lang),
+                    })
+                    .collect())
+            })();
+            let _ = tx.send(result);
+            windows::Win32::System::Com::CoUninitialize();
         })
         .map_err(|e| format!("枚举线程创建失败：{e}"))?;
     rx.recv().map_err(|_| "枚举线程无响应".to_string())?

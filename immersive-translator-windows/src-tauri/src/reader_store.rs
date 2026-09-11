@@ -266,7 +266,8 @@ fn load_articles(app: &AppHandle) -> Result<ArticlesFile, String> {
     if text.trim().is_empty() {
         return Ok(empty_articles_file());
     }
-    let file: ArticlesFile = serde_json::from_str(&text).map_err(|e| format!("文章数据损坏: {e}"))?;
+    let file: ArticlesFile =
+        serde_json::from_str(&text).map_err(|e| format!("文章数据损坏: {e}"))?;
     check_schema(file.schema_version)?;
     Ok(file)
 }
@@ -325,7 +326,8 @@ fn summary(article: Article) -> ArticleSummary {
 pub fn reader_list_articles(app: AppHandle) -> Result<Vec<ArticleSummary>, String> {
     let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
     let mut file = load_articles(&app)?;
-    file.articles.sort_by(|a, b| b.last_read_at.cmp(&a.last_read_at));
+    file.articles
+        .sort_by(|a, b| b.last_read_at.cmp(&a.last_read_at));
     Ok(file.articles.into_iter().map(summary).collect())
 }
 
@@ -429,7 +431,10 @@ pub fn reader_record_review(
     if let Some(entry) = file.review_log.days.iter_mut().find(|d| d.day == day) {
         entry.count += 1;
     } else {
-        file.review_log.days.push(ReviewLogDay { day: day.clone(), count: 1 });
+        file.review_log.days.push(ReviewLogDay {
+            day: day.clone(),
+            count: 1,
+        });
     }
     file.review_log.schema_version = READER_SCHEMA_VERSION;
     write_atomic(
@@ -463,8 +468,12 @@ fn compute_stats(file: &VocabFile, today: &str, now_ms: i64) -> ReviewStats {
         }
     }
     // streak：今天（若今天没打卡则从昨天）起连续有打卡记录的天数。
-    let days: std::collections::HashSet<&str> =
-        file.review_log.days.iter().map(|d| d.day.as_str()).collect();
+    let days: std::collections::HashSet<&str> = file
+        .review_log
+        .days
+        .iter()
+        .map(|d| d.day.as_str())
+        .collect();
     let yesterday = shift_day_key(today, -1);
     let mut streak = 0u32;
     let mut cursor: String = if days.contains(today) {

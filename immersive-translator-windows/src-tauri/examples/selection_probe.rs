@@ -15,7 +15,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_CONTROL,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, SetForegroundWindow,
+    GetClassNameW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+    SetForegroundWindow,
 };
 
 use windows::core::BSTR;
@@ -24,8 +25,7 @@ use windows::Win32::System::Com::{
     COINIT_DISABLE_OLE1DDE,
 };
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern,
-    UIA_TextPatternId,
+    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern, UIA_TextPatternId,
 };
 
 fn now_ms() -> u128 {
@@ -97,7 +97,10 @@ fn inspect_element(tag: &str, element: &IUIAutomationElement) {
                                         } else {
                                             s.clone()
                                         };
-                                        println!("[{tag}]   range[{i}] len={} {short:?}", s.chars().count());
+                                        println!(
+                                            "[{tag}]   range[{i}] len={} {short:?}",
+                                            s.chars().count()
+                                        );
                                     }
                                 },
                             }
@@ -123,7 +126,9 @@ fn probe_uia_once(automation: &IUIAutomation, hwnd_ptr: isize) {
     }
 
     if hwnd != 0 {
-        match unsafe { automation.ElementFromHandle(windows::Win32::Foundation::HWND(hwnd as *mut _)) } {
+        match unsafe {
+            automation.ElementFromHandle(windows::Win32::Foundation::HWND(hwnd as *mut _))
+        } {
             Err(e) => println!("[fg] ElementFromHandle 失败: {e}"),
             Ok(el) => inspect_element("toplevel", &el),
         }
@@ -273,19 +278,21 @@ fn run_auto(hwnd_target: isize) {
 
     // ---- 路径 1：UIA（对齐 uia.rs：focused → toplevel，重试 3 次 × 150ms）----
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
-    let automation: IUIAutomation = match unsafe {
-        CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-    } {
-        Ok(a) => a,
-        Err(e) => {
-            println!("[auto] UIA 初始化失败: {e}");
-            return;
-        }
-    };
+    let automation: IUIAutomation =
+        match unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) } {
+            Ok(a) => a,
+            Err(e) => {
+                println!("[auto] UIA 初始化失败: {e}");
+                return;
+            }
+        };
     let mut uia_result: Option<String> = None;
     for attempt in 0..3 {
         let (hwnd_now, _, _, pid_now) = window_info();
-        println!("[auto] UIA 第{}次尝试，当前前台 hwnd={hwnd_now} pid={pid_now}", attempt + 1);
+        println!(
+            "[auto] UIA 第{}次尝试，当前前台 hwnd={hwnd_now} pid={pid_now}",
+            attempt + 1
+        );
         match unsafe { automation.GetFocusedElement() } {
             Err(e) => println!("[auto] GetFocusedElement 失败: {e}"),
             Ok(focused) => {
@@ -316,18 +323,19 @@ fn run_auto(hwnd_target: isize) {
 
 /// 从 UIA 元素提取选区文本（与 uia.rs 的 extract_selection 相同逻辑）。
 fn extract_selection_text(element: &IUIAutomationElement) -> Result<String, String> {
-    let pattern: IUIAutomationTextPattern = unsafe {
-        element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
-    }
-    .map_err(|e| format!("不支持 TextPattern: {e}"))?;
-    let ranges = unsafe { pattern.GetSelection() }.map_err(|e| format!("GetSelection 失败: {e}"))?;
+    let pattern: IUIAutomationTextPattern =
+        unsafe { element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) }
+            .map_err(|e| format!("不支持 TextPattern: {e}"))?;
+    let ranges =
+        unsafe { pattern.GetSelection() }.map_err(|e| format!("GetSelection 失败: {e}"))?;
     let len = unsafe { ranges.Length() }.unwrap_or(0);
     if len == 0 {
         return Err("无选区 range".into());
     }
     let mut combined = String::new();
     for i in 0..len {
-        let range = unsafe { ranges.GetElement(i) }.map_err(|e| format!("GetElement({i}) 失败: {e}"))?;
+        let range =
+            unsafe { ranges.GetElement(i) }.map_err(|e| format!("GetElement({i}) 失败: {e}"))?;
         let bstr: BSTR = unsafe { range.GetText(0) }.map_err(|e| format!("GetText 失败: {e}"))?;
         let text = String::from_utf16_lossy(&*bstr);
         let trimmed = text.trim();
@@ -347,8 +355,8 @@ fn extract_selection_text(element: &IUIAutomationElement) -> Result<String, Stri
 /// 强制把目标窗口拉回前台（绕过 SetForegroundWindow 的限制）。
 /// 配方：AttachThreadInput 到目标/前台线程 + 短按 ALT 解除前台锁。
 unsafe fn force_activate(hwnd: isize) -> bool {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, VK_MENU};
     use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, VK_MENU};
 
     let hwnd = hwnd as *mut _;
     let fg = GetForegroundWindow();
@@ -387,7 +395,9 @@ unsafe fn force_activate(hwnd: isize) -> bool {
 /// 1. SPI_SETSCREENREADER 让 Chromium 开完整无障碍 → UIA GetSelection 是否能拿到文本；
 /// 2. 前台被抢后 force_activate 拉回 → Ctrl+C 是否能正常复制。
 fn run_fix(chrome_hwnd: isize, thief_hwnd: isize) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPIF_SENDCHANGE, SPI_SETSCREENREADER};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPIF_SENDCHANGE, SPI_SETSCREENREADER,
+    };
 
     unsafe {
         SetForegroundWindow(chrome_hwnd as *mut _);
@@ -423,13 +433,23 @@ fn run_fix(chrome_hwnd: isize, thief_hwnd: isize) {
     println!("[fix] ---- SPI_SETSCREENREADER=TRUE 后 ----");
     let mut old_flag = 0u32;
     unsafe {
-        SystemParametersInfoW(SPI_SETSCREENREADER, 1, std::ptr::null_mut(), SPIF_SENDCHANGE);
+        SystemParametersInfoW(
+            SPI_SETSCREENREADER,
+            1,
+            std::ptr::null_mut(),
+            SPIF_SENDCHANGE,
+        );
         let _ = old_flag; // SPI_GETSCREENREADER 读取可选，简化处理
     }
     thread::sleep(Duration::from_millis(400));
     uia_read_print(&automation);
     unsafe {
-        SystemParametersInfoW(SPI_SETSCREENREADER, 0, std::ptr::null_mut(), SPIF_SENDCHANGE);
+        SystemParametersInfoW(
+            SPI_SETSCREENREADER,
+            0,
+            std::ptr::null_mut(),
+            SPIF_SENDCHANGE,
+        );
     }
     println!("[fix] SPI_SETSCREENREADER 已恢复为 FALSE");
 
@@ -482,7 +502,10 @@ fn run_seltest(hwnd_target: isize) {
         let ok = force_activate(hwnd_target);
         thread::sleep(Duration::from_millis(300));
         let fg = GetForegroundWindow() as isize;
-        println!("[seltest] force_activate={ok} fg_now={fg} match={}", fg == hwnd_target);
+        println!(
+            "[seltest] force_activate={ok} fg_now={fg} match={}",
+            fg == hwnd_target
+        );
         if fg != hwnd_target {
             println!("[seltest] ✗ 前台不是目标窗口，中止（避免向其他窗口发键）");
             return;
@@ -501,22 +524,24 @@ fn run_seltest(hwnd_target: isize) {
     println!("[seltest] Ctrl+A 后前台: hwnd={hwnd} title={title:?}");
 
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
-    let automation: IUIAutomation = match unsafe {
-        CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-    } {
-        Ok(a) => a,
-        Err(e) => {
-            println!("[seltest] UIA 初始化失败: {e}");
-            return;
-        }
-    };
+    let automation: IUIAutomation =
+        match unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) } {
+            Ok(a) => a,
+            Err(e) => {
+                println!("[seltest] UIA 初始化失败: {e}");
+                return;
+            }
+        };
 
     println!("[seltest] ---- UIA 读取（有选区状态）----");
     let mut uia_ok = false;
     for attempt in 0..4 {
         let (fg_now, ..) = window_info();
         if fg_now != hwnd_target {
-            println!("[seltest] 前台已丢失 fg={fg_now}，第{}次尝试跳过", attempt + 1);
+            println!(
+                "[seltest] 前台已丢失 fg={fg_now}，第{}次尝试跳过",
+                attempt + 1
+            );
         }
         match unsafe { automation.GetFocusedElement() } {
             Err(e) => println!("[seltest] GetFocusedElement 失败: {e}"),
@@ -554,15 +579,14 @@ fn run_scan(hwnd_target: isize) {
     };
 
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
-    let automation: IUIAutomation = match unsafe {
-        CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-    } {
-        Ok(a) => a,
-        Err(e) => {
-            println!("[scan] UIA 初始化失败: {e}");
-            return;
-        }
-    };
+    let automation: IUIAutomation =
+        match unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) } {
+            Ok(a) => a,
+            Err(e) => {
+                println!("[scan] UIA 初始化失败: {e}");
+                return;
+            }
+        };
 
     println!("[scan] 目标 hwnd={hwnd_target}");
     match unsafe { automation.GetFocusedElement() } {
@@ -574,7 +598,11 @@ fn run_scan(hwnd_target: isize) {
             let short: String = n.chars().take(30).collect();
             println!("[scan] focused: controltype={ct} name={short:?}");
             match extract_selection_text(&f) {
-                Ok(t) => println!("[scan] focused 选区: len={} {:?}", t.chars().count(), t.chars().take(40).collect::<String>()),
+                Ok(t) => println!(
+                    "[scan] focused 选区: len={} {:?}",
+                    t.chars().count(),
+                    t.chars().take(40).collect::<String>()
+                ),
                 Err(r) => println!("[scan] focused 选区: ✗ {r}"),
             }
         },
@@ -591,7 +619,8 @@ fn run_scan(hwnd_target: isize) {
     };
 
     let cond = unsafe {
-        automation.CreatePropertyCondition(UIA_IsTextPatternAvailablePropertyId, &VARIANT::from(true))
+        automation
+            .CreatePropertyCondition(UIA_IsTextPatternAvailablePropertyId, &VARIANT::from(true))
     }
     .expect("cond");
     let cond: IUIAutomationCondition = cond.into();
@@ -609,8 +638,13 @@ fn run_scan(hwnd_target: isize) {
                         let name: BSTR = el.CurrentName().unwrap_or_default();
                         let n = String::from_utf16_lossy(&*name);
                         let short: String = n.chars().take(30).collect();
-                        let focused = el.CurrentHasKeyboardFocus().map(|v| v.as_bool()).unwrap_or(false);
-                        print!("[scan]   [{i}] controltype={ct} hasFocus={focused} name={short:?} → ");
+                        let focused = el
+                            .CurrentHasKeyboardFocus()
+                            .map(|v| v.as_bool())
+                            .unwrap_or(false);
+                        print!(
+                            "[scan]   [{i}] controltype={ct} hasFocus={focused} name={short:?} → "
+                        );
                         match extract_selection_text(&el) {
                             Ok(t) => println!(
                                 "★选区 len={} {:?}",
@@ -619,7 +653,7 @@ fn run_scan(hwnd_target: isize) {
                             ),
                             Err(r) => println!("✗ {r}"),
                         }
-                    }
+                    },
                 }
             }
         }
@@ -640,15 +674,14 @@ fn run_selftest(hwnd_target: isize) {
 
     println!("=== selftest hwnd={hwnd_target} ===");
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
-    let automation: IUIAutomation = match unsafe {
-        CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-    } {
-        Ok(a) => a,
-        Err(e) => {
-            println!("[selftest] UIA 初始化失败: {e}");
-            return;
-        }
-    };
+    let automation: IUIAutomation =
+        match unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) } {
+            Ok(a) => a,
+            Err(e) => {
+                println!("[selftest] UIA 初始化失败: {e}");
+                return;
+            }
+        };
 
     let element = match unsafe {
         automation.ElementFromHandle(windows::Win32::Foundation::HWND(hwnd_target as *mut _))
@@ -661,7 +694,8 @@ fn run_selftest(hwnd_target: isize) {
     };
 
     let cond = unsafe {
-        automation.CreatePropertyCondition(UIA_IsTextPatternAvailablePropertyId, &VARIANT::from(true))
+        automation
+            .CreatePropertyCondition(UIA_IsTextPatternAvailablePropertyId, &VARIANT::from(true))
     }
     .expect("cond");
     let cond: IUIAutomationCondition = cond.into();
@@ -675,25 +709,21 @@ fn run_selftest(hwnd_target: isize) {
 
     // 取第一个文本控件（Chrome 里就是文档），程序化选中第一段可见文本
     let doc = unsafe { arr.GetElement(0) }.expect("doc");
-    let pattern: IUIAutomationTextPattern = unsafe {
-        doc.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
-    }
-    .expect("textpattern");
+    let pattern: IUIAutomationTextPattern =
+        unsafe { doc.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) }
+            .expect("textpattern");
     let visible = unsafe { pattern.GetVisibleRanges() }.expect("visible ranges");
     let vlen = unsafe { visible.Length() }.unwrap_or(0);
     println!("[selftest] 可见文本行数: {vlen}（0 不影响：改用 DocumentRange 造选区）");
     // 用文档整域收缩出前 40 个字符的选区（不依赖窗口可见性）
-    use windows::Win32::UI::Accessibility::{
-        TextPatternRangeEndpoint_End, TextUnit_Character,
-    };
+    use windows::Win32::UI::Accessibility::{TextPatternRangeEndpoint_End, TextUnit_Character};
     let range = unsafe { pattern.DocumentRange() }.expect("doc range");
     // 先把 End 收回到 Start（收一个大数即可），再放出 40 字符
     let _ = unsafe {
         range.MoveEndpointByUnit(TextPatternRangeEndpoint_End, TextUnit_Character, -1000000)
     };
-    let _ = unsafe {
-        range.MoveEndpointByUnit(TextPatternRangeEndpoint_End, TextUnit_Character, 40)
-    };
+    let _ =
+        unsafe { range.MoveEndpointByUnit(TextPatternRangeEndpoint_End, TextUnit_Character, 40) };
     unsafe { range.Select() }.expect("select");
     println!("[selftest] 已通过 UIA Select() 选中文档前 40 字");
     thread::sleep(Duration::from_millis(400));
@@ -806,7 +836,9 @@ fn run_selftest(hwnd_target: isize) {
 ///        这正是哨兵写入毁掉 Ctrl+C 复制的原因。
 fn run_cbrt() {
     use arboard::Clipboard;
-    use windows_sys::Win32::System::DataExchange::{CloseClipboard, GetOpenClipboardWindow, OpenClipboard};
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, GetOpenClipboardWindow, OpenClipboard,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
     fn probe(seconds: f64, tag: &str) -> (u32, Vec<(isize, u32)>) {
@@ -873,8 +905,8 @@ fn run_cbrt() {
 fn run_fgself(hwnd_target: isize) {
     use windows::Win32::System::Variant::VARIANT;
     use windows::Win32::UI::Accessibility::{
-        IUIAutomationCondition, TextPatternRangeEndpoint_End, TreeScope_Descendants,
-        UIA_IsTextPatternAvailablePropertyId, TextUnit_Character,
+        IUIAutomationCondition, TextPatternRangeEndpoint_End, TextUnit_Character,
+        TreeScope_Descendants, UIA_IsTextPatternAvailablePropertyId,
     };
 
     println!("=== fgself hwnd={hwnd_target} ===");
@@ -882,7 +914,10 @@ fn run_fgself(hwnd_target: isize) {
         let ok = force_activate(hwnd_target);
         thread::sleep(Duration::from_millis(400));
         let fg = GetForegroundWindow() as isize;
-        println!("[fgself] force_activate={ok} fg_now={fg} match={}", fg == hwnd_target);
+        println!(
+            "[fgself] force_activate={ok} fg_now={fg} match={}",
+            fg == hwnd_target
+        );
         if fg != hwnd_target {
             println!("[fgself] 前台不是目标，中止");
             return;
@@ -890,15 +925,15 @@ fn run_fgself(hwnd_target: isize) {
     }
 
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
-    let automation: IUIAutomation = unsafe {
-        CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).expect("uia")
-    };
+    let automation: IUIAutomation =
+        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).expect("uia") };
     let element = unsafe {
         automation.ElementFromHandle(windows::Win32::Foundation::HWND(hwnd_target as *mut _))
     }
     .expect("element");
     let cond = unsafe {
-        automation.CreatePropertyCondition(UIA_IsTextPatternAvailablePropertyId, &VARIANT::from(true))
+        automation
+            .CreatePropertyCondition(UIA_IsTextPatternAvailablePropertyId, &VARIANT::from(true))
     }
     .expect("cond");
     let cond: IUIAutomationCondition = cond.into();
@@ -906,14 +941,16 @@ fn run_fgself(hwnd_target: isize) {
     let len = unsafe { arr.Length() }.unwrap_or(0);
     println!("[fgself] 文本控件数 {len}");
     let doc = unsafe { arr.GetElement(0) }.expect("doc");
-    let pattern: IUIAutomationTextPattern = unsafe {
-        doc.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
-    }
-    .expect("pattern");
+    let pattern: IUIAutomationTextPattern =
+        unsafe { doc.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) }
+            .expect("pattern");
 
     let range = unsafe { pattern.DocumentRange() }.expect("docrange");
-    let _ = unsafe { range.MoveEndpointByUnit(TextPatternRangeEndpoint_End, TextUnit_Character, -1000000) };
-    let _ = unsafe { range.MoveEndpointByUnit(TextPatternRangeEndpoint_End, TextUnit_Character, 40) };
+    let _ = unsafe {
+        range.MoveEndpointByUnit(TextPatternRangeEndpoint_End, TextUnit_Character, -1000000)
+    };
+    let _ =
+        unsafe { range.MoveEndpointByUnit(TextPatternRangeEndpoint_End, TextUnit_Character, 40) };
     unsafe { range.Select() }.expect("select");
     thread::sleep(Duration::from_millis(400));
 
@@ -942,15 +979,14 @@ fn run_bisect(hwnd_target: isize) {
     thread::sleep(Duration::from_millis(400));
 
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
-    let automation: IUIAutomation = match unsafe {
-        CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-    } {
-        Ok(a) => a,
-        Err(e) => {
-            println!("[bisect] UIA 初始化失败: {e}");
-            return;
-        }
-    };
+    let automation: IUIAutomation =
+        match unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) } {
+            Ok(a) => a,
+            Err(e) => {
+                println!("[bisect] UIA 初始化失败: {e}");
+                return;
+            }
+        };
     let hwnd = HWND(hwnd_target as *mut _);
 
     for (name, poison) in [("P1_纯净", false), ("P2_污染", true)] {
@@ -991,7 +1027,11 @@ fn run_bisect(hwnd_target: isize) {
         println!(
             "[{name}] seq {seq_before}→{} changed={changed} text_len={len} {}",
             unsafe { GetClipboardSequenceNumber() },
-            if changed && len > 0 { "★复制成功" } else { "✗没有复制" }
+            if changed && len > 0 {
+                "★复制成功"
+            } else {
+                "✗没有复制"
+            }
         );
         thread::sleep(Duration::from_millis(600));
     }
@@ -1058,8 +1098,16 @@ fn uia_select_minimal(automation: &IUIAutomation, hwnd: windows::Win32::Foundati
                 return false;
             }
         };
-        let _ = range.MoveEndpointByUnit(TextPatternRangeEndpoint_End, TextUnit_Character_placeholder(), -1_000_000);
-        let _ = range.MoveEndpointByUnit(TextPatternRangeEndpoint_End, TextUnit_Character_placeholder(), 40);
+        let _ = range.MoveEndpointByUnit(
+            TextPatternRangeEndpoint_End,
+            TextUnit_Character_placeholder(),
+            -1_000_000,
+        );
+        let _ = range.MoveEndpointByUnit(
+            TextPatternRangeEndpoint_End,
+            TextUnit_Character_placeholder(),
+            40,
+        );
         match range.Select() {
             Ok(()) => {
                 println!("    [select] 已选中文档前 40 字");
@@ -1081,7 +1129,7 @@ fn TextUnit_Character_placeholder() -> windows::Win32::UI::Accessibility::TextUn
 /// 对齐 uia.rs 的 kick（WM_GETOBJECT → 窗口 + 全部直接子窗口）
 fn kick_chromium(hwnd: windows::Win32::Foundation::HWND) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowExW, SendMessageTimeoutW, OBJID_CLIENT, WM_GETOBJECT, SMTO_ABORTIFHUNG,
+        FindWindowExW, SendMessageTimeoutW, OBJID_CLIENT, SMTO_ABORTIFHUNG, WM_GETOBJECT,
     };
     unsafe {
         SendMessageTimeoutW(
@@ -1191,12 +1239,22 @@ fn run_bisect2(hwnd_target: isize) {
     thread::sleep(Duration::from_millis(1200));
     unsafe {
         let np_class = wstr("Notepad");
-        let np = FindWindowExW(std::ptr::null_mut(), std::ptr::null_mut(), np_class.as_ptr(), std::ptr::null());
+        let np = FindWindowExW(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            np_class.as_ptr(),
+            std::ptr::null(),
+        );
         if np.is_null() {
             println!("[T1] 找不到记事本窗口");
         } else {
             let edit_class = wstr("Edit");
-            let edit = FindWindowExW(np, std::ptr::null_mut(), edit_class.as_ptr(), std::ptr::null());
+            let edit = FindWindowExW(
+                np,
+                std::ptr::null_mut(),
+                edit_class.as_ptr(),
+                std::ptr::null(),
+            );
             if edit.is_null() {
                 println!("[T1] 找不到 Edit 控件");
             } else {
@@ -1223,7 +1281,11 @@ fn run_bisect2(hwnd_target: isize) {
                 println!(
                     "[T1] 记事本复制: changed={ok} content={:?} {}",
                     content,
-                    if ok && content.contains("ELECTION_TEST") { "★成功" } else { "✗失败" }
+                    if ok && content.contains("ELECTION_TEST") {
+                        "★成功"
+                    } else {
+                        "✗失败"
+                    }
                 );
             }
         }
@@ -1257,8 +1319,17 @@ fn run_bisect2(hwnd_target: isize) {
                     break;
                 }
             }
-            let len = read_clipboard_text().map(|t| t.trim().chars().count()).unwrap_or(0);
-            println!("[T2] Chrome复制: changed={ok} text_len={len} {}", if ok && len > 0 { "★成功" } else { "✗失败" });
+            let len = read_clipboard_text()
+                .map(|t| t.trim().chars().count())
+                .unwrap_or(0);
+            println!(
+                "[T2] Chrome复制: changed={ok} text_len={len} {}",
+                if ok && len > 0 {
+                    "★成功"
+                } else {
+                    "✗失败"
+                }
+            );
         }
     }
     println!("[bisect2] 完成");
@@ -1284,16 +1355,28 @@ fn run_bisect3(hwnd_target: isize) {
     println!("=== bisect3 ===");
     // ---- T1 记事本 × 3 种注入方式 ----
     println!("---- T1 记事本: 三种注入方式 ----");
-    let mut child = std::process::Command::new("notepad.exe").spawn().expect("notepad");
+    let mut child = std::process::Command::new("notepad.exe")
+        .spawn()
+        .expect("notepad");
     thread::sleep(Duration::from_millis(1200));
     unsafe {
         let np_class = wstr("Notepad");
-        let np = FindWindowExW(std::ptr::null_mut(), std::ptr::null_mut(), np_class.as_ptr(), std::ptr::null());
+        let np = FindWindowExW(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            np_class.as_ptr(),
+            std::ptr::null(),
+        );
         if np.is_null() {
             println!("[T1] 找不到记事本窗口");
         } else {
             let edit_class = wstr("Edit");
-            let edit = FindWindowExW(np, std::ptr::null_mut(), edit_class.as_ptr(), std::ptr::null());
+            let edit = FindWindowExW(
+                np,
+                std::ptr::null_mut(),
+                edit_class.as_ptr(),
+                std::ptr::null(),
+            );
             if edit.is_null() {
                 println!("[T1] 找不到 Edit 控件");
             } else {
@@ -1328,7 +1411,11 @@ fn run_bisect3(hwnd_target: isize) {
                     println!(
                         "[T1.{name}] fg=ok 复制={ok} content={:?} {}",
                         content,
-                        if ok && content.contains("ELECTION_TEST") { "★成功" } else { "✗失败" }
+                        if ok && content.contains("ELECTION_TEST") {
+                            "★成功"
+                        } else {
+                            "✗失败"
+                        }
                     );
                 }
             }
@@ -1368,8 +1455,17 @@ fn run_bisect3(hwnd_target: isize) {
                         break;
                     }
                 }
-                let len = read_clipboard_text().map(|t| t.trim().chars().count()).unwrap_or(0);
-                println!("[T2a] 扫描码Ctrl+C: copied={ok} len={len} {}", if ok && len > 0 { "★成功" } else { "✗失败" });
+                let len = read_clipboard_text()
+                    .map(|t| t.trim().chars().count())
+                    .unwrap_or(0);
+                println!(
+                    "[T2a] 扫描码Ctrl+C: copied={ok} len={len} {}",
+                    if ok && len > 0 {
+                        "★成功"
+                    } else {
+                        "✗失败"
+                    }
+                );
 
                 // 2b: 子窗口 UIA（Chrome_RenderWidgetHostHWND）
                 uia_child_read(hwnd_target);
@@ -1383,27 +1479,36 @@ fn run_bisect3(hwnd_target: isize) {
 fn uia_child_read(hwnd_target: isize) {
     use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowExW;
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
-    let automation: IUIAutomation = match unsafe {
-        CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-    } {
-        Ok(a) => a,
-        Err(e) => {
-            println!("[T2b] UIA 初始化失败: {e}");
-            return;
-        }
-    };
+    let automation: IUIAutomation =
+        match unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) } {
+            Ok(a) => a,
+            Err(e) => {
+                println!("[T2b] UIA 初始化失败: {e}");
+                return;
+            }
+        };
     unsafe {
         let class = wstr("Chrome_RenderWidgetHostHWND");
         // 遍历顶层窗口的直接子窗口找渲染控件（可能在下一层）
         let mut found: *mut core::ffi::c_void = std::ptr::null_mut();
         // 先试直接子窗口
-        let direct = FindWindowExW(hwnd_target as *mut _, std::ptr::null_mut(), class.as_ptr(), std::ptr::null());
+        let direct = FindWindowExW(
+            hwnd_target as *mut _,
+            std::ptr::null_mut(),
+            class.as_ptr(),
+            std::ptr::null(),
+        );
         if !direct.is_null() {
             found = direct;
         } else {
             let mut cur: *mut core::ffi::c_void = std::ptr::null_mut();
             loop {
-                cur = FindWindowExW(hwnd_target as *mut _, cur, std::ptr::null(), std::ptr::null());
+                cur = FindWindowExW(
+                    hwnd_target as *mut _,
+                    cur,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                );
                 if cur.is_null() {
                     break;
                 }
@@ -1419,7 +1524,8 @@ fn uia_child_read(hwnd_target: isize) {
             return;
         }
         println!("[T2b] 找到渲染子窗口 hwnd={:p}", found);
-        let el = match automation.ElementFromHandle(windows::Win32::Foundation::HWND(found.cast())) {
+        let el = match automation.ElementFromHandle(windows::Win32::Foundation::HWND(found.cast()))
+        {
             Ok(e) => e,
             Err(e) => {
                 println!("[T2b] ElementFromHandle 失败: {e}");
@@ -1455,7 +1561,7 @@ fn send_ctrl_c_scancode() {
 }
 
 unsafe fn send_key_scancode(scan: u16, up: bool) {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{KEYEVENTF_SCANCODE, KEYEVENTF_KEYUP};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE};
     let mut flags = KEYEVENTF_SCANCODE;
     if up {
         flags |= KEYEVENTF_KEYUP;
@@ -1509,17 +1615,11 @@ fn main() {
             run_bisect(hwnd);
         }
         "bisect2" => {
-            let hwnd: isize = args
-                .get(2)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
+            let hwnd: isize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
             run_bisect2(hwnd);
         }
         "bisect3" => {
-            let hwnd: isize = args
-                .get(2)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
+            let hwnd: isize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
             run_bisect3(hwnd);
         }
         "selftest" => {
