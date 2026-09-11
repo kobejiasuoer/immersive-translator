@@ -3,15 +3,16 @@
  * 屏 C 划选查词入口。视觉按 §5 句对主从版式，640px 列居中。
  */
 
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   IconBookOpen,
   IconEdit,
   IconEyeOff,
   IconVolume,
 } from "../ui/icons";
-import type { Article, ReaderSettings } from "../core/readerTypes";
+import type { Article, ReaderSettings, SentenceChunk } from "../core/readerTypes";
 import { extractSelectionText } from "../core/readerDict";
+import { buildSentenceSpans, splitBySpans, type ChunkSpan } from "../core/chunkAnnotate";
 
 interface Props {
   article: Article | null;
@@ -23,12 +24,16 @@ interface Props {
   /** 遮罩模式下按住 H 的临时全显（不改变已揭开状态）。 */
   peekAll: boolean;
   searchMatchIdx: number | null;
+  /** 生词本归一化 id 集（生词再现标记用）。 */
+  knownIds: ReadonlySet<string>;
   onReveal: (idx: number) => void;
   onMask: (idx: number) => void;
   onRevealAll: () => void;
   onMaskAll: () => void;
   onSelection: (idx: number, text: string) => void;
   onWordClick: (idx: number, word: string) => void;
+  /** 点正文里的词块下划线 → 词典栏即时卡（无 LLM 调用）。 */
+  onChunkClick: (idx: number, chunk: SentenceChunk) => void;
   onSpeakSentence: (idx: number) => void;
   onRetryParagraph: (paragraphIdx: number) => void;
   onEditTranslation: (idx: number, zh: string) => void;
@@ -38,6 +43,9 @@ interface Props {
 }
 
 const WORD_CHARS = /[A-Za-z0-9'’-]/;
+
+const NO_SPANS: ChunkSpan[] = [];
+const NO_IDS: ReadonlySet<string> = new Set<string>();
 
 export function ReadingView(props: Props) {
   const { article, settings, activeIdx, translating, chunking, peekAll, searchMatchIdx } = props;
@@ -52,6 +60,22 @@ export function ReadingView(props: Props) {
     ? sentences.filter((s) => s.zh && (s.revealed || peekAll)).length
     : 0;
   const maskableCount = maskOn ? sentences.filter((s) => s.zh).length : 0;
+
+  // 词块/生词再现跨度（开关只影响参与合并的候选，en 不可变所以可安全 memo）。
+  const spansBySentence = useMemo(() => {
+    const map = new Map<number, ChunkSpan[]>();
+    if (!article) return map;
+    for (const s of article.sentences) {
+      const spans = buildSentenceSpans(
+        s.en,
+        settings.chunkHighlight ? s.chunks : undefined,
+        settings.showVocabMarks ? props.knownIds : NO_IDS,
+      );
+      if (spans.length > 0) map.set(s.idx, spans);
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [article?.id, article?.sentences, settings.chunkHighlight, settings.showVocabMarks, props.knownIds]);
 
   // 当前句滚动跟随（播放或光标移动时）。
   useEffect(() => {
@@ -225,7 +249,27 @@ export function ReadingView(props: Props) {
                   }`}
                 >
                   <p className="pair-en" onClick={handleEnClick} title="单击查词，划选查短语">
-                    {s.en}
+                    {(spansBySentence.get(s.idx) ?? NO_SPANS).length === 0
+                      ? s.en
+                      : splitBySpans(s.en, spansBySentence.get(s.idx)!).map((seg, i) =>
+                          seg.span ? (
+                            <span
+                              key={i}
+                              className={`chunk-hl${seg.span.kind === "known" ? " known" : ""}`}
+                              title={seg.span.chunk ? "词块 · 点击查看" : "生词再现 · 点击查词典"}
+                              onClick={(e) => {
+                                // 词块 span 自接管点击，避免触发句级点词查词。
+                                e.stopPropagation();
+                                if (seg.span!.chunk) props.onChunkClick(s.idx, seg.span!.chunk);
+                                else props.onSelection(s.idx, seg.text);
+                              }}
+                            >
+                              {seg.text}
+                            </span>
+                          ) : (
+                            seg.text
+                          ),
+                        )}
                   </p>
 
                   {maskSlot ? (

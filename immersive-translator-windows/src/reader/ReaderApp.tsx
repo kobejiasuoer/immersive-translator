@@ -35,6 +35,7 @@ import {
   type Article,
   type ArticleSummary,
   type ReaderSettings,
+  type SentenceChunk,
   type SentencePair,
   type VocabWord,
 } from "../core/readerTypes";
@@ -56,6 +57,7 @@ import {
   buildChunkAnnotateSystemPrompt,
   buildChunkBatchInput,
   chunkBatches,
+  chunkToVocab,
   parseChunkResponse,
 } from "../core/chunkAnnotate";
 import "./reader.css";
@@ -745,8 +747,35 @@ export function ReaderApp() {
     }).catch((error) => console.error("[reader] word tts failed", error));
   }, []);
 
+  /** 点正文词块下划线 → 即时卡（无 LLM 调用）。 */
+  const openChunkCard = useCallback((sentenceIdx: number, chunk: SentenceChunk) => {
+    setDict({
+      status: "chunk",
+      chunk,
+      sentenceIdx,
+      sourceSentence: articleRef.current?.sentences[sentenceIdx]?.en ?? "",
+    });
+  }, []);
+
   const addVocab = useCallback(() => {
-    if (dict.status !== "ready" || !articleRef.current) return;
+    if (!articleRef.current) return;
+    if (dict.status === "chunk") {
+      const word = chunkToVocab(dict.chunk, {
+        articleId: articleRef.current.id,
+        sentenceIdx: dict.sentenceIdx,
+      });
+      void readerSaveVocabWord(word)
+        .then(async () => {
+          await refreshVocab();
+          showToast(`已收藏词块：${word.word}`);
+        })
+        .catch((error) => {
+          console.error("[reader] add chunk vocab failed", error);
+          showToast("收藏词块失败");
+        });
+      return;
+    }
+    if (dict.status !== "ready") return;
     const word = entryToVocab(dict.entry, {
       articleId: articleRef.current.id,
       sentenceIdx: dict.sentenceIdx,
@@ -762,8 +791,14 @@ export function ReaderApp() {
       });
   }, [dict, refreshVocab, showToast]);
 
-  const inVocab =
-    dict.status === "ready" && vocabWords.some((w) => w.id === normalizeWordKey(dict.query));
+  const inVocab = useMemo(() => {
+    if (dict.status === "closed") return false;
+    const key = dict.status === "chunk" ? dict.chunk.text : dict.query;
+    return vocabWords.some((w) => w.id === normalizeWordKey(key));
+  }, [dict, vocabWords]);
+
+  /** 生词再现标记：生词本归一化 id 集。 */
+  const knownIds = useMemo(() => new Set(vocabWords.map((w) => w.id)), [vocabWords]);
 
   // ---- 复习（屏 D） ----
   const gradeVocab = useCallback(
@@ -905,6 +940,7 @@ export function ReaderApp() {
               chunking={chunking}
               peekAll={peekAll}
               searchMatchIdx={searchMatchIdx}
+              knownIds={knownIds}
               onReveal={(idx) =>
                 patchArticle((a) => ({
                   ...a,
@@ -931,6 +967,7 @@ export function ReaderApp() {
               }
               onSelection={(idx, text) => void lookup(text, idx)}
               onWordClick={(idx, word) => void lookup(word, idx)}
+              onChunkClick={openChunkCard}
               onSpeakSentence={(idx) => playback.jumpTo(idx, { autoplay: true })}
               onRetryParagraph={retryParagraph}
               onEditTranslation={editTranslation}
@@ -944,6 +981,7 @@ export function ReaderApp() {
               onSpeak={speakWord}
               onAddVocab={addVocab}
               onLocate={(idx) => playback.jumpTo(idx)}
+              onLookup={(text, idx) => void lookup(text, idx)}
               onClose={() => setDict({ status: "closed" })}
             />
           </>

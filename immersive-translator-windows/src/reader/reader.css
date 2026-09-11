@@ -393,6 +393,26 @@
   overflow-wrap: break-word;
   cursor: pointer;
 }
+/* 词块高亮（LLM 标注）与生词再现：克制点线，不打断阅读 */
+.pair-en .chunk-hl {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background-color 0.12s ease;
+}
+.pair-en .chunk-hl:hover {
+  background: var(--accent-softer);
+}
+.pair-en .chunk-hl.known {
+  text-decoration-color: var(--ok);
+}
+.pair-en .chunk-hl.known:hover {
+  background: var(--ok-soft);
+}
 /* 当前朗读句：底色 + 左侧 3×64 竖条 */
 .pair.is-active {
   background: var(--accent-soft);
@@ -1126,6 +1146,32 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
   font-weight: 600;
   line-height: 1.6;
   vertical-align: 1px;
+}
+/* 词块即时卡：类型徽章 / 槽位记法 / 直译陷阱 */
+.reader-dict .chunk-type-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.8;
+}
+.reader-dict .chunk-pattern {
+  font-family: var(--font-read-serif-en);
+  font-style: italic;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.reader-dict .chunk-trap {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--warn);
+}
+.reader-dict .chunk-trap::before {
+  content: "⚠ ";
 }
 .reader-dict .source-card {
   background: var(--accent-softer);
