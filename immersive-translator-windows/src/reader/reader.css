@@ -1384,6 +1384,37 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
   font-size: 13px;
   color: var(--text-3);
 }
+/* 词块卡：类型徽章 / 记法 / 直译陷阱 / 挖空原句 */
+.review-card .chunk-type-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.7;
+  align-self: center;
+}
+.review-card .chunk-detail {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+.review-card .chunk-detail i {
+  font-family: var(--font-read-serif-en);
+}
+.review-card .chunk-detail.trap {
+  color: var(--warn);
+}
+/* 左栏单词/词块分开计数 */
+.review-side .kind-split {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.6;
+}
 .review-card .sense-line {
   font-size: 14px;
   line-height: 1.7;

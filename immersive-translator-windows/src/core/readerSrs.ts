@@ -84,6 +84,11 @@ export interface ReviewStats {
   streak: number;
   /** 掌握度分布：按当前 intervalDays 分桶。 */
   distribution: { learning: number; familiar: number; mastered: number };
+  /** 单词/词块分开计数（左栏统计；kind 缺省视为单词）。 */
+  totalWords: number;
+  totalChunks: number;
+  dueWords: number;
+  dueChunks: number;
 }
 
 /** 复习时间线：每次评分的 { 天键, 次数 }。由存储层持久化。 */
@@ -123,10 +128,21 @@ export function reviewStats(
   }
 
   const distribution = { learning: 0, familiar: 0, mastered: 0 };
+  let totalWords = 0;
+  let totalChunks = 0;
+  let dueWords = 0;
+  let dueChunks = 0;
   for (const w of vocab) {
     if (w.srs.intervalDays >= 7) distribution.mastered++;
     else if (w.srs.intervalDays >= 1) distribution.familiar++;
     else distribution.learning++;
+    if (w.kind === "chunk") {
+      totalChunks++;
+      if (w.srs.dueAt <= now) dueChunks++;
+    } else {
+      totalWords++;
+      if (w.srs.dueAt <= now) dueWords++;
+    }
   }
 
   return {
@@ -135,6 +151,10 @@ export function reviewStats(
     total: vocab.length,
     streak,
     distribution,
+    totalWords,
+    totalChunks,
+    dueWords,
+    dueChunks,
   };
 }
 

@@ -7,7 +7,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { IconVolume } from "../ui/icons";
 import { GRADE_INTERVALS, dueVocab, type ReviewGrade } from "../core/readerSrs";
-import type { VocabWord } from "../core/readerTypes";
+import { CHUNK_TYPE_LABELS, type VocabWord } from "../core/readerTypes";
+import { blankChunkInSentence } from "../core/chunkAnnotate";
 import type { ReviewStats } from "../lib/readerStore";
 
 interface Props {
@@ -112,6 +113,9 @@ export function ReviewView({ words, stats, onGrade, onJumpToSentence, onSpeakWor
             </span>
             <span className="n">{stats.distribution.mastered}</span>
           </div>
+          <div className="kind-split">
+            单词 {stats.totalWords}（到期 {stats.dueWords}）· 词块 {stats.totalChunks}（到期 {stats.dueChunks}）
+          </div>
         </div>
       </aside>
 
@@ -131,6 +135,9 @@ export function ReviewView({ words, stats, onGrade, onJumpToSentence, onSpeakWor
 
               <div className="word-line">
                 <span className="word">{current.word}</span>
+                {current.kind === "chunk" && current.chunkType && (
+                  <span className="chunk-type-badge">{CHUNK_TYPE_LABELS[current.chunkType]}</span>
+                )}
                 {current.phonetic && <span className="phonetic">/{current.phonetic.replace(/^\/|\/$/g, "")}/</span>}
                 <button
                   className="reader-tb-btn"
@@ -150,6 +157,13 @@ export function ReviewView({ words, stats, onGrade, onJumpToSentence, onSpeakWor
                 ))}
               </div>
 
+              {current.kind === "chunk" && current.pattern && (
+                <div className="chunk-detail">记法：<i>{current.pattern}</i></div>
+              )}
+              {current.kind === "chunk" && current.trap && (
+                <div className="chunk-detail trap">直译陷阱：{current.trap}</div>
+              )}
+
               {current.collocations && current.collocations.length > 0 && (
                 <div style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.7 }}>
                   {current.collocations.map((c, i) => (
@@ -166,8 +180,12 @@ export function ReviewView({ words, stats, onGrade, onJumpToSentence, onSpeakWor
                 onClick={() => onJumpToSentence(current.source.articleId, current.source.sentenceIdx)}
                 title="点击回到原文这一句"
               >
-                {sourcePreview(current.source.articleId, current.source.sentenceIdx) ??
-                  "（原句已随文章删除）"}
+                {(() => {
+                  const src = sourcePreview(current.source.articleId, current.source.sentenceIdx);
+                  if (src === null) return "（原句已随文章删除）";
+                  // 词块卡：原句挖空做产出式回忆，点击回原文可看全句。
+                  return current.kind === "chunk" ? blankChunkInSentence(src, current.word) : src;
+                })()}
                 <span className="from">点击回到原文这一句</span>
               </div>
 

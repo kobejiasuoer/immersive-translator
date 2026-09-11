@@ -1,6 +1,6 @@
 /**
  * 屏 B · 阅读设置抽屉：右侧 380px 全高，背后 32% 黑遮罩。
- * 三组归口（§6）：版式 / 朗读 / 主题；底部 恢复默认 · 完成。
+ * 四组归口（§6）：版式 / 词块 / 朗读 / 主题；底部 恢复默认 · 完成。
  * 职责划分：视图菜单管「显示什么」（瞬时），这里管「怎么显示」（持久）。
  */
 
@@ -11,6 +11,7 @@ import {
   READER_FONT_SIZE_MIN,
   READER_RATE_MAX,
   READER_RATE_MIN,
+  type ArticleChunkState,
   type ContrastMode,
   type ReaderFontPair,
   type ReaderSettings,
@@ -23,6 +24,10 @@ interface Props {
   onPatch: (patch: Partial<ReaderSettings>) => void;
   onReset: () => void;
   onClose: () => void;
+  /** 当前文章的词块标注状态；无打开文章时不显示「重新标注」。 */
+  chunkState?: ArticleChunkState;
+  /** 重新标注当前文章（清空词块后重跑 LLM 标注）。 */
+  onReannotate?: () => void;
 }
 
 const CONTRAST_OPTIONS: { value: ContrastMode; label: string }[] = [
@@ -43,7 +48,7 @@ const THEMES: { value: ReaderTheme; label: string; swatch: string; text: string 
   { value: "oled", label: "纯黑", swatch: "#0a0a0b", text: "#b9bdc9" },
 ];
 
-export function SettingsDrawer({ settings, onPatch, onReset, onClose }: Props) {
+export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState, onReannotate }: Props) {
   const [voices, setVoices] = useState<TtsVoiceInfo[]>([]);
 
   useEffect(() => {
@@ -162,6 +167,45 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose }: Props) {
               </select>
             </div>
           </div>
+
+          <div className="drawer-group-title">词块</div>
+          <div
+            className="drawer-row"
+            title="新文章翻译完成后自动标注值得学的词组（会额外消耗接口 token），正文里以蓝色虚线下划线显示，点击看释义并可收藏"
+          >
+            <span className="label">自动标注词组</span>
+            <div className="control">
+              <button
+                className={`reader-switch${settings.chunkHighlight ? " on" : ""}`}
+                onClick={() => onPatch({ chunkHighlight: !settings.chunkHighlight })}
+                role="switch"
+                aria-checked={settings.chunkHighlight}
+                aria-label="自动标注词组"
+              />
+            </div>
+          </div>
+          <div className="drawer-row" title="已收藏的词/词块在正文再次出现时用绿色点线标记，点击可查看">
+            <span className="label">生词再现标记</span>
+            <div className="control">
+              <button
+                className={`reader-switch${settings.showVocabMarks ? " on" : ""}`}
+                onClick={() => onPatch({ showVocabMarks: !settings.showVocabMarks })}
+                role="switch"
+                aria-checked={settings.showVocabMarks}
+                aria-label="生词再现标记"
+              />
+            </div>
+          </div>
+          {chunkState && onReannotate && (
+            <div className="drawer-row" title="清空本篇已有标注，重新跑一遍词组标注">
+              <span className="label">重新标注本篇</span>
+              <div className="control">
+                <button className="btn btn-secondary btn-sm" onClick={onReannotate}>
+                  重新标注
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="drawer-group-title">朗读</div>
           <div className="drawer-row">

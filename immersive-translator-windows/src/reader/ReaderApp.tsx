@@ -332,6 +332,21 @@ export function ReaderApp() {
     }
   }, [patchArticle, requestTranslate, showToast]);
 
+  /** 设置抽屉「重新标注」：清空本篇词块后重跑。 */
+  const reannotateChunks = useCallback(() => {
+    const a = articleRef.current;
+    if (!a) return;
+    patchArticle((cur) => ({
+      ...cur,
+      chunkState: "pending",
+      sentences: cur.sentences.map((st) => {
+        const { chunks: _drop, ...rest } = st;
+        return rest;
+      }),
+    }));
+    void ensureAnnotated();
+  }, [patchArticle, ensureAnnotated]);
+
   // ---- 设置（全局 + 文章覆盖，见 §6 屏 B 职责划分） ----
   const patchSettings = useCallback(
     (patch: Partial<ReaderSettings>) => {
@@ -1059,6 +1074,12 @@ export function ReaderApp() {
           onPatch={patchSettings}
           onReset={resetSettings}
           onClose={() => setDrawerOpen(false)}
+          chunkState={
+            article?.chunkState === "done" || article?.chunkState === "failed"
+              ? article.chunkState
+              : undefined
+          }
+          onReannotate={reannotateChunks}
         />
       )}
 

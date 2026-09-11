@@ -47,6 +47,27 @@ describe("到期判定与计数同源（§9-3）", () => {
     expect(stats.dueNow).toBe(1);
     expect(stats.total).toBe(2);
   });
+
+  it("单词/词块分开计数（kind 缺省视为单词）", () => {
+    const word = makeWord("speed", NOW - 1);
+    const wordLater = makeWord("goal", NOW + 999_999);
+    const chunk: VocabWord = {
+      ...makeWord("take on momentum", NOW - 1),
+      kind: "chunk",
+      chunkType: "collocation",
+    };
+    const chunkLater: VocabWord = {
+      ...makeWord("settle in", NOW + 999_999),
+      kind: "chunk",
+      chunkType: "phrasal",
+    };
+    const stats = reviewStats([word, wordLater, chunk, chunkLater], { schemaVersion: 1, days: [] }, NOW);
+    expect(stats.total).toBe(4);
+    expect(stats.totalWords).toBe(2);
+    expect(stats.totalChunks).toBe(2);
+    expect(stats.dueWords).toBe(1);
+    expect(stats.dueChunks).toBe(1);
+  });
 });
 
 describe("四档评分", () => {

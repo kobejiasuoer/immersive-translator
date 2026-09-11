@@ -275,6 +275,10 @@ pub struct ReviewStats {
     pub total: u32,
     pub streak: u32,
     pub distribution: MasteryDistribution,
+    pub total_words: u32,
+    pub total_chunks: u32,
+    pub due_words: u32,
+    pub due_chunks: u32,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -515,6 +519,10 @@ fn compute_stats(file: &VocabFile, today: &str, now_ms: i64) -> ReviewStats {
     let mut learning = 0u32;
     let mut familiar = 0u32;
     let mut mastered = 0u32;
+    let mut total_words = 0u32;
+    let mut total_chunks = 0u32;
+    let mut due_words = 0u32;
+    let mut due_chunks = 0u32;
     for w in &file.words {
         if w.srs.interval_days >= 7.0 {
             mastered += 1;
@@ -522,6 +530,17 @@ fn compute_stats(file: &VocabFile, today: &str, now_ms: i64) -> ReviewStats {
             familiar += 1;
         } else {
             learning += 1;
+        }
+        if w.kind.as_ref() == Some(&VocabKind::Chunk) {
+            total_chunks += 1;
+            if w.srs.due_at <= now_ms {
+                due_chunks += 1;
+            }
+        } else {
+            total_words += 1;
+            if w.srs.due_at <= now_ms {
+                due_words += 1;
+            }
         }
     }
     // streak：今天（若今天没打卡则从昨天）起连续有打卡记录的天数。
@@ -561,6 +580,10 @@ fn compute_stats(file: &VocabFile, today: &str, now_ms: i64) -> ReviewStats {
             familiar,
             mastered,
         },
+        total_words,
+        total_chunks,
+        due_words,
+        due_chunks,
     }
 }
 
