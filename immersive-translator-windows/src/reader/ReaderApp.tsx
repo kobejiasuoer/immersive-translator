@@ -418,7 +418,8 @@ export function ReaderApp() {
       patchArticle((a) => ({
         ...a,
         sentences: a.sentences.map((st) =>
-          st.idx === idx ? { ...st, zh, zhState: "edited" as const } : st,
+          // 刚手改过的句子在遮罩模式下保持可见，避免改完又被盖回去
+          st.idx === idx ? { ...st, zh, zhState: "edited" as const, revealed: true } : st,
         ),
       }));
     },

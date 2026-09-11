@@ -265,18 +265,36 @@ export function ReadingView(props: Props) {
                       <button onClick={() => props.onRetryParagraph(s.paragraphIdx)}>重试本段</button>
                     </span>
                   ) : editingIdx === s.idx ? (
-                    <textarea
-                      className="pair-cn-edit"
-                      value={editDraft}
-                      autoFocus
-                      onChange={(e) => setEditDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) commitEdit(s.idx);
-                        if (e.key === "Escape") setEditingIdx(null);
-                      }}
-                      rows={2}
-                      aria-label="编辑译文（Ctrl+Enter 保存，Esc 取消）"
-                    />
+                    <div className="pair-cn-editor">
+                      <textarea
+                        className="pair-cn-edit"
+                        value={editDraft}
+                        autoFocus
+                        onChange={(e) => setEditDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) commitEdit(s.idx);
+                          if (e.key === "Escape") setEditingIdx(null);
+                        }}
+                        rows={2}
+                        aria-label="编辑译文（Ctrl+Enter 保存，Esc 取消）"
+                      />
+                      <div className="pair-cn-editor-actions">
+                        <span className="tip">Ctrl+Enter 保存 · Esc 取消</span>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setEditingIdx(null)}
+                        >
+                          取消
+                        </button>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          disabled={!editDraft.trim()}
+                          onClick={() => commitEdit(s.idx)}
+                        >
+                          保存
+                        </button>
+                      </div>
+                    </div>
                   ) : (
                     <p className="pair-cn" onClick={() => props.onJumpTo(s.idx)} title="点中文定位到对应英文句">
                       {s.zh}

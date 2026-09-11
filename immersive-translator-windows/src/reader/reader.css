@@ -496,6 +496,18 @@
   outline: none;
   cursor: text;
 }
+/* 手改译文编辑器：可见的 保存 / 取消 行（快捷键只是补充） */
+.pair-cn-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.pair-cn-editor-actions .tip {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--text-4);
+}
 /* 翻译中段落骨架 */
 .reader-skeleton-line {
   height: 15px;
