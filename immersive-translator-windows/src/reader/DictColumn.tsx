@@ -8,7 +8,8 @@
 
 import { IconClose, IconCopy, IconLocate, IconStar, IconVolume } from "../ui/icons";
 import type { ReaderDictEntry } from "../core/readerDict";
-import { CHUNK_TYPE_LABELS, type SentenceChunk } from "../core/readerTypes";
+import { CHUNK_TYPE_LABELS, type SentenceChunk, type VocabCollocation } from "../core/readerTypes";
+import { normalizeWordKey } from "../core/articleBuilder";
 
 export type DictPanelState =
   | { status: "closed" }
@@ -21,15 +22,29 @@ export type DictPanelState =
 interface Props {
   state: DictPanelState;
   inVocab: boolean;
+  /** 生词本归一化 id 集（搭配行收藏态判定）。 */
+  knownIds: ReadonlySet<string>;
   onSpeak: (text: string) => void;
   onAddVocab: () => void;
+  /** 常用搭配行一键收藏为词块。 */
+  onAddCollVocab: (coll: VocabCollocation) => void;
   onLocate: (sentenceIdx: number) => void;
   /** 词块即时卡「详查词典」：走完整 LLM 词条查询。 */
   onLookup: (text: string, sentenceIdx: number) => void;
   onClose: () => void;
 }
 
-export function DictColumn({ state, inVocab, onSpeak, onAddVocab, onLocate, onLookup, onClose }: Props) {
+export function DictColumn({
+  state,
+  inVocab,
+  knownIds,
+  onSpeak,
+  onAddVocab,
+  onAddCollVocab,
+  onLocate,
+  onLookup,
+  onClose,
+}: Props) {
   if (state.status === "closed") return null;
 
   const headWord = state.status === "chunk" ? state.chunk.text : state.query;
@@ -171,12 +186,23 @@ export function DictColumn({ state, inVocab, onSpeak, onAddVocab, onLocate, onLo
             <div>
               <div className="section-label">常用搭配</div>
               <div className="coll-list">
-                {state.entry.collocations.map((c, i) => (
-                  <div className="coll" key={i}>
-                    {c.en}
-                    <span className="cn">{c.cn}</span>
-                  </div>
-                ))}
+                {state.entry.collocations.map((c, i) => {
+                  const saved = knownIds.has(normalizeWordKey(c.en));
+                  return (
+                    <div className="coll" key={i}>
+                      {c.en}
+                      <span className="cn">{c.cn}</span>
+                      <button
+                        className={`coll-save${saved ? " saved" : ""}`}
+                        onClick={() => onAddCollVocab(c)}
+                        disabled={saved}
+                        title={saved ? "已在生词本" : "收藏为词块"}
+                      >
+                        <IconStar size={11} filled={saved} />
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

@@ -99,3 +99,58 @@ describe("buildReaderDictPrompt", () => {
     expect(p).toContain("not_a_word");
   });
 });
+
+describe("词块字段（chunkType/pattern/trap）", () => {
+  it("多词短语解析并带出词块字段", () => {
+    const res = parseReaderDictResponse(
+      JSON.stringify({
+        word: "take on momentum",
+        senses: [{ pos: "搭配", cn: "获得动力" }],
+        chunkType: "collocation",
+        pattern: "take on sth",
+        trap: "make momentum",
+      }),
+    );
+    expect(res.kind).toBe("entry");
+    if (res.kind !== "entry") return;
+    expect(res.entry.chunkType).toBe("collocation");
+    expect(res.entry.pattern).toBe("take on sth");
+    expect(res.entry.trap).toBe("make momentum");
+  });
+
+  it("非法 chunkType 被丢弃，单词词条不受影响", () => {
+    const res = parseReaderDictResponse(
+      JSON.stringify({ word: "settle", senses: [{ pos: "v.", cn: "安顿" }], chunkType: "weird" }),
+    );
+    expect(res.kind).toBe("entry");
+    if (res.kind !== "entry") return;
+    expect(res.entry.chunkType).toBeUndefined();
+  });
+
+  it("entryToVocab：多词自动 kind=chunk 并带词块字段，单词 kind=word", () => {
+    const now = 1_700_000_000_000;
+    const chunk = entryToVocab(
+      {
+        word: "take on momentum",
+        senses: [{ pos: "搭配", cn: "获得动力" }],
+        chunkType: "phrasal",
+        pattern: "take on sth",
+        trap: "make momentum",
+      },
+      { articleId: "a1", sentenceIdx: 0 },
+      now,
+    );
+    expect(chunk.kind).toBe("chunk");
+    expect(chunk.chunkType).toBe("phrasal");
+    expect(chunk.pattern).toBe("take on sth");
+    expect(chunk.id).toBe("take on momentum");
+
+    const single = entryToVocab(
+      { word: "settle", senses: [{ pos: "v.", cn: "安顿" }] },
+      { articleId: "a1", sentenceIdx: 0 },
+      now,
+    );
+    expect(single.kind).toBe("word");
+    expect(single.chunkType).toBeUndefined();
+  });
+});

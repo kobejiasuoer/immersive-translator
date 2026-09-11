@@ -37,6 +37,7 @@ import {
   type ReaderSettings,
   type SentenceChunk,
   type SentencePair,
+  type VocabCollocation,
   type VocabWord,
 } from "../core/readerTypes";
 import type { ReviewLogFile } from "../core/readerSrs";
@@ -800,6 +801,28 @@ export function ReaderApp() {
   /** 生词再现标记：生词本归一化 id 集。 */
   const knownIds = useMemo(() => new Set(vocabWords.map((w) => w.id)), [vocabWords]);
 
+  /** 常用搭配行一键收藏为词块。 */
+  const addCollVocab = useCallback(
+    (coll: VocabCollocation) => {
+      const a = articleRef.current;
+      if (!a || dict.status !== "ready") return;
+      const word = chunkToVocab(
+        { text: coll.en, chunkType: "collocation", gloss: coll.cn },
+        { articleId: a.id, sentenceIdx: dict.sentenceIdx },
+      );
+      void readerSaveVocabWord(word)
+        .then(async () => {
+          await refreshVocab();
+          showToast(`已收藏搭配：${word.word}`);
+        })
+        .catch((error) => {
+          console.error("[reader] add coll vocab failed", error);
+          showToast("收藏搭配失败");
+        });
+    },
+    [dict.status, refreshVocab, showToast],
+  );
+
   // ---- 复习（屏 D） ----
   const gradeVocab = useCallback(
     (word: VocabWord, g: ReviewGrade) => {
@@ -978,8 +1001,10 @@ export function ReaderApp() {
             <DictColumn
               state={dict}
               inVocab={inVocab}
+              knownIds={knownIds}
               onSpeak={speakWord}
               onAddVocab={addVocab}
+              onAddCollVocab={addCollVocab}
               onLocate={(idx) => playback.jumpTo(idx)}
               onLookup={(text, idx) => void lookup(text, idx)}
               onClose={() => setDict({ status: "closed" })}

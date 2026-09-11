@@ -11,8 +11,8 @@
  * 容错策略与 readerDict.ts 一致：prompt 约束 JSON + 剥围栏宽容解析。
  */
 
-import type { ChunkType, SentenceChunk, VocabSource, VocabWord } from "./readerTypes";
-import { CHUNK_TYPE_LABELS } from "./readerTypes";
+import type { SentenceChunk, VocabSource, VocabWord } from "./readerTypes";
+import { CHUNK_TYPE_LABELS, parseChunkType } from "./readerTypes";
 import { normalizeWordKey } from "./articleBuilder";
 import { initialSrs } from "./readerSrs";
 import { extractJsonObject } from "./readerDict";
@@ -26,8 +26,6 @@ export const CHUNKS_PER_SENTENCE = 3;
 /** 词块 text 的长度与词数上限（半个句子的「词块」是模型跑偏）。 */
 const CHUNK_MAX_CHARS = 60;
 const CHUNK_MAX_WORDS = 6;
-
-const CHUNK_TYPES: readonly ChunkType[] = ["collocation", "phrasal", "idiom", "pattern"];
 
 /** 标注批次的句子输入。 */
 export interface ChunkBatchItem {
@@ -112,11 +110,6 @@ export function findChunkRange(en: string, text: string): TextRange | null {
 
 const asString = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 
-function asChunkType(v: unknown): ChunkType | null {
-  const s = asString(v).toLowerCase();
-  return (CHUNK_TYPES as readonly string[]).includes(s) ? (s as ChunkType) : null;
-}
-
 /**
  * 解析一批标注响应，返回 idx → 通过定位校验的词块列表。
  * 无有效内容返回空 Map（调用方按批失败/空处理均可）。
@@ -149,7 +142,7 @@ export function parseChunkResponse(
       if (!gloss) continue;
       if (!findChunkRange(en, text)) continue; // 定位不到 = 丢弃
       seen.add(key);
-      const chunkType = asChunkType(co.type) ?? "collocation";
+      const chunkType = parseChunkType(co.type) ?? "collocation";
       const pattern = asString(co.pattern);
       const trap = asString(co.trap);
       chunks.push({

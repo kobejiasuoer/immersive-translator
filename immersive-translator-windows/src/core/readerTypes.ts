@@ -25,6 +25,13 @@ export const CHUNK_TYPE_LABELS: Record<ChunkType, string> = {
   pattern: "句式",
 };
 
+/** 宽容解析词块类型字符串（LLM 返回）；非法值返回 null。 */
+export function parseChunkType(v: unknown): ChunkType | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim().toLowerCase();
+  return s === "collocation" || s === "phrasal" || s === "idiom" || s === "pattern" ? s : null;
+}
+
 /**
  * 句内标注的一个词块。en 不可变（只允许编辑译文），所以标注不过期；
  * text 必须是 en 的连续子串，解析时强校验，匹配不上就丢弃（宁漏勿错）。
