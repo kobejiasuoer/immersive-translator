@@ -19,7 +19,7 @@ interface Props {
   playback: PlaybackHandle;
   settings: ReaderSettings;
   onPatchSettings: (patch: Partial<ReaderSettings>) => void;
-  onOpenViewMenu: (anchor: { right: number; bottom: number }) => void;
+  onOpenViewMenu: (anchor: { top: number; right: number }) => void;
   onOpenDrawer: () => void;
 }
 
@@ -152,7 +152,7 @@ export function PlayBar({ article, playback, settings, onPatchSettings, onOpenVi
           className="reader-tb-btn"
           onClick={(e) => {
             const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-            onOpenViewMenu({ right: rect.right, bottom: rect.bottom });
+            onOpenViewMenu({ top: rect.top, right: rect.right });
           }}
           title="视图"
         >

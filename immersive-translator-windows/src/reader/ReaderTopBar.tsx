@@ -158,7 +158,7 @@ export function ViewMenu({
   onPatchSettings,
   onClose,
 }: {
-  anchorRect: { right: number; bottom: number };
+  anchorRect: { top: number; right: number };
   settings: ReaderSettings;
   onPatchSettings: (patch: Partial<ReaderSettings>) => void;
   onClose: () => void;
@@ -180,7 +180,7 @@ export function ViewMenu({
     <div
       className="reader-pop reader-fade"
       ref={ref}
-      style={{ top: anchorRect.bottom + 6, left: anchorRect.right - 220 }}
+      style={{ bottom: window.innerHeight - anchorRect.top + 6, left: anchorRect.right - 220 }}
       role="menu"
     >
       <button className="reader-menu-item" role="menuitem" onClick={() => onPatchSettings({ contrastMode: nextContrast })}>

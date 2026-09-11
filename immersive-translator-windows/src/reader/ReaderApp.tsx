@@ -83,7 +83,7 @@ export function ReaderApp() {
   const [toast, setToast] = useState("");
   const [translating, setTranslating] = useState<{ done: number; total: number } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [viewMenuAnchor, setViewMenuAnchor] = useState<{ right: number; bottom: number } | null>(null);
+  const [viewMenuAnchor, setViewMenuAnchor] = useState<{ top: number; right: number } | null>(null);
   const [dict, setDict] = useState<DictPanelState>({ status: "closed" });
   const [peekAll, setPeekAll] = useState(false);
   const [searchMatchIdx, setSearchMatchIdx] = useState<number | null>(null);
