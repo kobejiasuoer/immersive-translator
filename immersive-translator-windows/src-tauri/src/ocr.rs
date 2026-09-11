@@ -407,6 +407,8 @@ pub async fn ocr_download_models(app: AppHandle) -> Result<(), String> {
 
     let dir = models_dir(&app)?;
     let client = reqwest::Client::builder()
+        // ModelScope 下载服务会拒绝缺少 User-Agent 的请求（HTTP 403）。
+        .user_agent(concat!("ImmersiveTranslator/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(300))
         .build()
         .map_err(|e| e.to_string())?;
