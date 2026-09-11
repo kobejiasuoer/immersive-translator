@@ -30,3 +30,6 @@ release-builds/
 # Temporary files
 *.tmp
 *.swp
+
+# ZCode 本地会话状态
+.zcode/

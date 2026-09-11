@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>词典卡片 · 交互预览（新方案）</title>
+<style>
+  :root {
+    --accent: #4c5ff0;
+    --accent-soft: #eef0fe;
+    --bg: #f4f5f9;
+    --surface: #ffffff;
+    --surface-2: #f9fafc;
+    --border: #e4e7ee;
+    --text-1: #1c2029;
+    --text-2: #4b5261;
+    --text-3: #7c8494;
+    --text-4: #a6adbb;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --shadow-float: 0 6px 16px rgba(16,24,40,.08), 0 2px 6px rgba(16,24,40,.06);
+    --font-ui: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+    --font-mono: Consolas, "Courier New", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px 32px 48px;
+    background: var(--bg); color: var(--text-1);
+    font-family: var(--font-ui); font-size: 14px;
+  }
+  .page-title { font-size: 18px; font-weight: 700; margin: 0 0 4px; }
+  .page-sub { color: var(--text-3); font-size: 12.5px; margin: 0 0 22px; }
+  .stage { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
+  .demo { flex: 0 1 430px; }
+  .caption {
+    font-size: 12.5px; color: var(--text-2); font-weight: 600;
+    margin: 0 0 10px; padding-left: 8px; border-left: 3px solid var(--accent);
+  }
+  .hint { font-size: 12px; color: var(--text-3); margin-top: 10px; line-height: 1.7; }
+  .hint b { color: var(--accent); }
+
+  /* ---------- 浮窗外观（与应用一致） ---------- */
+  .panel {
+    width: 420px; background: var(--surface); border-radius: 12px;
+    box-shadow: var(--shadow-float); overflow: hidden;
+  }
+  .panel-header {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 10px; border-bottom: 1px solid var(--border);
+  }
+  .logo {
+    width: 22px; height: 22px; border-radius: 6px; flex: none;
+    background: linear-gradient(135deg,#4c5ff0,#7a5cf0);
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700;
+  }
+  .app-name { font-size: 12.5px; font-weight: 600; }
+  .chip {
+    font-size: 10px; padding: 1px 7px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent); font-weight: 600;
+  }
+  .panel-actions { margin-left: auto; display: flex; gap: 2px; color: var(--text-4); }
+  .panel-actions svg { width: 15px; height: 15px; }
+
+  .panel-body { padding: 10px 12px 12px; }
+
+  .orig-label-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .orig-label { font-size: 10.5px; color: var(--text-3); font-weight: 700; letter-spacing: .04em; }
+  .edit-hint { font-size: 10px; color: var(--text-4); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+  .orig-text { font-size: 13px; color: var(--text-2); line-height: 1.55; }
+
+  .trans-block { margin-top: 10px; }
+  .trans-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .trans-label {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10.5px; color: var(--accent); font-weight: 700; letter-spacing: .04em;
+  }
+  .trans-label svg { width: 11px; height: 11px; }
+  .trans-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+  .trans-text { font-size: 13.5px; line-height: 1.6; }
+
+  .icon-btn {
+    width: 24px; height: 24px; border: none; border-radius: 6px; cursor: pointer;
+    background: transparent; color: var(--text-3);
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .icon-btn:hover { background: var(--surface-2); color: var(--text-1); }
+  .icon-btn svg { width: 14px; height: 14px; }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text-1); font-size: 12px; font-family: var(--font-ui);
+    padding: 4px 10px; border-radius: var(--radius-sm); cursor: pointer;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn svg { width: 13px; height: 13px; }
+  .btn-sm { padding: 3px 8px; font-size: 11.5px; }
+
+  /* ---------- 词典按钮的三种状态 ---------- */
+  .dict-btn { position: relative; }
+  .dict-btn.querying { color: var(--text-3); border-style: dashed; pointer-events: none; }
+  .dict-btn.ready {
+    border-color: var(--accent); color: var(--accent);
+    background: var(--accent-soft); font-weight: 600;
+  }
+  .dict-btn .dot {
+    width: 6px; height: 6px; border-radius: 50%; background: #22c55e;
+    margin-left: 2px;
+  }
+  .spinner {
+    width: 11px; height: 11px; border-radius: 50%; flex: none;
+    border: 2px solid var(--border); border-top-color: var(--accent);
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------- 词典卡片 ---------- */
+  .dict-card { display: flex; flex-direction: column; gap: 9px; }
+  .dict-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+  .dict-word { font-size: 20px; font-weight: 700; }
+  .dict-phonetic { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-3); }
+  .dict-phonetic b { color: var(--accent); font-family: var(--font-ui); margin-right: 3px; }
+  .dict-core { font-size: 13.5px; font-weight: 600; }
+  .dict-senses { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+  .dict-pos {
+    display: inline-block; margin-right: 6px; padding: 0 5px; border-radius: 4px;
+    background: var(--accent-soft); color: var(--accent);
+    font-size: 10.5px; font-style: italic; font-weight: 600; line-height: 1.6;
+  }
+  .dict-gloss { font-size: 13px; }
+  .dict-example { padding-left: 8px; border-left: 2px solid var(--border); margin-top: 3px; }
+  .dict-example-s { font-size: 12.5px; color: var(--text-2); }
+  .dict-example-t { font-size: 11.5px; color: var(--text-3); }
+  .dict-hl { color: var(--accent); font-weight: 700; background: transparent; }
+  .dict-extra {
+    padding-top: 8px; border-top: 1px dashed var(--border);
+    font-size: 12px; color: var(--text-3);
+  }
+  .dict-extra b { color: var(--accent); margin-right: 6px; }
+  .dict-actions { display: flex; gap: 6px; }
+  .view-tag {
+    margin-left: auto; font-size: 10px; color: var(--text-4);
+    border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; align-self: center;
+  }
+
+  /* ---------- 底部流程条 ---------- */
+  .flow {
+    margin-top: 30px; padding: 14px 16px; border-radius: 10px;
+    background: var(--surface); box-shadow: var(--shadow-float);
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    font-size: 12.5px; color: var(--text-2);
+  }
+  .flow .step {
+    background: var(--accent-soft); color: var(--accent);
+    border-radius: 999px; padding: 4px 12px; font-weight: 600; white-space: nowrap;
+  }
+  .flow .arrow { color: var(--text-4); }
+  .note { margin-top: 14px; font-size: 12px; color: var(--text-3); line-height: 1.9; }
+  .note code { background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+</style>
+</head>
+<body>
+  <h1 class="page-title">词典卡片 · 新交互预览</h1>
+  <p class="page-sub">划词永远先出普通翻译；词条类文本在译文行出现「词典」按钮 + 后台预取，点击秒开卡片。以下浮窗可直接点击体验。</p>
+
+  <div class="stage">
+    <!-- ① 可交互：单词 -->
+    <section class="demo">
+      <div class="caption">① 划选单词「resilient」→ 先出普通翻译，「词典」按钮自动进入后台查询</div>
+      <div class="panel">
+        <div class="panel-header">
+          <span class="logo">译</span>
+          <span class="app-name">ImmersiveTranslator</span>
+          <span class="chip">选中</span>
+          <span class="panel-actions">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 1 0-14 0 7 7 0 0 0 14 0z" opacity=".0"/><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </span>
+        </div>
+
+        <!-- 视图 A：普通翻译 -->
+        <div class="panel-body" id="viewTranslate">
+          <div class="orig-label-row">
+            <span class="orig-label">原文 · 选中</span>
+            <span class="edit-hint">可编辑</span>
+            <button class="icon-btn" style="margin-left:auto" title="朗读原文">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+            </button>
+          </div>
+          <div class="orig-text">resilient</div>
+
+          <div class="trans-block">
+            <div class="trans-row">
+              <span class="trans-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>
+                译文
+              </span>
+              <span class="trans-actions">
+                <button class="icon-btn" title="朗读译文">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                </button>
+                <!-- 词典按钮：JS 驱动三态 -->
+                <button class="btn btn-sm dict-btn" id="dictBtn" title="查看词典卡片（音标/释义/例句）">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                  <span id="dictBtnText">词典</span>
+                </button>
+                <button class="btn btn-sm">复制译文</button>
+              </span>
+            </div>
+            <div class="trans-text">adj. 有韧性的；能快速恢复的；适应力强的</div>
+          </div>
+        </div>
+
+        <!-- 视图 B：词典卡片（点击后） -->
+        <div class="panel-body" id="viewDict" hidden>
+          <div class="dict-card">
+            <div class="dict-head">
+              <span class="dict-word">resilient</span>
+              <span class="dict-phonetic"><b>UK</b>/ˈrezɪliənt/</span>
+              <span class="dict-phonetic"><b>US</b>/rɪˈzɪliənt/</span>
+              <button class="icon-btn" style="margin-left:auto;align-self:center" title="朗读词条">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+              </button>
+            </div>
+            <div class="dict-core">adj. 有韧性的；能快速恢复的；适应力强的</div>
+            <ol class="dict-senses">
+              <li>
+                <div class="dict-gloss"><span class="dict-pos">adj.</span>有弹性的；能快速恢复的</div>
+                <div class="dict-example">
+                  <div class="dict-example-s">The economy proved remarkably <span class="dict-hl">resilient</span> after the crisis.</div>
+                  <div class="dict-example-t">危机过后，经济展现出惊人的韧性。</div>
+                </div>
+              </li>
+              <li>
+                <div class="dict-gloss"><span class="dict-pos">adj.</span>（物质）有弹性的，有回弹力的</div>
+                <div class="dict-example">
+                  <div class="dict-example-s">rubber is a <span class="dict-hl">resilient</span> material.</div>
+                  <div class="dict-example-t">橡胶是一种有弹性的材料。</div>
+                </div>
+              </li>
+            </ol>
+            <div class="dict-extra"><b>词形</b>n. resilience · adv. resiliently</div>
+            <div class="dict-extra" style="border-top:none;padding-top:0"><b>记忆</b>re-（回）+ salire（跳）→ 能跳回来的 → 有韧性的</div>
+            <div class="dict-actions">
+              <button class="btn btn-sm">复制卡片</button>
+              <button class="btn btn-sm" id="backBtn">整句翻译</button>
+              <span class="view-tag">词典视图</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="hint" id="stateHint">
+        演示流程：<b>译文先出</b> →「词典」按钮显示查询中（约 1 秒，模拟预取）→ 变为<b>高亮 + 绿点（已就绪）</b> →
+        点击<b>秒开</b>词典卡片 → 卡片内「整句翻译」随时切回译文。
+      </p>
+    </section>
+
+    <!-- ② 静态：长句不变 -->
+    <section class="demo">
+      <div class="caption">② 划选长句 → 与现在完全一致，不出现词典按钮、不做预取</div>
+      <div class="panel">
+        <div class="panel-header">
+          <span class="logo">译</span>
+          <span class="app-name">ImmersiveTranslator</span>
+          <span class="chip">选中</span>
+          <span class="panel-actions">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </span>
+        </div>
+        <div class="panel-body">
+          <div class="orig-label-row">
+            <span class="orig-label">原文 · 选中</span>
+            <span class="edit-hint">可编辑</span>
+          </div>
+          <div class="orig-text">How does it work? For example, Hotelbeds and Booking.com may have different IDs and naming conventions for the properties they push to distributors.</div>
+          <div class="trans-block">
+            <div class="trans-row">
+              <span class="trans-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>
+                译文
+              </span>
+              <span class="trans-actions"><button class="btn btn-sm">复制译文</button></span>
+            </div>
+            <div class="trans-text">它是如何运作的？例如，Hotelbeds 和 Booking.com 对推送给分销商的物业可能有不同的 ID 和命名规则。</div>
+          </div>
+        </div>
+      </div>
+      <p class="hint">判定标准与现在相同：≤4 个词 / CJK ≤6 字，无句读标点。关掉设置里的「词典卡片」开关，则按钮与预取都不出现。</p>
+    </section>
+  </div>
+
+  <div class="flow">
+    <span class="step">划词</span><span class="arrow">→</span>
+    <span class="step">普通翻译（立即展示）</span><span class="arrow">→</span>
+    <span class="step">词条？后台同步预取词典</span><span class="arrow">→</span>
+    <span class="step">按钮「查询中 → 就绪」</span><span class="arrow">→</span>
+    <span class="step">点击秒开卡片</span><span class="arrow">→</span>
+    <span class="step">双向切换</span>
+  </div>
+
+  <p class="note">
+    对齐要点：① 默认视图永远是<b style="color:var(--text-2)">普通翻译</b>；②「词典」按钮只在词条类文本出现，位置在译文行（复制译文旁）；
+    ③ 预取与翻译并行，点击卡片无需等待；已就绪前点击则显示骨架（兜底）；④ 两个视图互切，翻译结果不丢；⑤
+    成本：词条类选区多一次接口调用（词典 JSON 很小，约几百 token）；重复查同一词可走本地缓存（可作二期）。<br>
+    如果你希望按钮放别的位置（比如原文行）、或不想预取（点击后才查询，省一次调用但点开要等 1~2 秒），告诉我，我调整稿子。
+  </p>
+
+<script>
+  const btn = document.getElementById("dictBtn");
+  const btnText = document.getElementById("dictBtnText");
+  const viewT = document.getElementById("viewTranslate");
+  const viewD = document.getElementById("viewDict");
+  const hint = document.getElementById("stateHint");
+  let ready = false;
+
+  // 模拟后台预取：1 秒后「就绪」
+  setTimeout(() => {
+    ready = true;
+    btn.classList.remove("querying");
+    btn.classList.add("ready");
+    btn.innerHTML = btn.innerHTML.replace("词典", "词典") ; // keep icon
+    btnText.textContent = "词典";
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    dot.title = "词典数据已就绪";
+    btn.appendChild(dot);
+  }, 1000);
+
+  // 初始：查询中
+  btn.classList.add("querying");
+  btnText.textContent = "词典·查询中";
+  btn.prepend(Object.assign(document.createElement("span"), { className: "spinner" }));
+
+  btn.addEventListener("click", () => {
+    if (!ready) return; // 未就绪时按钮本就禁用（兜底：实际实现里会显示骨架屏）
+    viewT.hidden = true;
+    viewD.hidden = false;
+    hint.innerHTML = "当前：<b>词典视图</b>。点卡片里的「整句翻译」切回译文，翻译结果一直保留。";
+  });
+  document.getElementById("backBtn").addEventListener("click", () => {
+    viewD.hidden = true;
+    viewT.hidden = false;
+    hint.innerHTML = "当前：<b>译文视图</b>。词典数据已缓存，再点「词典」仍是秒开。";
+  });
+</script>
+</body>
+</html>

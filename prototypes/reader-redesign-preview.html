@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>沉浸阅读室 · 重设计原型（导入弹窗 + 译文罩）</title>
+<style>
+  /* ============ 主题令牌（对齐 src/styles.css 阅读室令牌） ============ */
+  :root, [data-pt="light"] {
+    --pt-bg: #f4f5f9;
+    --pt-surface: #ffffff;
+    --pt-surface-2: #f7f8fb;
+    --pt-border: #e4e6ee;
+    --pt-border-strong: #cfd3e0;
+    --pt-text-1: #1c2029;
+    --pt-text-2: #4b5261;
+    --pt-text-3: #7c8494;
+    --pt-text-4: #a3aabd;
+    --pt-accent: #4c5ff0;
+    --pt-accent-hover: #3f52e0;
+    --pt-accent-soft: #eef0fe;
+    --pt-accent-softer: #f6f7ff;
+    --pt-mask: #dde2fd;
+    --pt-shadow-pop: 0 24px 64px rgba(18, 22, 40, 0.22), 0 4px 16px rgba(18, 22, 40, 0.08);
+    --pt-overlay: rgba(20, 23, 36, 0.42);
+  }
+  [data-pt="sepia"] {
+    --pt-bg: #f5efdf;
+    --pt-surface: #fbf7ec;
+    --pt-surface-2: #f1ead7;
+    --pt-border: #e4dac0;
+    --pt-border-strong: #d2c6a6;
+    --pt-text-1: #37301f;
+    --pt-text-2: #5a5138;
+    --pt-text-3: #857a5c;
+    --pt-text-4: #a89d80;
+    --pt-accent: #4c5ff0;
+    --pt-accent-hover: #3f52e0;
+    --pt-accent-soft: rgba(76, 95, 240, 0.12);
+    --pt-accent-softer: rgba(76, 95, 240, 0.07);
+    --pt-mask: #e8dfc8;
+    --pt-shadow-pop: 0 24px 64px rgba(80, 66, 32, 0.22), 0 4px 16px rgba(80, 66, 32, 0.08);
+    --pt-overlay: rgba(56, 46, 22, 0.38);
+  }
+  [data-pt="dark"] {
+    --pt-bg: #1d1f26;
+    --pt-surface: #262933;
+    --pt-surface-2: #2e313c;
+    --pt-border: #373b47;
+    --pt-border-strong: #474c5a;
+    --pt-text-1: #edeef4;
+    --pt-text-2: #c4c9d6;
+    --pt-text-3: #9399ab;
+    --pt-text-4: #6f7688;
+    --pt-accent: #7d8cff;
+    --pt-accent-hover: #93a0ff;
+    --pt-accent-soft: rgba(125, 140, 255, 0.16);
+    --pt-accent-softer: rgba(125, 140, 255, 0.09);
+    --pt-mask: #333744;
+    --pt-shadow-pop: 0 24px 64px rgba(0, 0, 0, 0.55), 0 4px 16px rgba(0, 0, 0, 0.35);
+    --pt-overlay: rgba(0, 0, 0, 0.55);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--pt-bg);
+    color: var(--pt-text-1);
+    font-family: "Inter", "Segoe UI", "Noto Sans SC", "Microsoft YaHei UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.7;
+    transition: background 0.35s ease, color 0.35s ease;
+    padding-bottom: 120px;
+  }
+  .serif-en { font-family: "Source Serif 4", Georgia, "Times New Roman", serif; }
+  .serif-cn { font-family: "Noto Serif SC", "Source Serif 4", Georgia, serif; }
+
+  /* ============ 页面框架 ============ */
+  .page { max-width: 1000px; margin: 0 auto; padding: 0 28px; }
+  header.page-head {
+    padding: 44px 0 10px;
+    display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; flex-wrap: wrap;
+  }
+  h1 { font-size: 22px; font-weight: 700; letter-spacing: 0.2px; }
+  h1 .sub { display: block; font-size: 13px; font-weight: 400; color: var(--pt-text-3); margin-top: 6px; }
+  .theme-switch {
+    display: inline-flex; border: 1px solid var(--pt-border); border-radius: 999px; overflow: hidden;
+    background: var(--pt-surface); flex: none;
+  }
+  .theme-switch button {
+    border: none; background: transparent; color: var(--pt-text-3); font: inherit; font-size: 12.5px;
+    padding: 6px 14px; cursor: pointer; transition: all .2s;
+  }
+  .theme-switch button.on { background: var(--pt-accent-soft); color: var(--pt-accent); font-weight: 600; }
+  .notice {
+    margin: 14px 0 8px; padding: 10px 16px; border-radius: 10px;
+    background: var(--pt-accent-softer); border: 1px solid var(--pt-accent-soft);
+    color: var(--pt-text-2); font-size: 13px;
+  }
+  .notice b { color: var(--pt-accent); }
+
+  section.demo { margin-top: 52px; }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+  .sec-no {
+    font-size: 12px; font-weight: 700; color: var(--pt-accent); background: var(--pt-accent-soft);
+    border-radius: 6px; padding: 2px 8px; letter-spacing: 1px;
+  }
+  .sec-head h2 { font-size: 18px; font-weight: 700; }
+  .sec-desc { color: var(--pt-text-2); font-size: 13.5px; max-width: 760px; margin-bottom: 18px; }
+  .sec-desc ul { margin: 8px 0 0 18px; }
+  .sec-desc li { margin: 3px 0; }
+  .bad { color: #c2410c; }
+  [data-pt="dark"] .bad { color: #f59e6b; }
+  .good { color: #16803c; }
+  [data-pt="dark"] .good { color: #6fcf8f; }
+
+  .card {
+    background: var(--pt-surface); border: 1px solid var(--pt-border); border-radius: 14px;
+    padding: 22px 24px; transition: background .35s, border-color .35s;
+  }
+
+  /* ============ ① 导入弹窗 ============ */
+  .import-stage { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+  .mini-shelf {
+    width: 236px; flex: none; background: var(--pt-surface); border: 1px solid var(--pt-border);
+    border-radius: 12px; padding: 10px; font-size: 12.5px;
+  }
+  .mini-shelf .shelf-h {
+    display: flex; align-items: center; justify-content: space-between;
+    color: var(--pt-text-3); font-weight: 600; padding: 2px 4px 8px;
+  }
+  .plus-btn {
+    width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--pt-border);
+    background: var(--pt-surface-2); color: var(--pt-text-2); cursor: pointer; font-size: 14px; line-height: 1;
+  }
+  .plus-btn:hover { border-color: var(--pt-accent); color: var(--pt-accent); }
+  .shelf-item {
+    border-radius: 8px; padding: 8px 9px; cursor: default; color: var(--pt-text-1);
+  }
+  .shelf-item + .shelf-item { margin-top: 2px; }
+  .shelf-item .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .shelf-item .m { display: flex; align-items: center; gap: 8px; margin-top: 5px; color: var(--pt-text-3); font-size: 11px; }
+  .shelf-item .bar { flex: 1; height: 3px; border-radius: 2px; background: var(--pt-border); overflow: hidden; }
+  .shelf-item .bar i { display: block; height: 100%; background: var(--pt-accent); border-radius: 2px; transition: width .8s ease; }
+  .shelf-item.fresh { animation: fresh-in .5s ease; background: var(--pt-accent-softer); }
+  @keyframes fresh-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+  .shelf-empty-tip { color: var(--pt-text-4); font-size: 11.5px; padding: 4px 9px 2px; line-height: 1.7; }
+
+  .open-modal-btn {
+    border: 1px solid var(--pt-accent); color: #fff; background: var(--pt-accent);
+    font: inherit; font-size: 13.5px; font-weight: 600; border-radius: 10px; padding: 10px 22px; cursor: pointer;
+  }
+  .open-modal-btn:hover { background: var(--pt-accent-hover); }
+  .stage-note { color: var(--pt-text-3); font-size: 12.5px; max-width: 380px; }
+
+  /* 弹窗本体 */
+  .overlay {
+    position: fixed; inset: 0; background: var(--pt-overlay); z-index: 100;
+    display: none; align-items: flex-start; justify-content: center;
+    padding: 8vh 20px 40px; overflow-y: auto;
+  }
+  .overlay.open { display: flex; animation: ov-in .18s ease; }
+  @keyframes ov-in { from { opacity: 0; } to { opacity: 1; } }
+  .modal {
+    width: 640px; max-width: 100%; background: var(--pt-surface); border: 1px solid var(--pt-border);
+    border-radius: 16px; box-shadow: var(--pt-shadow-pop); animation: md-in .22s cubic-bezier(.2,.9,.3,1.2);
+    overflow: hidden;
+  }
+  @keyframes md-in { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
+  .md-head {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    padding: 20px 24px 0;
+  }
+  .md-head h3 { font-size: 17px; font-weight: 700; }
+  .md-head p { font-size: 12.5px; color: var(--pt-text-3); margin-top: 3px; }
+  .md-close {
+    border: none; background: transparent; color: var(--pt-text-3); font-size: 16px; cursor: pointer;
+    width: 28px; height: 28px; border-radius: 8px; flex: none;
+  }
+  .md-close:hover { background: var(--pt-surface-2); color: var(--pt-text-1); }
+  .md-body { padding: 16px 24px 4px; }
+  .fld-label { display: block; font-size: 12px; font-weight: 600; color: var(--pt-text-3); margin: 0 0 6px; }
+  .md-body input[type="text"] {
+    width: 100%; font: inherit; font-size: 13.5px; color: var(--pt-text-1);
+    background: var(--pt-surface-2); border: 1px solid var(--pt-border); border-radius: 9px;
+    padding: 8px 12px; outline: none; transition: border-color .15s;
+  }
+  .md-body input[type="text"]:focus { border-color: var(--pt-accent); }
+  .md-body textarea {
+    width: 100%; min-height: 216px; resize: vertical; margin-top: 14px;
+    font-family: "Source Serif 4", Georgia, "Noto Serif SC", serif; font-size: 14.5px; line-height: 1.85;
+    color: var(--pt-text-1); background: var(--pt-surface-2); border: 1px solid var(--pt-border);
+    border-radius: 11px; padding: 13px 15px; outline: none; transition: border-color .15s;
+  }
+  .md-body textarea:focus { border-color: var(--pt-accent); background: var(--pt-surface); }
+  .md-body textarea::placeholder, .md-body input::placeholder { color: var(--pt-text-4); }
+  .detect-chip {
+    display: none; margin-top: 10px; font-size: 12.5px; border-radius: 9px; padding: 7px 12px;
+    background: var(--pt-accent-softer); border: 1px dashed var(--pt-accent-soft); color: var(--pt-text-2);
+  }
+  .detect-chip.show { display: block; animation: ov-in .2s ease; }
+  .detect-chip b { color: var(--pt-accent); font-weight: 600; }
+  .md-meta {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 10px; font-size: 12px; color: var(--pt-text-3); padding: 0 2px;
+  }
+  .md-meta .kbd {
+    font-family: inherit; font-size: 10.5px; border: 1px solid var(--pt-border-strong);
+    border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; margin: 0 1px; color: var(--pt-text-3);
+  }
+  .md-foot {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 24px 20px;
+  }
+  .btn-ghost {
+    border: none; background: transparent; color: var(--pt-text-3); font: inherit; font-size: 13px;
+    cursor: pointer; padding: 8px 10px; border-radius: 8px; text-decoration: underline dotted;
+    text-underline-offset: 3px;
+  }
+  .btn-ghost:hover { color: var(--pt-accent); background: var(--pt-accent-softer); }
+  .btn-row { display: flex; gap: 10px; }
+  .btn-cancel {
+    border: 1px solid var(--pt-border-strong); background: var(--pt-surface); color: var(--pt-text-2);
+    font: inherit; font-size: 13.5px; border-radius: 9px; padding: 8px 18px; cursor: pointer;
+  }
+  .btn-cancel:hover { border-color: var(--pt-text-4); color: var(--pt-text-1); }
+  .btn-primary {
+    border: none; background: var(--pt-accent); color: #fff; font: inherit; font-size: 13.5px; font-weight: 600;
+    border-radius: 9px; padding: 8px 20px; cursor: pointer;
+  }
+  .btn-primary:hover { background: var(--pt-accent-hover); }
+  .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+  [data-pt="light"] .btn-primary, [data-pt="sepia"] .btn-primary { color: #fff; }
+
+  /* ============ ② 译文罩 ============ */
+  .variant-tabs { display: flex; gap: 8px; margin: 18px 0 14px; flex-wrap: wrap; }
+  .vtab {
+    border: 1px solid var(--pt-border); background: var(--pt-surface); color: var(--pt-text-2);
+    font: inherit; font-size: 13px; border-radius: 999px; padding: 7px 18px; cursor: pointer; transition: all .18s;
+  }
+  .vtab:hover { border-color: var(--pt-accent); color: var(--pt-accent); }
+  .vtab.on { background: var(--pt-accent); border-color: var(--pt-accent); color: #fff; font-weight: 600; }
+  .vtab .rec { font-size: 11px; opacity: .85; margin-left: 4px; }
+  .vpanel { display: none; }
+  .vpanel.on { display: block; animation: ov-in .25s ease; }
+  .v-brief { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .chip {
+    font-size: 12px; border-radius: 7px; padding: 3px 10px; border: 1px solid var(--pt-border);
+    color: var(--pt-text-2); background: var(--pt-surface-2);
+  }
+  .chip.pro { border-color: transparent; background: rgba(22, 128, 60, 0.1); color: #16803c; }
+  .chip.con { border-color: transparent; background: rgba(194, 65, 12, 0.1); color: #c2410c; }
+  [data-pt="dark"] .chip.pro { color: #6fcf8f; }
+  [data-pt="dark"] .chip.con { color: #f59e6b; }
+
+  /* 阅读舞台模拟 */
+  .stage {
+    background: var(--pt-bg); border: 1px solid var(--pt-border); border-radius: 14px;
+    padding: 30px 20px 36px; transition: background .35s;
+  }
+  .stage-toolbar { max-width: 640px; margin: 0 auto 6px; display: flex; align-items: center; gap: 10px; }
+  .stage-toolbar .grow { flex: 1; }
+  .maskbar {
+    display: flex; align-items: center; gap: 10px; max-width: 640px; margin: 0 auto 22px;
+    font-size: 12px; color: var(--pt-text-3);
+  }
+  .maskbar .eye {
+    width: 22px; height: 22px; border-radius: 7px; background: var(--pt-accent-soft); color: var(--pt-accent);
+    display: inline-flex; align-items: center; justify-content: center; font-size: 12px; flex: none;
+  }
+  .maskbar b { color: var(--pt-text-2); font-weight: 600; }
+  .maskbar .count { color: var(--pt-accent); font-weight: 600; }
+  .maskbar button {
+    border: 1px solid var(--pt-border-strong); background: var(--pt-surface); color: var(--pt-text-2);
+    font: inherit; font-size: 11.5px; border-radius: 7px; padding: 3px 10px; cursor: pointer;
+  }
+  .maskbar button:hover { border-color: var(--pt-accent); color: var(--pt-accent); }
+  .pairs { max-width: 640px; margin: 0 auto; }
+  .pair { position: relative; padding: 2px 0 14px; }
+  .pair + .pair { border-top: 1px solid transparent; }
+  .pair-en {
+    font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size: 19px; line-height: 32px; color: var(--pt-text-1); cursor: default;
+  }
+  .pair-cn {
+    font-family: "Noto Serif SC", "Source Serif 4", Georgia, serif;
+    font-size: 15px; line-height: 26px; color: var(--pt-text-2); cursor: pointer;
+  }
+  .pair-cn:hover { color: var(--pt-text-1); }
+  .pair.active-mark .pair-en { background: linear-gradient(transparent 55%, var(--pt-accent-soft) 55%); border-radius: 2px; }
+
+  /* —— 方案 A：留白显影 —— */
+  .slotA {
+    position: relative; cursor: pointer; border-radius: 6px; min-height: 26px;
+  }
+  .slotA .zh-ghost {
+    position: absolute; left: 0; top: 1px; height: 24px; display: inline-flex; align-items: center; gap: 6px;
+    padding: 0 12px; border-radius: 999px; font-family: "Inter","Segoe UI","Noto Sans SC",sans-serif;
+    font-size: 11.5px; background: var(--pt-accent-soft); color: var(--pt-accent); font-weight: 500;
+    opacity: 0; transform: translateY(2px); transition: opacity .18s ease, transform .18s ease;
+    pointer-events: none;
+  }
+  .slotA:hover .zh-ghost { opacity: 1; transform: none; }
+  .slotA .zh-text { visibility: hidden; opacity: 0; }
+  .slotA.revealed .zh-text { visibility: visible; opacity: 1; transition: opacity .4s ease; }
+  .slotA.revealed { cursor: pointer; min-height: 0; }
+  .slotA.revealed .zh-ghost { display: none; }
+
+  /* —— 方案 B：墨条（墨条绝对定位叠在预留的真实译文空间上，多行也不跳） —— */
+  .slotB { position: relative; cursor: pointer; min-height: 26px; }
+  .slotB .inkbar {
+    position: absolute; left: 0; top: 7px;
+    display: block; height: 12px; width: 64%; border-radius: 999px; background: var(--pt-mask);
+    transition: width .25s ease, background .2s ease, opacity .3s ease, transform .3s ease;
+  }
+  .slotB:hover .inkbar { width: 74%; background: var(--pt-accent-soft); }
+  .slotB .zh-text { visibility: hidden; opacity: 0; }
+  .slotB.revealed .inkbar { opacity: 0; transform: scaleY(.4); }
+  .slotB.revealed .zh-text { visibility: visible; opacity: 1; transition: opacity .4s ease .05s; }
+
+  /* —— 方案 C：毛玻璃显影 —— */
+  .slotC { cursor: pointer; }
+  .slotC .zh-text {
+    filter: blur(9px); opacity: .35; user-select: none;
+    transition: filter .45s ease, opacity .45s ease;
+  }
+  .slotC:hover .zh-text { filter: blur(6px); opacity: .5; }
+  .slotC.revealed .zh-text { filter: blur(0); opacity: 1; user-select: auto; }
+
+  .reset-row { display: flex; gap: 10px; justify-content: flex-end; max-width: 640px; margin: 18px auto 0; }
+  .reset-row .hint { flex: 1; font-size: 12px; color: var(--pt-text-4); align-self: center; }
+  .btn-soft {
+    border: 1px solid var(--pt-border-strong); background: var(--pt-surface); color: var(--pt-text-2);
+    font: inherit; font-size: 12px; border-radius: 8px; padding: 5px 14px; cursor: pointer;
+  }
+  .btn-soft:hover { border-color: var(--pt-accent); color: var(--pt-accent); }
+  .btn-soft.holding { background: var(--pt-accent-soft); border-color: var(--pt-accent); color: var(--pt-accent); }
+
+  /* toast */
+  .toast {
+    position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%) translateY(20px);
+    background: var(--pt-text-1); color: var(--pt-bg); font-size: 13px; border-radius: 10px;
+    padding: 9px 18px; opacity: 0; pointer-events: none; transition: all .3s ease; z-index: 200;
+    box-shadow: 0 8px 30px rgba(0,0,0,.25);
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .flow-note { margin-top: 14px; font-size: 12.5px; color: var(--pt-text-3); }
+  .flow-note b { color: var(--pt-text-2); }
+</style>
+</head>
+<body data-pt="sepia">
+<div class="page">
+
+  <header class="page-head">
+    <h1>沉浸阅读室 · 两处重设计原型
+      <span class="sub">① 导入弹窗（替代系统 prompt 框）　② 译文罩交互（替代「点按查看译文」色块）</span>
+    </h1>
+    <div class="theme-switch" id="themeSwitch">
+      <button data-t="light">浅色</button>
+      <button data-t="sepia" class="on">护眼</button>
+      <button data-t="dark">深色</button>
+    </div>
+  </header>
+  <div class="notice">
+    这是<b>决策用交互原型</b>，没有写入应用 —— 所有按钮都可以点、可以真实操作。体验后在对话里回复选择即可，
+    例如：「导入弹窗可以，罩层用 B，另外标题识别改成……」。
+  </div>
+
+  <!-- ================= ① 导入弹窗 ================= -->
+  <section class="demo">
+    <div class="sec-head"><span class="sec-no">①</span><h2>导入文章 · 应用内弹窗</h2></div>
+    <div class="sec-desc">
+      现状是浏览器原生 <code>prompt()</code> 框，问题：
+      <ul>
+        <li class="bad">单行小输入框，粘贴长文看不见上下文，也无法再编辑；</li>
+        <li class="bad">没有任何反馈 —— 不知道会分成几段、认成什么标题、多少词；</li>
+        <li class="bad">样式与应用完全割裂，也不支持选 .txt 文件。</li>
+      </ul>
+      新设计：<span class="good">一个与阅读室同风格的导入弹窗</span> —— 大粘贴区、实时词数/段数、
+      首行标题识别预览（可改）、支持 .txt 文件、Ctrl+Enter 直接开始。
+      书架「+」按钮与空书架首屏统一走这一个弹窗。
+    </div>
+    <div class="card import-stage">
+      <div class="mini-shelf">
+        <div class="shelf-h">书架 <button class="plus-btn" id="plusBtn" title="粘贴导入文章">+</button></div>
+        <div id="shelfList">
+          <div class="shelf-item"><div class="t">The Speed of Reading</div><div class="m"><span class="bar"><i style="width:100%"></i></span><span>100%</span></div></div>
+          <div class="shelf-item"><div class="t">"I am wondering if others ha…</div><div class="m"><span class="bar"><i style="width:83%"></i></span><span>83%</span></div></div>
+        </div>
+      </div>
+      <div style="flex:1; min-width:260px; display:flex; flex-direction:column; gap:12px; align-items:flex-start;">
+        <button class="open-modal-btn" id="openBtn">打开导入弹窗（也可以点左边书架的 +）</button>
+        <div class="stage-note">
+          试试：粘贴一段英文（多段、带首行标题效果更好）→ 看底部实时统计与标题识别 →
+          填标题 / 留空 → <b>Ctrl+Enter</b> 或「开始阅读」→ 新文章会插进左边书架。
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ② 译文罩 ================= -->
+  <section class="demo">
+    <div class="sec-head"><span class="sec-no">②</span><h2>译文罩 · 三种交互方案</h2></div>
+    <div class="sec-desc">
+      现状是每句译文位置放一个写着「点按查看译文」的色块，问题：
+      <ul>
+        <li class="bad">一句话一个块，41 句就是 41 个块 + 41 次重复文字，喧宾夺主；</li>
+        <li class="bad">色块的视觉重量盖过了英文正文，「沉浸阅读」变成了「满屏方块」；</li>
+        <li class="bad">块是固定高度，和真实译文行数不一致，揭开时会跳动。</li>
+      </ul>
+      三个方案的共同底座：<span class="good">隐藏时预留真实译文的版面空间（揭开零跳动）、单击揭开、
+      按住 H 全部暂显、播放时只高亮英文</span>。下面用你正在读的那篇酒店评论做演示，直接点中文位置试试。
+    </div>
+
+    <div class="card">
+      <div class="variant-tabs" id="vtabs">
+        <button class="vtab on" data-v="A">A · 留白显影<span class="rec">（推荐）</span></button>
+        <button class="vtab" data-v="B">B · 墨条</button>
+        <button class="vtab" data-v="C">C · 毛玻璃</button>
+      </div>
+
+      <!-- A -->
+      <div class="vpanel on" data-v="A">
+        <div class="v-brief">
+          <span class="chip pro">页面最干净：隐藏时完全无痕，就是纯英文书页</span>
+          <span class="chip pro">悬停时浮现「显示译文」胶囊，指哪揭哪</span>
+          <span class="chip con">隐藏状态零提示，需要靠顶部说明条 + 悬停发现</span>
+        </div>
+        <div class="stage" data-variant="A"></div>
+      </div>
+      <!-- B -->
+      <div class="vpanel" data-v="B">
+        <div class="v-brief">
+          <span class="chip pro">隐藏位置一目了然，不需要学习</span>
+          <span class="chip pro">色块变细变短、无文字，噪音比现状低很多</span>
+          <span class="chip con">仍是「每句一个条」，只是更轻的块</span>
+        </div>
+        <div class="stage" data-variant="B"></div>
+      </div>
+      <!-- C -->
+      <div class="vpanel" data-v="C">
+        <div class="v-brief">
+          <span class="chip pro">版面节奏与真实译文完全一致，最像「蒙了一层雾」</span>
+          <span class="chip pro">悬停时雾变薄有「预告感」，揭开动效最自然</span>
+          <span class="chip con">文档最初禁用 blur（担心性能/泄读）；高模糊+低透明度下实际不可读</span>
+        </div>
+        <div class="stage" data-variant="C"></div>
+      </div>
+
+      <div class="reset-row">
+        <span class="hint">提示：揭开后再点中文可定位英文句（沿用现有行为）；顶部计数实时变化。</span>
+        <button class="btn-soft" id="peekBtn">按住模拟 H 键（全部暂显）</button>
+        <button class="btn-soft" id="resetBtn">重置演示</button>
+      </div>
+    </div>
+    <div class="flow-note">
+      <b>无论选哪个方案，顶部说明条都会简化成一行</b>：👁 译文遮罩 · 已揭开 n/N · 按住 H 全显 · 全部揭开，
+      不再占一整块横幅。选定方案后我会把它实装进应用（含四套主题下的颜色适配）并补测试。
+    </div>
+  </section>
+</div>
+
+<!-- ================= 导入弹窗 DOM ================= -->
+<div class="overlay" id="importOverlay">
+  <div class="modal" role="dialog" aria-label="导入文章">
+    <div class="md-head">
+      <div>
+        <h3>导入文章</h3>
+        <p>粘贴英文原文，空行自动分段 · 生成句对译文后立即开始精读</p>
+      </div>
+      <button class="md-close" id="modalClose" title="关闭 (Esc)">✕</button>
+    </div>
+    <div class="md-body">
+      <label class="fld-label" for="titleInput">标题（可选）</label>
+      <input type="text" id="titleInput" placeholder="留空则自动识别首行作为标题（≤80 字符且无句末标点）">
+      <textarea id="pasteArea" spellcheck="false" placeholder="粘贴英文文章…&#10;&#10;空行分段；第一行若像标题会自动识别。&#10;&#10;例：&#10;The Speed of Reading&#10;&#10;Reading speed was the goal, and comprehension was the test."></textarea>
+      <div class="detect-chip" id="detectChip"></div>
+      <div class="md-meta">
+        <span id="statText">0 词 · 0 段</span>
+        <span><span class="kbd">Ctrl</span>+<span class="kbd">Enter</span> 直接开始</span>
+      </div>
+    </div>
+    <div class="md-foot">
+      <button class="btn-ghost" id="txtBtn">打开 .txt 文件…</button>
+      <div class="btn-row">
+        <button class="btn-cancel" id="cancelBtn">取消</button>
+        <button class="btn-primary" id="goBtn" disabled>开始阅读</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ================= 主题切换 ================= */
+document.getElementById("themeSwitch").addEventListener("click", (e) => {
+  const btn = e.target.closest("button"); if (!btn) return;
+  document.body.dataset.pt = btn.dataset.t;
+  document.querySelectorAll("#themeSwitch button").forEach(b => b.classList.toggle("on", b === btn));
+});
+
+/* ================= toast ================= */
+let toastTimer = null;
+function toast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg; el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+}
+
+/* ================= ① 导入弹窗 ================= */
+const overlay = document.getElementById("importOverlay");
+const pasteArea = document.getElementById("pasteArea");
+const titleInput = document.getElementById("titleInput");
+const statText = document.getElementById("statText");
+const detectChip = document.getElementById("detectChip");
+const goBtn = document.getElementById("goBtn");
+
+function openModal() { overlay.classList.add("open"); setTimeout(() => pasteArea.focus(), 60); }
+function closeModal() { overlay.classList.remove("open"); }
+
+document.getElementById("openBtn").addEventListener("click", openModal);
+document.getElementById("plusBtn").addEventListener("click", openModal);
+document.getElementById("modalClose").addEventListener("click", closeModal);
+document.getElementById("cancelBtn").addEventListener("click", closeModal);
+overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) closeModal(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && overlay.classList.contains("open")) closeModal();
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && overlay.classList.contains("open") && goBtn.disabled === false) submitImport();
+});
+
+function countWords(text) {
+  const latin = (text.match(/[A-Za-z0-9''-]+/g) || []).length;
+  const cjk = (text.match(/[\u4e00-\u9fff\u3040-\u30ff]/g) || []).length;
+  return Math.round(latin + cjk * 0.6);
+}
+function paragraphs(text) {
+  return text.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
+}
+function detectTitle(text) {
+  const first = (text.split(/\r?\n/).find(l => l.trim()) || "").trim();
+  if (!first || first.length > 80) return null;
+  if (/[.!?。！？…]["'"'）)]?$/.test(first)) return null;
+  return first;
+}
+let detectedTitle = null;
+
+pasteArea.addEventListener("input", () => {
+  const text = pasteArea.value;
+  const paras = paragraphs(text);
+  statText.textContent = `${countWords(text).toLocaleString()} 词 · ${paras.length} 段`;
+  detectedTitle = detectTitle(text);
+  if (titleInput.value.trim()) {
+    detectChip.className = "detect-chip show";
+    detectChip.innerHTML = "使用你填写的标题：<b>《" + esc(titleInput.value.trim()) + "》</b>";
+  } else if (detectedTitle) {
+    detectChip.className = "detect-chip show";
+    detectChip.innerHTML = "✓ 识别首行为标题：<b>《" + esc(detectedTitle) + "》</b>（可填入上方标题栏修改）";
+  } else if (text.trim()) {
+    detectChip.className = "detect-chip show";
+    detectChip.innerHTML = "首行含句末标点或超长，不作为标题 —— 将从正文自动取一句做标题";
+  } else {
+    detectChip.className = "detect-chip";
+  }
+  goBtn.disabled = !text.trim();
+});
+titleInput.addEventListener("input", () => pasteArea.dispatchEvent(new Event("input")));
+document.getElementById("txtBtn").addEventListener("click", () =>
+  toast("原型演示：实现时走系统文件选择器，读取 .txt 内容填入上方文本框"));
+
+function submitImport() {
+  const text = pasteArea.value.trim(); if (!text) return;
+  const title = titleInput.value.trim() || detectedTitle || (text.split(/\r?\n/).find(l => l.trim()) || "").trim().slice(0, 60);
+  closeModal();
+  toast(`已导入《${title}》· 正在准备翻译…`);
+  // 演示：插入书架卡片
+  const list = document.getElementById("shelfList");
+  const item = document.createElement("div");
+  item.className = "shelf-item fresh";
+  item.innerHTML = `<div class="t">${esc(title)}</div><div class="m"><span class="bar"><i style="width:0%"></i></span><span class="pct">0%</span></div>`;
+  list.prepend(item);
+  const bar = item.querySelector("i"), pct = item.querySelector(".pct");
+  let w = 0;
+  const timer = setInterval(() => {
+    w = Math.min(34, w + 3); bar.style.width = w + "%"; pct.textContent = w + "%";
+    if (w >= 34) clearInterval(timer);
+  }, 90);
+  pasteArea.value = ""; titleInput.value = "";
+  detectChip.className = "detect-chip"; statText.textContent = "0 词 · 0 段"; goBtn.disabled = true;
+}
+goBtn.addEventListener("click", submitImport);
+
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+/* ================= ② 译文罩演示数据 ================= */
+const PAIRS = [
+  { en: "\u201CI am wondering if others have experienced what I am seeing,\u201D writes a TripAdvisor user.",
+    zh: "我想知道是否有人也经历过我所看到的，”一位 TripAdvisor 用户写道。" },
+  { en: "\u201CWhen I put in the hotel name in Google maps, I see one location.",
+    zh: "“当我在谷歌地图上输入酒店名称时，我看到一个位置。" },
+  { en: "However, when I put in the street address, I see a different location, generally not as favorable!",
+    zh: "然而，当我输入街道地址时，我看到的是另一个位置，通常不太理想！" },
+  { en: "Locations on Booking.com and Ctrip are also similarly inconsistent with street address.",
+    zh: "Booking.com 和携程上的位置与街道地址同样不一致。" },
+  { en: "This is not so for every hotel, but I am not sure if some hotels aren't somehow gaming the system.\u201D",
+    zh: "并非每家酒店都是这样，但我不确定是否有些酒店在某种程度上钻了系统的空子。”" },
+  { en: "No, hotels and OTAs are not fooling anybody, at least not on purpose.",
+    zh: "不，酒店和 OTA 骗不了任何人，至少不是故意的。" },
+];
+
+function buildStage(variant) {
+  const stage = document.querySelector(`.stage[data-variant="${variant}"]`);
+  stage.innerHTML = `
+    <div class="maskbar">
+      <span class="eye">◉̶</span>
+      <b>译文遮罩</b>
+      <span>已揭开 <span class="count">0 / ${PAIRS.length}</span></span>
+      <span class="grow" style="flex:1"></span>
+      <span>按住 H 全显</span>
+      <button type="button" data-all>全部揭开</button>
+    </div>
+    <div class="pairs"></div>`;
+  const wrap = stage.querySelector(".pairs");
+
+  PAIRS.forEach((p, i) => {
+    const pair = document.createElement("div");
+    pair.className = "pair" + (i === 0 ? " active-mark" : "");
+    if (variant === "A") {
+      pair.innerHTML = `
+        <p class="pair-en">${esc(p.en)}</p>
+        <div class="slotA" data-slot>
+          <span class="zh-ghost">显示译文</span>
+          <p class="pair-cn zh-text">${esc(p.zh)}</p>
+        </div>`;
+    } else if (variant === "B") {
+      pair.innerHTML = `
+        <p class="pair-en">${esc(p.en)}</p>
+        <div class="slotB" data-slot>
+          <span class="inkbar"></span>
+          <p class="pair-cn zh-text">${esc(p.zh)}</p>
+        </div>`;
+    } else {
+      pair.innerHTML = `
+        <p class="pair-en">${esc(p.en)}</p>
+        <div class="slotC" data-slot>
+          <p class="pair-cn zh-text">${esc(p.zh)}</p>
+        </div>`;
+    }
+    wrap.appendChild(pair);
+  });
+
+  const countEl = stage.querySelector(".count");
+  function refresh() {
+    countEl.textContent = `${stage.querySelectorAll("[data-slot].revealed").length} / ${PAIRS.length}`;
+  }
+  stage.querySelectorAll("[data-slot]").forEach(slot => {
+    slot.addEventListener("click", () => {
+      slot.classList.add("revealed");
+      slot.querySelectorAll(".zh-text").forEach(t => { t.style.visibility = "visible"; });
+      refresh();
+    });
+  });
+  stage.querySelector("[data-all]").addEventListener("click", () => {
+    stage.querySelectorAll("[data-slot]").forEach(s => {
+      s.classList.add("revealed");
+      s.querySelectorAll(".zh-text").forEach(t => { t.style.visibility = "visible"; });
+    });
+    refresh();
+  });
+  stage._refresh = refresh;
+  stage._reset = () => {
+    stage.querySelectorAll("[data-slot]").forEach(s => {
+      s.classList.remove("revealed");
+      s.querySelectorAll(".zh-text").forEach(t => { t.style.visibility = ""; });
+    });
+    refresh();
+  };
+  stage._peek = (on) => {
+    stage.querySelectorAll(".zh-text").forEach(t => { t.style.visibility = on ? "visible" : ""; });
+  };
+}
+buildStage("A"); buildStage("B"); buildStage("C");
+
+document.getElementById("vtabs").addEventListener("click", (e) => {
+  const btn = e.target.closest(".vtab"); if (!btn) return;
+  document.querySelectorAll("#vtabs .vtab").forEach(b => b.classList.toggle("on", b === btn));
+  document.querySelectorAll(".vpanel").forEach(p => p.classList.toggle("on", p.dataset.v === btn.dataset.v));
+});
+
+document.getElementById("resetBtn").addEventListener("click", () => {
+  document.querySelectorAll(".stage").forEach(s => s._reset && s._reset());
+});
+const peekBtn = document.getElementById("peekBtn");
+peekBtn.addEventListener("pointerdown", () => {
+  peekBtn.classList.add("holding");
+  document.querySelectorAll(".stage").forEach(s => s._peek && s._peek(true));
+});
+["pointerup", "pointerleave"].forEach(ev =>
+  peekBtn.addEventListener(ev, () => {
+    peekBtn.classList.remove("holding");
+    document.querySelectorAll(".stage").forEach(s => s._peek && s._peek(false));
+  }));
+</script>
+</body>
+</html>
