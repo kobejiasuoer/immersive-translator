@@ -340,6 +340,8 @@ export function ReadingView(props: Props) {
 
 /** 光标处的完整单词（阅读版式下 .pair-en 内单击查词）。 */
 function wordAtPoint(x: number, y: number, container: HTMLElement): string | null {
+  // vite 文件监视在 Windows 上可能吞掉同秒内的连续编辑，改动本文件后
+  // 若 HMR 行为与源码不符，优先怀疑转换缓存过期（2026-09 实际踩过）。
   const doc = container.ownerDocument;
   const range = doc.caretRangeFromPoint(x, y);
   if (!range || !range.startContainer) return null;
