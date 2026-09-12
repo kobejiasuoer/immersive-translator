@@ -143,12 +143,12 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
         cursor = max(0, startIdx)
     }
 
-    /// 单词发音（word 音轨，不打断句子朗读）。
-    func speakWord(_ text: String) {
+    /// 单词发音（word 音轨，不打断句子朗读）。rate 可调（听写整句稍慢 0.92）。
+    func speakWord(_ text: String, rate: Double = 1.0) {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
         wordSynth.stopSpeaking(at: .immediate)
-        let utterance = makeUtterance(clean, chinese: looksMostlyChinese(clean), rate: 1.0, pauseMs: 0)
+        let utterance = makeUtterance(clean, chinese: looksMostlyChinese(clean), rate: rate, pauseMs: 0)
         wordSynth.speak(utterance)
     }
 

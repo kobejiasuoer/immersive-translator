@@ -77,6 +77,11 @@ final class ReaderViewModel: ObservableObject {
     var sourceCache: [String: Article] = [:]
     /// 每篇文章的查词次数（读完统计用）。
     private var dictLookupCounts: [String: Int] = [:]
+    /// 复习卡在到期队列中的位置（左栏词表可跳卡）。
+    @Published var reviewPos: Int = 0
+    /// 复习页键盘处理（由 ReviewView 注入，卡片内状态归它管）。
+    var reviewKeyHandler: ((NSEvent) -> Bool)?
+
 
     init(settingsStore: SettingsStore, store: ReaderStore = .shared) {
         self.store = store
@@ -148,6 +153,11 @@ final class ReaderViewModel: ObservableObject {
         playback.speakWord(text)
     }
 
+    /// 听写卡整句朗读：word 音轨 + 稍慢语速，与句子朗读互不打断。
+    func speakRecallSentence(_ text: String) {
+        playback.speakWord(text, rate: 0.92)
+    }
+
     /// 生词本归一化 id 集（生词再现标记用）。
     var knownIds: Set<String> { Set(vocabWords.map(\.id)) }
 
@@ -187,6 +197,7 @@ final class ReaderViewModel: ObservableObject {
         if let file = try? store.getVocabFile() {
             vocabWords = file.words
             reviewLog = file.reviewLog
+            loadSourceArticles(ids: file.words.map(\.source.articleId))
         }
     }
 
@@ -682,6 +693,61 @@ final class ReaderViewModel: ObservableObject {
 
     func openReview() {
         route = .review
+        reviewPos = 0
+        loadSourceArticles(ids: vocabWords.map(\.source.articleId))
+    }
+
+    /// 复习卡回跳/书证需要原句：把相关文章拉进缓存。
+    func loadSourceArticles(ids: [String]) {
+        for id in Set(ids) where !id.isEmpty && sourceCache[id] == nil {
+            if let article = (try? store.getArticle(id: id)) ?? nil {
+                sourceCache[id] = article
+            }
+        }
+    }
+
+    /// 复习卡「回到原文」：切到阅读视图并定位该句。
+    func jumpToSource(articleId: String, sentenceIdx: Int) {
+        guard !articleId.isEmpty else { return }
+        if article?.id == articleId {
+            route = .reading
+        } else {
+            openArticle(id: articleId)
+        }
+        jumpTo(idx: sentenceIdx)
+    }
+
+    /// 来源句（含译文）。
+    func sourceSentence(articleId: String, sentenceIdx: Int) -> (en: String, zh: String?)? {
+        guard !articleId.isEmpty,
+              let sentence = sourceCache[articleId]?.sentences[safe: sentenceIdx] else { return nil }
+        return (sentence.en, sentence.zh)
+    }
+
+    func sourcePreview(articleId: String, sentenceIdx: Int) -> String? {
+        sourceSentence(articleId: articleId, sentenceIdx: sentenceIdx)?.en
+    }
+
+    func articleTitle(articleId: String) -> String? {
+        guard !articleId.isEmpty else { return nil }
+        return sourceCache[articleId]?.title ?? articleList.first { $0.id == articleId }?.article.title
+    }
+
+    // MARK: - 复习评分
+
+    /// 应用一档评分并落盘：SRS 演进 + 复习打卡 + 刷新统计。
+    func gradeVocab(_ word: VocabWord, _ grade: ReviewGrade) {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        var graded = word
+        graded.srs = gradeSrs(word.srs, grade, now: now)
+        do {
+            try store.saveVocabWord(graded)
+            let day = dayKey(nowMs: now)
+            reviewLog = (try? store.recordReview(day: day)) ?? reviewLog
+            refreshVocab()
+        } catch {
+            showToast("保存复习记录失败")
+        }
     }
 
     func openReading() {
@@ -691,6 +757,9 @@ final class ReaderViewModel: ObservableObject {
     // MARK: - 键盘（空格仅阅读器内生效；J/K/L 备选；H 暂显全部译文）
 
     func handleKeyDown(_ event: NSEvent) -> Bool {
+        if route == .review {
+            return reviewKeyHandler?(event) ?? false
+        }
         guard route == .reading else { return false }
         guard let key = event.charactersIgnoringModifiers?.lowercased() else { return false }
         if key == " " || key == "k" {

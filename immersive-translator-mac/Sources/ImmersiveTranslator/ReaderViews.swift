@@ -191,7 +191,7 @@ struct ReaderBodyView: View {
                         .frame(width: 320)
                 }
             } else {
-                ReviewPlaceholderView(vm: vm)
+                ReviewView(vm: vm)
             }
         }
         .frame(maxHeight: .infinity)
@@ -1409,36 +1409,6 @@ struct ReaderToast: View {
             .padding(.bottom, 56)
             .transition(.opacity)
             .animation(.easeInOut(duration: 0.18), value: text)
-    }
-}
-
-/// 复习页占位（复习流实现后替换）。
-struct ReviewPlaceholderView: View {
-    @ObservedObject var vm: ReaderViewModel
-    @Environment(\.readerPalette) private var palette
-
-    var body: some View {
-        VStack(spacing: 10) {
-            let stats = vm.stats
-            if stats.total == 0 {
-                Text("生词本还是空的")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(palette.text)
-                Text("在阅读室里查词并点击「加入生词本」，复习卡会出现在这里。")
-                    .font(.system(size: 12.5))
-                    .foregroundColor(palette.textSecondary)
-            } else {
-                Text("复习功能即将开放")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(palette.text)
-                Text("当前生词 \(stats.total) 个 · 到期 \(stats.dueNow) 个")
-                    .font(.system(size: 12.5))
-                    .foregroundColor(palette.textSecondary)
-            }
-            Button("返回阅读") { vm.openReading() }
-                .controlSize(.small)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
