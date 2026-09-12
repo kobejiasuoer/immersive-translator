@@ -99,7 +99,7 @@ manifest = {
   'pub_date': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
   'platforms': {'windows-x86_64': {
     'signature': sig,
-    'url': 'https://github.com/kobejiasuoer/immersive-translator/releases/latest/download/ImmersiveTranslator_X.Y.Z_x64-setup.exe'
+    'url': 'https://gh-proxy.com/https://github.com/kobejiasuoer/immersive-translator/releases/latest/download/ImmersiveTranslator_X.Y.Z_x64-setup.exe'
   }}
 }
 json.dump(manifest, open('latest-vX.Y.Z.json','w',encoding='utf-8'), ensure_ascii=False, indent=2)
@@ -107,6 +107,13 @@ json.dump(manifest, open('latest-vX.Y.Z.json','w',encoding='utf-8'), ensure_asci
 ```
 
 注意：signature 是 **.sig 文件全文**（内含换行，json.dump 会转义）。
+
+⚠️ **url 前缀是国内镜像**（`gh-proxy.com` 前缀 + GitHub 原链），无代理的国内用户
+检查更新和下载安装包都走它。镜像失效时需要**同步换两处**：本脚本的前缀 +
+`tauri.conf.json → plugins.updater.endpoints` 的前两行（候选镜像见下）。
+安装包下载后客户端会用 pubkey 校验 minisign 签名，镜像篡改会被拒装，只可能失败不会中毒。
+2026-09 实测可用（都能代理 Release 资产，按速度排序）：
+`gh-proxy.com` > `ghfast.top` > `ghproxy.net` > `gh.ddlc.top`。
 
 ## 5. 上传到 GitHub Release
 
@@ -151,6 +158,10 @@ curl -s -o /dev/null -w "HTTP %{http_code}\n" -X PATCH \
 # 自动更新端点已指向新版本（老用户「检查更新」走的就是它）
 curl -sL "https://github.com/kobejiasuoer/immersive-translator/releases/latest/download/latest.json"
 # ↑ version 应为新版本号；signature 应与本地 .sig 全文一致
+
+# 国内镜像链路也验一遍（endpoints 第一优先 + latest.json 里的下载 url 都走它）
+curl -sL --noproxy '*' "https://gh-proxy.com/https://github.com/kobejiasuoer/immersive-translator/releases/latest/download/latest.json"
+# ↑ 同样应返回新版本号，且 platforms...url 以 https://gh-proxy.com/ 开头
 
 # tag 上 CI 全绿（audit / fmt / 测试门禁）
 curl -s -H "Authorization: token $TOKEN" \

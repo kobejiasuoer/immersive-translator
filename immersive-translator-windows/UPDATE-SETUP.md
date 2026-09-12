@@ -50,10 +50,26 @@ keynum 应等于公钥的 keynum（公钥同样解两层 base64 后取字节 2..
 
 ### 2. 更新端点
 
-`tauri.conf.json` 配置的端点：
+`tauri.conf.json` 配置的端点（**镜像在前、GitHub 兜底**，updater 按顺序尝试，
+前一个失败自动换下一个）：
+
 ```
-https://github.com/kobejiasuoer/immersive-translator/releases/latest/download/latest.json
+1. https://gh-proxy.com/https://github.com/.../releases/latest/download/latest.json   ← 国内镜像
+2. https://ghfast.top/https://github.com/.../releases/latest/download/latest.json     ← 国内镜像备胎
+3. https://github.com/.../releases/latest/download/latest.json                        ← 直连兜底
 ```
+
+**为什么敢走第三方镜像**：客户端下载安装包后用内置 pubkey 校验 minisign 签名，
+镜像篡改内容会被拒装——镜像最多让下载失败，不可能装上被改过的包。
+
+**为什么 latest.json 里的下载 url 也要加镜像前缀**（见 RELEASE-CHECKLIST 第 4 步）：
+端点数组只决定「清单从哪拉」，安装包从清单的 `url` 字段下载；url 若仍是裸 GitHub，
+国内无代理用户会「检查成功、下载失败」。
+
+**换镜像要同步两处**：`tauri.conf.json` 的 endpoints + RELEASE-CHECKLIST 第 4 步
+生成 latest.json 的 url 前缀。（镜像站是社区维护，域名会失效；2026-09 实测可用：
+`gh-proxy.com` > `ghfast.top` > `ghproxy.net` > `gh.ddlc.top`。长期方案是自建域名
+反代或国内对象存储。）
 
 每次发布新版本时，把 `latest.json` 和签名后的安装包上传到 GitHub Release。
 
@@ -191,4 +207,4 @@ cargo tauri build
 | 检查更新报错 | GitHub releases 还没上传 latest.json | 确认 latest.json 是 Release Asset |
 | 下载后校验失败 | .sig 文件内容不对 / 私钥不匹配 | 重新签名，确保用的是同一对密钥 |
 | 检测不到新版本 | latest.json 的 version ≤ 当前版本 | 确保 latest.json 的 version 高于已安装版本 |
-| 国内下载慢 | GitHub releases 国内访问慢 | 可换 jsdelivr CDN 或自建镜像改 endpoints |
+| 国内下载失败/慢 | GitHub 国内直连不稳（DNS 污染/连接重置） | 已配 gh-proxy 镜像端点（见上文「更新端点」）；镜像失效时换一家并同步改 endpoints + latest.json 的 url 前缀。**jsDelivr 走不通**——它只能加速仓库内文件，拿不到 Release Asset |
