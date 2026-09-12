@@ -29,8 +29,16 @@ struct ReaderRootView: View {
                 InkProgressBar(percent: article.progress.percent)
             }
             ReaderBodyView(vm: vm)
+            if vm.route == .reading, !settings.zenMode {
+                PlayBarView(vm: vm)
+            }
         }
         .background(palette.background)
+        .overlay(alignment: .bottom) {
+            if vm.route == .reading, settings.zenMode {
+                ZenControlsView(vm: vm).padding(.bottom, 20)
+            }
+        }
         .environment(\.readerPalette, palette)
         .environment(\.colorScheme, palette.colorScheme)
         .overlay(alignment: .bottom) {
@@ -620,6 +628,7 @@ struct SentenceRowView: View {
                 sentenceEN(settings: settings)
                 cnArea(settings: settings, maskSlot: maskSlot, maskShown: maskShown)
             }
+            rowActions(editing: editing)
         }
         .padding(.top, isParaStart ? 14 : 2)
         .padding(.bottom, 4)
@@ -633,6 +642,33 @@ struct SentenceRowView: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(isSearchMatch ? palette.warn.opacity(0.5) : Color.clear, lineWidth: 1.5)
         )
+    }
+
+    private func rowActions(editing: Bool) -> some View {
+        VStack(spacing: 6) {
+            Button {
+                vm.speakSentence(pair.idx)
+            } label: {
+                Image(systemName: ReaderIcons.speaker)
+                    .font(.system(size: 11))
+                    .foregroundColor(isActive ? palette.accent : palette.textTertiary)
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.plain)
+            .help(isActive ? "朗读当前句" : "朗读这一句")
+            if pair.zh != nil, pair.zhState != .pending, !editing {
+                Button {
+                    onStartEdit()
+                } label: {
+                    Image(systemName: ReaderIcons.edit)
+                        .font(.system(size: 10))
+                        .foregroundColor(palette.textTertiary)
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.plain)
+                .help("手改译文")
+            }
+        }
     }
 
     private var numberButton: some View {
@@ -851,7 +887,7 @@ struct DictColumnView: View {
                             Button("关闭") { vm.dict = .closed }
                                 .controlSize(.small)
                         }
-                    case .ready(let query, let entry, let sentenceIdx):
+                    case .ready(_, let entry, let sentenceIdx):
                         entryBody(entry: entry, sentenceIdx: sentenceIdx)
                     }
                 }
@@ -876,6 +912,14 @@ struct DictColumnView: View {
                 }
             }
             Spacer()
+            Button {
+                vm.speakWord(headWord)
+            } label: {
+                Image(systemName: ReaderIcons.speaker).font(.system(size: 11))
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(palette.textSecondary)
+            .help("发音")
             Button {
                 vm.dict = .closed
             } label: {
@@ -1165,6 +1209,24 @@ struct ReaderSettingsDrawer: View {
                                 vm.patchSettings { $0.fontPair = value }
                             }
 
+                            groupTitle("朗读")
+                            voiceRow(selection: settings.voice)
+                            sliderRow("语速", value: settings.rate, range: readerRateMin...readerRateMax, step: 0.05, format: String(format: "%.2f×", settings.rate)) { value in
+                                vm.patchSettings { $0.rate = value }
+                            }
+                            sliderRow("每句停顿", value: settings.sentencePauseMs, range: 0...2000, step: 100, format: String(format: "%.1fs", settings.sentencePauseMs / 1000)) { value in
+                                vm.patchSettings { $0.sentencePauseMs = value }
+                            }
+                            HStack {
+                                rowLabel("跟读模式")
+                                Toggle("", isOn: Binding(
+                                    get: { settings.shadowingMode },
+                                    set: { value in vm.patchSettings { $0.shadowingMode = value } }
+                                ))
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                            }
+
                             groupTitle("主题")
                             HStack(spacing: 8) {
                                 ForEach(ReaderTheme.allCases, id: \.self) { theme in
@@ -1225,6 +1287,26 @@ struct ReaderSettingsDrawer: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+    }
+
+    @State private var voiceCatalog: [ReaderVoiceInfo] = []
+
+    private func voiceRow(selection: String) -> some View {
+        HStack {
+            rowLabel("音色")
+            Picker("音色", selection: Binding(
+                get: { selection },
+                set: { value in vm.patchSettings { $0.voice = value } }
+            )) {
+                Text("系统默认").tag("")
+                ForEach(voiceCatalog, id: \.name) { voice in
+                    Text(voice.chinese ? "\(voice.name)（中文）" : voice.name).tag(voice.name)
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onAppear { voiceCatalog = ReaderVoiceCatalog.voices() }
+        }
     }
 
     private func groupTitle(_ title: String) -> some View {
@@ -1365,5 +1447,269 @@ struct ReviewPlaceholderView: View {
 extension Array {
     subscript(safe index: Int) -> Element? {
         indices.contains(index) ? self[index] : nil
+    }
+}
+
+// MARK: - 播放条（屏 A 底部）
+
+let readerRatePresets: [Double] = [0.75, 1, 1.25, 1.5]
+
+struct PlayBarView: View {
+    @ObservedObject var vm: ReaderViewModel
+    @Environment(\.readerPalette) private var palette
+    @State private var hoverIdx: Int?
+    @State private var dragging = false
+
+    private var total: Int { vm.article?.sentences.count ?? 0 }
+    private var idx: Int { vm.activeSentenceIdx }
+    private var percent: Double {
+        total > 1 ? Double(idx) / Double(total - 1) : 0
+    }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            transport
+            progressTrack
+            countLabel
+            HStack(spacing: 8) {
+                if vm.shadowingWait {
+                    HStack(spacing: 6) {
+                        Text("请跟读当前句").font(.system(size: 11.5)).foregroundColor(palette.warn)
+                        Button("继续") { vm.continueAfterShadowing() }
+                            .controlSize(.small)
+                            .buttonStyle(.borderedProminent)
+                    }
+                } else {
+                    rateButton
+                }
+                viewMenu
+                Button {
+                    vm.settingsDrawerShown = true
+                } label: {
+                    Image(systemName: ReaderIcons.gear).font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(palette.textSecondary)
+                .help("阅读设置")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(palette.surface)
+    }
+
+    private var transport: some View {
+        HStack(spacing: 10) {
+            Button {
+                vm.jumpTo(idx: idx - 1)
+            } label: {
+                Image(systemName: ReaderIcons.prev).font(.system(size: 13))
+            }
+            .buttonStyle(.plain)
+            .disabled(total == 0 || idx <= 0)
+            .foregroundColor(palette.text)
+            .help("上一句 (L)")
+
+            Button {
+                vm.togglePlayback()
+            } label: {
+                Image(systemName: vm.playbackPlaying ? ReaderIcons.pause : ReaderIcons.play)
+                    .font(.system(size: 15))
+                    .foregroundColor(.white)
+                    .frame(width: 32, height: 32)
+                    .background(palette.accent)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(total == 0)
+            .help(vm.playbackPlaying ? "暂停 (Space)" : "播放 (Space)")
+
+            Button {
+                vm.jumpTo(idx: idx + 1)
+            } label: {
+                Image(systemName: ReaderIcons.next).font(.system(size: 13))
+            }
+            .buttonStyle(.plain)
+            .disabled(total == 0 || idx >= total - 1)
+            .foregroundColor(palette.text)
+            .help("下一句 (J)")
+        }
+    }
+
+    private var progressTrack: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            ZStack(alignment: .leading) {
+                Capsule().fill(palette.border.opacity(0.5))
+                Capsule()
+                    .fill(palette.accent)
+                    .frame(width: max(0, width * percent))
+                if total > 1, total <= 40 {
+                    ForEach(1..<total, id: \.self) { i in
+                        Rectangle()
+                            .fill(palette.surface)
+                            .frame(width: 1, height: 6)
+                            .offset(x: width * CGFloat(i) / CGFloat(total - 1) - 0.5)
+                    }
+                }
+                Circle()
+                    .fill(palette.accent)
+                    .frame(width: 11, height: 11)
+                    .offset(x: max(0, min(width - 11, width * percent - 5.5)))
+            }
+            .frame(height: 6, alignment: .center)
+            .contentShape(Rectangle().inset(by: -8))
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        dragging = true
+                        vm.jumpTo(idx: idxFor(x: value.location.x, width: width))
+                    }
+                    .onEnded { _ in dragging = false }
+            )
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let location):
+                    hoverIdx = idxFor(x: location.x, width: width)
+                case .ended:
+                    hoverIdx = nil
+                @unknown default:
+                    break
+                }
+            }
+            .overlay(alignment: .top) {
+                if let hoverIdx, !dragging, total > 0,
+                   let preview = vm.article?.sentences[safe: hoverIdx]?.en {
+                    Text("第 \(hoverIdx + 1) 句 · \(preview)")
+                        .font(.system(size: 10.5))
+                        .foregroundColor(palette.text)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(palette.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .shadow(color: .black.opacity(0.18), radius: 4, y: 1)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: 320, alignment: .leading)
+                        .offset(x: hoverOffset(x: width * CGFloat(hoverIdx) / CGFloat(max(1, total - 1)), width: width))
+                        .offset(y: -30)
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+        .frame(height: 22)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func idxFor(x: CGFloat, width: CGFloat) -> Int {
+        guard total > 0, width > 0 else { return 0 }
+        let ratio = min(1, max(0, x / width))
+        return min(total - 1, Int((ratio * CGFloat(total - 1)).rounded()))
+    }
+
+    private func hoverOffset(x: CGFloat, width: CGFloat) -> CGFloat {
+        min(0, max(-(x - 140), -width + 150))
+    }
+
+    private var countLabel: some View {
+        Group {
+            if total > 0 {
+                Text("\(idx + 1)")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(palette.accent)
+                + Text(" ∕ \(total) 句")
+                    .font(.system(size: 12))
+                    .foregroundColor(palette.textTertiary)
+            } else {
+                Text("暂无句子")
+                    .font(.system(size: 12))
+                    .foregroundColor(palette.textTertiary)
+            }
+        }
+    }
+
+    private var rateButton: some View {
+        Button {
+            let current = readerRatePresets.firstIndex(of: vm.effectiveSettings.rate) ?? 1
+            let next = readerRatePresets[(current + 1) % readerRatePresets.count]
+            vm.patchSettings { $0.rate = next }
+        } label: {
+            Text(rateLabel)
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 12, weight: .medium).monospacedDigit())
+        .foregroundColor(palette.text)
+        .help("播放语速（更多档位在阅读设置）")
+    }
+
+    private var rateLabel: String {
+        var text = String(format: "%.2f", vm.effectiveSettings.rate)
+        if text.hasSuffix("0") { text.removeLast() }
+        return "\(text)×"
+    }
+
+    private var viewMenu: some View {
+        let settings = vm.effectiveSettings
+        let contrasts = ContrastMode.allCases
+        let nextContrast = contrasts[(contrasts.firstIndex(of: settings.contrastMode) ?? 0 + 1) % contrasts.count]
+        return Menu {
+            Button("对照模式：\(nextContrast.label)") {
+                vm.patchSettings { $0.contrastMode = nextContrast }
+            }
+            Button("\(settings.maskTranslation ? "✓" : "") 译文遮罩 · 自测") {
+                vm.patchSettings { $0.maskTranslation = !$0.maskTranslation }
+            }
+            Button("\(settings.showProgress ? "✓" : "") 显示阅读进度") {
+                vm.patchSettings { $0.showProgress = !$0.showProgress }
+            }
+            Divider()
+            Button("\(settings.zenMode ? "✓" : "") 禅模式 · 隐藏侧栏与播放条") {
+                vm.patchSettings { $0.zenMode = !$0.zenMode }
+            }
+        } label: {
+            Text("视图")
+                .font(.system(size: 12))
+                .foregroundColor(palette.textSecondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+}
+
+// MARK: - 禅模式浮动控制
+
+struct ZenControlsView: View {
+    @ObservedObject var vm: ReaderViewModel
+    @Environment(\.readerPalette) private var palette
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Button {
+                vm.jumpTo(idx: vm.activeSentenceIdx - 1)
+            } label: {
+                Image(systemName: ReaderIcons.prev).font(.system(size: 12))
+            }
+            Button {
+                vm.togglePlayback()
+            } label: {
+                Image(systemName: vm.playbackPlaying ? ReaderIcons.pause : ReaderIcons.play)
+                    .font(.system(size: 13))
+                    .foregroundColor(.white)
+                    .frame(width: 34, height: 34)
+                    .background(palette.accent)
+                    .clipShape(Circle())
+            }
+            Button {
+                vm.jumpTo(idx: vm.activeSentenceIdx + 1)
+            } label: {
+                Image(systemName: ReaderIcons.next).font(.system(size: 12))
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(palette.text)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(palette.surface.opacity(0.92))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
     }
 }
