@@ -1065,8 +1065,10 @@ pub fn run() {
             let history = MenuItem::with_id(app, "history", "翻译历史", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu =
-                Menu::with_items(app, &[&ocr, &reader, &vocab, &sep, &history, &settings, &quit])?;
+            let menu = Menu::with_items(
+                app,
+                &[&ocr, &reader, &vocab, &sep, &history, &settings, &quit],
+            )?;
 
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())

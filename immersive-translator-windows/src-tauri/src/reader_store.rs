@@ -778,6 +778,7 @@ mod tests {
                 lapses: 0,
             },
             added_at: 0,
+            example: None,
         }
     }
 }
