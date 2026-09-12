@@ -247,6 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.startScreenSelection()
         }
     )
+    private lazy var readerController = ReaderWindowController(settingsStore: settingsStore)
     private var hotKeyManager: HotKeyManager?
     private var screenSelector: ScreenSelectionController?
     private var ocrSessionCounter = 0
@@ -290,6 +291,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "翻译选中文本  \(settingsStore.selectionHotKeyShortcut.title)", action: #selector(menuTranslateSelection), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "截图 OCR 翻译  \(settingsStore.ocrHotKeyShortcut.title)", action: #selector(menuTranslateScreenshot), keyEquivalent: ""))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "沉浸阅读室...", action: #selector(openReader), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "生词本...", action: #selector(openVocabReview), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "翻译历史...", action: #selector(openHistory), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "检查更新...", action: #selector(menuCheckForUpdates), keyEquivalent: ""))
@@ -369,6 +373,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openHistory() {
         historyController.show()
+    }
+
+    @objc private func openReader() {
+        readerController.show()
+    }
+
+    @objc private func openVocabReview() {
+        readerController.show(openReview: true)
     }
 
     @objc private func menuCheckForUpdates() {
