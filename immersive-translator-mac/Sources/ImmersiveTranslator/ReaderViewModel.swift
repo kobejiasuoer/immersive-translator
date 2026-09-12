@@ -1,0 +1,658 @@
+import SwiftUI
+import Combine
+import ReaderCore
+
+/// 沉浸阅读室组合根（ReaderApp.tsx 的 Mac 对应物）。
+///
+/// 职责：加载数据（文章/生词/设置）、驱动翻译管线（段级流式 + 单段重试 +
+/// 手改译文）、词典栏、遮罩、复习入口与全部入口状态。落盘走 ReaderStore，
+/// 文章保存带 700ms 防抖。
+@MainActor
+final class ReaderViewModel: ObservableObject {
+    enum Route: Equatable {
+        case reading
+        case review
+    }
+
+    /// 词典栏状态（DictPanelState）。
+    enum DictPanel: Equatable {
+        case closed
+        case loading(query: String, sentenceIdx: Int)
+        case ready(query: String, entry: ReaderDictEntry, sentenceIdx: Int)
+        case notAWord(query: String, sentenceIdx: Int)
+        case error(query: String, sentenceIdx: Int, message: String)
+
+        var isOpen: Bool { self != .closed }
+
+        var query: String? {
+            switch self {
+            case .closed: return nil
+            case .loading(let q, _), .ready(let q, _, _), .notAWord(let q, _), .error(let q, _, _):
+                return q
+            }
+        }
+
+        var sentenceIdx: Int {
+            switch self {
+            case .closed: return 0
+            case .loading(_, let i), .ready(_, _, let i), .notAWord(_, let i), .error(_, let i, _):
+                return i
+            }
+        }
+    }
+
+    struct StepProgress: Equatable {
+        var done: Int
+        var total: Int
+    }
+
+    // ---- 数据 ----
+    @Published var globalSettings: ReaderSettings
+    @Published var articleList: [ArticleSummary] = []
+    @Published var article: Article?
+    @Published var vocabWords: [VocabWord] = []
+    @Published var reviewLog: ReviewLogFile = .empty
+    @Published var route: Route = .reading
+    @Published var toast: String = ""
+    @Published var translating: StepProgress?
+    @Published var dict: DictPanel = .closed
+    @Published var searchMatchIdx: Int?
+    @Published var activeSentenceIdx: Int = 0
+    @Published var peekAll = false
+    @Published var importSheetShown = false
+    @Published var settingsDrawerShown = false
+
+    let store: ReaderStore
+    private let chat: ReaderChatClient
+    private var saveTask: Task<Void, Never>?
+    private var translationTask: Task<Void, Never>?
+    private var translationRunID = 0
+    private var toastTask: Task<Void, Never>?
+    /// 打开的文章 id 集合里的源文缓存（复习卡回跳展示用）。
+    var sourceCache: [String: Article] = [:]
+
+    init(settingsStore: SettingsStore, store: ReaderStore = .shared) {
+        self.store = store
+        self.chat = ReaderChatClient(settingsStore: settingsStore)
+        self.globalSettings = store.loadGlobalReaderSettings()
+    }
+
+    /// 生词本归一化 id 集（生词再现标记用）。
+    var knownIds: Set<String> { Set(vocabWords.map(\.id)) }
+
+    var effectiveSettings: ReaderSettings {
+        mergeReaderSettings(globalSettings, article?.settings)
+    }
+
+    var stats: ReviewStats {
+        reviewStats(vocabWords, reviewLog, nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+    }
+
+    var dueWords: [VocabWord] {
+        dueVocab(vocabWords, now: Int64(Date().timeIntervalSince1970 * 1000))
+    }
+
+    // MARK: - 启动加载
+
+    func bootstrap(pendingImportText: String? = nil, openReview: Bool = false) {
+        globalSettings = store.loadGlobalReaderSettings()
+        refreshVocab()
+        let list = (try? store.listArticles()) ?? []
+        articleList = list
+        if let text = pendingImportText, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            importPaste(text)
+            return
+        }
+        if openReview {
+            route = .review
+            return
+        }
+        if let first = list.first {
+            openArticle(id: first.id)
+        }
+    }
+
+    func refreshVocab() {
+        if let file = try? store.getVocabFile() {
+            vocabWords = file.words
+            reviewLog = file.reviewLog
+        }
+    }
+
+    // MARK: - 文章打开 / 列表
+
+    func refreshArticleList() {
+        articleList = (try? store.listArticles()) ?? []
+    }
+
+    func openArticle(id: String) {
+        guard let full = (try? store.getArticle(id: id)) ?? nil else { return }
+        translationTask?.cancel()
+        translationRunID += 1
+        route = .reading
+        dict = .closed
+        searchMatchIdx = nil
+        article = full
+        activeSentenceIdx = min(full.progress.sentenceIdx, max(0, full.sentences.count - 1))
+        sourceCache[full.id] = full
+        scheduleSave(mutate: { $0.lastReadAt = Int64(Date().timeIntervalSince1970 * 1000) })
+        runTranslationPipeline(for: full.id)
+    }
+
+    func deleteArticle(id: String) {
+        _ = try? store.deleteArticle(id: id)
+        refreshArticleList()
+        refreshVocab()
+        if article?.id == id {
+            article = nil
+            activeSentenceIdx = 0
+            if let first = articleList.first {
+                openArticle(id: first.id)
+            }
+        }
+        showToast("文章已删除")
+    }
+
+    // MARK: - 导入
+
+    func importPaste(_ text: String, title: String? = nil) {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        guard let built = buildArticleFromText(text, options: BuildArticleOptions(now: now, title: title)) else {
+            showToast("没有识别到正文内容")
+            return
+        }
+        do {
+            _ = try store.saveArticle(built)
+            refreshArticleList()
+            openArticle(id: built.id)
+            showToast("已导入「\(built.title)」")
+        } catch {
+            showToast("导入失败：\((error as? LocalizedError)?.errorDescription ?? "\(error)")")
+        }
+    }
+
+    // MARK: - 文章落盘（防抖）
+
+    /// 原地修改当前文章并触发防抖保存。
+    func scheduleSave(mutate: (inout Article) -> Void) {
+        guard var current = article else { return }
+        mutate(&current)
+        article = current
+        sourceCache[current.id] = current
+        saveTask?.cancel()
+        let id = current.id
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled, let self else { return }
+            if let latest = self.article, latest.id == id, let summary = try? self.store.saveArticle(latest) {
+                self.articleList = self.articleList
+                    .filter { $0.id != summary.id }
+                    .inserting(summary, at: 0)
+                    .sorted { $0.article.lastReadAt > $1.article.lastReadAt }
+            }
+        }
+    }
+
+    // MARK: - 设置（全局 + 文章覆盖）
+
+    func patchSettings(_ mutate: (inout ReaderSettings) -> Void) {
+        let old = globalSettings
+        var updated = old
+        mutate(&updated)
+        clampReaderSettings(&updated)
+        globalSettings = updated
+        store.saveGlobalReaderSettings(updated)
+        // 复习模式只进全局默认，不写文章覆盖。
+        var patch = readerSettingsPatch(from: old, to: updated)
+        patch.removeValue(forKey: "reviewMode")
+        if !patch.isEmpty, article != nil {
+            scheduleSave { article in
+                var override = article.settings ?? ReaderSettingsOverride()
+                override.apply(patch: patch)
+                article.settings = override
+            }
+        }
+    }
+
+    func resetSettings() {
+        globalSettings = .default
+        store.saveGlobalReaderSettings(.default)
+        scheduleSave { article in
+            var override = ReaderSettingsOverride()
+            let patch = readerSettingsPatch(from: ReaderSettings.default, to: ReaderSettings.default)
+            override.apply(patch: patch)
+            article.settings = override
+        }
+        showToast("已恢复默认阅读设置")
+    }
+
+    // MARK: - 翻译管线（段级流式 + 单段重试 + 手改译文）
+
+    func runTranslationPipeline(for articleID: String) {
+        translationTask?.cancel()
+        translationRunID += 1
+        let runID = translationRunID
+        translationTask = Task { [weak self] in
+            await self?.ensureTranslated(articleID: articleID, runID: runID)
+        }
+    }
+
+    private func isCurrentRun(_ articleID: String, _ runID: Int) -> Bool {
+        article?.id == articleID && runID == translationRunID
+    }
+
+    private func ensureTranslated(articleID: String, runID: Int) async {
+        guard let input = article, input.id == articleID else { return }
+        let configured = (try? chat.configuration()) != nil
+        guard configured else {
+            showToast("先在设置里配置翻译接口，译文才会自动生成")
+            return
+        }
+        let sample = input.sentences.first?.en ?? input.title
+        let target = chat.resolveTarget(for: sample)
+
+        // 待翻段落分组（保序）。
+        var groups: [Int: [SentencePair]] = [:]
+        for st in input.sentences where st.zhState == .pending {
+            groups[st.paragraphIdx, default: []].append(st)
+        }
+        let pendingGroups = groups.sorted { $0.key < $1.key }
+        let titlePending = input.titleCnState == .pending
+        if !titlePending, pendingGroups.isEmpty {
+            await MainActor.run { self.translating = nil }
+            return
+        }
+
+        await MainActor.run {
+            self.translating = StepProgress(done: 0, total: pendingGroups.count + (titlePending ? 1 : 0))
+        }
+
+        func patch(_ mutate: @escaping (inout Article) -> Void) {
+            guard isCurrentRun(articleID, runID) else { return }
+            self.scheduleSave(mutate: mutate)
+        }
+
+        if titlePending {
+            do {
+                let cn = try await chat.complete(
+                    systemPrompt: buildTitleTranslateSystemPrompt(target: target),
+                    userText: input.title
+                )
+                let line = cn
+                    .components(separatedBy: .newlines)
+                    .first?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                patch { a in
+                    if !line.isEmpty {
+                        a.titleCn = line
+                        a.titleCnState = .done
+                    } else {
+                        a.titleCnState = .failed
+                    }
+                }
+            } catch {
+                patch { $0.titleCnState = .failed }
+            }
+            await MainActor.run {
+                if isCurrentRun(articleID, runID) {
+                    self.translating?.done += 1
+                }
+            }
+        }
+
+        for (_, sentences) in pendingGroups {
+            guard isCurrentRun(articleID, runID) else { return }
+            await translateParagraph(sentences, target: target, articleID: articleID, runID: runID)
+            await MainActor.run {
+                if isCurrentRun(articleID, runID) {
+                    self.translating?.done += 1
+                    if self.translating?.done ?? 0 >= self.translating?.total ?? 0 {
+                        self.translating = nil
+                    }
+                }
+            }
+        }
+        if isCurrentRun(articleID, runID) {
+            translating = nil
+        }
+    }
+
+    private func translateParagraph(
+        _ sentences: [SentencePair],
+        target: String,
+        articleID: String,
+        runID: Int
+    ) async {
+        let expected = sentences.count
+        let numberedInput = buildParagraphRequestInput(sentences.map(\.en))
+        let systemPrompt = buildParagraphTranslateSystemPrompt(
+            targetLanguage: target,
+            customStyle: chat.customStyle,
+            glossaryText: chat.glossaryText
+        )
+
+        func patchGroup(_ transform: (SentencePair) -> SentencePair) {
+            guard isCurrentRun(articleID, runID) else { return }
+            let ids = Set(sentences.map(\.idx))
+            scheduleSave { a in
+                a.sentences = a.sentences.map { ids.contains($0.idx) ? transform($0) : $0 }
+            }
+        }
+
+        do {
+            let finalText = try await chat.completeStreaming(
+                systemPrompt: systemPrompt,
+                userText: numberedInput,
+                onDelta: { [weak self] accumulated in
+                    // 流式增量：只亮出已完整的编号行（pending 且已有部分译文的句子）。
+                    guard let self, self.isCurrentRun(articleID, runID) else { return }
+                    let partial = parsePartialNumbered(accumulated, expectedCount: expected)
+                    let updates: [(Int, String)] = partial.enumerated().compactMap { i, text in
+                        guard let text, !text.isEmpty else { return nil }
+                        return (sentences[i].idx, text)
+                    }
+                    guard !updates.isEmpty else { return }
+                    let map = Dictionary(uniqueKeysWithValues: updates)
+                    self.scheduleSave { a in
+                        a.sentences = a.sentences.map { st in
+                            guard st.zhState == .pending, let zh = map[st.idx] else { return st }
+                            var next = st
+                            next.zh = zh
+                            return next
+                        }
+                    }
+                }
+            )
+            // 完整解析换回；cancelled 时已收到的部分也按完整解析尝试。
+            guard let parsed = parseParagraphResponse(finalText, expectedCount: expected) else {
+                patchGroup { st in
+                    var next = st
+                    next.zhState = .failed
+                    return next
+                }
+                return
+            }
+            patchGroup { st in
+                var next = st
+                if let i = sentences.firstIndex(where: { $0.idx == st.idx }) {
+                    next.zh = parsed[i]
+                    next.zhState = .done
+                }
+                return next
+            }
+        } catch {
+            guard isCurrentRun(articleID, runID) else { return }
+            patchGroup { st in
+                var next = st
+                next.zhState = .failed
+                return next
+            }
+        }
+    }
+
+    /// 单段重试：把该段失败句重置回 pending 后单独重跑。
+    func retryParagraph(_ paragraphIdx: Int) {
+        scheduleSave { a in
+            a.sentences = a.sentences.map { st in
+                guard st.paragraphIdx == paragraphIdx, st.zhState == .failed else { return st }
+                var next = st
+                next.zh = nil
+                next.zhState = .pending
+                return next
+            }
+        }
+        guard let current = article else { return }
+        translationTask?.cancel()
+        translationRunID += 1
+        let runID = translationRunID
+        let target = chat.resolveTarget(for: current.sentences.first?.en ?? current.title)
+        let group = current.sentences.filter { $0.paragraphIdx == paragraphIdx && $0.zhState == .pending }
+        guard !group.isEmpty else { return }
+        translating = StepProgress(done: 0, total: 1)
+        translationTask = Task { [weak self] in
+            await self?.translateParagraph(group, target: target, articleID: current.id, runID: runID)
+            await MainActor.run {
+                if self?.isCurrentRun(current.id, runID) == true { self?.translating = nil }
+            }
+        }
+    }
+
+    func retryTitle() {
+        scheduleSave { a in
+            a.titleCn = nil
+            a.titleCnState = .pending
+        }
+        runTranslationPipeline(for: article?.id ?? "")
+    }
+
+    /// 手改译文；刚手改过的句子在遮罩模式下保持可见。
+    func editTranslation(idx: Int, zh: String) {
+        scheduleSave { a in
+            a.sentences = a.sentences.map { st in
+                guard st.idx == idx else { return st }
+                var next = st
+                next.zh = zh
+                next.zhState = .edited
+                next.revealed = true
+                return next
+            }
+        }
+    }
+
+    // MARK: - 遮罩
+
+    func reveal(_ idx: Int) {
+        scheduleSave { a in
+            a.sentences = a.sentences.map { $0.idx == idx ? $0.withRevealed(true) : $0 }
+        }
+    }
+
+    func mask(_ idx: Int) {
+        scheduleSave { a in
+            a.sentences = a.sentences.map { $0.idx == idx ? $0.withRevealed(false) : $0 }
+        }
+    }
+
+    func revealAll() {
+        scheduleSave { a in
+            a.sentences = a.sentences.map { $0.zh == nil ? $0 : $0.withRevealed(true) }
+        }
+    }
+
+    func maskAll() {
+        scheduleSave { a in
+            a.sentences = a.sentences.map { $0.zh == nil ? $0 : $0.withRevealed(false) }
+        }
+    }
+
+    // MARK: - 检索 / 定位
+
+    func searchInArticle(_ raw: String) {
+        let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let sentences = article?.sentences, !query.isEmpty else { return }
+        if let hit = sentences.first(where: { $0.en.localizedCaseInsensitiveContains(query) }) {
+            searchMatchIdx = hit.idx
+            activeSentenceIdx = hit.idx
+            showToast("在第 \(hit.idx + 1) 句找到「\(query)」")
+        } else {
+            showToast("本文没有包含「\(query)」的句子")
+        }
+    }
+
+    func jumpTo(idx: Int) {
+        guard let total = article?.sentences.count, total > 0 else { return }
+        activeSentenceIdx = min(max(0, idx), total - 1)
+    }
+
+    /// 滚动到哪 = 读到哪（未播放时光标跟随视口，M1 无播放即始终跟随）。
+    func viewportMoved(to idx: Int) {
+        if idx != activeSentenceIdx {
+            activeSentenceIdx = idx
+        }
+    }
+
+    /// 阅读进度（断点续读 + 墨线）。
+    func noteReadProgress(idx: Int) {
+        guard let a = article else { return }
+        let total = a.sentences.count
+        guard total > 0 else { return }
+        let maxIdx = max(a.progress.sentenceIdx, min(idx, total - 1))
+        let percent = total > 1 ? (Double(maxIdx) / Double(total - 1)) * 100 : (total == 1 ? 100 : 0)
+        if maxIdx != a.progress.sentenceIdx || abs(percent - a.progress.percent) >= 0.5 {
+            scheduleSave { article in
+                article.lastReadAt = Int64(Date().timeIntervalSince1970 * 1000)
+                article.progress.sentenceIdx = maxIdx
+                article.progress.percent = percent
+            }
+        }
+    }
+
+    // MARK: - 词典（屏 C）
+
+    func lookup(query raw: String, sentenceIdx: Int) {
+        guard let cleaned = extractSelectionText(raw) else { return }
+        dict = .loading(query: cleaned, sentenceIdx: sentenceIdx)
+        Task { [weak self] in
+            await self?.performLookup(query: cleaned, sentenceIdx: sentenceIdx)
+        }
+    }
+
+    private func performLookup(query: String, sentenceIdx: Int) async {
+        let target = chat.resolveTarget(for: query)
+        do {
+            let raw = try await chat.complete(
+                systemPrompt: buildReaderDictPrompt(targetLanguage: target, glossaryText: chat.glossaryText),
+                userText: query
+            )
+            switch parseReaderDictResponse(raw) {
+            case .entry(let entry):
+                dict = .ready(query: query, entry: entry, sentenceIdx: sentenceIdx)
+            case .notAWord:
+                dict = .notAWord(query: query, sentenceIdx: sentenceIdx)
+            case .invalid:
+                dict = .error(query: query, sentenceIdx: sentenceIdx, message: "返回格式无法解析，请重试")
+            }
+        } catch {
+            dict = .error(query: query, sentenceIdx: sentenceIdx, message: (error as? LocalizedError)?.errorDescription ?? "\(error)")
+        }
+    }
+
+    var isInVocab: Bool {
+        guard let key = dict.query else { return false }
+        return vocabWords.contains { $0.id == normalizeWordKey(key) }
+    }
+
+    func addCurrentDictVocab() {
+        guard let currentArticle = article else { return }
+        let source = VocabSource(articleId: currentArticle.id, sentenceIdx: dict.sentenceIdx)
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        switch dict {
+        case .ready(_, let entry, _):
+            let word = entryToVocab(entry, source: source, now: now)
+            do {
+                try store.saveVocabWord(word)
+                refreshVocab()
+                showToast("已加入生词本：\(word.word)")
+            } catch {
+                showToast("加入生词本失败")
+            }
+        case .loading, .notAWord, .error, .closed:
+            break
+        }
+    }
+
+    /// 常用搭配行一键收藏为词块。
+    func addCollocationVocab(_ coll: VocabCollocation, sentenceIdx: Int) {
+        guard let currentArticle = article else { return }
+        let chunk = SentenceChunk(text: coll.en, chunkType: .collocation, gloss: coll.cn)
+        let word = chunkToVocab(
+            chunk,
+            source: VocabSource(articleId: currentArticle.id, sentenceIdx: sentenceIdx),
+            now: Int64(Date().timeIntervalSince1970 * 1000)
+        )
+        do {
+            try store.saveVocabWord(word)
+            refreshVocab()
+            showToast("已收藏搭配：\(word.word)")
+        } catch {
+            showToast("收藏搭配失败")
+        }
+    }
+
+    func copyDictEntry() {
+        guard case let .ready(query, entry, _) = dict else { return }
+        var lines = [entry.word]
+        for s in entry.senses {
+            let line = "\(s.pos) \(s.cn)".trimmingCharacters(in: .whitespaces)
+            if !line.isEmpty { lines.append(line) }
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+        _ = query
+    }
+
+    // MARK: - 复习（屏 D，M3 完整实现）
+
+    func openReview() {
+        route = .review
+    }
+
+    func openReading() {
+        route = .reading
+    }
+
+    // MARK: - 键盘（空格仅阅读器内生效；J/K/L 备选；H 暂显全部译文）
+
+    func handleKeyDown(_ event: NSEvent) -> Bool {
+        guard route == .reading else { return false }
+        guard let key = event.charactersIgnoringModifiers?.lowercased() else { return false }
+        if key == " " {
+            jumpTo(idx: activeSentenceIdx + 1) // M2 接播放后改为播放/暂停
+            return true
+        }
+        if key == "j" { jumpTo(idx: activeSentenceIdx + 1); return true }
+        if key == "k" { jumpTo(idx: activeSentenceIdx); return true }
+        if key == "l" { jumpTo(idx: activeSentenceIdx - 1); return true }
+        if key == "h" {
+            peekAll = true
+            return true
+        }
+        return false
+    }
+
+    func handleKeyUp(_ event: NSEvent) {
+        guard let key = event.charactersIgnoringModifiers?.lowercased() else { return }
+        if key == "h" { peekAll = false }
+    }
+
+    // MARK: - Toast
+
+    func showToast(_ message: String) {
+        toast = message
+        toastTask?.cancel()
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 3_200_000_000)
+            guard !Task.isCancelled else { return }
+            self?.toast = ""
+        }
+    }
+}
+
+// MARK: - 小工具
+
+private extension SentencePair {
+    func withRevealed(_ value: Bool) -> SentencePair {
+        var copy = self
+        copy.revealed = value
+        return copy
+    }
+}
+
+private extension Array {
+    func inserting(_ element: Element, at index: Int) -> Array {
+        var copy = self
+        let clamped = Swift.min(Swift.max(0, index), copy.count)
+        copy.insert(element, at: clamped)
+        return copy
+    }
+}
