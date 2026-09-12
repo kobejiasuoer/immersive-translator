@@ -61,20 +61,91 @@ final class ReaderViewModel: ObservableObject {
     @Published var peekAll = false
     @Published var importSheetShown = false
     @Published var settingsDrawerShown = false
+    /// 播放引擎状态的镜像（PlayBar 绑定用）。
+    @Published private(set) var playbackPlaying = false
+    @Published private(set) var shadowingWait = false
 
     let store: ReaderStore
     private let chat: ReaderChatClient
+    let playback = ReaderPlaybackEngine()
+    private var cancellables = Set<AnyCancellable>()
     private var saveTask: Task<Void, Never>?
     private var translationTask: Task<Void, Never>?
     private var translationRunID = 0
     private var toastTask: Task<Void, Never>?
     /// 打开的文章 id 集合里的源文缓存（复习卡回跳展示用）。
     var sourceCache: [String: Article] = [:]
+    /// 每篇文章的查词次数（读完统计用）。
+    private var dictLookupCounts: [String: Int] = [:]
 
     init(settingsStore: SettingsStore, store: ReaderStore = .shared) {
         self.store = store
         self.chat = ReaderChatClient(settingsStore: settingsStore)
         self.globalSettings = store.loadGlobalReaderSettings()
+
+        playback.$playing
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in self?.playbackPlaying = $0 }
+            .store(in: &cancellables)
+        playback.$shadowingWait
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in self?.shadowingWait = $0 }
+            .store(in: &cancellables)
+        playback.onEvent = { [weak self] event in
+            self?.handlePlaybackEvent(event)
+        }
+    }
+
+    // MARK: - 播放（M2）
+
+    private func handlePlaybackEvent(_ event: ReaderPlaybackEngine.Event) {
+        switch event {
+        case .activeIdx(let idx):
+            activeSentenceIdx = idx
+        case .finished:
+            let id = article?.id ?? ""
+            let lookups = dictLookupCounts[id] ?? 0
+            let added = vocabWords.filter { $0.source.articleId == id }.count
+            showToast("本篇读完 🎉 共查词 \(lookups) 次 · 生词本新增 \(added) 个")
+        case .failed(let message):
+            showToast("朗读失败：\(message)")
+        }
+    }
+
+    /// 当前文章句文与播放设置同步给引擎。
+    private func syncPlaybackContext() {
+        let settings = effectiveSettings
+        playback.updateContext(
+            texts: article?.sentences.map(\.en) ?? [],
+            settings: ReaderPlaybackEngine.Settings(
+                rate: settings.rate,
+                voice: settings.voice,
+                sentencePauseMs: settings.sentencePauseMs,
+                shadowingMode: settings.shadowingMode
+            )
+        )
+    }
+
+    func togglePlayback() {
+        playback.toggle()
+    }
+
+    func continueAfterShadowing() {
+        playback.continueAfterShadowing()
+    }
+
+    func stopPlayback() {
+        playback.stop()
+    }
+
+    /// 朗读某一句（播放条喇叭按钮 / 中文行定位）。
+    func speakSentence(_ idx: Int) {
+        jumpTo(idx: idx, autoplay: true)
+    }
+
+    /// 单词/词块发音（独立音轨，不打断句子朗读）。
+    func speakWord(_ text: String) {
+        playback.speakWord(text)
     }
 
     /// 生词本归一化 id 集（生词再现标记用）。
@@ -135,6 +206,8 @@ final class ReaderViewModel: ObservableObject {
         article = full
         activeSentenceIdx = min(full.progress.sentenceIdx, max(0, full.sentences.count - 1))
         sourceCache[full.id] = full
+        playback.reset(startIdx: activeSentenceIdx)
+        syncPlaybackContext()
         scheduleSave(mutate: { $0.lastReadAt = Int64(Date().timeIntervalSince1970 * 1000) })
         runTranslationPipeline(for: full.id)
     }
@@ -146,6 +219,8 @@ final class ReaderViewModel: ObservableObject {
         if article?.id == id {
             article = nil
             activeSentenceIdx = 0
+            playback.reset(startIdx: 0)
+            syncPlaybackContext()
             if let first = articleList.first {
                 openArticle(id: first.id)
             }
@@ -202,6 +277,7 @@ final class ReaderViewModel: ObservableObject {
         clampReaderSettings(&updated)
         globalSettings = updated
         store.saveGlobalReaderSettings(updated)
+        syncPlaybackContext()
         // 复习模式只进全局默认，不写文章覆盖。
         var patch = readerSettingsPatch(from: old, to: updated)
         patch.removeValue(forKey: "reviewMode")
@@ -479,15 +555,24 @@ final class ReaderViewModel: ObservableObject {
         }
     }
 
-    func jumpTo(idx: Int) {
+    func jumpTo(idx: Int, autoplay: Bool = false) {
         guard let total = article?.sentences.count, total > 0 else { return }
-        activeSentenceIdx = min(max(0, idx), total - 1)
+        let clamped = min(max(0, idx), total - 1)
+        playback.jumpTo(clamped, autoplay: autoplay)
+        if !playback.playing {
+            // 未播放：引擎只移动光标；这里同步高亮（播放中由引擎事件驱动）。
+            if clamped != activeSentenceIdx {
+                activeSentenceIdx = clamped
+            }
+        }
     }
 
-    /// 滚动到哪 = 读到哪（未播放时光标跟随视口，M1 无播放即始终跟随）。
+    /// 滚动到哪 = 读到哪：未播放（且非跟读等待）时光标跟随视口。
     func viewportMoved(to idx: Int) {
+        guard !playback.playing, !playback.shadowingWait else { return }
         if idx != activeSentenceIdx {
             activeSentenceIdx = idx
+            playback.setActiveCursor(idx)
         }
     }
 
@@ -511,6 +596,8 @@ final class ReaderViewModel: ObservableObject {
 
     func lookup(query raw: String, sentenceIdx: Int) {
         guard let cleaned = extractSelectionText(raw) else { return }
+        let articleID = article?.id ?? ""
+        dictLookupCounts[articleID, default: 0] += 1
         dict = .loading(query: cleaned, sentenceIdx: sentenceIdx)
         Task { [weak self] in
             await self?.performLookup(query: cleaned, sentenceIdx: sentenceIdx)
@@ -606,12 +693,11 @@ final class ReaderViewModel: ObservableObject {
     func handleKeyDown(_ event: NSEvent) -> Bool {
         guard route == .reading else { return false }
         guard let key = event.charactersIgnoringModifiers?.lowercased() else { return false }
-        if key == " " {
-            jumpTo(idx: activeSentenceIdx + 1) // M2 接播放后改为播放/暂停
+        if key == " " || key == "k" {
+            togglePlayback()
             return true
         }
         if key == "j" { jumpTo(idx: activeSentenceIdx + 1); return true }
-        if key == "k" { jumpTo(idx: activeSentenceIdx); return true }
         if key == "l" { jumpTo(idx: activeSentenceIdx - 1); return true }
         if key == "h" {
             peekAll = true
