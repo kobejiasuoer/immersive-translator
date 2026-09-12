@@ -1857,6 +1857,8 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
 
 /* 复习卡左上角的形态标签 */
 .review-card .card-meta .mode-pill {
+  flex: none;
+  white-space: nowrap;
   padding: 1px 9px;
   border-radius: 999px;
   font-size: 11px;
@@ -1871,6 +1873,13 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
 .review-card .card-meta .mode-pill.dict {
   background: var(--ok-soft);
   color: var(--ok);
+}
+/* 智能混合派发的小签：「智能 · 完形」——虚线描边表示派发来源，悬停有原因 */
+.review-card .card-meta .mode-pill.smart {
+  background: transparent;
+  color: var(--text-2);
+  border: 1px dashed var(--border-strong);
+  cursor: help;
 }
 
 /* 完形卡：句中挖空 + 内嵌输入框 */

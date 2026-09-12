@@ -106,6 +106,16 @@ export function gradeAsk(mode: RecallMode): string {
   }[mode];
 }
 
+/**
+ * 智能模式下卡片小签的派发说明：为什么这张卡练这个形态。
+ * （词块→完形 · 熟词间隔≥1天→听写 · 其余→识别）
+ */
+const SMART_ROUTE_TIP: Record<RecallMode, string> = {
+  cloze: "智能混合：本卡是词块，练完形（放进原句默写）",
+  dictation: "智能混合：本卡已复习过（间隔≥1 天），练听写",
+  recognition: "智能混合：本卡是新词，先看词想义",
+};
+
 /** 完形/听写卡的句子素材：挖空定位过的一段。 */
 interface SentenceSpec {
   sentence: string;
@@ -354,6 +364,7 @@ export function ReviewView({
                 flipped={flipped}
                 pos={pos}
                 total={due.length}
+                smart={reviewMode === "smart"}
                 sourceLabel={metaSource(current)}
                 sentence={recognitionSentence(current)}
                 onFlip={() => setFlipped(true)}
@@ -372,6 +383,7 @@ export function ReviewView({
                 verdict={verdict}
                 pos={pos}
                 total={due.length}
+                smart={reviewMode === "smart"}
                 sourceLabel={metaSource(current)}
                 onInput={setInput}
                 onHint={() => setHints((n) => Math.min(3, n + 1))}
@@ -390,6 +402,7 @@ export function ReviewView({
                 replays={replays}
                 pos={pos}
                 total={due.length}
+                smart={reviewMode === "smart"}
                 sourceLabel={metaSource(current)}
                 onInput={setInput}
                 onReplay={() => {
@@ -452,28 +465,46 @@ function ModeSwitch({ value, onChange }: { value: ReviewModeSetting; onChange: (
 // ---------- 词条版式小件 ----------
 
 /** 卡片头部：形态标签 + 来源 + 进度。 */
+/**
+ * 卡片头部：形态标签（智能模式下前缀「智能」并带派发原因悬停说明）+ 来源 + 进度。
+ */
 function CardMeta({
   pill,
   tone,
+  smart,
   source,
   pos,
   total,
 }: {
   pill: string;
   tone?: "muted" | "dict";
+  /** 智能混合按卡路由时为 true：小签变「智能 · X」，一眼可见是派发而非切错模式。 */
+  smart?: boolean;
   source: string;
   pos: number;
   total: number;
 }) {
   return (
     <div className="card-meta">
-      <span className={`mode-pill${tone ? ` ${tone}` : ""}`}>{pill}</span>
+      <span
+        className={`mode-pill${tone ? ` ${tone}` : ""}${smart ? " smart" : ""}`}
+        title={smart ? pillTip(pill) : undefined}
+      >
+        {smart ? `智能 · ${pill}` : pill}
+      </span>
       <span className="rc-from">{source}</span>
       <span className="rc-counter">
         {pos + 1} / {total}
       </span>
     </div>
   );
+}
+
+function pillTip(pill: string): string | undefined {
+  if (pill === "完形") return SMART_ROUTE_TIP.cloze;
+  if (pill === "听写") return SMART_ROUTE_TIP.dictation;
+  if (pill === "识别") return SMART_ROUTE_TIP.recognition;
+  return undefined;
 }
 
 /** 词头：目标词 + 类型徽章 / 音标 + 发音（背面可加「遮住释义」）。 */
@@ -705,6 +736,7 @@ function RecognitionCard({
   flipped,
   pos,
   total,
+  smart,
   sourceLabel,
   sentence,
   onFlip,
@@ -717,6 +749,7 @@ function RecognitionCard({
   flipped: boolean;
   pos: number;
   total: number;
+  smart?: boolean;
   sourceLabel: string;
   sentence: string | null;
   onFlip: () => void;
@@ -728,7 +761,7 @@ function RecognitionCard({
   const jump = () => onJumpToSentence(word.source.articleId, word.source.sentenceIdx);
   return (
     <div className="review-card" key={word.id}>
-      <CardMeta pill="识别" tone="muted" source={sourceLabel} pos={pos} total={total} />
+      <CardMeta pill="识别" tone="muted" smart={smart} source={sourceLabel} pos={pos} total={total} />
 
       <WordHead word={word} onSpeak={onSpeakWord} onCollapse={flipped ? onUnflip : undefined} />
 
@@ -788,6 +821,7 @@ function ClozeCard({
   verdict,
   pos,
   total,
+  smart,
   sourceLabel,
   onInput,
   onHint,
@@ -805,6 +839,7 @@ function ClozeCard({
   verdict: RecallVerdict | null;
   pos: number;
   total: number;
+  smart?: boolean;
   sourceLabel: string;
   onInput: (v: string) => void;
   onHint: () => void;
@@ -827,7 +862,7 @@ function ClozeCard({
 
   return (
     <div className="review-card" key={word.id}>
-      <CardMeta pill="完形" source={sourceLabel} pos={pos} total={total} />
+      <CardMeta pill="完形" smart={smart} source={sourceLabel} pos={pos} total={total} />
 
       <div className="cloze-sentence">
         {spec.pre}
@@ -985,6 +1020,7 @@ function DictationCard({
   replays,
   pos,
   total,
+  smart,
   sourceLabel,
   onInput,
   onReplay,
@@ -1000,6 +1036,7 @@ function DictationCard({
   replays: number;
   pos: number;
   total: number;
+  smart?: boolean;
   sourceLabel: string;
   onInput: (v: string) => void;
   onReplay: () => void;
@@ -1019,7 +1056,7 @@ function DictationCard({
 
   return (
     <div className="review-card" key={word.id}>
-      <CardMeta pill="听写" tone="dict" source={sourceLabel} pos={pos} total={total} />
+      <CardMeta pill="听写" tone="dict" smart={smart} source={sourceLabel} pos={pos} total={total} />
 
       <div className="dictation-bar">
         <button className="recall-btn primary" onClick={onReplay} disabled={verdict === null && replays <= 0}>

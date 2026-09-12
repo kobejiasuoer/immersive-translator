@@ -95,6 +95,8 @@ describe("ReviewView render smoke", () => {
   it("smart 模式：词块卡渲染为完形（挖空输入框 + 中文打码提示）", () => {
     const html = renderToString(<ReviewView {...baseProps("smart")} />);
     expect(html).toContain("完形");
+    // 智能混合下小签带「智能」前缀（派发可见），强制模式不带
+    expect(html).toContain("智能 · 完形");
     expect(html).toContain("被挖空的部分");
     expect(html).toContain("cn-masked");
     // 完形卡不渲染词头（词条即答案，避免剧透）

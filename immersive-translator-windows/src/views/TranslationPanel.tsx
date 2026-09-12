@@ -79,7 +79,6 @@ import {
   IconList,
   IconShuffle,
   IconSendToReader,
-  IconPlus,
 } from "../ui/icons";
 
 type Status = "idle" | "reading" | "translating" | "done" | "error" | "needsConfig";
@@ -235,6 +234,10 @@ export function TranslationPanel() {
   const [dictStatus, setDictStatus] = useState<
     "hidden" | "querying" | "ready" | "error"
   >("hidden");
+  /** 模型对本次文本的「非词条」判定（仅词典开启且预取完成时可能为 true）。
+   *  与 dictStatus="hidden" 分开记：后者还承担「词典未开启」的含义，生词本入口
+   *  只跟前者对齐——词典管道判了非词条就一起收起，词典关着则仍按文本形状判断。 */
+  const [dictNotAWord, setDictNotAWord] = useState(false);
   /** done 态当前展示的视图：false=译文，true=词典卡片。 */
   const [dictView, setDictView] = useState(false);
   /** 正在朗读的位置；null 表示未在朗读。 */
@@ -341,6 +344,7 @@ export function TranslationPanel() {
           setDictStatus("ready");
         } else if (result.kind === "notAWord") {
           setDictStatus("hidden");
+          setDictNotAWord(true);
           setDictView(false);
         } else {
           setDictStatus("error");
@@ -491,6 +495,7 @@ export function TranslationPanel() {
     setDictCardData(null);
     const wantsDict = s.dictCard === "auto" && isLookupText(text);
     setDictStatus(wantsDict ? "querying" : "hidden");
+    setDictNotAWord(false);
 
     const tag = `t${++requestSeqRef.current}`;
     mainTagRef.current = tag;
@@ -1098,6 +1103,11 @@ export function TranslationPanel() {
   const canRetry = status === "error" && retryable;
   /** 译文行「词典」按钮：词条类文本且预取未被判非词条时显示。 */
   const showDictButton = status === "done" && dictStatus !== "hidden";
+  /**
+   * 生词本入口：按文本形状（isLookupText）出现，不跟随词典卡片开关；
+   * 但词典预取明确判了「非词条」时一并不出现——两个入口对同一个词讲同一个故事。
+   */
+  const showVocabButton = status === "done" && isLookupText(original) && !dictNotAWord;
 
   /** 原文角标文案。错误态隐藏来源标签，避免误导。 */
   const sourceLabel =
@@ -1163,21 +1173,24 @@ export function TranslationPanel() {
               <IconStar size={15} filled={favToggled} />
             </button>
           )}
-          {/* 加入生词本（划词收藏）：词条信息 + LLM 例句，复习时在阅读室出语境 */}
-          {status === "done" && (
+          {/* 加入生词本（划词收藏）：按词条启发式出现、不受词典开关影响；
+              模型判非词条时与词典入口一起收起（见 dictNotAWord） */}
+          {showVocabButton && (
             <button
               className={`icon-btn${vocabState === "saved" ? " active" : ""}`}
               onClick={() => void addToVocab()}
               disabled={!original.trim() || vocabState === "saving"}
               title={
                 vocabState === "saved"
-                  ? "已加入生词本"
+                  ? "已在生词本"
                   : vocabState === "saving"
                     ? "正在查询词条并生成例句…"
                     : "加入生词本"
               }
             >
-              {vocabState === "saved" ? <IconCheck size={15} /> : <IconPlus size={15} />}
+              <span className="vocab-glyph" aria-hidden>
+                生
+              </span>
             </button>
           )}
           {/* 发送到阅读室（§8.2）：位于「收藏」和「固定」之间，只新增不改旧行为 */}
