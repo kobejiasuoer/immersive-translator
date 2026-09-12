@@ -1,0 +1,26 @@
+{
+  "name": "immersive-translator-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "description": "沉浸阅读室移动端（iOS 先行）· M0 spike 工程：真机验证阅读性能 / TTS / BYOK 网络 / 导入 / 键盘适配。",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.7.0",
+    "typescript": "^6.0.3",
+    "vite": "^6.0.3"
+  }
+}

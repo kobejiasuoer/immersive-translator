@@ -1,0 +1,111 @@
+/* ============================================================
+   主题令牌 —— 与 reading-room 原型同源。
+   ⚠ spike 适配：不使用 color-mix()（需 iOS 16.2+），半透面用
+   每主题显式 rgba 变量 --tb-bg（tabbar/顶栏毛玻璃底）。
+   ============================================================ */
+
+:root,
+[data-theme="light"] {
+  --bg: #f4f5f9;
+  --surface: #ffffff;
+  --surface-2: #f9fafc;
+  --border: #e4e7ee;
+  --border-strong: #d6dae4;
+  --text-1: #1c2029;
+  --text-2: #4b5261;
+  --text-3: #7c8494;
+  --text-4: #a6adbb;
+  --accent: #4c5ff0;
+  --accent-hover: #3f52e0;
+  --accent-soft: #eef0fe;
+  --accent-softer: #f6f7ff;
+  --accent-hl: #dde2fd;
+  --on-accent: #ffffff;
+  --ok: #1f8a4c;
+  --ok-soft: #e8f5ee;
+  --warn: #b45309;
+  --warn-soft: #fdf1e3;
+  --err: #cf4141;
+  --err-soft: #fdeeee;
+  --tb-bg: rgba(255, 255, 255, 0.84);
+  --shadow-pop: 0 12px 32px rgba(16, 24, 40, 0.16), 0 3px 10px rgba(16, 24, 40, 0.1);
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+}
+[data-theme="dark"] {
+  --bg: #1d1f26;
+  --surface: #262933;
+  --surface-2: #2e313c;
+  --border: #373b47;
+  --border-strong: #474c5a;
+  --text-1: #edeef4;
+  --text-2: #c4c9d6;
+  --text-3: #9399ab;
+  --text-4: #6d7384;
+  --accent: #7d8cff;
+  --accent-hover: #93a0ff;
+  --accent-soft: rgba(125, 140, 255, 0.16);
+  --accent-softer: rgba(125, 140, 255, 0.09);
+  --accent-hl: rgba(125, 140, 255, 0.3);
+  --on-accent: #ffffff;
+  --ok: #4cc38a;
+  --ok-soft: rgba(76, 195, 138, 0.14);
+  --warn: #e0a458;
+  --warn-soft: rgba(224, 164, 88, 0.14);
+  --err: #e57070;
+  --err-soft: rgba(229, 112, 112, 0.14);
+  --tb-bg: rgba(38, 41, 51, 0.84);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+[data-theme="sepia"] {
+  --bg: #f5efdf;
+  --surface: #fbf7ec;
+  --surface-2: #f1ead7;
+  --border: #e4dac0;
+  --border-strong: #d2c6a6;
+  --text-1: #37301f;
+  --text-2: #5a5138;
+  --text-3: #857a5c;
+  --text-4: #a89d80;
+  --accent: #4c5ff0;
+  --accent-hover: #3f52e0;
+  --accent-soft: rgba(76, 95, 240, 0.1);
+  --accent-softer: rgba(76, 95, 240, 0.06);
+  --accent-hl: rgba(76, 95, 240, 0.2);
+  --on-accent: #ffffff;
+  --ok: #35793f;
+  --ok-soft: rgba(53, 121, 63, 0.12);
+  --warn: #9a6212;
+  --warn-soft: rgba(154, 98, 18, 0.12);
+  --err: #b03a32;
+  --err-soft: rgba(176, 58, 50, 0.12);
+  --tb-bg: rgba(251, 247, 236, 0.86);
+  --shadow-pop: 0 12px 32px rgba(80, 66, 32, 0.18), 0 3px 10px rgba(80, 66, 32, 0.1);
+  --shadow-card: 0 1px 2px rgba(80, 66, 32, 0.05), 0 1px 3px rgba(80, 66, 32, 0.06);
+}
+[data-theme="oled"] {
+  --bg: #000000;
+  --surface: #0a0a0b;
+  --surface-2: #141416;
+  --border: #212126;
+  --border-strong: #2f2f36;
+  --text-1: #e8e7e4;
+  --text-2: #b0aeab;
+  --text-3: #77756f;
+  --text-4: #4c4a46;
+  --accent: #7d8cff;
+  --accent-hover: #93a0ff;
+  --accent-soft: rgba(125, 140, 255, 0.13);
+  --accent-softer: rgba(125, 140, 255, 0.07);
+  --accent-hl: rgba(125, 140, 255, 0.26);
+  --on-accent: #0c0c10;
+  --ok: #4cc38a;
+  --ok-soft: rgba(76, 195, 138, 0.12);
+  --warn: #e0a458;
+  --warn-soft: rgba(224, 164, 88, 0.12);
+  --err: #e57070;
+  --err-soft: rgba(229, 112, 112, 0.12);
+  --tb-bg: rgba(10, 10, 11, 0.84);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.8), 0 3px 10px rgba(0, 0, 0, 0.5);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.6);
+}

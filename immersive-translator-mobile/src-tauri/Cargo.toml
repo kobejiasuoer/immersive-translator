@@ -1,0 +1,29 @@
+[package]
+name = "imreader-mobile"
+version = "0.1.0"
+description = "Immersive reading room, mobile (iOS-first) — M0 spike"
+edition = "2021"
+
+# Tauri v2 移动端入口标准布局：lib + 细薄 main
+[lib]
+name = "imreader_mobile_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 桌面专属插件（移动端不编译；与官方模板一致）
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-opener = "2"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

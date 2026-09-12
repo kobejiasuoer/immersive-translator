@@ -1,0 +1,1901 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>沉浸阅读室 · 移动端原型 v1（iOS · P0）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   沉浸阅读室 · 移动端交互原型 v1 —— iOS 优先 / P0
+   覆盖：今天(复习) · 生词本(单词/词块) · 书架+点词阅读 · 我的(同步/导入)
+   外加：词典卡 · 系统分享收词 · 文件互导 · 四主题
+   单文件 · 无依赖 · 令牌与 reading-room-recall.html 同源（品牌延续）
+   ============================================================ */
+
+/* ---------- 令牌 · 浅色（默认） ---------- */
+:root, [data-theme="light"] {
+  --bg:#f4f5f9;
+  --surface:   #ffffff;
+  --surface-2:#f9fafc;
+  --border:      #e4e7ee;
+  --border-strong:#d6dae4;
+
+  --text-1: #1c2029;
+  --text-2:    #4b5261;
+  --text-3:    #7c8494;
+  --text-4:    #a6adbb;
+
+  --accent:         #4c5ff0;
+  --accent-hover:   #3f52e0;
+  --accent-soft:    #eef0fe;
+  --accent-softer:  #f6f7ff;
+  --accent-hl:      #dde2fd;
+  --on-accent:      #ffffff;
+
+  --ok:        #1f8a4c;
+  --ok-soft:   #e8f5ee;
+  --warn:      #b45309;
+  --warn-soft: #fdf1e3;
+  --err:       #cf4141;
+  --err-soft:  #fdeeee;
+
+  --shadow-pop: 0 12px 32px rgba(16, 24, 40, 0.16), 0 3px 10px rgba(16, 24, 40, 0.1);
+  --shadow-card:0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+  --sel: rgba(76, 95, 240, 0.2);
+}
+/* ---------- 深色 ---------- */
+[data-theme="dark"] {
+  --bg:#1d1f26;
+  --surface:   #262933;
+  --surface-2:#2e313c;
+  --border:      #373b47;
+  --border-strong:#474c5a;
+
+  --text-1: #edeef4;
+  --text-2:    #c4c9d6;
+  --text-3:    #9399ab;
+  --text-4:    #6d7384;
+
+  --accent:         #7d8cff;
+  --accent-hover:   #93a0ff;
+  --accent-soft:    rgba(125, 140, 255, 0.16);
+  --accent-softer:  rgba(125, 140, 255, 0.09);
+  --accent-hl:      rgba(125, 140, 255, 0.30);
+  --on-accent:      #ffffff;
+
+  --ok:        #4cc38a;
+  --ok-soft:   rgba(76, 195, 138, 0.14);
+  --warn:      #e0a458;
+  --warn-soft: rgba(224, 164, 88, 0.14);
+  --err:       #e57070;
+  --err-soft:  rgba(229, 112, 112, 0.14);
+
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  --shadow-card:0 1px 2px rgba(0, 0, 0, 0.3);
+  --sel: rgba(125, 140, 255, 0.3);
+}
+/* ---------- 护眼 ---------- */
+[data-theme="sepia"] {
+  --bg:#f5efdf;
+  --surface:   #fbf7ec;
+  --surface-2:#f1ead7;
+  --border:      #e4dac0;
+  --border-strong:#d2c6a6;
+
+  --text-1: #37301f;
+  --text-2:    #5a5138;
+  --text-3:    #857a5c;
+  --text-4:    #a89d80;
+
+  --accent:         #4c5ff0;
+  --accent-hover:   #3f52e0;
+  --accent-soft:    rgba(76, 95, 240, 0.10);
+  --accent-softer:  rgba(76, 95, 240, 0.06);
+  --accent-hl:      rgba(76, 95, 240, 0.20);
+  --on-accent:      #ffffff;
+
+  --ok:        #35793f;
+  --ok-soft:   rgba(53, 121, 63, 0.12);
+  --warn:      #9a6212;
+  --warn-soft: rgba(154, 98, 18, 0.12);
+  --err:       #b03a32;
+  --err-soft:  rgba(176, 58, 50, 0.12);
+
+  --shadow-pop: 0 12px 32px rgba(80, 66, 32, 0.18), 0 3px 10px rgba(80, 66, 32, 0.10);
+  --shadow-card:0 1px 2px rgba(80, 66, 32, 0.05), 0 1px 3px rgba(80, 66, 32, 0.06);
+  --sel: rgba(76, 95, 240, 0.18);
+}
+/* ---------- 纯黑（OLED） ---------- */
+[data-theme="oled"] {
+  --bg:#000000;
+  --surface:   #0a0a0b;
+  --surface-2:#141416;
+  --border:      #212126;
+  --border-strong:#2f2f36;
+
+  --text-1: #e8e7e4;
+  --text-2:    #b0aeab;
+  --text-3:    #77756f;
+  --text-4:    #4c4a46;
+
+  --accent:         #7d8cff;
+  --accent-hover:   #93a0ff;
+  --accent-soft:    rgba(125, 140, 255, 0.13);
+  --accent-softer:  rgba(125, 140, 255, 0.07);
+  --accent-hl:      rgba(125, 140, 255, 0.26);
+  --on-accent:      #0c0c10;
+
+  --ok:        #4cc38a;
+  --ok-soft:   rgba(76, 195, 138, 0.12);
+  --warn:      #e0a458;
+  --warn-soft: rgba(224, 164, 88, 0.12);
+  --err:       #e57070;
+  --err-soft:  rgba(229, 112, 112, 0.12);
+
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.8), 0 3px 10px rgba(0, 0, 0, 0.5);
+  --shadow-card:0 1px 2px rgba(0, 0, 0, 0.6);
+  --sel: rgba(125, 140, 255, 0.28);
+}
+
+/* ---------- 基底 ---------- */
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 15px; line-height: 1.55;
+  color: var(--text-1); background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  transition: background .3s ease, color .3s ease;
+}
+::selection { background: var(--sel); }
+button { font-family: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 6px;
+}
+.serif-en { font-family: "Source Serif 4", Georgia, "Times New Roman", serif; }
+.zh-serif { font-family: "Noto Serif SC", serif; }
+.hidden { display: none !important; }
+
+/* ---------- 原型说明条 ---------- */
+.proto-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 18px; height: 40px;
+  background: var(--accent-softer);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--text-2);
+  position: relative; z-index: 50;
+}
+.proto-banner .tag {
+  flex: none; padding: 1px 9px; border-radius: 999px;
+  background: var(--accent); color: var(--on-accent);
+  font-weight: 600; font-size: 11px;
+}
+.proto-banner b { color: var(--text-1); }
+.proto-banner .links { display: flex; gap: 2px; margin-left: 6px; flex-wrap: nowrap; overflow: hidden; }
+.banner-link {
+  border: none; background: transparent; color: var(--text-2);
+  font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
+}
+.banner-link:hover { background: var(--accent-soft); color: var(--accent); }
+.proto-banner .spacer { flex: 1; }
+
+/* ---------- 舞台（桌面观看） ---------- */
+.stage {
+  position: absolute; top: 40px; left: 0; right: 0; bottom: 0;
+  display: grid; place-items: center;
+  background:
+    radial-gradient(900px 500px at 50% 12%, var(--accent-softer), transparent 70%),
+    var(--bg);
+  overflow: hidden;
+}
+.stage-note {
+  position: absolute; left: max(24px, calc(50vw - 560px)); top: 50%;
+  transform: translateY(-50%);
+  width: 220px; color: var(--text-3); font-size: 12.5px; line-height: 1.9;
+}
+.stage-note .n1 { font-size: 15px; font-weight: 700; color: var(--text-1); margin-bottom: 4px; }
+.stage-note .n1 small { font-size: 11px; font-weight: 500; color: var(--text-4); display: block; }
+.stage-note em { color: var(--text-2); font-style: normal; background: var(--accent-soft); border-radius: 4px; padding: 0 4px; }
+@media (max-width: 1180px) { .stage-note { display: none; } }
+
+/* ---------- iPhone 壳 ---------- */
+.phone {
+  position: relative; width: 390px; height: 844px; flex: none;
+  background: var(--bg);
+  border-radius: 55px;
+  border: 11px solid #101116;
+  outline: 1px solid rgba(128, 138, 160, .35);
+  box-shadow: 0 30px 80px rgba(10, 14, 30, .35), 0 6px 22px rgba(10, 14, 30, .22);
+  overflow: hidden;
+  transform-origin: center;
+}
+.island {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  width: 122px; height: 36px; border-radius: 20px;
+  background: #050507; z-index: 40;
+  pointer-events: none;
+}
+.statusbar {
+  position: absolute; top: 0; left: 0; right: 0; height: 58px; z-index: 39;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 34px 0 40px;
+  font-size: 15px; font-weight: 600; color: var(--text-1);
+  pointer-events: none;
+}
+.statusbar svg { display: block; }
+.homebar {
+  position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+  width: 134px; height: 5px; border-radius: 3px;
+  background: var(--text-1); opacity: .35; z-index: 46; pointer-events: none;
+}
+
+/* ---------- App 内部 ---------- */
+.app { position: absolute; inset: 0; }
+.screen {
+  position: absolute; inset: 0;
+  padding: 74px 18px 120px;
+  overflow-y: auto; overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.screen::-webkit-scrollbar { display: none; }
+.screen .pagehead { padding: 2px 2px 14px; }
+.large-title { font-size: 30px; font-weight: 800; letter-spacing: -.02em; line-height: 1.15; }
+.page-sub { font-size: 12.5px; color: var(--text-3); margin-top: 3px; }
+
+/* 底部 Tab Bar */
+.tabbar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 30;
+  display: flex; align-items: flex-start;
+  padding: 7px 10px 26px;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  -webkit-backdrop-filter: saturate(1.4) blur(18px);
+  backdrop-filter: saturate(1.4) blur(18px);
+  border-top: 1px solid var(--border);
+}
+.tab {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  border: none; background: transparent; padding: 4px 0 0;
+  color: var(--text-3); font-size: 10px; font-weight: 500;
+}
+.tab svg { width: 25px; height: 25px; }
+.tab.on { color: var(--accent); }
+.tab .tbadge {
+  position: absolute; margin: -3px 0 0 16px;
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  background: var(--err); color: #fff; font-size: 10px; font-weight: 700; line-height: 16px;
+}
+.tab { position: relative; }
+
+/* ---------- 通用组件 ---------- */
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: var(--shadow-card); padding: 16px;
+}
+.btn {
+  height: 50px; border: none; border-radius: 14px; width: 100%;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 16px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+}
+.btn:hover { background: var(--accent-hover); }
+.btn.ghost {
+  background: transparent; border: 1px solid var(--border-strong);
+  color: var(--text-2); font-size: 14px; font-weight: 500; height: 44px;
+}
+.btn.ghost:hover { color: var(--text-1); border-color: var(--text-3); }
+.btn.sm { height: 36px; font-size: 13.5px; border-radius: 10px; width: auto; padding: 0 16px; }
+.badge {
+  display: inline-flex; align-items: center; padding: 1px 9px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 600;
+  white-space: nowrap;
+}
+.badge.warn { background: var(--warn-soft); color: var(--warn); }
+.badge.err  { background: var(--err-soft);  color: var(--err); }
+.badge.mute { background: var(--surface-2); color: var(--text-3); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--err); flex: none; }
+.dot.ok { background: var(--ok); }
+
+/* iOS 分段控件 */
+.seg {
+  display: flex; padding: 2px; gap: 2px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 11px;
+}
+.seg button {
+  flex: 1; height: 32px; border: none; background: transparent; border-radius: 9px;
+  font-size: 13px; color: var(--text-3); font-weight: 500;
+}
+.seg button.on { background: var(--surface); color: var(--text-1); font-weight: 600; box-shadow: var(--shadow-card); }
+
+/* 搜索框 */
+.search {
+  display: flex; align-items: center; gap: 7px;
+  height: 38px; padding: 0 12px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 11px;
+  color: var(--text-4);
+}
+.search input {
+  flex: 1; border: none; background: transparent; outline: none;
+  font-size: 15px; color: var(--text-1); font-family: inherit;
+}
+.search input::placeholder { color: var(--text-4); }
+
+/* 列表行 */
+.rows { display: flex; flex-direction: column; }
+.row {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 13px 4px; border: none; background: transparent; text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.rows .row:last-child { border-bottom: none; }
+.row .rt { flex: 1; min-width: 0; }
+.row .rt .t1 { font-size: 15.5px; font-weight: 600; display: flex; align-items: center; gap: 7px; min-width: 0; }
+.row .rt .t1 .w { font-family: "Source Serif 4", Georgia, serif; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .rt .t2 { font-size: 12.5px; color: var(--text-3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .chev { color: var(--text-4); flex: none; }
+
+/* ---------- 今天（复习主页） ---------- */
+.hero { padding: 20px 18px 18px; text-align: left; position: relative; }
+.hero .huge {
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 76px; font-weight: 600; line-height: .95; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
+.hero .huge small { font-size: 22px; color: var(--text-3); font-weight: 400; margin-left: 6px; }
+.hero .split { margin-top: 10px; font-size: 13px; color: var(--text-2); display: flex; gap: 14px; align-items: center; }
+.hero .split .sw { display: inline-flex; align-items: center; gap: 5px; }
+.hero .split .sw i { width: 8px; height: 8px; border-radius: 3px; background: var(--accent); display: inline-block; }
+.hero .split .sw.ck i { border-radius: 50%; background: var(--warn); }
+.hero .streak {
+  position: absolute; top: 18px; right: 16px;
+  text-align: right; font-size: 12px; color: var(--text-3); line-height: 1.5;
+}
+.hero .streak b { display: block; font-size: 20px; color: var(--warn); font-family: "Source Serif 4", Georgia, serif; }
+.hero-dots { display: flex; gap: 5px; margin-top: 14px; flex-wrap: wrap; }
+.hero-dots i { width: 9px; height: 9px; border-radius: 3px; background: var(--accent); opacity: .9; }
+.hero-dots i.ck { border-radius: 50%; background: var(--warn); }
+.hero-dots i.done { background: var(--border-strong); opacity: .55; }
+.sect-label { font-size: 12px; font-weight: 700; color: var(--text-3); margin: 20px 4px 8px; letter-spacing: .02em; }
+
+.resume { display: flex; align-items: center; gap: 12px; }
+.resume .thumb {
+  width: 46px; height: 46px; border-radius: 12px; flex: none;
+  background: linear-gradient(135deg, var(--accent), #7a5cf0);
+  color: #fff; display: flex; align-items: center; justify-content: center;
+  font-size: 19px; font-weight: 700; font-family: "Source Serif 4", Georgia, serif;
+}
+.resume .rt { flex: 1; min-width: 0; }
+.resume .pbar { height: 4px; border-radius: 2px; background: var(--border); margin-top: 7px; overflow: hidden; }
+.resume .pbar i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+
+/* ---------- 复习卡 ---------- */
+.rev-top { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.rev-top .x {
+  width: 34px; height: 34px; border-radius: 50%; border: none; flex: none;
+  background: var(--surface-2); color: var(--text-2); font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+}
+.rev-top .prog { flex: 1; height: 5px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.rev-top .prog i { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width .25s ease; }
+.rev-top .n { font-size: 12.5px; color: var(--text-3); font-variant-numeric: tabular-nums; flex: none; }
+
+.rev-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 18px;
+  box-shadow: var(--shadow-card); padding: 20px 18px;
+  display: flex; flex-direction: column; gap: 14px;
+  animation: rise .2s ease-out;
+}
+.rev-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-3); }
+.word-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.word { font-family: "Source Serif 4", Georgia, serif; font-size: 36px; line-height: 1.1; }
+.phonetic { font-size: 13.5px; color: var(--text-3); }
+.icon-btn {
+  width: 34px; height: 34px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-2); font-size: 14px;
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+}
+.icon-btn:active { background: var(--accent-soft); color: var(--accent); }
+.sense-line { font-size: 15px; line-height: 1.75; font-family: "Noto Serif SC", serif; }
+.sense-line .pos { color: var(--text-3); font-style: italic; margin-right: 5px; font-size: 13px; }
+.chunk-detail { font-size: 13px; line-height: 1.7; color: var(--text-2); }
+.chunk-detail i { font-family: "Source Serif 4", Georgia, serif; }
+.src-sent {
+  border-left: 2px solid var(--border-strong); padding: 8px 12px;
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 13px; line-height: 1.65; color: var(--text-2);
+}
+.src-sent .from { display: block; margin-top: 3px; font-size: 11px; color: var(--text-3); font-family: inherit; }
+
+/* 完形（移动：输入槽内嵌句中，字号 ≥16 防 iOS 缩放） */
+.cloze-sent {
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 19px; line-height: 2.1; color: var(--text-1);
+}
+.blank-input {
+  font-family: inherit; font-size: 17px; line-height: inherit; text-align: center;
+  border: none; outline: none; border-bottom: 2px solid var(--accent);
+  background: var(--accent-softer); color: var(--accent);
+  min-width: 88px; max-width: 250px; width: 120px;
+  padding: 0 7px; margin: 0 2px; border-radius: 8px 8px 0 0;
+}
+.blank-input::placeholder { color: var(--text-4); font-style: italic; font-size: 13.5px; }
+.blank-input:focus { background: var(--accent-soft); }
+.cloze-cn { font-family: "Noto Serif SC", serif; font-size: 13.5px; color: var(--text-3); }
+.cn-masked { cursor: pointer; border-bottom: 1px dashed var(--border-strong); }
+.hint {
+  font-size: 13px; color: var(--text-2); line-height: 1.65;
+  padding: 9px 12px; border-radius: 10px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  animation: rise .18s ease-out;
+}
+.hint .h-tag { color: var(--accent); font-weight: 600; margin-right: 7px; font-size: 11px; }
+.hint-btn {
+  align-self: flex-start; border: 1px dashed var(--border-strong); border-radius: 10px;
+  background: transparent; color: var(--text-3); font-size: 12.5px; padding: 6px 14px;
+}
+/* 听写 */
+.dict-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 13px; border-radius: 12px;
+  background: var(--surface-2); border: 1px solid var(--border);
+}
+.play-btn {
+  height: 42px; padding: 0 18px; border-radius: 11px; border: none; flex: none;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 14px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.play-btn:disabled { opacity: .5; }
+.dict-input {
+  width: 100%; min-height: 84px; resize: vertical;
+  font-family: "Source Serif 4", Georgia, serif; font-size: 17px; line-height: 1.7;
+  color: var(--text-1); background: var(--surface);
+  border: 1px solid var(--border-strong); border-radius: 12px;
+  padding: 11px 13px; outline: none;
+}
+.dict-input:focus { border-color: var(--accent); }
+/* 判分反馈 */
+.verdict { border-radius: 12px; padding: 12px 14px; font-size: 13.5px; line-height: 1.7; animation: rise .18s ease-out; }
+.verdict .v-head { font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.verdict.perfect { background: var(--ok-soft); color: var(--ok); }
+.verdict.close   { background: var(--warn-soft); color: var(--warn); }
+.verdict.trapv   { background: var(--err-soft); color: var(--err); }
+.verdict.wrong   { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
+.verdict .v-body { color: var(--text-2); font-size: 13px; }
+.verdict .v-body b { color: var(--text-1); }
+.verdict .ans { font-family: "Source Serif 4", Georgia, serif; font-size: 15px; color: var(--text-1); }
+.diff-line { font-family: "Source Serif 4", Georgia, serif; font-size: 15px; line-height: 1.95; }
+.diff-line .w-ok    { color: var(--ok); }
+.diff-line .w-miss  { color: var(--err); border-bottom: 2px dashed var(--err); padding: 0 2px; }
+.diff-line .w-miss::before { content: "+"; font-size: 11px; }
+.diff-line .w-extra { color: var(--err); text-decoration: line-through; margin: 0 2px; }
+/* 评分带（拇指优先：4 大按钮） */
+.gradebar { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 2px; }
+.grade-btn {
+  border: 1px solid var(--border-strong); background: var(--surface);
+  border-radius: 14px; padding: 12px 4px 10px;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  position: relative; min-height: 58px;
+}
+.grade-btn .name { font-size: 14.5px; font-weight: 600; }
+.grade-btn .next { font-size: 11px; color: var(--text-3); }
+.grade-btn:active { background: var(--accent-softer); }
+.grade-btn.focus { border-color: var(--accent); background: var(--accent-softer); }
+.grade-btn.focus::after {
+  content: "建议"; position: absolute; top: -9px; right: 8px;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 10px; font-weight: 700; padding: 0 7px; border-radius: 999px; line-height: 1.6;
+}
+.act-row { display: flex; gap: 10px; }
+.act-row .btn { flex: 1; }
+.act-row .btn.ghost { flex: 1.35; }
+/* 摘要 */
+.summary { text-align: center; padding: 26px 0 8px; display: flex; flex-direction: column; gap: 14px; align-items: center; }
+.summary .big { font-family: "Source Serif 4", Georgia, serif; font-size: 24px; }
+.summary .sub { font-size: 13px; color: var(--text-3); }
+.sum-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; width: 100%; }
+.sum-cell { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 13px 6px; }
+.sum-cell .n { font-family: "Source Serif 4", Georgia, serif; font-size: 23px; font-weight: 600; }
+.sum-cell .l { font-size: 11px; margin-top: 2px; color: inherit; }
+.sum-cell.ok { color: var(--ok); } .sum-cell.warn { color: var(--warn); }
+.sum-cell.err { color: var(--err); } .sum-cell.mute { color: var(--text-3); }
+
+/* ---------- 生词本 ---------- */
+.list-meta { display: flex; align-items: center; justify-content: space-between; margin: 14px 4px 6px; }
+.list-meta .lm-t { font-size: 12px; font-weight: 700; color: var(--text-3); letter-spacing: .02em; }
+.due-chip {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-3);
+  border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; background: var(--surface);
+}
+.due-chip.on { border-color: var(--accent); color: var(--accent); background: var(--accent-softer); }
+.vrow .t1 .w { font-size: 17.5px; }
+.empty { text-align: center; color: var(--text-3); font-size: 13px; padding: 34px 0; }
+
+/* ---------- 书架 ---------- */
+.sync-card { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.sync-card .ic {
+  width: 42px; height: 42px; border-radius: 12px; flex: none;
+  background: var(--accent-soft); color: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+}
+.sync-card .rt { flex: 1; min-width: 0; }
+.sync-card .rt .t1 { font-size: 14.5px; font-weight: 600; }
+.sync-card .rt .t2 { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.shelf-card { padding: 15px 16px 13px; }
+.shelf-card .t { font-family: "Source Serif 4", Georgia, serif; font-size: 18px; line-height: 1.3; }
+.shelf-card .tc { font-family: "Noto Serif SC", serif; font-size: 13px; color: var(--text-2); margin-top: 2px; }
+.shelf-card .meta { display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: 11.5px; color: var(--text-3); flex-wrap: wrap; }
+.shelf-card .pbar { height: 4px; border-radius: 2px; background: var(--border); margin-top: 10px; overflow: hidden; }
+.shelf-card .pbar i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+
+/* ---------- 我的 ---------- */
+.group { border-radius: 16px; overflow: hidden; border: 1px solid var(--border); background: var(--surface); box-shadow: var(--shadow-card); }
+.group .glabel { font-size: 12px; font-weight: 700; color: var(--text-3); margin: 18px 6px 8px; letter-spacing: .02em; }
+.mrow {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 13px 14px; border: none; background: transparent; text-align: left;
+  border-bottom: 1px solid var(--border); font-size: 15px;
+}
+.group .mrow:last-child { border-bottom: none; }
+.mrow:active { background: var(--surface-2); }
+.mrow .rt { flex: 1; }
+.mrow .val { color: var(--text-3); font-size: 13.5px; display: flex; align-items: center; gap: 6px; }
+
+/* ---------- 阅读层 ---------- */
+.reader-layer {
+  position: absolute; inset: 0; z-index: 35;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+  animation: slidein .22s ease-out;
+}
+@keyframes slidein { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.r-top {
+  flex: none; padding: 64px 14px 8px;
+  display: flex; align-items: center; gap: 8px;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border);
+}
+.r-top .x {
+  width: 36px; height: 36px; border-radius: 50%; border: none; flex: none;
+  background: var(--surface-2); color: var(--text-2); font-size: 17px;
+  display: flex; align-items: center; justify-content: center;
+}
+.r-top .tt { flex: 1; min-width: 0; text-align: center; }
+.r-top .tt .a { font-family: "Source Serif 4", Georgia, serif; font-size: 14.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-top .tt .b { font-size: 10.5px; color: var(--text-3); }
+.r-top .rbtn {
+  width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--border); flex: none;
+  background: var(--surface); color: var(--text-2); font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+}
+.r-top .rbtn.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.minibar {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 8px 16px; border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.minibar .play-mini {
+  width: 34px; height: 34px; border-radius: 50%; border: none; flex: none;
+  background: var(--accent); color: var(--on-accent); font-size: 12px;
+  display: flex; align-items: center; justify-content: center;
+}
+.minibar .m-info { flex: 1; min-width: 0; font-size: 12px; color: var(--text-3); }
+.minibar .m-info b { color: var(--text-2); }
+.minibar .rate { border: none; background: transparent; color: var(--text-3); font-size: 12px; padding: 4px 6px; }
+.r-body {
+  flex: 1; overflow-y: auto; padding: 20px 22px 60px;
+  scrollbar-width: none;
+}
+.r-body::-webkit-scrollbar { display: none; }
+.para { margin-bottom: 22px; }
+.para .en {
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 18.5px; line-height: 1.95; color: var(--text-1);
+}
+.para .zh {
+  font-family: "Noto Serif SC", serif;
+  font-size: 13.5px; line-height: 1.85; color: var(--text-2);
+  margin-top: 7px; padding-left: 1px;
+  transition: filter .25s ease, opacity .25s ease;
+}
+.reader-masked .para .zh { filter: blur(7px); opacity: .55; cursor: pointer; }
+.reader-masked .para .zh.revealed { filter: none; opacity: 1; }
+.tok { border-radius: 4px; padding: 0 1px; }
+.tok.pu { pointer-events: none; }
+.tok.sv { background: var(--accent-hl); }
+.tok.ck { border-bottom: 2px dotted var(--accent); cursor: pointer; }
+.tok.ck.sv { background: var(--accent-hl); }
+.tok:not(.pu):active { background: var(--accent-soft); }
+.sent.cur { background: var(--accent-soft); border-radius: 6px; box-shadow: 0 0 0 3px var(--accent-soft); }
+.r-foot { text-align: center; font-size: 11px; color: var(--text-4); padding: 8px 0 2px; }
+
+/* ---------- 底部抽屉（词典卡 / 生词详情 / 导入） ---------- */
+.dim { position: absolute; inset: 0; background: rgba(8, 10, 18, .38); z-index: 44; animation: fade .2s ease; }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+.sheet {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 45;
+  background: var(--surface); border-radius: 20px 20px 0 0;
+  box-shadow: var(--shadow-pop);
+  padding: 8px 18px calc(30px + env(safe-area-inset-bottom));
+  max-height: 78%; overflow-y: auto; scrollbar-width: none;
+  animation: up .26s cubic-bezier(.2,.9,.3,1);
+}
+.sheet::-webkit-scrollbar { display: none; }
+@keyframes up { from { transform: translateY(60px); opacity: 0; } to { transform: none; opacity: 1; } }
+.grabber { width: 38px; height: 5px; border-radius: 3px; background: var(--border-strong); margin: 4px auto 12px; }
+.d-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.d-head .w { font-family: "Source Serif 4", Georgia, serif; font-size: 27px; line-height: 1.1; }
+.d-head .close { margin-left: auto; }
+.d-senses { margin-top: 10px; font-size: 15px; line-height: 1.8; font-family: "Noto Serif SC", serif; }
+.d-senses .pos { color: var(--text-3); font-style: italic; margin-right: 5px; font-size: 13px; }
+.d-extra { margin-top: 10px; font-size: 13px; line-height: 1.7; color: var(--text-2); }
+.d-extra i { font-family: "Source Serif 4", Georgia, serif; }
+.d-trap {
+  margin-top: 10px; padding: 10px 12px; border-radius: 12px;
+  background: var(--err-soft); color: var(--err); font-size: 13px; line-height: 1.65;
+}
+.d-trap b { font-weight: 700; }
+.d-src {
+  margin-top: 12px; border-left: 2px solid var(--border-strong); padding: 8px 12px;
+  font-family: "Source Serif 4", Georgia, serif; font-size: 13px; line-height: 1.65; color: var(--text-2);
+}
+.d-src .from { display: block; margin-top: 3px; font-size: 11px; color: var(--text-3); font-family: inherit; }
+.d-srs { margin-top: 10px; font-size: 12.5px; color: var(--text-3); display: flex; gap: 14px; flex-wrap: wrap; }
+.d-actions { display: flex; gap: 10px; margin-top: 16px; }
+.d-actions .btn { flex: 1; }
+.d-note { margin-top: 10px; font-size: 11.5px; color: var(--text-4); text-align: center; }
+/* 导入抽屉 */
+.imp-step { display: flex; gap: 12px; padding: 9px 0; align-items: flex-start; font-size: 13.5px; line-height: 1.65; }
+.imp-step .no {
+  flex: none; width: 22px; height: 22px; border-radius: 50%; margin-top: 1px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+}
+.imp-step .no.done { background: var(--ok-soft); color: var(--ok); }
+.imp-prog { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; margin: 12px 0 4px; }
+.imp-prog i { display: block; height: 100%; width: 0%; background: var(--accent); border-radius: 3px; transition: width .8s ease; }
+.imp-done { text-align: center; padding: 14px 0 4px; }
+.imp-done .big { font-size: 17px; font-weight: 700; }
+.imp-done .sub { font-size: 12.5px; color: var(--text-3); margin-top: 4px; line-height: 1.7; }
+
+/* ---------- 系统分享收词 ---------- */
+.share-layer { position: absolute; inset: 0; z-index: 48; }
+.share-sheet {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  background: var(--surface); border-radius: 20px 20px 0 0;
+  box-shadow: var(--shadow-pop);
+  padding: 10px 18px calc(26px + env(safe-area-inset-bottom));
+  animation: up .28s cubic-bezier(.2,.9,.3,1);
+}
+.share-head { display: flex; align-items: center; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.share-head .app-ic {
+  width: 34px; height: 34px; border-radius: 9px; flex: none;
+  background: linear-gradient(160deg, #4cd964, #0a9c46);
+  color: #fff; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700;
+}
+.share-head .st { flex: 1; }
+.share-head .st .a { font-size: 13.5px; font-weight: 600; }
+.share-head .st .b { font-size: 11px; color: var(--text-3); }
+.share-snippet {
+  margin: 12px 0; padding: 12px 14px; border-radius: 12px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  font-family: "Source Serif 4", Georgia, serif; font-size: 15.5px; line-height: 1.75;
+}
+.share-actions { display: flex; flex-direction: column; gap: 9px; }
+
+/* toast */
+.toast {
+  position: absolute; left: 50%; bottom: 120px; transform: translateX(-50%);
+  background: var(--text-1); color: var(--bg);
+  padding: 9px 18px; border-radius: 999px; font-size: 13px;
+  box-shadow: var(--shadow-pop); z-index: 60; white-space: nowrap;
+  animation: rise .2s ease-out;
+}
+@keyframes rise { from { opacity: 0; transform: translate(-50%, 6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+@keyframes rise0 { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.rev-card, .hint, .verdict { animation-name: rise0; }
+.rev-card { animation: rise0 .2s ease-out; }
+
+/* 真手机 / 窄窗口：脱壳全屏 */
+@media (max-width: 520px), (max-height: 620px) {
+  .proto-banner { display: none; }
+  .stage { top: 0; }
+  .stage-note { display: none; }
+  .phone {
+    width: 100vw; height: 100dvh; border-radius: 0; border: none; outline: none;
+    box-shadow: none; transform: none !important;
+  }
+  .island { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="proto-banner" id="banner">
+  <span class="tag">原型 v1</span>
+  <span><b>沉浸阅读室 · 移动端</b>（iPhone 优先 · P0）</span>
+  <span class="links">
+    <button class="banner-link" data-go="today">首页</button>
+    <button class="banner-link" data-go="review">复习</button>
+    <button class="banner-link" data-go="cloze">完形</button>
+    <button class="banner-link" data-go="trap">陷阱</button>
+    <button class="banner-link" data-go="dictdiff">听写</button>
+    <button class="banner-link" data-go="lookup">查词</button>
+    <button class="banner-link" data-go="vocab">生词本</button>
+    <button class="banner-link" data-go="share">分享</button>
+    <button class="banner-link" data-go="import">导入</button>
+  </span>
+  <span class="spacer"></span>
+  <button class="banner-link" data-go="theme" id="themeBtn">深色</button>
+</div>
+
+<div class="stage">
+  <div class="stage-note">
+    <div class="n1">沉浸阅读室<small>Mobile · P0 · iPhone 优先</small></div>
+    <div>桌面端管深度阅读与整理，手机管碎片时间的 <em>复习</em>、<em>随手收词</em> 与轻阅读。</div>
+    <div style="margin-top:10px">试试：点正文里的<em>词</em>查释义 · 点<em>虚线词块</em>看搭配 · <em>开始复习</em>走一轮 SRS。</div>
+    <div style="margin-top:10px; color:var(--text-4)">所有状态可用说明条快捷键直达；手机浏览器打开自动脱壳全屏。</div>
+  </div>
+
+  <div class="phone" id="phone">
+    <div class="island"></div>
+    <div class="statusbar">
+      <span>9:41</span>
+      <span style="display:flex;gap:6px;align-items:center">
+        <svg width="18" height="12" viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="7" width="3" height="5" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2.5" width="3" height="9.5" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".35"/></svg>
+        <svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor"><path d="M8 9.6a1.6 1.6 0 1 1 0 2.3 1.6 1.6 0 0 1 0-2.3zM4.9 7.4a4.6 4.6 0 0 1 6.2 0l-1.2 1.2a2.9 2.9 0 0 0-3.8 0zM2 4.6a8.6 8.6 0 0 1 12 0l-1.2 1.2a6.9 6.9 0 0 0-9.6 0z" transform="translate(0 -1.5)"/></svg>
+        <svg width="25" height="12" viewBox="0 0 25 12"><rect x="0.5" y="0.5" width="21" height="11" rx="3.5" fill="none" stroke="currentColor" opacity=".4"/><rect x="2" y="2" width="16" height="8" rx="2" fill="currentColor"/><path d="M23 4v4a2.2 2.2 0 0 0 0-4z" fill="currentColor" opacity=".4"/></svg>
+      </span>
+    </div>
+
+    <div class="app">
+      <div class="screen" id="scr-today"></div>
+      <div class="screen hidden" id="scr-vocab"></div>
+      <div class="screen hidden" id="scr-shelf"></div>
+      <div class="screen hidden" id="scr-me"></div>
+
+      <div class="tabbar" id="tabbar">
+        <button class="tab on" data-tab="today">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.8 13.2h5.7L9.3 22l8.9-11.2h-5.7z"/></svg>
+          今天
+        </button>
+        <button class="tab" data-tab="vocab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 18.5V21"/><path d="M9 7.5h7"/></svg>
+          生词
+          <span class="tbadge" id="tabDue">8</span>
+        </button>
+        <button class="tab" data-tab="shelf">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13.5 9 5 9-5"/></svg>
+          书架
+        </button>
+        <button class="tab" data-tab="me">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c1.4-3.4 3.9-5 7-5s5.6 1.6 7 5"/></svg>
+          我的
+        </button>
+      </div>
+    </div>
+
+    <!-- 阅读层（盖住 tabbar） -->
+    <div class="reader-layer hidden" id="readerLayer"></div>
+
+    <!-- 底部抽屉 -->
+    <div class="dim hidden" id="dim"></div>
+    <div class="sheet hidden" id="sheet"></div>
+
+    <!-- 系统分享收词 -->
+    <div class="share-layer hidden" id="shareLayer"></div>
+
+    <div class="homebar"></div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   数据 —— 与 readerTypes.ts 对齐的演示子集
+   VOCAB: 生词本（kind: word | chunk，srs.due 简化为演示标签）
+   CARDS: 今日到期复习队列（= recall 原型的 8 张卡，跨端一致）
+   ARTICLES: 书架文章（句子带 chunks 标注；已收藏词自动高亮）
+   ============================================================ */
+const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9\s']/g, " ").replace(/\s+/g, " ").trim();
+
+const VOCAB = [
+  { id:"take-root", kind:"chunk", chunkType:"短语动词", word:"take root", senses:[{pos:"phrasal", cn:"扎根；（想法）被接受并流行开来"}], pattern:"take root (in sth)", trap:"take roots（不可数，无复数）", due:"now", src:"Why Cities Need Trees · 第 2 句" },
+  { id:"in-the-wake-of", kind:"chunk", chunkType:"习语", word:"in the wake of", senses:[{pos:"idiom", cn:"紧随……之后（常指随坏事件而来）"}], pattern:"in the wake of sth", trap:"in the wake for / at the wake of", due:"now", src:"Why Cities Need Trees · 第 3 句" },
+  { id:"buffer-against", kind:"chunk", chunkType:"搭配", word:"buffer against", senses:[{pos:"collocation", cn:"缓冲，抵御（噪声、冲击、炎热）"}], pattern:"buffer A against B", trap:"buffer from（中式直译）", due:"now", src:"Why Cities Need Trees · 第 6 句" },
+  { id:"settle-in", kind:"chunk", chunkType:"短语动词", word:"settle in", senses:[{pos:"phrasal", cn:"安顿下来，适应新环境"}], pattern:"settle in (to sth)", trap:"settle down to（语义偏向安定就寝）", due:"now", src:"A Field Guide to Deep Focus · 第 4 句" },
+  { id:"attribute-to", kind:"chunk", chunkType:"句式", word:"attribute X to Y", senses:[{pos:"pattern", cn:"把 X 归因于 Y"}], pattern:"attribute X to Y", trap:"attribute for（介词误用）", due:"now", src:"Why Cities Need Trees · 第 7 句" },
+  { id:"torrential-rain", kind:"chunk", chunkType:"搭配", word:"torrential rain", senses:[{pos:"collocation", cn:"倾盆大雨（不是 big rain）"}], trap:"big rain（中文直译）", due:"now", src:"Why Cities Need Trees · 第 8 句" },
+  { id:"comprehension", kind:"word", phonetic:"ˌkɒmprɪˈhenʃn", word:"comprehension", senses:[{pos:"n.", cn:"理解力（尤指阅读/听力）"}], due:"now", src:"The Quiet Power of Reading Slowly · 第 1 句" },
+  { id:"canopy", kind:"word", phonetic:"ˈkænəpi", word:"canopy", senses:[{pos:"n.", cn:"（树的）树冠层；顶篷"}], due:"now", src:"Why Cities Need Trees · 第 5 句" },
+  { id:"pay-off", kind:"chunk", chunkType:"短语动词", word:"pay off", senses:[{pos:"phrasal", cn:"见效；得到回报"}], pattern:"sth pays off", trap:"pay it off（及物义为「还清」，别混）", due:"3d", src:"A Field Guide to Deep Focus · 第 6 句" },
+  { id:"by-and-large", kind:"chunk", chunkType:"习语", word:"by and large", senses:[{pos:"idiom", cn:"大体上，总的来说"}], trap:"by large / on the whole of", due:"3d", src:"Why Cities Need Trees · 第 9 句" },
+  { id:"heatwave", kind:"word", phonetic:"ˈhiːtweɪv", word:"heatwave", senses:[{pos:"n.", cn:"热浪"}], due:"7d", src:"Why Cities Need Trees · 第 2 句" },
+  { id:"linden", kind:"word", phonetic:"ˈlɪndən", word:"linden", senses:[{pos:"n.", cn:"椴树（常用行道树）"}], due:"7d", src:"Why Cities Need Trees · 第 6 句" },
+  { id:"drainage", kind:"word", phonetic:"ˈdreɪnɪdʒ", word:"drainage", senses:[{pos:"n.", cn:"排水（系统）"}], due:"future", src:"Why Cities Need Trees · 第 8 句" },
+  { id:"solitude", kind:"word", phonetic:"ˈsɒlɪtjuːd", word:"solitude", senses:[{pos:"n.", cn:"独处；远离人群的状态（中性偏褒）"}], trap:"别与 loneliness（孤独感，贬义）混译", due:"future", src:"A Field Guide to Deep Focus · 第 1 句" },
+  { id:"murmur", kind:"word", phonetic:"ˈmɜːmə", word:"murmur", senses:[{pos:"n./v.", cn:"低语，沙沙声"}], due:"future", src:"A Field Guide to Deep Focus · 第 1 句" },
+  { id:"gale", kind:"word", phonetic:"ɡeɪl", word:"gale", senses:[{pos:"n.", cn:"大风，强风（比 wind 强）"}], due:"future", src:"A Field Guide to Deep Focus · 第 1 句" },
+];
+
+/* 复习队列 = 到期 8 张（与 reading-room-recall.html 同一批数据） */
+const REVIEW_CARDS = [
+  { id:"take-root", kind:"chunk", chunkType:"短语动词", word:"take root", senses:[{pos:"phrasal", cn:"扎根；（想法）被接受并流行开来"}], pattern:"take root (in sth)", trap:"take roots（不可数，无复数）",
+    sentence:"The idea of car-free streets took root after the summer of heatwaves.", sentenceCn:"无车街道的想法在热浪之夏之后扎了根。",
+    blank:"took root", accepted:["take root"], article:"Why Cities Need Trees", mode:"cloze" },
+  { id:"comprehension", kind:"word", phonetic:"ˌkɒmprɪˈhenʃn", word:"comprehension", senses:[{pos:"n.", cn:"理解力（尤指阅读/听力）"}],
+    sentence:"Speed was the goal, and comprehension was the test.", sentenceCn:"速度是目标，理解力是考卷。",
+    article:"The Quiet Power of Reading Slowly", mode:"recognition" },
+  { id:"in-the-wake-of", kind:"chunk", chunkType:"习语", word:"in the wake of", senses:[{pos:"idiom", cn:"紧随……之后（常指随坏事件而来）"}], pattern:"in the wake of sth", trap:"in the wake for / at the wake of",
+    sentence:"In the wake of the storm, the council planted twelve thousand trees.", sentenceCn:"风暴过后，市政会种下了一万两千棵树。",
+    article:"Why Cities Need Trees", mode:"cloze" },
+  { id:"canopy", kind:"word", phonetic:"ˈkænəpi", word:"canopy", senses:[{pos:"n.", cn:"（树的）树冠层；顶篷"}],
+    sentence:"The city's tree canopy now covers forty percent of the streets.", sentenceCn:"这座城市的树冠层如今覆盖了四成的街道。",
+    article:"Why Cities Need Trees", mode:"dictation" },
+  { id:"buffer-against", kind:"chunk", chunkType:"搭配", word:"buffer against", senses:[{pos:"collocation", cn:"缓冲，抵御（噪声、冲击、炎热）"}], pattern:"buffer A against B", trap:"buffer from（中式直译）",
+    sentence:"Rows of lindens buffer against the traffic noise all summer.", sentenceCn:"成排的椴树整个夏天都在抵御交通噪音。",
+    article:"Why Cities Need Trees", mode:"cloze" },
+  { id:"settle-in", kind:"chunk", chunkType:"短语动词", word:"settle in", senses:[{pos:"phrasal", cn:"安顿下来，适应新环境"}], pattern:"settle in (to sth)", trap:"settle down to（语义偏向安定就寝）",
+    sentence:"It took the new arrivals a month to settle in to the neighbourhood.", sentenceCn:"新来的人花了一个月才在街区里安顿下来。",
+    article:"A Field Guide to Deep Focus", mode:"cloze" },
+  { id:"attribute-to", kind:"chunk", chunkType:"句式", word:"attribute X to Y", senses:[{pos:"pattern", cn:"把 X 归因于 Y"}], pattern:"attribute X to Y", trap:"attribute for（介词误用）",
+    sentence:"Residents attribute the cooler summers to the young canopy.", sentenceCn:"居民们把更凉爽的夏天归功于年轻的树冠。",
+    blank:"attribute", article:"Why Cities Need Trees", mode:"cloze" },
+  { id:"torrential-rain", kind:"chunk", chunkType:"搭配", word:"torrential rain", senses:[{pos:"collocation", cn:"倾盆大雨（不是 big rain）"}], trap:"big rain（中文直译）",
+    sentence:"Torrential rain tested the new drainage within a week.", sentenceCn:"倾盆大雨在一周内就考验了新的排水系统。",
+    article:"Why Cities Need Trees", mode:"dictation" },
+];
+
+const ARTICLES = [
+  {
+    id:"trees", title:"Why Cities Need Trees", titleCn:"为什么城市需要树", pct:63, words:486,
+    paras:[
+      { en:"The idea of car-free streets took root after the summer of heatwaves. In the wake of the storm, the council planted twelve thousand trees.",
+        zh:"无车街道的想法在热浪之夏之后扎了根。风暴过后，市政会种下了一万两千棵树。",
+        chunks:[
+          { text:"took root", type:"短语动词", gloss:"扎根；被接受并流行开来", pattern:"take root (in sth)", trap:"take roots", word:"take root" },
+          { text:"In the wake of", type:"习语", gloss:"紧随……之后", pattern:"in the wake of sth", trap:"in the wake for", word:"in the wake of" },
+        ] },
+      { en:"The city's tree canopy now covers forty percent of the streets. Rows of lindens buffer against the traffic noise all summer.",
+        zh:"这座城市的树冠层如今覆盖了四成的街道。成排的椴树整个夏天都在抵御交通噪音。",
+        chunks:[
+          { text:"buffer against", type:"搭配", gloss:"缓冲，抵御", pattern:"buffer A against B", trap:"buffer from（中式直译）", word:"buffer against" },
+        ] },
+      { en:"Residents attribute the cooler summers to the young canopy. Torrential rain tested the new drainage within a week.",
+        zh:"居民们把更凉爽的夏天归功于年轻的树冠。倾盆大雨在一周内就考验了新的排水系统。",
+        chunks:[
+          { text:"attribute the cooler summers to", type:"句式", gloss:"把……归因于", pattern:"attribute X to Y", trap:"attribute for", word:"attribute X to Y" },
+          { text:"Torrential rain", type:"搭配", gloss:"倾盆大雨", trap:"big rain（中文直译）", word:"torrential rain" },
+        ] },
+      { en:"City planners say the young canopy will pay off within a decade. By and large, cooler streets mean longer walks.",
+        zh:"城市规划者说，年轻的树冠十年内就会见效。总体而言，街道越凉爽，步行的人越多。",
+        chunks:[
+          { text:"pay off", type:"短语动词", gloss:"见效；得到回报", pattern:"sth pays off", word:"pay off" },
+          { text:"By and large", type:"习语", gloss:"大体上，总的来说", word:"by and large" },
+        ] },
+    ],
+  },
+  {
+    id:"slow", title:"The Quiet Power of Reading Slowly", titleCn:"慢读的力量", pct:18, words:392,
+    paras:[
+      { en:"Speed was the goal, and comprehension was the test. Nobody told us what the rushing was for.",
+        zh:"速度是目标，理解力是考卷。没有人告诉我们，匆忙本身是为了什么。",
+        chunks:[] },
+      { en:"There was a murmur of pages, and then solitude did its quiet work.",
+        zh:"书页沙沙作响，然后独处安静地完成了它的工作。",
+        chunks:[] },
+    ],
+  },
+  {
+    id:"focus", title:"A Field Guide to Deep Focus", titleCn:"深度专注田野指南", pct:0, words:341,
+    paras:[
+      { en:"Solitude is not silence. The room keeps a murmur of its own — the gale outside, the lamp's small fizz.",
+        zh:"独处不是寂静。房间自有一种低语——窗外的风、灯丝细微的嘶鸣。",
+        chunks:[] },
+      { en:"It took a month to settle in to the neighbourhood of your own attention. Guard the hour, and the work will pay off.",
+        zh:"要花一个月才能在自己的注意力附近安顿下来。守住这一个小时，努力就会见效。",
+        chunks:[
+          { text:"settle in to", type:"短语动词", gloss:"安顿下来，适应", pattern:"settle in (to sth)", word:"settle in" },
+          { text:"pay off", type:"短语动词", gloss:"见效；得到回报", pattern:"sth pays off", word:"pay off" },
+        ] },
+    ],
+  },
+];
+
+/* 演示词典（未收藏词的 tap 查词结果；实际实现走 readerDict + provider） */
+const MINI_DICT = {
+  council: { senses:[{pos:"n.", cn:"市政会，议会"}] },
+  linden: { senses:[{pos:"n.", cn:"椴树（常用行道树）"}], trap:"复数 lindens" },
+  drainage: { senses:[{pos:"n.", cn:"排水（系统）"}] },
+  heatwave: { senses:[{pos:"n.", cn:"热浪"}], trap:"亦作 heat wave" },
+  solitude: { senses:[{pos:"n.", cn:"独处；远离人群的状态（中性偏褒）"}], trap:"别与 loneliness（孤独感）混译" },
+  murmur: { senses:[{pos:"n./v.", cn:"低语，沙沙声"}] },
+  gale: { senses:[{pos:"n.", cn:"大风，强风"}] },
+  planners: { senses:[{pos:"n.", cn:"规划者（plan 的施动者名词）"}] },
+  decade: { senses:[{pos:"n.", cn:"十年"}] },
+  canopy: { senses:[{pos:"n.", cn:"（树的）树冠层；顶篷"}] },
+  comprehension: { senses:[{pos:"n.", cn:"理解力"}] },
+  residents: { senses:[{pos:"n.", cn:"居民"}] },
+  neighbourhood: { senses:[{pos:"n.", cn:"街区，邻里"}], trap:"美式拼写 neighborhood" },
+};
+
+/* ============================================================
+   判分内核（与 recallJudge 规划一致，纯本地）
+   ============================================================ */
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++)
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n];
+}
+function judge(input, answer, trap, accepted = []) {
+  const i = norm(input), a = norm(answer);
+  if (!i) return "wrong";
+  if (i === a || accepted.some((x) => norm(x) === i)) return "perfect";
+  const t = norm(trap);
+  if (t && (i === t || (t.length > 6 && i.includes(t)))) return "trap";
+  const strip = (x) => x.replace(/\b(a|an|the)\b/g, "").replace(/\s+/g, " ").trim();
+  if (strip(i) === strip(a)) return "close";
+  if (levenshtein(i, a) <= Math.max(1, Math.floor(a.length / 6))) return "close";
+  return "wrong";
+}
+const JUDGE_SUGGEST = { perfect: "easy", close: "good", trap: "forgot", wrong: "forgot" };
+const JUDGE_HEAD = { perfect: "✓ 一次写对", close: "≈ 很接近，差一点", trap: "⚠ 命中直译陷阱", wrong: "✗ 没想起来" };
+const JUDGE_TONE = { perfect: "perfect", close: "close", trap: "trapv", wrong: "wrong" };
+function wordDiff(input, answer) {
+  const tk = (s) => norm(s).split(" ").filter(Boolean);
+  const A = tk(input), B = tk(answer);
+  const m = A.length, n = B.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
+    dp[i][j] = A[i - 1] === B[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+  const out = []; let i = m, j = n;
+  while (i > 0 && j > 0) {
+    if (A[i - 1] === B[j - 1]) { out.unshift({ w: B[j - 1], s: "ok" }); i--; j--; }
+    else if (dp[i - 1][j] >= dp[i][j - 1]) { out.unshift({ w: A[i - 1], s: "extra" }); i--; }
+    else { out.unshift({ w: B[j - 1], s: "miss" }); j--; }
+  }
+  while (i > 0) { out.unshift({ w: A[i - 1], s: "extra" }); i--; }
+  while (j > 0) { out.unshift({ w: B[j - 1], s: "miss" }); j--; }
+  return out;
+}
+
+/* ============================================================
+   状态
+   ============================================================ */
+const state = {
+  tab: "today",
+  review: null,        // { queue, pos, phase, hints, input, judged, replay, results, done }
+  vocab: { kind: "word", q: "", dueOnly: false },
+  reader: null,        // { art, sentences, si, playing, rate, masked }
+  imported: false,
+};
+const $ = (id) => document.getElementById(id);
+const esc = (s) => (s || "").replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+const vocabOf = (kind) => VOCAB.filter((v) => (v.kind || "word") === kind);
+const dueVocab = () => VOCAB.filter((v) => v.due === "now");
+const savedKeys = () => new Set(VOCAB.map((v) => norm(v.word)));
+
+/* ---------- TTS（原型用 Web Speech；实现走系统 TTS 插件） ---------- */
+let voiceEn = null;
+function pickVoice() {
+  if (!("speechSynthesis" in window)) return;
+  const vs = speechSynthesis.getVoices().filter((v) => /^en(-|_)/i.test(v.lang));
+  voiceEn = vs.find((v) => /Google US|Natural|Samantha|Zira/i.test(v.name)) || vs[0] || null;
+}
+if ("speechSynthesis" in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+function speak(text, rate = 1, onend = null) {
+  if (!("speechSynthesis" in window)) { if (onend) setTimeout(onend, 400); return; }
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "en-US"; u.rate = rate;
+  if (voiceEn) u.voice = voiceEn;
+  if (onend) u.onend = onend;
+  speechSynthesis.speak(u);
+}
+function stopSpeak() { if ("speechSynthesis" in window) speechSynthesis.cancel(); }
+
+/* ============================================================
+   Tab 切换
+   ============================================================ */
+const SCREENS = { today: "scr-today", vocab: "scr-vocab", shelf: "scr-shelf", me: "scr-me" };
+function switchTab(tab) {
+  state.tab = tab;
+  document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
+  Object.entries(SCREENS).forEach(([k, id]) => $(id).classList.toggle("hidden", k !== tab));
+  if (tab === "today") renderToday();
+  if (tab === "vocab") renderVocab();
+  if (tab === "shelf") renderShelf();
+  if (tab === "me") renderMe();
+  updateDueBadge();
+}
+$("tabbar").addEventListener("click", (e) => {
+  const b = e.target.closest(".tab");
+  if (b) switchTab(b.dataset.tab);
+});
+function updateDueBadge() {
+  const n = dueVocab().length;
+  $("tabDue").textContent = n;
+  $("tabDue").style.display = n ? "" : "none";
+}
+
+/* ============================================================
+   今天（复习主页 + 复习流）
+   ============================================================ */
+function renderToday() {
+  if (state.review && !state.review.finished) renderReviewCard();
+  else if (state.review && state.review.finished) renderSummary();
+  else renderTodayHome();
+}
+
+function renderTodayHome() {
+  const due = dueVocab();
+  const dueW = due.filter((v) => v.kind !== "chunk").length;
+  const dueC = due.length - dueW;
+  const dateStr = new Date().toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "long" });
+  $("scr-today").innerHTML = `
+    <div class="pagehead">
+      <div class="large-title">今天</div>
+      <div class="page-sub">${dateStr} · 连续打卡 14 天</div>
+    </div>
+    <div class="card hero">
+      <div class="streak"><b>14</b>天 streak</div>
+      <div class="huge">${due.length}<small>待复习</small></div>
+      <div class="split">
+        <span class="sw"><i></i>单词 ${dueW}</span>
+        <span class="sw ck"><i></i>词块 ${dueC}</span>
+        <span style="margin-left:auto;color:var(--text-4);font-size:12px">10 分钟 / 1 / 3 / 7 天</span>
+      </div>
+      <div class="hero-dots">
+        ${due.map((v) => `<i class="${v.kind === "chunk" ? "ck" : ""}"></i>`).join("")}
+        ${Array.from({ length: 6 }, () => `<i class="done"></i>`).join("")}
+      </div>
+      <div style="height:14px"></div>
+      <button class="btn" id="btnStart">开始复习</button>
+    </div>
+    <div class="sect-label">继续阅读</div>
+    <div class="card resume" id="resumeCard" style="cursor:pointer">
+      <div class="thumb">W</div>
+      <div class="rt">
+        <div class="t1" style="font-size:14.5px;font-weight:600;font-family:'Source Serif 4',Georgia,serif">Why Cities Need Trees</div>
+        <div class="t2" style="font-size:12px;color:var(--text-3)">第 8 / 12 句 · 63%</div>
+        <div class="pbar"><i style="width:63%"></i></div>
+      </div>
+      <span class="chev">›</span>
+    </div>
+    <div class="sect-label">本周</div>
+    <div class="card" style="display:flex;gap:16px;text-align:center;padding:13px 8px">
+      <div style="flex:1"><div style="font-family:'Source Serif 4',Georgia,serif;font-size:21px;font-weight:600">21</div><div style="font-size:11px;color:var(--text-3)">复习卡片</div></div>
+      <div style="flex:1"><div style="font-family:'Source Serif 4',Georgia,serif;font-size:21px;font-weight:600">6</div><div style="font-size:11px;color:var(--text-3)">新增生词</div></div>
+      <div style="flex:1"><div style="font-family:'Source Serif 4',Georgia,serif;font-size:21px;font-weight:600;color:var(--warn)">3</div><div style="font-size:11px;color:var(--text-3)">直译陷阱</div></div>
+    </div>`;
+  $("btnStart").addEventListener("click", startReview);
+  $("resumeCard").addEventListener("click", () => openReader("trees"));
+}
+
+function startReview() {
+  state.review = {
+    queue: REVIEW_CARDS.map((c) => ({ ...c })),
+    pos: 0, phase: "answer", hints: 0, input: "", judged: null,
+    replay: 3, results: [], finished: false,
+  };
+  renderToday();
+  $("scr-today").scrollTop = 0;
+}
+function rvNext() {
+  const r = state.review;
+  r.pos += 1;
+  r.phase = "answer"; r.hints = 0; r.input = ""; r.judged = null; r.replay = 3;
+  if (r.pos >= r.queue.length) r.finished = true;
+  renderToday();
+  $("scr-today").scrollTop = 0;
+}
+function renderReviewCard() {
+  const r = state.review;
+  const c = r.queue[r.pos];
+  const prog = Math.round((r.pos / r.queue.length) * 100);
+  let inner = "";
+  if (c.mode === "recognition") inner = htmlRecognition(c);
+  else if (c.mode === "cloze") inner = htmlCloze(c);
+  else inner = htmlDictation(c);
+  $("scr-today").innerHTML = `
+    <div class="rev-top">
+      <button class="x" id="rvClose" title="结束本轮">✕</button>
+      <div class="prog"><i style="width:${prog}%"></i></div>
+      <span class="n">${r.pos + 1} / ${r.queue.length}</span>
+    </div>
+    <div class="rev-card">${inner}</div>
+    <div style="text-align:center;margin-top:12px"><button class="banner-link" id="rvSkip">跳过这张</button></div>`;
+  bindReview(c);
+}
+function modePill(mode) {
+  const m = { recognition: ["识别", "mute"], cloze: ["完形", ""], dictation: ["听写", "warn"] }[mode];
+  return `<span class="badge ${m[1]}">${m[0]}</span>`;
+}
+function htmlRecognition(c) {
+  const flipped = state.review.phase === "graded";
+  return `
+    <div class="rev-meta">${modePill("recognition")}<span>来自《${c.article}》</span></div>
+    <div class="word-line">
+      <span class="word">${esc(c.word)}</span>
+      ${c.phonetic ? `<span class="phonetic">/${c.phonetic}/</span>` : ""}
+      <button class="icon-btn" id="btnSpeakWord">🔊</button>
+    </div>
+    ${flipped ? `
+      <div class="sense-line">${c.senses.map((s) => `<div><span class="pos">${s.pos}</span>${esc(s.cn)}</div>`).join("")}</div>
+      ${c.pattern ? `<div class="chunk-detail">记法：<i>${esc(c.pattern)}</i></div>` : ""}
+      <div class="src-sent">${esc(c.sentence)}<span class="from">来自《${c.article}》 · 点击跳回原文</span></div>
+      ${gradebarHtml()}
+    ` : `
+      <div style="color:var(--text-3);font-size:13.5px">回想它的意思，再翻面对答案。</div>
+      <button class="btn" id="btnFlip">翻面看释义</button>
+    `}`;
+}
+function htmlCloze(c) {
+  const graded = state.review.phase === "graded";
+  const blank = c.blank || c.word;
+  const idx = c.sentence.toLowerCase().indexOf(blank.toLowerCase());
+  const before = idx >= 0 ? c.sentence.slice(0, idx) : `_____ `;
+  const after = idx >= 0 ? c.sentence.slice(idx + blank.length) : "";
+  let sentHtml;
+  if (!graded) {
+    sentHtml = `${esc(before)}<input class="blank-input" id="blankInput" spellcheck="false" autocomplete="off" placeholder="写出挖空部分" value="${esc(state.review.input)}">${esc(after)}`;
+  } else {
+    sentHtml = `${esc(before)}<span class="${state.review.judged === "perfect" ? "diff-line" : ""}" style="color:${state.review.judged === "perfect" ? "var(--ok)" : state.review.judged === "close" ? "var(--warn)" : "var(--err)"}">${esc(blank)}</span>${esc(after)}`;
+  }
+  let hintsHtml = "";
+  if (!graded) {
+    const hints = [];
+    if (state.review.hints >= 1) hints.push(`<div class="hint"><span class="h-tag">提示 1</span>${esc(c.senses[0].cn)}</div>`);
+    if (state.review.hints >= 2) hints.push(`<div class="hint"><span class="h-tag">提示 2</span>首字母：${blank.split(/\s+/).map((w) => w[0] + "…").join(" ")}（${blank.split(/\s+/).length} 词）</div>`);
+    if (state.review.hints >= 3) hints.push(`<div class="hint"><span class="h-tag">提示 3</span>槽位记法：<i>${esc(c.pattern || c.word)}</i></div>`);
+    hintsHtml = hints.join("") + (state.review.hints < 3 ? `<button class="hint-btn" id="btnHint">再给一点提示</button>` : "");
+  }
+  let verdictHtml = "";
+  if (graded) {
+    const j = state.review.judged;
+    const ansNote = blank !== c.word ? `（词条原形：${esc(c.word)}）` : "";
+    let body = "";
+    if (j === "close") body = `你写的：<b>${esc(state.review.input)}</b> · <span class="ans">${esc(blank)}</span>${ansNote}`;
+    else if (j === "trap") body = `你写了 <b>${esc(state.review.input)}</b> —— ${esc(c.trap || "常见直译错误")}。<span class="ans">正确：${esc(blank)}</span>`;
+    else if (j === "wrong") body = `<span class="ans">${esc(blank)}</span>${ansNote}${c.trap ? ` · ⚠ 别写成：${esc(c.trap)}` : ""}`;
+    else body = `<span class="ans">${esc(blank)}</span>${ansNote}`;
+    verdictHtml = `
+      <div class="verdict ${JUDGE_TONE[j]}">
+        <span class="v-head">${JUDGE_HEAD[j]}${state.review.hints ? `<span style="font-weight:400;font-size:11px;opacity:.75">（用了 ${state.review.hints} 级提示）</span>` : ""}</span>
+        <span class="v-body">${body}</span>
+      </div>`;
+  }
+  return `
+    <div class="rev-meta">${modePill("cloze")}<span>词块 · 来自《${c.article}》</span></div>
+    <div class="cloze-sent">${sentHtml}</div>
+    <div class="cloze-cn">中文提示：<span class="cn-masked" id="cnHint">${graded ? esc(c.sentenceCn) : esc(c.sentenceCn).replace(/[^\s，。]/g, "＿")}</span></div>
+    ${hintsHtml ? `<div style="display:flex;flex-direction:column;gap:6px">${hintsHtml}</div>` : ""}
+    ${verdictHtml}
+    ${graded ? gradebarHtml() : `
+      <div class="act-row">
+        <button class="btn" id="btnSubmit" style="flex:1.3">提交判分</button>
+        <button class="btn ghost" id="btnGiveup">想不出来，看答案</button>
+      </div>`}
+    ${graded ? "" : `<div style="text-align:center;font-size:11px;color:var(--text-4)">提示阶梯：释义 → 首字母 → 槽位记法</div>`}`;
+}
+function htmlDictation(c) {
+  const graded = state.review.phase === "graded";
+  let verdictHtml = "";
+  if (graded) {
+    const diff = wordDiff(state.review.input, c.sentence);
+    const diffHtml = diff.map((d) =>
+      d.s === "ok" ? `<span class="w-ok">${esc(d.w)}</span>` : d.s === "miss" ? `<span class="w-miss">${esc(d.w)}</span>` : `<span class="w-extra">${esc(d.w)}</span>`).join(" ");
+    const okN = diff.filter((d) => d.s === "ok").length;
+    const pct = Math.round((okN / Math.max(1, norm(c.sentence).split(" ").length)) * 100);
+    verdictHtml = `
+      <div class="verdict ${JUDGE_TONE[state.review.judged]}">
+        <span class="v-head">${JUDGE_HEAD[state.review.judged]} · 词级命中 ${pct}%</span>
+        <span class="diff-line">${diffHtml}</span>
+        <span class="v-body" style="font-size:11px"><span class="w-ok">写对</span> · <span class="w-miss">漏写</span> · <span class="w-extra">多写/写错</span></span>
+      </div>`;
+  }
+  return `
+    <div class="rev-meta">${modePill("dictation")}<span>${c.kind === "chunk" ? "词块" : "单词"}整句 · 来自《${c.article}》</span></div>
+    <div class="word-line">
+      <span class="word" style="font-size:28px">${esc(c.word)}</span>
+      <button class="icon-btn" id="btnSpeakWord">🔊</button>
+    </div>
+    <div class="dict-bar">
+      <button class="play-btn" id="btnPlay" ${!graded && state.review.replay <= 0 ? "disabled" : ""}>▶ ${graded ? "再听一遍" : state.review.replay < 3 ? "重播" : "播放句子"}</button>
+      <span style="font-size:11.5px;color:var(--text-3)">还可重播 <b>${state.review.replay}</b> 次</span>
+    </div>
+    ${graded ? "" : `<textarea class="dict-input" id="dictInput" spellcheck="false" placeholder="听写整句（不区分大小写与标点）">${esc(state.review.input)}</textarea>`}
+    ${verdictHtml}
+    ${graded ? gradebarHtml() : `
+      <div class="act-row">
+        <button class="btn" id="btnSubmitD" style="flex:1.3">提交判分</button>
+        <button class="btn ghost" id="btnGiveupD">听不出，看句子</button>
+      </div>`}`;
+}
+function gradebarHtml() {
+  const suggest = JUDGE_SUGGEST[state.review.judged || "wrong"];
+  const bars = [["forgot", "忘记", "10 分钟"], ["hard", "困难", "1 天"], ["good", "一般", "3 天"], ["easy", "简单", "7 天"]];
+  return `<div class="gradebar">${bars.map(([v, name, next]) => `
+    <button class="grade-btn ${v === suggest ? "focus" : ""}" data-grade="${v}">
+      <span class="name">${name}</span><span class="next">${next}</span>
+    </button>`).join("")}</div>`;
+}
+function bindReview(c) {
+  $("rvClose").addEventListener("click", () => { state.review = null; stopSpeak(); renderToday(); });
+  $("rvSkip").addEventListener("click", () => rvNext());
+  $("btnSpeakWord")?.addEventListener("click", () => speak(c.word, 0.9));
+  $("btnFlip")?.addEventListener("click", () => { state.review.phase = "graded"; renderToday(); });
+  $("btnHint")?.addEventListener("click", () => { state.review.hints++; renderReviewCard(); });
+  $("cnHint")?.addEventListener("click", () => toast("实现：点击显示完整中文"));
+  $("btnGiveup")?.addEventListener("click", () => { state.review.phase = "graded"; state.review.judged = "wrong"; renderToday(); });
+  $("btnSubmit")?.addEventListener("click", submitCloze);
+  $("btnPlay")?.addEventListener("click", () => {
+    if (state.review.phase !== "graded") {
+      if (state.review.replay <= 0) return;
+      state.review.replay--;
+    }
+    speak(c.sentence, 1, () => renderReviewCard());
+    renderReviewCard();
+  });
+  $("btnGiveupD")?.addEventListener("click", () => { state.review.phase = "graded"; state.review.judged = "wrong"; speak(c.sentence); renderToday(); });
+  $("btnSubmitD")?.addEventListener("click", submitDictation);
+  const bi = $("blankInput");
+  if (bi) {
+    bi.addEventListener("input", () => { state.review.input = bi.value; });
+    bi.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submitCloze(); } });
+  }
+  const di = $("dictInput");
+  if (di) {
+    di.addEventListener("input", () => { state.review.input = di.value; });
+    di.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitDictation(); } });
+  }
+  document.querySelectorAll(".grade-btn").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.review.results.push({ word: c.word, mode: c.mode, judged: state.review.judged, grade: b.dataset.grade });
+      rvNext();
+    }));
+}
+function submitCloze() {
+  const r = state.review;
+  if (r.phase === "graded") return;
+  r.phase = "graded";
+  const c = r.queue[r.pos];
+  r.judged = judge(r.input, c.blank || c.word, c.trap, c.accepted);
+  renderToday();
+}
+function submitDictation() {
+  const r = state.review;
+  if (r.phase === "graded") return;
+  r.phase = "graded";
+  const c = r.queue[r.pos];
+  const full = judge(r.input, c.sentence, c.trap, c.accepted);
+  if (full === "perfect" || full === "trap") { r.judged = full; renderToday(); return; }
+  const nA = norm(c.sentence).split(" ").filter(Boolean).length;
+  const okN = wordDiff(r.input, c.sentence).filter((d) => d.s === "ok").length;
+  r.judged = okN / Math.max(1, nA) >= 0.85 ? "close" : "wrong";
+  renderToday();
+}
+function renderSummary() {
+  const r = state.review;
+  const produced = r.results.filter((x) => x.mode !== "recognition");
+  const recogN = r.results.length - produced.length;
+  const count = (j) => produced.filter((x) => x.judged === j).length;
+  $("scr-today").innerHTML = `
+    <div class="summary">
+      <div style="font-size:44px">🎉</div>
+      <div class="big">今日复习完成</div>
+      <div class="sub">${produced.length} 张产出卡${recogN ? ` · 另 ${recogN} 张识别卡` : ""} · streak 15 天 🔥</div>
+      <div class="sum-grid">
+        <div class="sum-cell ok"><div class="n">${count("perfect")}</div><div class="l">一次写对</div></div>
+        <div class="sum-cell warn"><div class="n">${count("close")}</div><div class="l">接近差一点</div></div>
+        <div class="sum-cell err"><div class="n">${count("trap")}</div><div class="l">直译陷阱</div></div>
+        <div class="sum-cell mute"><div class="n">${count("wrong")}</div><div class="l">未想起</div></div>
+      </div>
+      <div style="font-size:12px;color:var(--text-3);line-height:1.8;max-width:300px">
+        直译陷阱命中会进入长期统计「中式直译纠正率」——手机与电脑端共用同一份记录。
+      </div>
+      <button class="btn" id="btnHome" style="max-width:260px">回到今天</button>
+    </div>`;
+  $("btnHome").addEventListener("click", () => { state.review = null; renderToday(); });
+  updateDueBadge();
+}
+
+/* ============================================================
+   生词本（单词 / 词块 分开计数）
+   ============================================================ */
+function renderVocab() {
+  $("scr-vocab").innerHTML = `
+    <div class="pagehead">
+      <div class="large-title">生词本</div>
+      <div class="page-sub">与电脑端同一份数据 · SRS 到期自动进「今天」</div>
+    </div>
+    <div class="seg" id="kindSeg">
+      <button data-kind="word" class="${state.vocab.kind === "word" ? "on" : ""}">单词 ${vocabOf("word").length}</button>
+      <button data-kind="chunk" class="${state.vocab.kind === "chunk" ? "on" : ""}">词块 ${vocabOf("chunk").length}</button>
+    </div>
+    <div style="height:10px"></div>
+    <div class="search">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.8-3.8"/></svg>
+      <input id="vq" placeholder="搜索单词或词块" value="${esc(state.vocab.q)}">
+    </div>
+    <div class="list-meta">
+      <span class="lm-t">${state.vocab.kind === "word" ? "WORDS" : "CHUNKS"}</span>
+      <button class="due-chip ${state.vocab.dueOnly ? "on" : ""}" id="dueChip">
+        <span class="dot" style="${state.vocab.dueOnly ? "" : "background:var(--border-strong)"}"></span>只看到期
+      </button>
+    </div>
+    <div class="card rows" id="vrows" style="padding:2px 12px"></div>`;
+  renderVocabRows();
+  $("kindSeg").addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (b) { state.vocab.kind = b.dataset.kind; renderVocab(); }
+  });
+  $("vq").addEventListener("input", (e) => { state.vocab.q = e.target.value; renderVocabRows(); });
+  $("dueChip").addEventListener("click", () => { state.vocab.dueOnly = !state.vocab.dueOnly; renderVocab(); });
+}
+function renderVocabRows() {
+  const dueChip = $("dueChip");
+  let list = vocabOf(state.vocab.kind);
+  if (state.vocab.dueOnly) list = list.filter((v) => v.due === "now");
+  if (state.vocab.q) list = list.filter((v) => norm(v.word).includes(norm(state.vocab.q)));
+  const dueLabel = { now: "现在到期", "3d": "3 天后", "7d": "7 天后", future: "已安排" };
+  $("vrows").innerHTML = list.length ? list.map((v) => `
+    <button class="row vrow" data-id="${v.id}">
+      <span class="dot ${v.due === "now" ? "" : "ok"}" style="${v.due === "now" ? "" : "background:var(--border-strong)"}"></span>
+      <span class="rt">
+        <span class="t1"><span class="w">${esc(v.word)}</span>${v.chunkType ? `<span class="badge">${esc(v.chunkType)}</span>` : ""}</span>
+        <span class="t2">${esc(v.senses[0]?.cn || "")}</span>
+      </span>
+      <span style="font-size:11px;color:${v.due === "now" ? "var(--err)" : "var(--text-4)"};flex:none">${dueLabel[v.due]}</span>
+      <span class="chev">›</span>
+    </button>`).join("") : `<div class="empty">没有匹配的词条</div>`;
+  if (dueChip) dueChip.style.display = "";
+  document.querySelectorAll(".vrow").forEach((b) =>
+    b.addEventListener("click", () => {
+      const v = VOCAB.find((x) => x.id === b.dataset.id);
+      openVocabDetail(v);
+    }));
+}
+function dueText(v) {
+  const d = new Date();
+  const add = { now: 0, "3d": 3, "7d": 7, future: 12 }[v.due];
+  d.setDate(d.getDate() + add);
+  return v.due === "now" ? "现在到期" : `${d.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" })} 复习`;
+}
+function openVocabDetail(v) {
+  const isChunk = v.kind === "chunk";
+  openSheet(`
+    <div class="grabber"></div>
+    <div class="d-head">
+      <span class="w">${esc(v.word)}</span>
+      ${v.chunkType ? `<span class="badge">${esc(v.chunkType)}</span>` : ""}
+      ${v.phonetic ? `<span class="phonetic">/${v.phonetic}/</span>` : ""}
+      <button class="icon-btn close" id="dSpeak">🔊</button>
+    </div>
+    <div class="d-senses">${v.senses.map((s) => `<div><span class="pos">${s.pos}</span>${esc(s.cn)}</div>`).join("")}</div>
+    ${v.pattern ? `<div class="d-extra">槽位记法：<i>${esc(v.pattern)}</i></div>` : ""}
+    ${v.trap ? `<div class="d-trap">⚠ <b>直译陷阱</b>：${esc(v.trap)}</div>` : ""}
+    ${v.pattern ? `<div class="d-extra">槽位记法：<i>${esc(v.pattern)}</i></div>` : ""}
+    ${v.trap ? `<div class="d-trap">⚠ <b>直译陷阱</b>：${esc(v.trap)}</div>` : ""}
+    ${v.src ? `<div class="d-src"><span class="from">来自 ${esc(v.src)}</span></div>` : ""}
+    <div class="d-srs"><span>SRS 间隔：${v.due === "now" ? "今天到期" : v.due === "3d" ? "3 天" : v.due === "7d" ? "7 天" : "12 天"}</span><span>${dueText(v)}</span><span>已复习 ${v.due === "now" ? 0 : 2} 次</span></div>
+    <div class="d-actions">
+      <button class="btn ghost" id="dDelete">删除</button>
+      <button class="btn" id="dGo">在原文中查看</button>
+    </div>
+    <div class="d-note">${isChunk ? "词块复习默认走完形：在原句里写出这个搭配" : "熟词会逐步转入听写练习"}</div>`);
+  $("dSpeak").addEventListener("click", () => speak(v.word, 0.9));
+  $("dDelete").addEventListener("click", () => {
+    const i = VOCAB.findIndex((x) => x.id === v.id);
+    if (i >= 0) VOCAB.splice(i, 1);
+    closeSheet(); toast(`已删除「${v.word}」`);
+    renderVocab(); updateDueBadge();
+  });
+  $("dGo").addEventListener("click", () => {
+    closeSheet();
+    const artId = v.id === "settle-in" || v.id === "solitude" ? "focus" : v.id === "comprehension" || v.id === "murmur" ? "slow" : "trees";
+    openReader(artId);
+    toast("实现：滚动到收藏时的那句");
+  });
+}
+
+/* ============================================================
+   书架
+   ============================================================ */
+function renderShelf() {
+  $("scr-shelf").innerHTML = `
+    <div class="pagehead">
+      <div class="large-title">书架</div>
+      <div class="page-sub">${state.imported ? "上次与电脑同步：昨天 22:41" : "内容从电脑端同步而来（v0 文件互导）"}</div>
+    </div>
+    <div class="card sync-card">
+      <div class="ic">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+      </div>
+      <div class="rt">
+        <div class="t1">从电脑导入</div>
+        <div class="t2">${state.imported ? "昨天 22:41 · 3 篇文章 · 16 个词条" : "电脑端导出同步文件 → 发到手机 → 一键导入"}</div>
+      </div>
+      <button class="btn sm ${state.imported ? "ghost" : ""}" id="btnImport">${state.imported ? "再次导入" : "导入"}</button>
+    </div>
+    ${ARTICLES.map((a) => `
+      <div class="card shelf-card" data-id="${a.id}" style="cursor:pointer;margin-bottom:12px">
+        <div class="t">${esc(a.title)}</div>
+        <div class="tc">${esc(a.titleCn)}</div>
+        <div class="meta">
+          <span>${a.words} 词</span><span>·</span>
+          <span>${a.paras.reduce((n, p) => n + p.chunks.length, 0)} 个词块</span><span>·</span>
+          <span style="color:${a.pct > 0 && a.pct < 100 ? "var(--accent)" : "var(--text-3)"}">${a.pct === 0 ? "未开始" : a.pct === 100 ? "已读完" : a.pct + "%"}</span>
+        </div>
+        <div class="pbar"><i style="width:${a.pct}%"></i></div>
+      </div>`).join("")}
+    <div style="text-align:center;font-size:11px;color:var(--text-4);margin-top:14px;line-height:1.8">
+      阅读进度、生词、词块与电脑端同构<br>（contracts/reading-room.schema.json v1）
+    </div>`;
+  $("btnImport").addEventListener("click", openImport);
+  document.querySelectorAll(".shelf-card").forEach((c) =>
+    c.addEventListener("click", () => openReader(c.dataset.id)));
+}
+
+/* ---------- 导入抽屉 ---------- */
+function openImport() {
+  openSheet(`
+    <div class="grabber"></div>
+    <div style="font-size:17px;font-weight:700;margin-bottom:2px">从电脑导入</div>
+    <div style="font-size:12.5px;color:var(--text-3);margin-bottom:8px">局域网直传与云同步在后续版本；当前用文件互导。</div>
+    <div class="imp-step"><span class="no" id="st1">1</span><span>电脑端「书架 → 导出同步文件」，得到 <b>.json</b>（含文章、生词、进度）</span></div>
+    <div class="imp-step"><span class="no" id="st2">2</span><span>通过 AirDrop / 微信 / 网盘把文件发到这台手机</span></div>
+    <div class="imp-step"><span class="no" id="st3">3</span><span>在这里选择文件，完成后自动合并（同词条按复习进度取最新）</span></div>
+    <div class="imp-prog" id="impProg"><i></i></div>
+    <button class="btn" id="btnPick">选择同步文件</button>
+    <div style="text-align:center;font-size:11px;color:var(--text-4);margin-top:8px">原型：点「选择同步文件」模拟完成</div>`);
+  $("btnPick").addEventListener("click", () => {
+    $("btnPick").disabled = true;
+    $("btnPick").textContent = "正在合并…";
+    document.querySelector("#impProg i").style.width = "100%";
+    setTimeout(() => {
+      state.imported = true;
+      closeSheet();
+      toast("导入完成：3 篇文章 · 16 个词条");
+      renderShelf(); renderMe();
+    }, 900);
+  });
+}
+
+/* ============================================================
+   我的
+   ============================================================ */
+function renderMe() {
+  $("scr-me").innerHTML = `
+    <div class="pagehead">
+      <div class="large-title">我的</div>
+      <div class="page-sub">iPhone 优先 · Android 随后</div>
+    </div>
+    <div class="glabel">数据与同步</div>
+    <div class="group">
+      <button class="mrow" id="mImport"><span class="rt">从电脑导入</span><span class="val">${state.imported ? "昨天" : "去导入"} ›</span></button>
+      <button class="mrow" id="mSync"><span class="rt">与电脑同步</span><span class="val">文件互导 · 局域网直传规划中 ›</span></button>
+      <button class="mrow" id="mCloud"><span class="rt">云同步与登录</span><span class="val badge mute">阶段二</span></button>
+    </div>
+    <div class="glabel">学习</div>
+    <div class="group">
+      <button class="mrow" id="mRemind"><span class="rt">复习提醒</span><span class="val">每天 21:00 · 本地通知 ›</span></button>
+      <button class="mrow" id="mWidget"><span class="rt">桌面小组件</span><span class="val">今日待复习 N · 规划中 ›</span></button>
+    </div>
+    <div class="glabel">翻译（可选）</div>
+    <div class="group">
+      <button class="mrow" id="mApi"><span class="rt">翻译引擎</span><span class="val">未配置 · 可不填 ›</span></button>
+      <div class="mrow" style="cursor:default"><span class="rt" style="font-size:13px;color:var(--text-3)">不填 API Key 也能用：读从电脑同步来的文章（自带译文与词块），复习与听力不受影响。</span></div>
+    </div>
+    <div class="glabel">外观</div>
+    <div class="group">
+      <button class="mrow" id="mTheme"><span class="rt">主题</span><span class="val">${THEME_LABEL[THEMES[themeIdx]]} ›</span></button>
+      <button class="mrow" id="mFont"><span class="rt">正文字体</span><span class="val">衬线 · 18.5 ›</span></button>
+    </div>
+    <div style="text-align:center;font-size:11px;color:var(--text-4);margin-top:18px">沉浸阅读室 Mobile 0.1.0 · 原型</div>`;
+  $("mImport").addEventListener("click", openImport);
+  $("mSync").addEventListener("click", () => toast("v1 规划：同一 Wi-Fi 扫码直传"));
+  $("mCloud").addEventListener("click", () => toast("登录 + 云同步：P0 验证后再做"));
+  $("mRemind").addEventListener("click", () => toast("实现：iOS 本地通知（UNUserNotificationCenter）"));
+  $("mWidget").addEventListener("click", () => toast("WidgetKit 小组件：今日到期数"));
+  $("mApi").addEventListener("click", () => toast("BYOK：DeepSeek / 智谱 / OpenAI…，Key 存钥匙串"));
+  $("mFont").addEventListener("click", () => toast("字号与字体设置在阅读页右上角"));
+}
+
+/* ============================================================
+   阅读层：点词查词 + 词块高亮 + 遮罩 + 逐句播放
+   ============================================================ */
+function buildSentences(art) {
+  const sents = [];
+  art.paras.forEach((p) => {
+    (p.en.match(/[^.!?]+[.!?]+["']?\s*|[^.!?]+$/g) || [p.en]).forEach((s) => {
+      const t = s.trim();
+      if (t) sents.push({ en: t, chunks: p.chunks });
+    });
+  });
+  return sents;
+}
+function tokenizeSentence(text, chunks, savedSet) {
+  const toks = text.match(/[A-Za-z0-9'’-]+|[^A-Za-z0-9'’-]+/g) || [];
+  const isW = (t) => /^[A-Za-z0-9'’-]+$/.test(t);
+  const marks = new Array(toks.length).fill(-1);
+  (chunks || []).forEach((ch, ci) => {
+    const needle = norm(ch.text).split(" ");
+    for (let i = 0; i < toks.length; i++) {
+      if (!isW(toks[i])) continue;
+      let k = i, j = 0;
+      while (j < needle.length && k < toks.length) {
+        if (!isW(toks[k])) { k++; continue; }
+        if (toks[k].toLowerCase().replace("’", "'") === needle[j]) { j++; k++; } else break;
+      }
+      if (j === needle.length) { for (let x = i; x < k; x++) if (isW(toks[x])) marks[x] = ci; break; }
+    }
+  });
+  return toks.map((t, i) => {
+    if (!isW(t)) return `<span class="tok pu">${esc(t)}</span>`;
+    const key = norm(t);
+    const keyBase = key.endsWith("s") ? key.slice(0, -1) : key;
+    const ck = marks[i] >= 0 ? ` ck" data-ck="${marks[i]}` : "";
+    const sv = savedSet.has(key) || savedSet.has(keyBase) || (marks[i] >= 0 && savedSet.has(norm(chunks[marks[i]].word))) ? " sv" : "";
+    return `<span class="tok${ck}${sv}" data-w="${esc(key)}" data-t="${esc(t)}">${esc(t)}</span>`;
+  }).join("");
+}
+function openReader(artId) {
+  const art = ARTICLES.find((a) => a.id === artId);
+  const sentences = buildSentences(art);
+  state.reader = { art, sentences, si: Math.min(7, sentences.length - 1), playing: false, rate: 1, masked: false };
+  renderReader();
+  $("readerLayer").classList.remove("hidden");
+  $("readerLayer").scrollTop = 0;
+}
+function closeReader() {
+  state.reader.playing = false; stopSpeak();
+  $("readerLayer").classList.add("hidden");
+  $("readerLayer").innerHTML = "";
+  renderShelf();
+}
+function renderReader() {
+  const r = state.reader;
+  const saved = savedKeys();
+  let si = 0;
+  const paras = r.art.paras.map((p) => {
+    const sents = (p.en.match(/[^.!?]+[.!?]+["']?\s*|[^.!?]+$/g) || [p.en]).map((s) => s.trim()).filter(Boolean);
+    const enHtml = sents.map((s) => {
+      const cur = si === r.si ? " cur" : "";
+      const html = `<span class="sent${cur}" data-si="${si}">${tokenizeSentence(s, p.chunks, saved)}</span>`;
+      si++;
+      return html;
+    }).join(" ");
+    return `<div class="para"><div class="en">${enHtml}</div><p class="zh">${esc(p.zh)}</p></div>`;
+  });
+  $("readerLayer").innerHTML = `
+    <div class="r-top ${r.masked ? "reader-masked" : ""}">
+      <button class="x" id="rBack">‹</button>
+      <div class="tt"><div class="a">${esc(r.art.title)}</div><div class="b">${r.art.words} 词 · ${r.art.pct}%</div></div>
+      <button class="rbtn ${r.masked ? "on" : ""}" id="rMask" title="遮罩中文">目</button>
+    </div>
+    <div class="minibar ${r.masked ? "reader-masked" : ""}">
+      <button class="play-mini" id="rPlay">${r.playing ? "❚❚" : "▶"}</button>
+      <span class="m-info">第 <b>${r.si + 1}</b> / ${r.sentences.length} 句 · 逐句朗读</span>
+      <button class="rate" id="rRate">${r.rate}×</button>
+    </div>
+    <div class="r-body ${r.masked ? "reader-masked" : ""}">
+      ${paras.join("")}
+      <div class="r-foot">已收藏词会整篇高亮 · 点词查词 · 点句子朗读</div>
+    </div>`;
+  $("rBack").addEventListener("click", closeReader);
+  $("rMask").addEventListener("click", () => { r.masked = !r.masked; renderReader(); });
+  $("rPlay").addEventListener("click", () => (r.playing ? stopPlay() : startPlay(r.si)));
+  $("rRate").addEventListener("click", () => {
+    r.rate = r.rate === 1 ? 1.25 : r.rate === 1.25 ? 0.85 : 1;
+    if (r.playing) { stopPlay(); startPlay(r.si); } else renderReader();
+  });
+  $("readerLayer").querySelector(".r-body").addEventListener("click", onReaderTap);
+}
+function onReaderTap(e) {
+  const r = state.reader;
+  const tok = e.target.closest(".tok");
+  if (tok && !tok.classList.contains("pu")) {
+    if (tok.dataset.ck !== undefined) {
+      const ch = r.art.paras.flatMap((p) => p.chunks).find((c) => norm(c.word) === norm(r.sentences[+tok.closest(".sent").dataset.si].chunks[+tok.dataset.ck]?.word || c.word)) || null;
+      const ci = +tok.dataset.ck;
+      const sent = r.sentences[+tok.closest(".sent").dataset.si];
+      const ch2 = sent.chunks[ci];
+      openDictForChunk(ch2, tok.dataset.t);
+    } else {
+      lookupWord(tok.dataset.t);
+    }
+    return;
+  }
+  const zh = e.target.closest(".zh");
+  if (zh && r.masked && !zh.classList.contains("revealed")) { zh.classList.add("revealed"); return; }
+  const sent = e.target.closest(".sent");
+  if (sent) { stopPlay(); state.reader.si = +sent.dataset.si; renderReader(); startPlay(+sent.dataset.si); }
+}
+function lookupWord(t) {
+  const key = norm(t);
+  const keyBase = key.endsWith("s") ? key.slice(0, -1) : key;
+  const saved = VOCAB.find((v) => norm(v.word) === key || norm(v.word) === keyBase);
+  const sent = state.reader.sentences[state.reader.si];
+  const src = `${state.reader.art.title} · 第 ${state.reader.si + 1} 句`;
+  if (saved) { openDictForEntry({ ...saved, src, sentence: sent.en }); return; }
+  const d = MINI_DICT[key] || MINI_DICT[keyBase];
+  openDictForEntry({
+    id: keyBase, kind: "word", word: t, senses: d?.senses || [{ pos: "", cn: "（原型未收录释义 · 实际实现调用 readerDict 在线词典）" }],
+    trap: d?.trap, src, sentence: sent.en,
+  });
+}
+function openDictForChunk(ch, surfaceForm) {
+  if (!ch) return;
+  const saved = VOCAB.find((v) => norm(v.word) === norm(ch.word));
+  const sent = state.reader.sentences[state.reader.si];
+  const src = `${state.reader.art.title} · 第 ${state.reader.si + 1} 句`;
+  if (saved) { openDictForEntry({ ...saved, src, sentence: sent.en }); return; }
+  openDictForEntry({
+    id: norm(ch.word), kind: "chunk", chunkType: ch.type, word: ch.word,
+    senses: [{ pos: ch.type?.toLowerCase() || "chunk", cn: ch.gloss }],
+    pattern: ch.pattern, trap: ch.trap, src, sentence: sent.en,
+  });
+}
+/* 词典卡（阅读 tap 查词 / 分享收词共用） */
+function openDictForEntry(v) {
+  const isSaved = VOCAB.some((x) => norm(x.word) === norm(v.word));
+  openSheet(`
+    <div class="grabber"></div>
+    <div class="d-head">
+      <span class="w">${esc(v.word)}</span>
+      ${v.chunkType ? `<span class="badge">${esc(v.chunkType)}</span>` : `<span class="badge mute">单词</span>`}
+      <button class="icon-btn close" id="dSpeak">🔊</button>
+    </div>
+    <div class="d-senses">${v.senses.map((s) => `<div><span class="pos">${s.pos}</span>${esc(s.cn)}</div>`).join("")}</div>
+    ${v.pattern ? `<div class="d-extra">槽位记法：<i>${esc(v.pattern)}</i></div>` : ""}
+    ${v.trap ? `<div class="d-trap">⚠ <b>直译陷阱</b>：${esc(v.trap)}</div>` : ""}
+    ${v.src ? `<div class="d-src">${v.sentence ? esc(v.sentence) : ""}<span class="from">来自 ${esc(v.src)}</span></div>` : ""}
+    <div class="d-actions">
+      ${isSaved
+        ? `<button class="btn ghost" id="dSaved" disabled style="color:var(--ok);border-color:transparent;background:var(--ok-soft)">✓ 已在生词本</button>`
+        : `<button class="btn" id="dSave">收进生词本</button>
+           <button class="btn ghost" id="dSaveChunk">收为词块</button>`}
+    </div>
+    <div class="d-note">收藏后整篇自动高亮，SRS 到期进「今天」复习</div>`);
+  $("dSpeak").addEventListener("click", () => speak(v.word, 0.9));
+  const save = (kind) => {
+    VOCAB.unshift({ ...v, kind, due: "now", senses: v.senses, src: v.src || `${state.reader?.art?.title || "分享"} · 收藏` });
+    closeSheet();
+    toast(kind === "chunk" ? `已收为词块「${v.word}」· 今晚复习` : `已收藏「${v.word}」· 今晚复习`);
+    if (state.reader && !$("readerLayer").classList.contains("hidden")) renderReader();
+    updateDueBadge();
+    if (state.tab === "vocab") renderVocab();
+  };
+  $("dSave")?.addEventListener("click", () => save("word"));
+  $("dSaveChunk")?.addEventListener("click", () => save("chunk"));
+}
+
+/* ---------- 逐句播放 ---------- */
+function startPlay(si) {
+  const r = state.reader;
+  r.playing = true; r.si = si;
+  stepPlay();
+}
+function stepPlay() {
+  const r = state.reader;
+  if (!r.playing) return;
+  if (r.si >= r.sentences.length) { stopPlay(); return; }
+  const body = $("readerLayer").querySelector(".r-body");
+  if (body) {
+    body.querySelectorAll(".sent.cur").forEach((s) => s.classList.remove("cur"));
+    const cur = body.querySelector(`.sent[data-si="${r.si}"]`);
+    if (cur) cur.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+  updateMinibar();
+  speak(r.sentences[r.si].en, r.rate, () => {
+    if (!state.reader?.playing) return;
+    state.reader.si++;
+    markCur();
+    setTimeout(stepPlay, 300);
+  });
+}
+function stopPlay() {
+  if (state.reader) state.reader.playing = false;
+  stopSpeak();
+  const b = $("readerLayer")?.querySelector(".r-body");
+  if (b) b.querySelectorAll(".sent.cur").forEach((s) => s.classList.remove("cur"));
+  updateMinibar();
+}
+function markCur() {
+  const r = state.reader;
+  const b = $("readerLayer")?.querySelector(".r-body");
+  if (!b || !r) return;
+  b.querySelectorAll(".sent").forEach((s) => s.classList.toggle("cur", +s.dataset.si === r.si));
+}
+function updateMinibar() {
+  const r = state.reader;
+  const pb = $("rPlay");
+  if (pb && r) pb.textContent = r.playing ? "❚❚" : "▶";
+}
+
+/* ============================================================
+   底部抽屉
+   ============================================================ */
+function openSheet(html) { $("sheet").innerHTML = html; $("dim").classList.remove("hidden"); $("sheet").classList.remove("hidden"); }
+function closeSheet() { $("sheet").classList.add("hidden"); $("dim").classList.add("hidden"); $("sheet").innerHTML = ""; }
+$("dim").addEventListener("click", closeSheet);
+
+/* ============================================================
+   系统分享收词（iOS Share Extension 模拟）
+   ============================================================ */
+const SHARED = {
+  from: "微信 · 收藏",
+  snippet: "Rows of lindens buffer against the traffic noise all summer.",
+  word: "linden",
+};
+function openShare() {
+  $("shareLayer").innerHTML = `
+    <div class="dim" style="z-index:0"></div>
+    <div class="share-sheet">
+      <div class="share-head">
+        <div class="app-ic">微</div>
+        <div class="st"><div class="a">微信 分享给你一段文字</div><div class="b">沉浸阅读室 · Share Extension</div></div>
+      </div>
+      <div class="share-snippet">“${esc(SHARED.snippet)}”</div>
+      <div class="share-actions">
+        <button class="btn" id="shLookup">查词「${esc(SHARED.word)}」并收藏</button>
+        <button class="btn ghost" id="shArticle">整句存为文章草稿</button>
+        <button class="btn ghost" id="shLater">拷贝全文 · 稍后处理</button>
+      </div>
+    </div>`;
+  $("shareLayer").classList.remove("hidden");
+  $("shLater").addEventListener("click", closeShare);
+  $("shArticle").addEventListener("click", () => {
+    closeShare();
+    toast("已存为草稿《来自分享 · 9月12日》");
+  });
+  $("shLookup").addEventListener("click", () => {
+    closeShare();
+    const d = MINI_DICT[SHARED.word];
+    openDictForEntry({
+      id: SHARED.word, kind: "word", word: SHARED.word,
+      senses: d?.senses || [{ pos: "n.", cn:"椴树" }],
+      trap: d?.trap, src: `来自分享 · ${SHARED.snippet.slice(0, 24)}…`,
+    });
+  });
+}
+function closeShare() { $("shareLayer").classList.add("hidden"); $("shareLayer").innerHTML = ""; }
+
+/* ============================================================
+   主题 / toast / 键盘 / 启动
+   ============================================================ */
+const THEMES = ["light", "dark", "sepia", "oled"];
+const THEME_LABEL = { light: "浅色", dark: "深色", sepia: "护眼", oled: "纯黑" };
+let themeIdx = 0;
+function cycleTheme() {
+  themeIdx = (themeIdx + 1) % THEMES.length;
+  document.documentElement.dataset.theme = THEMES[themeIdx];
+  $("themeBtn").textContent = THEME_LABEL[THEMES[themeIdx]];
+  $("mTheme") && ($("mTheme").querySelector(".val").textContent = THEME_LABEL[THEMES[themeIdx]] + " ›");
+}
+function setTheme(t) {
+  themeIdx = THEMES.indexOf(t);
+  document.documentElement.dataset.theme = t;
+  $("themeBtn").textContent = THEME_LABEL[t];
+}
+let toastTimer = null;
+function toast(msg) {
+  document.querySelectorAll(".toast").forEach((t) => t.remove());
+  const t = document.createElement("div");
+  t.className = "toast"; t.textContent = msg;
+  $("phone").appendChild(t);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.remove(), 2200);
+}
+document.querySelector(".proto-banner").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-go]");
+  if (!b) return;
+  const go = b.dataset.go;
+  if (go === "theme") return cycleTheme();
+  if (go === "today") { state.review = null; switchTab("today"); }
+  if (go === "review") { switchTab("today"); startReview(); }
+  if (go === "cloze") { switchTab("today"); startReview(); while (!state.review.finished && state.review.queue[state.review.pos].mode !== "cloze") rvNext(); }
+  if (go === "trap") { switchTab("today"); startReview(); const i = state.review.queue.findIndex((c) => c.blank === "took root"); state.review.pos = i; state.review.input = "take roots"; submitCloze(); }
+  if (go === "dictdiff") {
+    switchTab("today"); startReview();
+    const i = state.review.queue.findIndex((c) => c.word === "canopy");
+    state.review.pos = i; state.review.phase = "answer";
+    state.review.input = "The citys tree canopy now cover fourty percent of the streets";
+    submitDictation();
+  }
+  if (go === "vocab") switchTab("vocab");
+  if (go === "lookup") { openReader("trees"); setTimeout(() => lookupWord("lindens"), 60); }
+  if (go === "share") openShare();
+  if (go === "import") { switchTab("shelf"); setTimeout(openImport, 60); }
+});
+/* 桌面键 1-4 评分（真机用不到，方便电脑上走完一轮） */
+document.addEventListener("keydown", (e) => {
+  if (e.target.matches("input, textarea")) return;
+  if (state.review && !state.review.finished && state.review.phase === "graded" && ["1", "2", "3", "4"].includes(e.key)) {
+    const grade = ["forgot", "hard", "good", "easy"][+e.key - 1];
+    const c = state.review.queue[state.review.pos];
+    state.review.results.push({ word: c.word, mode: c.mode, judged: state.review.judged, grade });
+    rvNext();
+  }
+});
+
+/* 手机壳自适应缩放 */
+function fitPhone() {
+  const phone = $("phone");
+  if (window.innerWidth <= 520 || window.innerHeight <= 620) { phone.style.transform = ""; return; }
+  const s = Math.min(1, (window.innerHeight - 92) / 866);
+  phone.style.transform = `scale(${s})`;
+}
+window.addEventListener("resize", fitPhone);
+
+/* ---------- 启动 ---------- */
+switchTab("today");
+fitPhone();
+
+/* 演示钩子：URL hash 直达关键状态，便于截图/分享
+   #demo=review   复习流第一张（识别卡）
+   #demo=cloze    完形卡答题态
+   #demo=trap     完形命中直译陷阱的判分反馈
+   #demo=dictdiff 听写卡词级 diff
+   #demo=lookup   阅读页点词查词典卡（lindens）
+   #demo=vocab    生词本（词块分组）
+   #demo=share    系统分享收词
+   #demo=import   电脑导入抽屉
+   #demo=imported 导入完成后的书架
+   #demo=done     今日复习完成摘要
+   #theme=dark|sepia|oled 指定主题 */
+(function demoHook() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  const demo = p.get("demo");
+  if (p.get("theme")) setTheme(p.get("theme"));
+  if (!demo) return;
+  if (demo === "review") { switchTab("today"); startReview(); }
+  if (demo === "cloze") { switchTab("today"); startReview(); while (!state.review.finished && state.review.queue[state.review.pos].mode !== "cloze") rvNext(); }
+  if (demo === "trap") { switchTab("today"); startReview(); const i = state.review.queue.findIndex((c) => c.blank === "took root"); state.review.pos = i; state.review.input = "take roots"; submitCloze(); }
+  if (demo === "dictdiff") {
+    switchTab("today"); startReview();
+    const i = state.review.queue.findIndex((c) => c.word === "canopy");
+    state.review.pos = i; state.review.phase = "answer";
+    state.review.input = "The citys tree canopy now cover fourty percent of the streets";
+    submitDictation();
+  }
+  if (demo === "lookup") { openReader("trees"); setTimeout(() => lookupWord("lindens"), 60); }
+  if (demo === "vocab") { switchTab("vocab"); state.vocab.kind = "chunk"; renderVocab(); }
+  if (demo === "share") openShare();
+  if (demo === "import") { switchTab("shelf"); setTimeout(openImport, 60); }
+  if (demo === "imported") { state.imported = true; switchTab("shelf"); }
+  if (demo === "done") {
+    state.review = { queue: REVIEW_CARDS, pos: 8, phase: "graded", hints: 0, input: "", judged: null, replay: 0,
+      finished: true,
+      results: [
+        { word: "took root", mode: "cloze", judged: "perfect", grade: "easy" },
+        { word: "comprehension", mode: "recognition", judged: null, grade: "good" },
+        { word: "in the wake of", mode: "cloze", judged: "perfect", grade: "easy" },
+        { word: "canopy", mode: "dictation", judged: "close", grade: "hard" },
+        { word: "buffer against", mode: "cloze", judged: "trap", grade: "forgot" },
+        { word: "settle in", mode: "cloze", judged: "wrong", grade: "forgot" },
+        { word: "attribute X to Y", mode: "cloze", judged: "perfect", grade: "good" },
+        { word: "torrential rain", mode: "dictation", judged: "wrong", grade: "hard" },
+      ] };
+    switchTab("today");
+  }
+})();
+</script>
+</body>
+</html>
