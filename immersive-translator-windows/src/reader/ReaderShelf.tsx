@@ -64,30 +64,19 @@ export function ReaderShelf({
               if (e.key === "Enter") onSelect(a.id);
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <div className="t" style={{ flex: 1 }}>
-                {a.title}
-              </div>
-              <button
-                className="reader-tb-btn"
-                style={{ width: 20, height: 20, opacity: 0 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (window.confirm(`删除《${a.title}》？生词本不受影响。`)) onDelete(a.id);
-                }}
-                onMouseOver={(e) => (e.currentTarget.style.opacity = "1")}
-                onMouseOut={(e) => (e.currentTarget.style.opacity = "0")}
-                title="删除文章"
-              >
-                <IconTrash size={11} />
-              </button>
-            </div>
-            <div className="m">
-              <span className="bar">
-                <i style={{ width: `${Math.round(a.progress.percent)}%` }} />
-              </span>
-              <span>{Math.round(a.progress.percent)}%</span>
-            </div>
+            <span className="t">{a.title}</span>
+            <span className="dots" aria-hidden />
+            <span className="pct">{Math.round(a.progress.percent)}%</span>
+            <button
+              className="del"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (window.confirm(`删除《${a.title}》？生词本不受影响。`)) onDelete(a.id);
+              }}
+              title="删除文章"
+            >
+              <IconTrash size={11} />
+            </button>
           </div>
         ))}
       </div>

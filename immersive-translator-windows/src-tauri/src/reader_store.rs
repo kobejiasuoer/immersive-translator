@@ -205,6 +205,14 @@ pub struct VocabSource {
     pub sentence_idx: u32,
 }
 
+/// 无文章来源的生词（如划词浮窗收藏）配的 LLM 例句。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct VocabExample {
+    pub en: String,
+    pub zh: Option<String>,
+}
+
 /// 生词条目类别：单词 / 词块。缺省视为 word（老数据无需迁移）。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -238,6 +246,9 @@ pub struct VocabWord {
     pub source: VocabSource,
     pub srs: VocabSrsState,
     pub added_at: i64,
+    /// source.article_id 为空（划词收藏）时的 LLM 例句，复习卡用作出语境。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub example: Option<VocabExample>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

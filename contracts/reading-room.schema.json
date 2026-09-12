@@ -12,49 +12,126 @@
     },
     "articleSourceType": {
       "type": "string",
-      "enum": ["paste", "url", "epub", "pdf"]
+      "enum": [
+        "paste",
+        "url",
+        "epub",
+        "pdf"
+      ]
     },
     "sentenceZhState": {
       "type": "string",
-      "enum": ["pending", "done", "failed", "edited"]
+      "enum": [
+        "pending",
+        "done",
+        "failed",
+        "edited"
+      ]
     },
     "chunkType": {
       "type": "string",
-      "enum": ["collocation", "phrasal", "idiom", "pattern"],
+      "enum": [
+        "collocation",
+        "phrasal",
+        "idiom",
+        "pattern"
+      ],
       "description": "词块类型：搭配 / 短语动词 / 习语 / 句式框架"
     },
     "sentenceChunk": {
       "type": "object",
-      "required": ["text", "chunkType", "gloss"],
+      "required": [
+        "text",
+        "chunkType",
+        "gloss"
+      ],
       "description": "句内标注的词块；text 必须是所在句 en 的连续子串",
       "properties": {
-        "text": { "type": "string" },
-        "chunkType": { "$ref": "#/$defs/chunkType" },
-        "gloss": { "type": "string", "description": "中文释义（一句话）" },
-        "pattern": { "type": "string", "description": "槽位记法，如 take on sth" },
-        "trap": { "type": "string", "description": "直译陷阱，如 \"不是 make momentum\"" }
+        "text": {
+          "type": "string"
+        },
+        "chunkType": {
+          "$ref": "#/$defs/chunkType"
+        },
+        "gloss": {
+          "type": "string",
+          "description": "中文释义（一句话）"
+        },
+        "pattern": {
+          "type": "string",
+          "description": "槽位记法，如 take on sth"
+        },
+        "trap": {
+          "type": "string",
+          "description": "直译陷阱，如 \"不是 make momentum\""
+        }
       }
     },
     "sentencePair": {
       "type": "object",
-      "required": ["idx", "paragraphIdx", "en", "zh", "zhState"],
+      "required": [
+        "idx",
+        "paragraphIdx",
+        "en",
+        "zh",
+        "zhState"
+      ],
       "properties": {
-        "idx": { "type": "integer", "minimum": 0, "description": "全文句序号，从 0" },
-        "paragraphIdx": { "type": "integer", "minimum": 0 },
-        "en": { "type": "string" },
-        "zh": { "type": ["string", "null"], "description": "null = 尚未翻译" },
-        "zhState": { "$ref": "#/$defs/sentenceZhState" },
-        "revealed": { "type": "boolean", "description": "遮罩模式下是否已揭开" },
-        "chunks": { "type": "array", "items": { "$ref": "#/$defs/sentenceChunk" } }
+        "idx": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "全文句序号，从 0"
+        },
+        "paragraphIdx": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "en": {
+          "type": "string"
+        },
+        "zh": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "null = 尚未翻译"
+        },
+        "zhState": {
+          "$ref": "#/$defs/sentenceZhState"
+        },
+        "revealed": {
+          "type": "boolean",
+          "description": "遮罩模式下是否已揭开"
+        },
+        "chunks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sentenceChunk"
+          }
+        }
       }
     },
     "articleProgress": {
       "type": "object",
-      "required": ["sentenceIdx", "percent", "secondsListened"],
+      "required": [
+        "sentenceIdx",
+        "percent",
+        "secondsListened"
+      ],
       "properties": {
-        "sentenceIdx": { "type": "integer", "minimum": 0 },
-        "percent": { "type": "number", "minimum": 0, "maximum": 100 },
-        "secondsListened": { "type": "number", "minimum": 0 }
+        "sentenceIdx": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "secondsListened": {
+          "type": "number",
+          "minimum": 0
+        }
       }
     },
     "readerSettings": {
@@ -62,123 +139,339 @@
       "description": "文章记录里允许只携带部分字段（覆盖全局默认）；全局默认文件必须全量。",
       "required": [],
       "properties": {
-        "contrastMode": { "type": "string", "enum": ["en", "dual", "zh"] },
-        "maskTranslation": { "type": "boolean" },
-        "maskStyle": { "type": "string", "enum": ["blank", "frost"], "description": "遮罩样式：blank=留白显影，frost=毛玻璃" },
-        "showProgress": { "type": "boolean" },
-        "zenMode": { "type": "boolean" },
-        "theme": { "type": "string", "enum": ["light", "dark", "sepia", "oled"] },
-        "fontSize": { "type": "number", "minimum": 14, "maximum": 24 },
-        "lineHeight": { "type": "number", "minimum": 1, "maximum": 2.4 },
-        "fontPair": { "type": "string", "enum": ["serif", "sans"] },
-        "voice": { "type": "string", "description": "系统 TTS 音色名；空串 = 引擎默认" },
-        "rate": { "type": "number", "minimum": 0.5, "maximum": 2 },
-        "sentencePauseMs": { "type": "number", "minimum": 0, "maximum": 2000 },
-        "shadowingMode": { "type": "boolean" },
-        "chunkHighlight": { "type": "boolean", "description": "词块高亮：翻译完成后自动跑 LLM 词块标注" },
-        "showVocabMarks": { "type": "boolean", "description": "生词再现标记：正文中标记已收藏的词/词块" }
+        "contrastMode": {
+          "type": "string",
+          "enum": [
+            "en",
+            "dual",
+            "zh"
+          ]
+        },
+        "maskTranslation": {
+          "type": "boolean"
+        },
+        "maskStyle": {
+          "type": "string",
+          "enum": [
+            "blank",
+            "frost"
+          ],
+          "description": "遮罩样式：blank=留白显影，frost=毛玻璃"
+        },
+        "showProgress": {
+          "type": "boolean"
+        },
+        "zenMode": {
+          "type": "boolean"
+        },
+        "theme": {
+          "type": "string",
+          "enum": [
+            "light",
+            "dark",
+            "sepia",
+            "oled"
+          ]
+        },
+        "fontSize": {
+          "type": "number",
+          "minimum": 14,
+          "maximum": 24
+        },
+        "lineHeight": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 2.4
+        },
+        "fontPair": {
+          "type": "string",
+          "enum": [
+            "serif",
+            "sans"
+          ]
+        },
+        "voice": {
+          "type": "string",
+          "description": "系统 TTS 音色名；空串 = 引擎默认"
+        },
+        "rate": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 2
+        },
+        "sentencePauseMs": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2000
+        },
+        "shadowingMode": {
+          "type": "boolean"
+        },
+        "chunkHighlight": {
+          "type": "boolean",
+          "description": "词块高亮：翻译完成后自动跑 LLM 词块标注"
+        },
+        "showVocabMarks": {
+          "type": "boolean",
+          "description": "生词再现标记：正文中标记已收藏的词/词块"
+        }
       }
     },
     "article": {
       "type": "object",
       "required": [
-        "id", "title", "titleCnState", "sourceType", "wordCount",
-        "createdAt", "lastReadAt", "progress", "sentences"
+        "id",
+        "title",
+        "titleCnState",
+        "sourceType",
+        "wordCount",
+        "createdAt",
+        "lastReadAt",
+        "progress",
+        "sentences"
       ],
       "properties": {
-        "id": { "type": "string" },
-        "title": { "type": "string", "description": "英文标题" },
-        "titleCn": { "type": "string", "description": "中文副标题" },
-        "titleCnState": { "$ref": "#/$defs/sentenceZhState" },
-        "sourceUrl": { "type": "string" },
-        "sourceType": { "$ref": "#/$defs/articleSourceType" },
-        "level": { "type": "string", "description": "如 \"B1 入门\"" },
-        "wordCount": { "type": "integer", "minimum": 0 },
-        "createdAt": { "type": "integer", "description": "Unix 毫秒" },
-        "lastReadAt": { "type": "integer", "description": "Unix 毫秒" },
-        "progress": { "$ref": "#/$defs/articleProgress" },
-        "sentences": { "type": "array", "items": { "$ref": "#/$defs/sentencePair" } },
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string",
+          "description": "英文标题"
+        },
+        "titleCn": {
+          "type": "string",
+          "description": "中文副标题"
+        },
+        "titleCnState": {
+          "$ref": "#/$defs/sentenceZhState"
+        },
+        "sourceUrl": {
+          "type": "string"
+        },
+        "sourceType": {
+          "$ref": "#/$defs/articleSourceType"
+        },
+        "level": {
+          "type": "string",
+          "description": "如 \"B1 入门\""
+        },
+        "wordCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "createdAt": {
+          "type": "integer",
+          "description": "Unix 毫秒"
+        },
+        "lastReadAt": {
+          "type": "integer",
+          "description": "Unix 毫秒"
+        },
+        "progress": {
+          "$ref": "#/$defs/articleProgress"
+        },
+        "sentences": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sentencePair"
+          }
+        },
         "chunkState": {
           "type": "string",
-          "enum": ["pending", "done", "failed"],
+          "enum": [
+            "pending",
+            "done",
+            "failed"
+          ],
           "description": "词块标注进度；缺省 = 从未标注"
         },
-        "settings": { "$ref": "#/$defs/readerSettings" }
+        "settings": {
+          "$ref": "#/$defs/readerSettings"
+        }
       }
     },
     "vocabSrsState": {
       "type": "object",
-      "required": ["ease", "intervalDays", "reps", "dueAt", "lapses"],
+      "required": [
+        "ease",
+        "intervalDays",
+        "reps",
+        "dueAt",
+        "lapses"
+      ],
       "properties": {
-        "ease": { "type": "number" },
-        "intervalDays": { "type": "number", "minimum": 0 },
-        "reps": { "type": "integer", "minimum": 0 },
-        "dueAt": { "type": "integer", "description": "Unix 毫秒；到期判定唯一依据" },
-        "lapses": { "type": "integer", "minimum": 0 }
+        "ease": {
+          "type": "number"
+        },
+        "intervalDays": {
+          "type": "number",
+          "minimum": 0
+        },
+        "reps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dueAt": {
+          "type": "integer",
+          "description": "Unix 毫秒；到期判定唯一依据"
+        },
+        "lapses": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "vocabWord": {
       "type": "object",
-      "required": ["id", "word", "senses", "source", "srs", "addedAt"],
+      "required": [
+        "id",
+        "word",
+        "senses",
+        "source",
+        "srs",
+        "addedAt"
+      ],
       "properties": {
-        "id": { "type": "string", "description": "归一化（小写、去首尾标点）后的唯一键" },
-        "word": { "type": "string" },
+        "id": {
+          "type": "string",
+          "description": "归一化（小写、去首尾标点）后的唯一键"
+        },
+        "word": {
+          "type": "string"
+        },
         "kind": {
           "type": "string",
-          "enum": ["word", "chunk"],
+          "enum": [
+            "word",
+            "chunk"
+          ],
           "description": "生词条目类别；缺省视为 word（老数据无需迁移）"
         },
-        "phonetic": { "type": "string" },
+        "phonetic": {
+          "type": "string"
+        },
         "senses": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["pos", "cn"],
+            "required": [
+              "pos",
+              "cn"
+            ],
             "properties": {
-              "pos": { "type": "string" },
-              "cn": { "type": "string" }
+              "pos": {
+                "type": "string"
+              },
+              "cn": {
+                "type": "string"
+              }
             }
           }
         },
-        "forms": { "type": "array", "items": { "type": "string" } },
-        "chunkType": { "$ref": "#/$defs/chunkType", "description": "kind=chunk 时的词块类型" },
-        "pattern": { "type": "string", "description": "槽位记法" },
-        "trap": { "type": "string", "description": "直译陷阱" },
+        "forms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "chunkType": {
+          "$ref": "#/$defs/chunkType",
+          "description": "kind=chunk 时的词块类型"
+        },
+        "pattern": {
+          "type": "string",
+          "description": "槽位记法"
+        },
+        "trap": {
+          "type": "string",
+          "description": "直译陷阱"
+        },
         "collocations": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["en", "cn"],
+            "required": [
+              "en",
+              "cn"
+            ],
             "properties": {
-              "en": { "type": "string" },
-              "cn": { "type": "string" }
+              "en": {
+                "type": "string"
+              },
+              "cn": {
+                "type": "string"
+              }
             }
           }
         },
         "source": {
           "type": "object",
-          "required": ["articleId", "sentenceIdx"],
+          "required": [
+            "articleId",
+            "sentenceIdx"
+          ],
           "properties": {
-            "articleId": { "type": "string" },
-            "sentenceIdx": { "type": "integer", "minimum": 0 }
+            "articleId": {
+              "type": "string"
+            },
+            "sentenceIdx": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         },
-        "srs": { "$ref": "#/$defs/vocabSrsState" },
-        "addedAt": { "type": "integer", "description": "Unix 毫秒" }
+        "srs": {
+          "$ref": "#/$defs/vocabSrsState"
+        },
+        "addedAt": {
+          "type": "integer",
+          "description": "Unix 毫秒"
+        },
+        "example": {
+          "type": "object",
+          "description": "无文章来源（划词收藏）时的 LLM 例句，复习卡用作出语境",
+          "required": [
+            "en"
+          ],
+          "properties": {
+            "en": {
+              "type": "string",
+              "description": "含目标词的英文例句"
+            },
+            "zh": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "例句中文翻译"
+            }
+          }
+        }
       }
     },
     "reviewLog": {
       "type": "object",
-      "required": ["days"],
+      "required": [
+        "days"
+      ],
       "properties": {
         "days": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["day", "count"],
+            "required": [
+              "day",
+              "count"
+            ],
             "properties": {
-              "day": { "type": "string", "description": "本地时区 YYYY-MM-DD" },
-              "count": { "type": "integer", "minimum": 0 }
+              "day": {
+                "type": "string",
+                "description": "本地时区 YYYY-MM-DD"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              }
             }
           }
         }
@@ -189,29 +482,59 @@
     {
       "title": "reader_articles.json",
       "type": "object",
-      "required": ["schemaVersion", "articles"],
+      "required": [
+        "schemaVersion",
+        "articles"
+      ],
       "properties": {
-        "schemaVersion": { "$ref": "#/$defs/schemaVersion" },
-        "articles": { "type": "array", "items": { "$ref": "#/$defs/article" } }
+        "schemaVersion": {
+          "$ref": "#/$defs/schemaVersion"
+        },
+        "articles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/article"
+          }
+        }
       }
     },
     {
       "title": "reader_vocab.json",
       "type": "object",
-      "required": ["schemaVersion", "words", "reviewLog"],
+      "required": [
+        "schemaVersion",
+        "words",
+        "reviewLog"
+      ],
       "properties": {
-        "schemaVersion": { "$ref": "#/$defs/schemaVersion" },
-        "words": { "type": "array", "items": { "$ref": "#/$defs/vocabWord" } },
-        "reviewLog": { "$ref": "#/$defs/reviewLog" }
+        "schemaVersion": {
+          "$ref": "#/$defs/schemaVersion"
+        },
+        "words": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/vocabWord"
+          }
+        },
+        "reviewLog": {
+          "$ref": "#/$defs/reviewLog"
+        }
       }
     },
     {
       "title": "全局阅读设置（可选的跨平台同步单元）",
       "type": "object",
-      "required": ["schemaVersion", "settings"],
+      "required": [
+        "schemaVersion",
+        "settings"
+      ],
       "properties": {
-        "schemaVersion": { "$ref": "#/$defs/schemaVersion" },
-        "settings": { "$ref": "#/$defs/readerSettings" }
+        "schemaVersion": {
+          "$ref": "#/$defs/schemaVersion"
+        },
+        "settings": {
+          "$ref": "#/$defs/readerSettings"
+        }
       }
     }
   ]

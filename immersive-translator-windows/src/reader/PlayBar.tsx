@@ -115,6 +115,14 @@ export function PlayBar({ article, playback, settings, onPatchSettings, onOpenVi
       >
         <div className="track">
           <div className="fill" style={{ width: `${percent}%` }} />
+          {article &&
+            total > 1 &&
+            total <= 40 &&
+            article.sentences.map((_, i) =>
+              i === 0 ? null : (
+                <i key={i} className="tick" style={{ left: `${(i / (total - 1)) * 100}%` }} aria-hidden />
+              ),
+            )}
           <div className="knob" style={{ left: `${percent}%` }} />
         </div>
         {hover && previewText && (
@@ -122,9 +130,17 @@ export function PlayBar({ article, playback, settings, onPatchSettings, onOpenVi
             第 {hover.idx + 1} 句 · {previewText}
           </div>
         )}
-        <div className="sentence-count">
-          {total > 0 ? `第 ${idx + 1} / ${total} 句` : "暂无句子"}
-        </div>
+      </div>
+
+      <div className="reader-count" aria-hidden>
+        {total > 0 ? (
+          <>
+            <span className="cur">{idx + 1}</span>
+            <span className="total"> ∕ {total} 句</span>
+          </>
+        ) : (
+          "暂无句子"
+        )}
       </div>
 
       <div className="right">

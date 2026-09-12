@@ -38,6 +38,8 @@ interface Props {
   onRetryParagraph: (paragraphIdx: number) => void;
   onEditTranslation: (idx: number, zh: string) => void;
   onJumpTo: (idx: number) => void;
+  /** 滚动阅读时光标跟随视口（未播放时由 ReaderApp 决定是否采纳）。 */
+  onViewportIdx: (idx: number) => void;
   onOpenImport: () => void;
   onRetryTitle: () => void;
 }
@@ -103,6 +105,46 @@ export function ReadingView(props: Props) {
     }
   }, [searchMatchIdx]);
 
+  // 滚动阅读：光标跟随视口（rAF 节流）。播放中的跟随滚动由 activeIdx 驱动，
+  // 这里不回写，避免和播放跟随互相拉扯（ReaderApp 侧再按 playing 过滤）。
+  const rafRef = useRef(0);
+  const onViewportIdxRef = useRef(props.onViewportIdx);
+  onViewportIdxRef.current = props.onViewportIdx;
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container) return;
+    let lastReported = -1;
+    function computeViewportIdx(): number {
+      const el = scrollRef.current;
+      if (!el) return -1;
+      // 取视口上三分之一高度处的那一句：滚到哪，读到哪。
+      const line = el.scrollTop + el.clientHeight / 3;
+      let best = -1;
+      for (const [idx, pair] of pairRefs.current) {
+        if (pair.offsetTop <= line && idx > best) best = idx;
+      }
+      if (best < 0) return pairRefs.current.size > 0 ? 0 : -1;
+      return best;
+    }
+    function onScroll() {
+      if (rafRef.current) return;
+      rafRef.current = window.requestAnimationFrame(() => {
+        rafRef.current = 0;
+        const idx = computeViewportIdx();
+        if (idx >= 0 && idx !== lastReported) {
+          lastReported = idx;
+          onViewportIdxRef.current(idx);
+        }
+      });
+    }
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      container.removeEventListener("scroll", onScroll);
+      if (rafRef.current) window.cancelAnimationFrame(rafRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [article?.id]);
+
   function handleMouseUp(e: ReactMouseEvent<HTMLDivElement>) {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed) return;
@@ -153,12 +195,6 @@ export function ReadingView(props: Props) {
   return (
     <div className="reader-stage">
       <div className="reader-scroll" ref={scrollRef}>
-        {settings.showProgress && (
-          <div className="reader-progressline" aria-hidden>
-            <i style={{ width: `${Math.round(article.progress.percent)}%` }} />
-          </div>
-        )}
-
         {maskOn && (
           <div className="reader-maskbar">
             <span className="eye">
@@ -248,6 +284,15 @@ export function ReadingView(props: Props) {
                     s.zhState === "failed" ? " failed" : ""
                   }`}
                 >
+                  <button
+                    className="pair-no"
+                    onClick={() => props.onJumpTo(s.idx)}
+                    title={`第 ${s.idx + 1} 句 · 点击定位`}
+                    aria-label={`定位到第 ${s.idx + 1} 句`}
+                  >
+                    {s.idx + 1}
+                  </button>
+                  <div className="pair-body">
                   <p className="pair-en" onClick={handleEnClick} title="单击查词，划选查短语">
                     {(spansBySentence.get(s.idx) ?? NO_SPANS).length === 0
                       ? s.en
@@ -299,6 +344,7 @@ export function ReadingView(props: Props) {
                         }}
                       >
                         <span className="zh-ghost" aria-hidden>
+                          <IconEyeOff size={12} />
                           显示译文
                         </span>
                         <p className="pair-cn">{s.zh}</p>
@@ -378,6 +424,7 @@ export function ReadingView(props: Props) {
                         <IconEdit size={12} />
                       </button>
                     )}
+                  </div>
                   </div>
                 </div>
               );

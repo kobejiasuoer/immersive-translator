@@ -1,14 +1,84 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_SETTINGS,
+  CUSTOM_PROVIDER_ID,
+  adoptMisplacedSingleKey,
+  parseKeyVault,
   persistHotkeyField,
   persistSettingsTransaction,
+  providerIdFor,
   type AppSettings,
 } from "./settingsStore";
 
 function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
   return { ...DEFAULT_SETTINGS, ...overrides };
 }
+
+describe("parseKeyVault", () => {
+  it("returns an empty vault for empty content", () => {
+    expect(parseKeyVault("", "openai")).toEqual({});
+    expect(parseKeyVault("   ", "openai")).toEqual({});
+  });
+
+  it("parses a per-provider vault and drops invalid entries", () => {
+    const vault = parseKeyVault(
+      JSON.stringify({ openai: "sk-a", deepseek: "", ollama: 42 }),
+      "openai",
+    );
+    expect(vault).toEqual({ openai: "sk-a" });
+  });
+
+  it("treats a legacy plaintext key as the fallback provider's bucket", () => {
+    expect(parseKeyVault("sk-legacy-key", "deepseek")).toEqual({ deepseek: "sk-legacy-key" });
+  });
+
+  it("treats non-object JSON as a legacy plaintext key", () => {
+    expect(parseKeyVault('["sk-x"]', CUSTOM_PROVIDER_ID)).toEqual({ [CUSTOM_PROVIDER_ID]: '["sk-x"]' });
+  });
+});
+
+describe("providerIdFor", () => {
+  it("always infers from the endpoint, ignoring a stale saved providerId", () => {
+    expect(
+      providerIdFor({
+        endpoint: "https://api.deepseek.com/chat/completions",
+        providerId: "openai",
+      } as Pick<AppSettings, "endpoint">),
+    ).toBe("deepseek");
+  });
+
+  it("infers the provider from the endpoint when providerId is missing", () => {
+    expect(
+      providerIdFor({ endpoint: "https://api.deepseek.com/chat/completions" }),
+    ).toBe("deepseek");
+  });
+
+  it("falls back to custom for unknown endpoints", () => {
+    expect(providerIdFor({ endpoint: "https://my-proxy.example.com/v1" })).toBe(
+      CUSTOM_PROVIDER_ID,
+    );
+  });
+});
+
+describe("adoptMisplacedSingleKey", () => {
+  it("returns the key to the current provider when the vault holds one misplaced key", () => {
+    expect(adoptMisplacedSingleKey({ openai: "sk-ds" }, "deepseek", false)).toEqual({
+      deepseek: "sk-ds",
+    });
+  });
+
+  it("keeps the vault untouched when the single key is already in the right bucket", () => {
+    expect(adoptMisplacedSingleKey({ deepseek: "sk-ds" }, "deepseek", false)).toBeNull();
+  });
+
+  it("does not touch a multi-provider vault", () => {
+    expect(adoptMisplacedSingleKey({ openai: "sk-a", zhipu: "sk-b" }, "deepseek", false)).toBeNull();
+  });
+
+  it("never adopts for localhost endpoints (they need no key)", () => {
+    expect(adoptMisplacedSingleKey({ openai: "sk-a" }, "ollama", true)).toBeNull();
+  });
+});
 
 describe("persistSettingsTransaction", () => {
   it("restores the previous raw settings when DPAPI writing fails", async () => {

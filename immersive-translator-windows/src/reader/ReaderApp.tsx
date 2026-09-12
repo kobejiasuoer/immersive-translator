@@ -13,6 +13,7 @@ import {
   onTranslationDone,
   onTranslationError,
   takePendingReaderImport,
+  takePendingOpenReview,
   translateStream,
   ttsSpeakAdvanced,
 } from "../lib/tauriBridge";
@@ -64,6 +65,7 @@ import {
 import "./reader.css";
 import { ReaderTopBar, ViewMenu } from "./ReaderTopBar";
 import { ReaderShelf } from "./ReaderShelf";
+import { VocabListPanel } from "./VocabListPanel";
 import { ReadingView } from "./ReadingView";
 import { PlayBar } from "./PlayBar";
 import { SettingsDrawer } from "./SettingsDrawer";
@@ -616,6 +618,15 @@ export function ReaderApp() {
       } catch (error) {
         console.error("[reader] take pending import failed", error);
       }
+      // 托盘「生词本」路径：窗口重建时取走「打开复习页」请求。
+      try {
+        if (await takePendingOpenReview()) {
+          setView("review");
+          return;
+        }
+      } catch (error) {
+        console.error("[reader] take pending open review failed", error);
+      }
       if (list.length > 0) {
         void openArticle(list[0].id);
       }
@@ -644,10 +655,30 @@ export function ReaderApp() {
       else u();
     });
 
+    // 托盘「生词本」（窗口已存在时）：切到复习页
+    let unlistenOpenReview: (() => void) | undefined;
+    listen("reader:open-review", () => {
+      setView("review");
+    }).then((u) => {
+      if (active) unlistenOpenReview = u;
+      else u();
+    });
+
+    // 划词浮窗「加入生词本」：刷新生词与到期徽标
+    let unlistenVocab: (() => void) | undefined;
+    listen("reader:vocab-added", () => {
+      void refreshVocab();
+    }).then((u) => {
+      if (active) unlistenVocab = u;
+      else u();
+    });
+
     return () => {
       active = false;
       unlistenArticle?.();
       unlistenImport?.();
+      unlistenOpenReview?.();
+      unlistenVocab?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -865,6 +896,13 @@ export function ReaderApp() {
 
   const stats = useMemo(() => reviewStats(vocabWords, reviewLog), [vocabWords, reviewLog]);
   const dueNow = useMemo(() => dueVocab(vocabWords).length, [vocabWords]);
+  /** 到期队列：复习卡与左栏词表共用同一序号，pos 上提在此（左栏词表可跳卡）。 */
+  const dueWords = useMemo(() => dueVocab(vocabWords), [vocabWords]);
+  const [reviewPos, setReviewPos] = useState(0);
+  useEffect(() => {
+    // 每次进入生词本都从队首开始（离开即卸载，results 随之清零）
+    if (view === "review") setReviewPos(0);
+  }, [view]);
 
   const jumpToSentence = useCallback(
     (articleId: string, sentenceIdx: number) => {
@@ -924,18 +962,41 @@ export function ReaderApp() {
     (id: string, sentenceIdx: number) => sourceCache.get(id)?.sentences[sentenceIdx]?.en ?? null,
     [sourceCache],
   );
+  /** 原句含译文（复习完形卡的中文提示行）。 */
+  const sourceSentence = useCallback((id: string, sentenceIdx: number) => {
+    const s = sourceCache.get(id)?.sentences[sentenceIdx];
+    return s ? { en: s.en, zh: s.zh } : null;
+  }, [sourceCache]);
+
+  /** 听写卡整句朗读：word 音轨 + 稍慢语速，与句子朗读音轨互不打断。 */
+  const speakRecallSentence = useCallback((text: string) => {
+    void ttsSpeakAdvanced(text, false, { track: "word", target: "reader", rate: 0.92 }).catch(
+      (error) => console.error("[reader] recall sentence tts failed", error),
+    );
+  }, []);
+
+  /** 复习模式只进全局默认，不写文章覆盖（复习不随文章变化）。 */
+  const patchReviewMode = useCallback(
+    (patch: Partial<ReaderSettings>) => {
+      if (patch.reviewMode === undefined) return;
+      const merged: ReaderSettings = { ...globalSettings, reviewMode: patch.reviewMode };
+      setGlobalSettings(merged);
+      saveGlobalReaderSettings(merged);
+    },
+    [globalSettings],
+  );
 
   const rootStyle = {
     "--read-en-size-cur": `${effectiveSettings.fontSize}px`,
-    "--read-en-lh-cur": `${Math.round((effectiveSettings.fontSize / 19) * 32 * effectiveSettings.lineHeight)}px`,
+    "--read-en-lh-cur": `${Math.round((effectiveSettings.fontSize / 19) * 29 * effectiveSettings.lineHeight)}px`,
     "--read-cn-size-cur": `${Math.round((effectiveSettings.fontSize / 19) * 15)}px`,
-    "--read-cn-lh-cur": `${Math.round((effectiveSettings.fontSize / 19) * 26 * effectiveSettings.lineHeight)}px`,
+    "--read-cn-lh-cur": `${Math.round((effectiveSettings.fontSize / 19) * 24 * effectiveSettings.lineHeight)}px`,
   } as CSSProperties;
 
   return (
     <div className="reader-root" data-theme={effectiveSettings.theme} data-font={effectiveSettings.fontPair} style={rootStyle}>
       <ReaderTopBar
-        articleName={article?.title ?? null}
+        articleName={view === "review" ? "生词本" : (article?.title ?? null)}
         settings={effectiveSettings}
         onPatchSettings={patchSettings}
         onOpenDrawer={() => setDrawerOpen(true)}
@@ -953,8 +1014,14 @@ export function ReaderApp() {
         }}
       />
 
+      {view === "reading" && effectiveSettings.showProgress && article && (
+        <div className="reader-inkline" aria-hidden>
+          <i style={{ width: `${Math.round(article.progress.percent)}%` }} />
+        </div>
+      )}
+
       <div className="reader-body">
-        {showChrome && (
+        {showChrome && view === "reading" && (
           <ReaderShelf
             articles={articleList}
             activeId={article?.id ?? null}
@@ -965,6 +1032,17 @@ export function ReaderApp() {
             onOpenReview={() => setView("review")}
             onDelete={deleteArticle}
             onOpenImport={() => setImportOpen(true)}
+          />
+        )}
+        {view === "review" && (
+          <VocabListPanel
+            words={vocabWords}
+            due={dueWords}
+            pos={reviewPos}
+            reviewedToday={stats.reviewedToday}
+            streak={stats.streak}
+            onJumpToCard={setReviewPos}
+            onOpenReader={() => setView("reading")}
           />
         )}
 
@@ -1010,6 +1088,11 @@ export function ReaderApp() {
               onRetryParagraph={retryParagraph}
               onEditTranslation={editTranslation}
               onJumpTo={(idx) => playback.jumpTo(idx)}
+              onViewportIdx={(idx) => {
+                // 滚动到哪 = 读到哪：未播放（且非跟读等待）时光标跟随视口，
+                // 顶部墨线、走带进度、当前句高亮与断点记忆随之更新。
+                if (!playback.playing && !playback.shadowingWait) playback.setActiveIdx(idx);
+              }}
               onOpenImport={() => setImportOpen(true)}
               onRetryTitle={retryTitle}
             />
@@ -1028,11 +1111,18 @@ export function ReaderApp() {
         ) : (
           <ReviewView
             words={vocabWords}
+            due={dueWords}
+            pos={reviewPos}
+            onSetPos={setReviewPos}
             stats={stats}
+            reviewMode={effectiveSettings.reviewMode}
+            onReviewModeChange={(m) => patchReviewMode({ reviewMode: m })}
             onGrade={gradeVocab}
             onJumpToSentence={jumpToSentence}
             onSpeakWord={speakWord}
+            onSpeakSentence={speakRecallSentence}
             sourcePreview={sourcePreview}
+            sourceSentence={sourceSentence}
             articleTitle={articleTitle}
           />
         )}
@@ -1072,6 +1162,7 @@ export function ReaderApp() {
         <SettingsDrawer
           settings={effectiveSettings}
           onPatch={patchSettings}
+          onPatchReview={patchReviewMode}
           onReset={resetSettings}
           onClose={() => setDrawerOpen(false)}
           chunkState={

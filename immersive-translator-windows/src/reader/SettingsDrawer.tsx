@@ -11,11 +11,13 @@ import {
   READER_FONT_SIZE_MIN,
   READER_RATE_MAX,
   READER_RATE_MIN,
+  REVIEW_MODE_LABELS,
   type ArticleChunkState,
   type ContrastMode,
   type ReaderFontPair,
   type ReaderSettings,
   type ReaderTheme,
+  type ReviewModeSetting,
 } from "../core/readerTypes";
 import { ttsVoices, type TtsVoiceInfo } from "../lib/tauriBridge";
 
@@ -28,6 +30,8 @@ interface Props {
   chunkState?: ArticleChunkState;
   /** 重新标注当前文章（清空词块后重跑 LLM 标注）。 */
   onReannotate?: () => void;
+  /** 复习模式修改：只进全局默认，不写文章覆盖（缺省时退回 onPatch）。 */
+  onPatchReview?: (patch: Partial<ReaderSettings>) => void;
 }
 
 const CONTRAST_OPTIONS: { value: ContrastMode; label: string }[] = [
@@ -48,7 +52,7 @@ const THEMES: { value: ReaderTheme; label: string; swatch: string; text: string 
   { value: "oled", label: "纯黑", swatch: "#0a0a0b", text: "#b9bdc9" },
 ];
 
-export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState, onReannotate }: Props) {
+export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState, onReannotate, onPatchReview }: Props) {
   const [voices, setVoices] = useState<TtsVoiceInfo[]>([]);
 
   useEffect(() => {
@@ -207,6 +211,27 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
             </div>
           )}
 
+          <div className="drawer-group-title">复习</div>
+          <div
+            className="drawer-row"
+            title="产出式复习：智能混合按卡自动选择（词块→完形 · 熟词→听写 · 新词→识别）；完形=原句挖空打字，听写=听整句写整句"
+          >
+            <span className="label">复习模式</span>
+            <div className="control">
+              <div className="seg">
+                {(Object.keys(REVIEW_MODE_LABELS) as ReviewModeSetting[]).map((m) => (
+                  <button
+                    key={m}
+                    className={settings.reviewMode === m ? "active" : ""}
+                    onClick={() => (onPatchReview ?? onPatch)({ reviewMode: m })}
+                  >
+                    {REVIEW_MODE_LABELS[m]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
           <div className="drawer-group-title">朗读</div>
           <div className="drawer-row">
             <span className="label">音色</span>
@@ -277,11 +302,11 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
               <button
                 key={t.value}
                 className={`theme-swatch${settings.theme === t.value ? " active" : ""}`}
-                style={{ background: t.swatch, color: t.text }}
                 onClick={() => onPatch({ theme: t.value })}
                 aria-label={`主题：${t.label}`}
               >
-                {t.label}
+                <i style={{ background: t.swatch }} aria-hidden />
+                <span>{t.label}</span>
               </button>
             ))}
           </div>

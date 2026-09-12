@@ -32,8 +32,16 @@ import {
   type TranslationPhase,
 } from "../lib/tauriBridge";
 import { loadSettingsAsync, hasValidSettings } from "../lib/settingsStore";
-import { readerSaveArticle } from "../lib/readerStore";
+import { readerSaveArticle, readerSaveVocabWord } from "../lib/readerStore";
 import { buildArticleFromText } from "../core/articleBuilder";
+import {
+  buildReaderDictPrompt,
+  parseReaderDictResponse,
+  entryToVocab,
+  buildExamplePrompt,
+  parseExampleResponse,
+  type ReaderDictEntry,
+} from "../core/readerDict";
 import {
   classifyTranslationError,
   sanitizeDiagnosticText,
@@ -71,6 +79,7 @@ import {
   IconList,
   IconShuffle,
   IconSendToReader,
+  IconPlus,
 } from "../ui/icons";
 
 type Status = "idle" | "reading" | "translating" | "done" | "error" | "needsConfig";
@@ -220,6 +229,8 @@ export function TranslationPanel() {
   const [quickAction, setQuickAction] = useState<QuickActionState | null>(null);
   /** 词典卡片数据：后台预取完成且解析成功时存在。 */
   const [dictCardData, setDictCardData] = useState<DictCardData | null>(null);
+  /** 加入生词本的状态（划词收藏，例句由 LLM 生成）。 */
+  const [vocabState, setVocabState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   /** 词典预取状态：hidden=非词条/未开启；querying=后台查询中；ready=可秒开；error=可点击重试。 */
   const [dictStatus, setDictStatus] = useState<
     "hidden" | "querying" | "ready" | "error"
@@ -473,6 +484,7 @@ export function TranslationPanel() {
     setTiming(null);
     setLastRecordId(null);
     setFavToggled(false);
+    setVocabState("idle");
     lastDoneHistoryKeyRef.current = "";
     // 词典视图复位；词条类文本置为查询中并后台预取
     setDictView(false);
@@ -510,7 +522,9 @@ export function TranslationPanel() {
     }
   }
 
-  /** 发起（或重试）词典预取查询。与主翻译并行，事件按 dictTagRef 路由，不落历史。 */
+  /**
+   * 发起（或重试）词典预取查询。与主翻译并行，事件按 dictTagRef 路由，不落历史。
+   */
   async function lookupDict(text: string) {
     const s = await loadSettingsSafely();
     if (s === null) return;
@@ -543,6 +557,105 @@ export function TranslationPanel() {
       });
     } catch {
       setDictStatus("error");
+    }
+  }
+
+  /**
+   * 一次性 LLM 请求（按 tag 路由，主流程/词典预取的全局监听会忽略本 tag）。
+   * 供「加入生词本」的词条查询与例句生成使用；超时 60s。
+   */
+  function requestOnce(text: string, systemPrompt: string, tag: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const unsubs: Array<() => void> = [];
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        unsubs.forEach((u) => u());
+        fn();
+      };
+      const timer = window.setTimeout(() => finish(() => reject(new Error("生成超时，请重试"))), 60_000);
+      onTranslationDone((e) => {
+        if (e.tag === tag) finish(() => resolve(e.text));
+      }).then((u) => unsubs.push(u));
+      onTranslationError((e) => {
+        if (e.tag === tag) finish(() => reject(new Error(e.body || "请求失败")));
+      }).then((u) => unsubs.push(u));
+      onTranslationCancelled((e) => {
+        if (e.tag === tag) finish(() => reject(new Error("已取消")));
+      }).then((u) => unsubs.push(u));
+      void (async () => {
+        try {
+          const s = await loadSettingsAsync();
+          if (!hasValidSettings(s)) {
+            finish(() => reject(new Error("未配置翻译接口")));
+            return;
+          }
+          await translateStream({
+            text,
+            endpoint: s.endpoint,
+            apiKey: s.apiKey,
+            model: s.model,
+            systemPrompt,
+            stream: s.stream,
+            windowLabel: "panel",
+            tag,
+          });
+        } catch (error) {
+          finish(() => reject(error instanceof Error ? error : new Error(String(error))));
+        }
+      })();
+    });
+  }
+
+  /**
+   * 加入生词本（划词收藏）：词典查词条信息 + LLM 造一个例句（两者并行），
+   * 落库后广播给阅读室刷新。无文章语境，复习卡用例句作出语境。
+   */
+  async function addToVocab() {
+    const text = (lastOriginalRef.current || original).trim();
+    if (!text || vocabState === "saving") return;
+    setVocabState("saving");
+    try {
+      const s = await loadSettingsAsync();
+      if (!hasValidSettings(s)) throw new Error("先在设置里配置翻译接口");
+      const target = resolveTargetLanguage(text, { mode: s.translationMode, fixed: s.fixedTarget });
+      const dictTag = `v${++requestSeqRef.current}`;
+      const exTag = `v${++requestSeqRef.current}`;
+      const [dictRes, exRes] = await Promise.allSettled([
+        requestOnce(
+          text,
+          buildReaderDictPrompt({ targetLanguage: target, customStyle: "", glossaryText: s.glossaryText }),
+          dictTag,
+        ),
+        // 例句按「规整后的查询词」生成，与词条查询并行
+        requestOnce(text.replace(/^\s+|\s+$/g, ""), buildExamplePrompt(text, target), exTag),
+      ]);
+      // 词条信息：词典成功用词条；失败/非词条时用当前译文兜底（保证能收藏）
+      let entry: ReaderDictEntry | null = null;
+      if (dictRes.status === "fulfilled") {
+        const parsed = parseReaderDictResponse(dictRes.value);
+        if (parsed.kind === "entry") entry = parsed.entry;
+      }
+      if (!entry) {
+        const cn = translated.trim();
+        if (!cn) throw new Error("词典查询失败，请稍后重试");
+        entry = { word: text, senses: [{ pos: "", cn }] };
+      }
+      const word = entryToVocab(entry, { articleId: "", sentenceIdx: 0 });
+      if (exRes.status === "fulfilled") {
+        const example = parseExampleResponse(exRes.value, entry.word);
+        if (example) word.example = example;
+      }
+      await readerSaveVocabWord(word);
+      await emit("reader:vocab-added", word.id);
+      setVocabState("saved");
+      flashCopied(`已加入生词本：${word.word}${word.example ? "（含例句）" : ""}`);
+    } catch (error) {
+      setVocabState("error");
+      const message = error instanceof Error ? error.message : String(error);
+      flashCopied(`加入生词本失败：${message}`);
     }
   }
 
@@ -1048,6 +1161,23 @@ export function TranslationPanel() {
               title={favToggled ? "取消收藏" : "收藏到历史"}
             >
               <IconStar size={15} filled={favToggled} />
+            </button>
+          )}
+          {/* 加入生词本（划词收藏）：词条信息 + LLM 例句，复习时在阅读室出语境 */}
+          {status === "done" && (
+            <button
+              className={`icon-btn${vocabState === "saved" ? " active" : ""}`}
+              onClick={() => void addToVocab()}
+              disabled={!original.trim() || vocabState === "saving"}
+              title={
+                vocabState === "saved"
+                  ? "已加入生词本"
+                  : vocabState === "saving"
+                    ? "正在查询词条并生成例句…"
+                    : "加入生词本"
+              }
+            >
+              {vocabState === "saved" ? <IconCheck size={15} /> : <IconPlus size={15} />}
             </button>
           )}
           {/* 发送到阅读室（§8.2）：位于「收藏」和「固定」之间，只新增不改旧行为 */}

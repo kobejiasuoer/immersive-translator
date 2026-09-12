@@ -101,6 +101,11 @@ export async function takePendingReaderImport(): Promise<ReaderImportPayload | n
   return invoke<ReaderImportPayload | null>("take_pending_reader_import");
 }
 
+/** 阅读室窗口挂载时取走「打开复习页」请求（托盘「生词本」入口，窗口重建路径）。 */
+export async function takePendingOpenReview(): Promise<boolean> {
+  return invoke<boolean>("take_pending_open_review");
+}
+
 // ---- OCR 模型管理 ----
 
 /** 检查 OCR 模型是否就绪（det + rec 存在）。 */

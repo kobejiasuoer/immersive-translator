@@ -8,6 +8,39 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // 浏览器直开（npm run dev + ?window=xxx）时的 Tauri 垫片：
+      // Tauri 窗口里 __TAURI_INTERNALS__ 已存在，跳过；纯浏览器里补一个最小实现。
+      // 密钥存 localStorage（仅本机预览用），其余命令按需补充，未识别的命令返回拒绝。
+      if (!window.__TAURI_INTERNALS__) {
+        const label = new URLSearchParams(window.location.search).get("window") || "panel";
+        const MOCK_SECRET_KEY = "mock-tauri-secret";
+        window.__TAURI_INTERNALS__ = {
+          metadata: { currentWindow: { label }, currentWebview: { windowLabel: label, label: "main" } },
+          plugins: {},
+          transformCallback: (cb) => cb,
+          invoke: (cmd, args) => {
+            switch (cmd) {
+              case "secret_get":
+                return Promise.resolve(localStorage.getItem(MOCK_SECRET_KEY) ?? "");
+              case "secret_set":
+                localStorage.setItem(MOCK_SECRET_KEY, args?.value ?? "");
+                return Promise.resolve(null);
+              case "ocr_models_ready":
+                return Promise.resolve(true);
+              case "plugin:app|version":
+                return Promise.resolve("0.3.0-dev");
+              case "plugin:event|listen":
+                return Promise.resolve(1);
+              case "plugin:event|unlisten":
+                return Promise.resolve(null);
+              default:
+                return Promise.reject(new Error("浏览器预览模式：Tauri 命令不可用（" + cmd + "）"));
+            }
+          },
+        };
+      }
+    </script>
     <script type="module" src="/src/main.tsx" defer></script>
   </body>
 </html>

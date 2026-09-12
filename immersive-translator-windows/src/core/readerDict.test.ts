@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildExamplePrompt,
   buildReaderDictPrompt,
   entryToVocab,
   extractJsonObject,
   extractSelectionText,
+  parseExampleResponse,
   parseReaderDictResponse,
 } from "./readerDict";
 
@@ -152,5 +154,38 @@ describe("词块字段（chunkType/pattern/trap）", () => {
     );
     expect(single.kind).toBe("word");
     expect(single.chunkType).toBeUndefined();
+  });
+});
+
+describe("buildExamplePrompt", () => {
+  it("把目标词嵌入提示词（含原形硬约束）", () => {
+    const p = buildExamplePrompt("take root", "简体中文");
+    expect(p).toContain('"take root"');
+    expect(p).toContain("EXACTLY this form");
+    expect(p).toContain("简体中文");
+  });
+});
+
+describe("parseExampleResponse", () => {
+  it("解析合法例句对", () => {
+    const r = parseExampleResponse('{"en":"These ideas take root slowly.","zh":"这些想法扎根很慢。"}', "take root");
+    expect(r).toEqual({ en: "These ideas take root slowly.", zh: "这些想法扎根很慢。" });
+  });
+
+  it("例句不含目标词 → null（宁缺勿错）", () => {
+    expect(parseExampleResponse('{"en":"Unrelated words here.","zh":"无关"}', "take root")).toBeNull();
+  });
+
+  it("缺 en / 非 JSON / 超长 → null", () => {
+    expect(parseExampleResponse('{"zh":"只有中文"}', "word")).toBeNull();
+    expect(parseExampleResponse("not json", "word")).toBeNull();
+    expect(parseExampleResponse(`{"en":"${"x".repeat(240)}"}`, "word")).toBeNull();
+  });
+
+  it("zh 缺省 → null（字段可空）", () => {
+    expect(parseExampleResponse('{"en":"A word appears here."}', "word")).toEqual({
+      en: "A word appears here.",
+      zh: null,
+    });
   });
 });

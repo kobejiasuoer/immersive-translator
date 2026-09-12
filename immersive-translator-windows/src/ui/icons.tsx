@@ -347,3 +347,13 @@ export const IconPlus = (p: IconProps) => (
     <line x1="5" y1="12" x2="19" y2="12" />
   </svg>
 );
+
+/** 键盘（快捷键） */
+export const IconKeyboard = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="2" y="6" width="20" height="13" rx="2" />
+    <path d="M6 10.5h.01M10 10.5h.01M14 10.5h.01M18 10.5h.01" />
+    <path d="M6 14.5h.01M18 14.5h.01" />
+    <path d="M9 14.5h6" />
+  </svg>
+);

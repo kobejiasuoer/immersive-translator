@@ -58,6 +58,11 @@ struct ReaderImportPayload {
 #[derive(Default)]
 struct PendingReaderImport(Mutex<Option<ReaderImportPayload>>);
 
+/// 托盘「生词本」要求阅读室打开复习页：窗口已存在时走事件即时切换；
+/// 窗口不存在时先记下标记，等窗口挂载后取走（同 PendingReaderImport 模式）。
+#[derive(Default)]
+struct PendingOpenReview(Mutex<Option<()>>);
+
 // 自动读取和手动复制等待共用一次会话，避免热键连按启动多个剪贴板监听。
 static SELECTION_RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -434,6 +439,12 @@ fn take_pending_reader_import(
     state: tauri::State<'_, PendingReaderImport>,
 ) -> Option<ReaderImportPayload> {
     state.0.lock().unwrap().take()
+}
+
+/// 阅读室窗口挂载时取走「打开复习页」请求（托盘「生词本」入口）。
+#[tauri::command]
+fn take_pending_open_review(state: tauri::State<'_, PendingOpenReview>) -> bool {
+    state.0.lock().unwrap().take().is_some()
 }
 
 fn persist_hotkeys(
@@ -999,6 +1010,7 @@ pub fn run() {
         .manage(tts::TtsState::default())
         .manage(PendingPanelPayload::default())
         .manage(PendingReaderImport::default())
+        .manage(PendingOpenReview::default())
         .manage(ActiveHotkeys::default())
         .invoke_handler(tauri::generate_handler![
             take_pending_panel_payload,
@@ -1032,6 +1044,7 @@ pub fn run() {
             show_ocr_result,
             reregister_hotkeys,
             take_pending_reader_import,
+            take_pending_open_review,
             reader_store::reader_list_articles,
             reader_store::reader_get_article,
             reader_store::reader_save_article,
@@ -1047,11 +1060,13 @@ pub fn run() {
             // 下组是「窗口/应用」（打开某个界面）。
             let ocr = MenuItem::with_id(app, "ocr", "截图翻译 (OCR)", true, None::<&str>)?;
             let reader = MenuItem::with_id(app, "reader", "沉浸阅读室", true, None::<&str>)?;
+            let vocab = MenuItem::with_id(app, "vocab", "生词本", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let history = MenuItem::with_id(app, "history", "翻译历史", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&ocr, &reader, &sep, &history, &settings, &quit])?;
+            let menu =
+                Menu::with_items(app, &[&ocr, &reader, &vocab, &sep, &history, &settings, &quit])?;
 
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
@@ -1063,6 +1078,17 @@ pub fn run() {
                     "settings" => show_window(app, "settings"),
                     "history" => show_window(app, "history"),
                     "reader" => show_reader_window(app),
+                    "vocab" => {
+                        // 生词本：打开阅读室并切到复习页。窗口已存在 → 事件即时切换；
+                        // 不存在 → 记下标记，窗口挂载后由 take_pending_open_review 消费。
+                        if app.get_webview_window("reader").is_some() {
+                            show_reader_window(app);
+                            let _ = app.emit_to("reader", "reader:open-review", ());
+                        } else {
+                            *app.state::<PendingOpenReview>().0.lock().unwrap() = Some(());
+                            show_reader_window(app);
+                        }
+                    }
                     "ocr" => {
                         // 截图 OCR：截全屏 → 发给 overlay → 显示 overlay
                         open_ocr_overlay(app.clone());

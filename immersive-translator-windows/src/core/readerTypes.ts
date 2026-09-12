@@ -103,6 +103,12 @@ export interface VocabSource {
   sentenceIdx: number;
 }
 
+/** 无文章来源的生词（如划词浮窗收藏）配的 LLM 例句。 */
+export interface VocabExample {
+  en: string;
+  zh: string | null;
+}
+
 export interface VocabSense {
   pos: string;
   cn: string;
@@ -135,6 +141,8 @@ export interface VocabWord {
   source: VocabSource;
   srs: VocabSrsState;
   addedAt: number;
+  /** source.articleId 为空（划词收藏）时的 LLM 例句，复习卡用作出语境。 */
+  example?: VocabExample;
 }
 
 export interface VocabSrsState {
@@ -148,6 +156,19 @@ export interface VocabSrsState {
 
 /** 对照模式：仅英文 / 对照 / 仅中文。 */
 export type ContrastMode = "en" | "dual" | "zh";
+
+/** 产出式复习的练习形态：识别翻卡 / 完形填空 / 听写。 */
+export type RecallMode = "recognition" | "cloze" | "dictation";
+
+/** 复习模式设置：smart = 按卡智能路由（词块→完形 · 熟词→听写 · 新词→识别）。 */
+export type ReviewModeSetting = "smart" | RecallMode;
+
+export const REVIEW_MODE_LABELS: Record<ReviewModeSetting, string> = {
+  smart: "智能混合",
+  recognition: "识别",
+  cloze: "完形",
+  dictation: "听写",
+};
 
 /** 译文遮罩样式：blank = 留白显影（悬停出胶囊），frost = 毛玻璃（模糊→揭开）。 */
 export type MaskStyle = "blank" | "frost";
@@ -181,6 +202,8 @@ export interface ReaderSettings {
   chunkHighlight: boolean;
   /** 生词再现标记：正文中标记已收藏的词/词块（纯本地计算）。 */
   showVocabMarks: boolean;
+  /** 复习模式（全局，不入文章覆盖）：smart 按卡路由到识别/完形/听写。 */
+  reviewMode: ReviewModeSetting;
 }
 
 export const DEFAULT_READER_SETTINGS: ReaderSettings = {
@@ -199,6 +222,7 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   shadowingMode: false,
   chunkHighlight: true,
   showVocabMarks: true,
+  reviewMode: "smart",
 };
 
 /** 屏 B 字号步进器范围。 */
@@ -252,6 +276,7 @@ export function mergeReaderSettings(
   merged.shadowingMode = bool(override.shadowingMode) ?? merged.shadowingMode;
   merged.chunkHighlight = bool(override.chunkHighlight) ?? merged.chunkHighlight;
   merged.showVocabMarks = bool(override.showVocabMarks) ?? merged.showVocabMarks;
+  merged.reviewMode = oneOf(override.reviewMode, ["smart", "recognition", "cloze", "dictation"]) ?? merged.reviewMode;
   return merged;
 }
 

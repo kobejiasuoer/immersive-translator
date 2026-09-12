@@ -8,10 +8,8 @@ import {
   IconCheck,
   IconClose,
   IconHelp,
-  IconMoon,
   IconSearch,
   IconSettings,
-  IconTranslate,
 } from "../ui/icons";
 import type { ContrastMode, ReaderSettings, ReaderTheme } from "../core/readerTypes";
 
@@ -71,16 +69,13 @@ export function ReaderTopBar({ articleName, settings, onPatchSettings, onOpenDra
   return (
     <header className="reader-topbar">
       <span className="reader-logo" aria-hidden>
-        <IconTranslate size={15} />
+        阅
       </span>
       <span className="reader-appname">沉浸阅读室</span>
       {articleName && (
-        <>
-          <span className="sep" aria-hidden>|</span>
-          <span className="reader-article-name" title={articleName}>
-            {articleName}
-          </span>
-        </>
+        <span className="reader-article-name" title={articleName}>
+          {articleName}
+        </span>
       )}
       <div className="spacer" />
       <div className="reader-pop-anchor" ref={anchorRef} style={{ display: "flex", alignItems: "center", gap: 2 }}>
@@ -112,8 +107,12 @@ export function ReaderTopBar({ articleName, settings, onPatchSettings, onOpenDra
         >
           <IconSearch size={15} />
         </button>
-        <button className="reader-tb-btn" onClick={cycleTheme} title={`主题：${themeLabel[settings.theme]}（点击切换）`}>
-          <IconMoon size={15} />
+        <button
+          className="reader-tb-btn reader-theme-btn"
+          onClick={cycleTheme}
+          title={`主题：${themeLabel[settings.theme]}（点击切换）`}
+        >
+          {themeLabel[settings.theme]}
         </button>
         <button
           className={`reader-tb-btn${helpOpen ? " active" : ""}`}

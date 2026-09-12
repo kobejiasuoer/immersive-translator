@@ -1,0 +1,1220 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>沉浸阅读室 · 产出式复习原型（Active Recall）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   沉浸阅读室 · 交互原型 v3 ——「产出式复习 · Active Recall」
+   复习流升级：识别（现状）→ 完形填空 / 听写 / 直译陷阱检测
+   单文件 · 无依赖 · 令牌与 reading-room-v2.html 同源
+   ============================================================ */
+
+/* ---------- 令牌 · 浅色（默认，= app light） ---------- */
+:root, [data-theme="light"] {
+  --bg:#f4f5f9;
+  --surface:   #ffffff;
+  --surface-2:#f9fafc;
+  --border:      #e4e7ee;
+  --border-strong:#d6dae4;
+
+  --text-1: #1c2029;
+  --text-2:    #4b5261;
+  --text-3:    #7c8494;
+  --text-4:    #a6adbb;
+
+  --accent:         #4c5ff0;
+  --accent-hover:   #3f52e0;
+  --accent-soft:    #eef0fe;
+  --accent-softer:  #f6f7ff;
+  --accent-hl:      #dde2fd;
+  --on-accent:      #ffffff;
+
+  --ok:        #1f8a4c;
+  --ok-soft:   #e8f5ee;
+  --warn:      #b45309;
+  --warn-soft: #fdf1e3;
+  --err:       #cf4141;
+  --err-soft:  #fdeeee;
+
+  --shadow-pop: 0 12px 32px rgba(16, 24, 40, 0.16), 0 3px 10px rgba(16, 24, 40, 0.1);
+  --shadow-card:0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+  --sel: rgba(76, 95, 240, 0.2);
+}
+/* ---------- 深色（= app dark） ---------- */
+[data-theme="dark"] {
+  --bg:#1d1f26;
+  --surface:   #262933;
+  --surface-2:#2e313c;
+  --border:      #373b47;
+  --border-strong:#474c5a;
+
+  --text-1: #edeef4;
+  --text-2:    #c4c9d6;
+  --text-3:    #9399ab;
+  --text-4:    #6d7384;
+
+  --accent:         #7d8cff;
+  --accent-hover:   #93a0ff;
+  --accent-soft:    rgba(125, 140, 255, 0.16);
+  --accent-softer:  rgba(125, 140, 255, 0.09);
+  --accent-hl:      rgba(125, 140, 255, 0.30);
+  --on-accent:      #ffffff;
+
+  --ok:        #4cc38a;
+  --ok-soft:   rgba(76, 195, 138, 0.14);
+  --warn:      #e0a458;
+  --warn-soft: rgba(224, 164, 88, 0.14);
+  --err:       #e57070;
+  --err-soft:  rgba(229, 112, 112, 0.14);
+
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  --shadow-card:0 1px 2px rgba(0, 0, 0, 0.3);
+  --sel: rgba(125, 140, 255, 0.3);
+}
+/* ---------- 护眼 ---------- */
+[data-theme="sepia"] {
+  --bg:#f5efdf;
+  --surface:   #fbf7ec;
+  --surface-2:#f1ead7;
+  --border:      #e4dac0;
+  --border-strong:#d2c6a6;
+
+  --text-1: #37301f;
+  --text-2:    #5a5138;
+  --text-3:    #857a5c;
+  --text-4:    #a89d80;
+
+  --accent:         #4c5ff0;
+  --accent-hover:   #3f52e0;
+  --accent-soft:    rgba(76, 95, 240, 0.10);
+  --accent-softer:  rgba(76, 95, 240, 0.06);
+  --accent-hl:      rgba(76, 95, 240, 0.20);
+  --on-accent:      #ffffff;
+
+  --ok:        #35793f;
+  --ok-soft:   rgba(53, 121, 63, 0.12);
+  --warn:      #9a6212;
+  --warn-soft: rgba(154, 98, 18, 0.12);
+  --err:       #b03a32;
+  --err-soft:  rgba(176, 58, 50, 0.12);
+
+  --shadow-pop: 0 12px 32px rgba(80, 66, 32, 0.18), 0 3px 10px rgba(80, 66, 32, 0.10);
+  --shadow-card:0 1px 2px rgba(80, 66, 32, 0.05), 0 1px 3px rgba(80, 66, 32, 0.06);
+  --sel: rgba(76, 95, 240, 0.18);
+}
+/* ---------- 纯黑（OLED） ---------- */
+[data-theme="oled"] {
+  --bg:#000000;
+  --surface:   #0a0a0b;
+  --surface-2:#141416;
+  --border:      #212126;
+  --border-strong:#2f2f36;
+
+  --text-1: #e8e7e4;
+  --text-2:    #b0aeab;
+  --text-3:    #77756f;
+  --text-4:    #4c4a46;
+
+  --accent:         #7d8cff;
+  --accent-hover:   #93a0ff;
+  --accent-soft:    rgba(125, 140, 255, 0.13);
+  --accent-softer:  rgba(125, 140, 255, 0.07);
+  --accent-hl:      rgba(125, 140, 255, 0.26);
+  --on-accent:      #0c0c10;
+
+  --ok:        #4cc38a;
+  --ok-soft:   rgba(76, 195, 138, 0.12);
+  --warn:      #e0a458;
+  --warn-soft: rgba(224, 164, 88, 0.12);
+  --err:       #e57070;
+  --err-soft:  rgba(229, 112, 112, 0.12);
+
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.8), 0 3px 10px rgba(0, 0, 0, 0.5);
+  --shadow-card:0 1px 2px rgba(0, 0, 0, 0.6);
+  --sel: rgba(125, 140, 255, 0.28);
+}
+
+/* ---------- 基底 ---------- */
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  font-size: 13.5px; line-height: 1.6;
+  color: var(--text-1); background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  transition: background .3s ease, color .3s ease;
+}
+::selection { background: var(--sel); }
+button { font-family: inherit; color: inherit; }
+button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+.serif-en { font-family: "Source Serif 4", Georgia, "Times New Roman", serif; }
+
+/* ---------- 原型说明条 ---------- */
+.proto-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 20px;
+  background: var(--accent-softer);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--text-2);
+}
+.proto-banner .tag {
+  flex: none;
+  padding: 1px 9px; border-radius: 999px;
+  background: var(--accent); color: var(--on-accent);
+  font-weight: 600; font-size: 11px;
+}
+.proto-banner b { color: var(--text-1); }
+.proto-banner .close { margin-left: auto; flex: none; }
+
+/* ---------- 顶栏 ---------- */
+.topbar {
+  height: 52px; flex: none;
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.topbar .logo {
+  width: 26px; height: 26px; border-radius: 8px;
+  background: linear-gradient(135deg, #4c5ff0, #7a5cf0);
+  color: #fff; font-size: 13px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.topbar .name { font-weight: 600; font-size: 14px; }
+.topbar .crumb { color: var(--text-3); font-size: 12.5px; }
+.topbar .crumb::before { content: "/"; margin-right: 10px; color: var(--text-4); }
+.tb-btn {
+  height: 30px; min-width: 30px; padding: 0 9px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  border: none; background: transparent; border-radius: 7px;
+  color: var(--text-2); font-size: 12.5px; cursor: pointer;
+}
+.tb-btn:hover { background: var(--accent-softer); color: var(--text-1); }
+.spacer { flex: 1; }
+
+/* ---------- 主布局（= 现复习页 review-layout） ---------- */
+.layout {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  display: flex; flex-direction: column;
+  padding-top: 30px; /* banner 空间；关掉后 JS 会归零 */
+}
+.layout.no-banner { padding-top: 0; }
+.body { flex: 1; display: flex; min-height: 0; }
+
+.side {
+  width: 240px; flex: none;
+  border-right: 1px solid var(--border);
+  padding: 26px 8px 20px 26px;
+  display: flex; flex-direction: column; gap: 4px;
+  overflow-y: auto;
+}
+.stat-card { padding: 7px 10px; border-radius: var(--radius-md, 8px); }
+.stat-num {
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 22px; font-weight: 600; line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.stat-label { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.kind-split { margin-top: 8px; font-size: 11.5px; color: var(--text-3); line-height: 1.6; }
+.section-label {
+  font-size: 11px; font-weight: 700; color: var(--text-3);
+  margin: 18px 0 6px; letter-spacing: .02em;
+}
+/* 左栏 · 练习方式说明卡 */
+.route-card {
+  margin-top: 4px; padding: 10px 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  font-size: 11.5px; color: var(--text-2); line-height: 1.7;
+}
+.route-card .rt { display: flex; gap: 6px; align-items: baseline; margin-top: 3px; }
+.route-card .rt .k {
+  flex: none; padding: 0 6px; border-radius: 4px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 10.5px; font-weight: 700;
+}
+.route-card .rt.trap .k { background: var(--err-soft); color: var(--err); }
+
+/* ---------- 主区 ---------- */
+.main { flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; }
+.col { width: 640px; max-width: 100%; padding: 22px 16px 60px; display: flex; flex-direction: column; gap: 14px; }
+
+/* 模式分段控件 */
+.mode-row { display: flex; align-items: center; gap: 10px; }
+.mode-switch {
+  display: inline-flex; padding: 3px; gap: 2px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+}
+.mode-btn {
+  border: none; background: transparent; border-radius: 8px;
+  padding: 5px 13px; font-size: 12.5px; color: var(--text-3); cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.mode-btn:hover { color: var(--text-1); }
+.mode-btn.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.mode-btn .kbd {
+  font-size: 10px; color: var(--text-4); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0 4px; line-height: 1.5;
+}
+.mode-desc { font-size: 12px; color: var(--text-3); }
+
+/* ---------- 卡片 ---------- */
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow-card);
+  padding: 26px 34px 22px;
+  display: flex; flex-direction: column; gap: 15px;
+}
+.card-meta { display: flex; align-items: baseline; gap: 10px; font-size: 12px; color: var(--text-3); }
+.card-meta .mode-pill {
+  padding: 1px 9px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  background: var(--accent-soft); color: var(--accent);
+}
+.card-meta .mode-pill.recognition { background: var(--surface-2); color: var(--text-3); }
+.card-meta .mode-pill.dictation { background: var(--ok-soft); color: var(--ok); }
+
+.word-line { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.word { font-family: "Source Serif 4", Georgia, serif; font-size: 34px; line-height: 1.15; }
+.phonetic { font-size: 13.5px; color: var(--text-3); }
+.badge {
+  display: inline-flex; align-items: center; padding: 1px 10px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600;
+}
+.icon-btn {
+  width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface); cursor: pointer; color: var(--text-2);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.sense-line { font-size: 14.5px; line-height: 1.7; font-family: "Noto Serif SC", serif; }
+.sense-line .pos { color: var(--text-3); font-style: italic; margin-right: 5px; font-size: 13px; }
+.chunk-detail { font-size: 13px; line-height: 1.7; color: var(--text-2); }
+.chunk-detail i { font-family: "Source Serif 4", Georgia, serif; }
+.chunk-detail.trap { color: var(--err); }
+
+/* ---------- 完形卡 · 句内挖空 ---------- */
+.cloze-sentence {
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 19px; line-height: 2.05; color: var(--text-1);
+}
+.blank-input {
+  font-family: inherit; font-size: inherit; line-height: inherit; text-align: center;
+  border: none; outline: none; border-bottom: 2px solid var(--accent);
+  background: var(--accent-softer); color: var(--accent);
+  min-width: 90px; max-width: 340px; width: 130px;
+  padding: 0 8px; margin: 0 3px; border-radius: 6px 6px 0 0;
+  transition: width .18s ease, background .15s ease;
+}
+.blank-input::placeholder { color: var(--text-4); font-style: italic; font-size: 14px; }
+.blank-input:focus { background: var(--accent-soft); }
+.blank-input.done { border-bottom-color: transparent; }
+.cloze-cn { font-family: "Noto Serif SC", serif; font-size: 14px; color: var(--text-3); }
+.cn-masked { cursor: pointer; border-bottom: 1px dashed var(--border-strong); }
+.cn-masked:hover { color: var(--text-2); }
+
+/* 提示阶梯 */
+.hints { display: flex; flex-direction: column; gap: 6px; }
+.hint {
+  font-size: 12.5px; color: var(--text-2); line-height: 1.65;
+  padding: 7px 11px; border-radius: 8px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  animation: rise .18s ease-out;
+}
+.hint .h-tag { color: var(--accent); font-weight: 600; margin-right: 7px; font-size: 11px; }
+.hint.trap-hint { background: var(--err-soft); border-color: transparent; color: var(--err); }
+@keyframes rise { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.hint-btn {
+  align-self: flex-start;
+  border: 1px dashed var(--border-strong); border-radius: 8px;
+  background: transparent; color: var(--text-3);
+  font-size: 12px; padding: 4px 12px; cursor: pointer;
+}
+.hint-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ---------- 听写卡 ---------- */
+.dictation-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; border-radius: 10px;
+  background: var(--surface-2); border: 1px solid var(--border);
+}
+.play-main {
+  height: 38px; padding: 0 16px; border-radius: 9px; border: none;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.play-main:hover { background: var(--accent-hover); }
+.play-main:disabled { opacity: .55; cursor: default; }
+.replay-left { font-size: 11.5px; color: var(--text-3); }
+.dict-input {
+  width: 100%; min-height: 66px; resize: vertical;
+  font-family: "Source Serif 4", Georgia, serif; font-size: 16.5px; line-height: 1.7;
+  color: var(--text-1); background: var(--surface);
+  border: 1px solid var(--border-strong); border-radius: 10px;
+  padding: 10px 14px; outline: none;
+}
+.dict-input:focus { border-color: var(--accent); }
+
+/* ---------- 判分反馈 ---------- */
+.verdict {
+  border-radius: 10px; padding: 11px 14px;
+  font-size: 13px; line-height: 1.7;
+  display: flex; flex-direction: column; gap: 5px;
+  animation: rise .18s ease-out;
+}
+.verdict .v-head { font-weight: 700; font-size: 12.5px; display: flex; align-items: center; gap: 7px; }
+.verdict.perfect { background: var(--ok-soft); color: var(--ok); }
+.verdict.close   { background: var(--warn-soft); color: var(--warn); }
+.verdict.trapv   { background: var(--err-soft); color: var(--err); }
+.verdict.wrong   { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
+.verdict .v-body { color: var(--text-2); font-size: 12.5px; }
+.verdict .v-body b { color: var(--text-1); }
+.verdict .ans { font-family: "Source Serif 4", Georgia, serif; font-size: 15px; color: var(--text-1); }
+
+/* 词级 diff（听写）：绿=写对；红+词=漏写（该写未写）；红删除线=多写/写错 */
+.diff-line {
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 15.5px; line-height: 2;
+}
+.diff-line .w-ok   { color: var(--ok); }
+.diff-line .w-miss { color: var(--err); border-bottom: 2px dashed var(--err); padding: 0 2px; }
+.diff-line .w-miss::before { content: "+"; font-size: 12px; }
+.diff-line .w-extra { color: var(--err); text-decoration: line-through; margin: 0 2px; }
+
+/* ---------- 原句 / 来源 ---------- */
+.source-sentence {
+  border-left: 2px solid var(--border-strong);
+  padding: 10px 14px;
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 13px; line-height: 1.6; color: var(--text-2);
+  cursor: pointer; transition: border-color .15s ease;
+}
+.source-sentence:hover { border-left-color: var(--accent); }
+.source-sentence .from { display: block; margin-top: 4px; font-size: 11.5px; color: var(--text-3); font-family: inherit; }
+
+/* ---------- 评分带 ---------- */
+.gradebar {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px;
+}
+.grade-btn {
+  border: 1px solid var(--border-strong); background: var(--surface);
+  border-radius: 10px; padding: 10px 8px 8px; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  transition: border-color .15s ease, background .15s ease;
+  position: relative;
+}
+.grade-btn .name { font-size: 13.5px; font-weight: 600; }
+.grade-btn .next { font-size: 11.5px; color: var(--text-3); }
+.grade-btn .kbd {
+  font-size: 10px; color: var(--text-4); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0 4px; margin-top: 2px;
+}
+.grade-btn:hover { border-color: var(--accent); background: var(--accent-softer); }
+.grade-btn.forgot:hover { border-color: var(--err); background: var(--err-soft); }
+.grade-btn.easy:hover { border-color: var(--ok); background: var(--ok-soft); }
+.grade-btn.focus { border-color: var(--accent); background: var(--accent-softer); }
+.grade-btn.focus::after {
+  content: "建议"; position: absolute; top: -9px; right: 8px;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 10px; font-weight: 700; padding: 0 7px; border-radius: 999px;
+  line-height: 1.6;
+}
+.gradebar.disabled { opacity: .38; pointer-events: none; }
+
+.shortcut-hints { display: flex; justify-content: center; gap: 14px; font-size: 11px; color: var(--text-4); }
+kbd, .kbd {
+  font-family: inherit; font-size: 10.5px; color: var(--text-3);
+  border: 1px solid var(--border); border-bottom-width: 2px;
+  border-radius: 4px; padding: 0 5px; background: var(--surface);
+}
+
+/* 提交按钮行 */
+.submit-row { display: flex; align-items: center; gap: 12px; }
+.submit-btn {
+  height: 36px; padding: 0 22px; border-radius: 9px; border: none;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.submit-btn:hover { background: var(--accent-hover); }
+.submit-btn.ghost { background: transparent; border: 1px solid var(--border-strong); color: var(--text-2); }
+.submit-btn.ghost:hover { color: var(--text-1); border-color: var(--text-3); background: var(--surface-2); }
+.enter-hint { font-size: 11px; color: var(--text-4); }
+
+/* ---------- 结果摘要 ---------- */
+.summary { display: flex; flex-direction: column; gap: 16px; align-items: center; text-align: center; padding: 46px 0 10px; }
+.summary .big { font-family: "Source Serif 4", Georgia, serif; font-size: 26px; }
+.summary .sub { font-size: 13px; color: var(--text-3); }
+.sum-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; width: 100%; margin-top: 6px; }
+.sum-cell { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 8px; }
+.sum-cell .n { font-family: "Source Serif 4", Georgia, serif; font-size: 24px; font-weight: 600; }
+.sum-cell .l { font-size: 11.5px; margin-top: 2px; }
+.sum-cell.ok { color: var(--ok); } .sum-cell.warn { color: var(--warn); }
+.sum-cell.err { color: var(--err); } .sum-cell.mute { color: var(--text-3); }
+.sum-note { font-size: 12px; color: var(--text-3); max-width: 460px; line-height: 1.7; }
+
+/* ---------- 帮助弹层 ---------- */
+.mask-layer { position: fixed; inset: 0; background: rgba(10, 12, 20, .32); z-index: 40; }
+.dlg {
+  position: fixed; z-index: 41; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 460px; max-width: calc(100vw - 40px);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow-pop); padding: 20px 22px;
+}
+.dlg h3 { margin: 0 0 10px; font-size: 15px; }
+.dlg ul { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--text-2); line-height: 2; }
+
+/* toast */
+.toast {
+  position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%);
+  background: var(--text-1); color: var(--bg);
+  padding: 8px 18px; border-radius: 999px; font-size: 12.5px;
+  box-shadow: var(--shadow-pop); z-index: 60;
+  animation: rise .18s ease-out;
+}
+
+.hidden { display: none !important; }
+@media (max-width: 980px) { .side { display: none; } }
+</style>
+</head>
+<body>
+
+<div class="layout" id="layout">
+  <!-- 原型说明条 -->
+  <div class="proto-banner" id="banner">
+    <span class="tag">原型 v3</span>
+    <span><b>产出式复习</b> —— 把复习从「看词想义」升级为「完形填空 · 听写 · 直译陷阱检测」。判分纯本地、四档评分桥接不变。<a href="#" id="whyLink" style="color:var(--accent)">为什么做这个？</a></span>
+    <button class="tb-btn close" id="bannerClose" title="收起说明条">收起</button>
+  </div>
+
+  <!-- 顶栏 -->
+  <div class="topbar">
+    <div class="logo">读</div>
+    <span class="name">沉浸阅读室</span>
+    <span class="crumb">生词本 · 复习</span>
+    <span class="spacer"></span>
+    <span class="mode-desc" id="queueInfo"></span>
+    <button class="tb-btn" id="helpBtn" title="快捷键与玩法说明">帮助</button>
+    <button class="tb-btn" id="themeBtn" title="主题（浅色 / 深色 / 护眼 / 纯黑）">浅色</button>
+  </div>
+
+  <div class="body">
+    <!-- 左栏：沿用现复习页布局 -->
+    <aside class="side">
+      <div class="stat-card">
+        <div class="stat-num" id="statToday">0/6</div>
+        <div class="stat-label">今日复习（到期 6 词待复习）</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">14</div>
+        <div class="stat-label">连续打卡天数</div>
+      </div>
+      <div class="section-label">练习方式 · 智能路由</div>
+      <div class="route-card">
+        <div class="rt"><span class="k">识别</span><span>新词（当天首见）先认脸</span></div>
+        <div class="rt"><span class="k">完形</span><span>词块卡：原句挖空，产出搭配</span></div>
+        <div class="rt"><span class="k">听写</span><span>熟词（间隔 ≥ 1 天）绑定听力拼写</span></div>
+        <div class="rt trap"><span class="k">陷阱</span><span>命中直译陷阱时单独反馈</span></div>
+      </div>
+      <div class="kind-split">单词 31（到期 2）· 词块 18（到期 4）<br>判分与计数同源 srs.dueAt</div>
+    </aside>
+
+    <!-- 主区 -->
+    <div class="main">
+      <div class="col">
+        <!-- 模式切换 -->
+        <div class="mode-row">
+          <div class="mode-switch" id="modeSwitch">
+            <button class="mode-btn on" data-mode="smart" title="按卡自动选择练习方式">智能混合</button>
+            <button class="mode-btn" data-mode="recognition" title="现状保留：看词想义">识别</button>
+            <button class="mode-btn" data-mode="cloze" title="原句挖空，打字产出">完形</button>
+            <button class="mode-btn" data-mode="dictation" title="听句写句">听写</button>
+          </div>
+          <span class="mode-desc" id="modeDesc"></span>
+        </div>
+
+        <!-- 卡片容器 -->
+        <div id="cardHost"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="mask-layer hidden" id="maskLayer"></div>
+<div class="dlg hidden" id="helpDlg">
+  <h3>产出式复习 · 玩法与快捷键</h3>
+  <ul>
+    <li><b>完形卡</b>：在句中空槽里打出词块。<kbd>Enter</kbd> 提交判分</li>
+    <li><kbd>H</kbd> 提示阶梯：释义→首字母→槽位记法（用了提示不影响判分，评分时自己心里有数）</li>
+    <li><b>听写卡</b>：自动朗读整句，<kbd>Space</kbd> 重播（限 3 次），听写整句后判分</li>
+    <li><b>识别卡</b>：现状保留。<kbd>Space</kbd> 翻面</li>
+    <li>判分后 <kbd>1</kbd>–<kbd>4</kbd> 评分；带「建议」描边的是判分映射档，可自行改选</li>
+    <li><kbd>Esc</kbd> 关闭弹窗</li>
+  </ul>
+</div>
+
+<div class="dlg hidden" id="whyDlg">
+  <h3>为什么要做产出式复习？</h3>
+  <ul style="text-align:left">
+    <li><b>研究缺口</b>：二语习得研究一致表明「产出式提取」（打字写出目标词）的长期留存优于纯识别；产出性搭配知识显著滞后于接受性知识，需要专门练习。</li>
+    <li><b>竞品标配</b>：Readlang（typing/Blitz）、LingQ（完形/听写/回译五件套）、Migaku（cloze）都有产出式复习，我们是纯识别。</li>
+    <li><b>差异化</b>：词块标注管线产出了 pattern（槽位记法）与 trap（直译陷阱）——这是 Anki/Readlang 没有的资产，只有我们能做「陷阱检测」。</li>
+    <li><b>零新增依赖</b>：判分是纯本地字符串计算；TTS 双音轨已有；数据模型零 schema 变更。</li>
+  </ul>
+</div>
+
+<script>
+/* ============================================================
+   模拟数据 —— 一篇文章的生词本队列（8 张卡）
+   字段与 readerTypes.ts 的 VocabWord 对齐：
+   kind / senses / pattern / trap / source.sentenceIdx
+   blank = 句中挖空目标（词块在句中常有词形变化，可能 ≠ 词条形式）
+   accepted = 除句中形式外同样判 perfect 的产出（如词条原形）
+   smart = 智能路由的结果（词块→完形，熟词→听写，新词→识别）
+   ============================================================ */
+const CARDS = [
+  {
+    id: "take-root", kind: "chunk", chunkType: "短语动词", word: "take root",
+    senses: [{ pos: "phrasal", cn: "扎根；（想法）被接受并流行开来" }],
+    pattern: "take root (in sth)", trap: "take roots（不可数，无复数）",
+    sentence: "The idea of car-free streets took root after the summer of heatwaves.",
+    sentenceCn: "无车街道的想法在热浪之夏之后扎了根。",
+    blank: "took root", accepted: ["take root"],
+    article: "Why Cities Need Trees", smart: "cloze",
+  },
+  {
+    id: "comprehension", kind: "word", word: "comprehension",
+    phonetic: "ˌkɒmprɪˈhenʃn",
+    senses: [{ pos: "n.", cn: "理解力（尤指阅读/听力）" }],
+    sentence: "Speed was the goal, and comprehension was the test.",
+    sentenceCn: "速度是目标，理解力是考卷。",
+    article: "The Quiet Power of Reading Slowly", smart: "recognition",
+  },
+  {
+    id: "in-the-wake-of", kind: "chunk", chunkType: "习语", word: "in the wake of",
+    senses: [{ pos: "idiom", cn: "紧随……之后（常指随坏事件而来）" }],
+    pattern: "in the wake of sth", trap: "in the wake for / at the wake of",
+    sentence: "In the wake of the storm, the council planted twelve thousand trees.",
+    sentenceCn: "风暴过后，市政会种下了一万两千棵树。",
+    article: "Why Cities Need Trees", smart: "cloze",
+  },
+  {
+    id: "canopy", kind: "word", word: "canopy",
+    phonetic: "ˈkænəpi",
+    senses: [{ pos: "n.", cn: "（树的）树冠层；顶篷" }],
+    sentence: "The city's tree canopy now covers forty percent of the streets.",
+    sentenceCn: "这座城市的树冠层如今覆盖了四成的街道。",
+    article: "Why Cities Need Trees", smart: "dictation",
+  },
+  {
+    id: "buffer-against", kind: "chunk", chunkType: "搭配", word: "buffer against",
+    senses: [{ pos: "collocation", cn: "缓冲，抵御（噪声、冲击、炎热）" }],
+    pattern: "buffer A against B", trap: "buffer from（中式直译）",
+    sentence: "Rows of lindens buffer against the traffic noise all summer.",
+    sentenceCn: "成排的椴树整个夏天都在抵御交通噪音。",
+    article: "Why Cities Need Trees", smart: "cloze",
+  },
+  {
+    id: "settle-in", kind: "chunk", chunkType: "短语动词", word: "settle in",
+    senses: [{ pos: "phrasal", cn: "安顿下来，适应新环境" }],
+    pattern: "settle in (to sth)", trap: "settle down to（语义偏向安定就寝/平静）",
+    sentence: "It took the new arrivals a month to settle in to the neighbourhood.",
+    sentenceCn: "新来的人花了一个月才在街区里安顿下来。",
+    article: "A Field Guide to Deep Focus", smart: "cloze",
+  },
+  {
+    id: "attribute-to", kind: "chunk", chunkType: "句式", word: "attribute X to Y",
+    senses: [{ pos: "pattern", cn: "把 X 归因于 Y" }],
+    pattern: "attribute X to Y", trap: "attribute for（介词误用）",
+    sentence: "Residents attribute the cooler summers to the young canopy.",
+    sentenceCn: "居民们把更凉爽的夏天归功于年轻的树冠。",
+    blank: "attribute",
+    article: "Why Cities Need Trees", smart: "cloze",
+  },
+  {
+    id: "torrential-rain", kind: "chunk", chunkType: "搭配", word: "torrential rain",
+    senses: [{ pos: "collocation", cn: "倾盆大雨（不是 big rain）" }],
+    trap: "big rain（中文直译）",
+    sentence: "Torrential rain tested the new drainage within a week.",
+    sentenceCn: "倾盆大雨在一周内就考验了新的排水系统。",
+    article: "Why Cities Need Trees", smart: "dictation",
+  },
+];
+
+const MODE_META = {
+  recognition: { pill: "识别", cls: "recognition", desc: "看词想义（现状保留）" },
+  cloze:       { pill: "完形", cls: "",             desc: "原句挖空 · 打字产出词块" },
+  dictation:   { pill: "听写", cls: "dictation",    desc: "听整句 · 写整句" },
+};
+
+/* ============================================================
+   判分（纯本地，与 app 里计划实现一致，可测）
+   perfect > close > trap > wrong；评分映射：perfect→easy,
+   close→good, trap/wrong→forgot
+   ============================================================ */
+function normalize(s) {
+  return (s || "").toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ").trim();
+}
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+function judge(input, answer, trap, accepted = []) {
+  const i = normalize(input), a = normalize(answer);
+  if (!i) return "wrong";
+  if (i === a || accepted.some((x) => normalize(x) === i)) return "perfect";
+  const t = normalize(trap);
+  if (t && (i === t || (t.length > 6 && i.includes(t)))) return "trap";
+  const stripArt = (x) => x.replace(/\b(a|an|the)\b/g, "").replace(/\s+/g, " ").trim();
+  if (stripArt(i) === stripArt(a)) return "close";
+  const d = levenshtein(i, a);
+  if (d <= Math.max(1, Math.floor(a.length / 6))) return "close";
+  return "wrong";
+}
+/* 评分建议映射（判分 → 建议档） */
+const JUDGE_SUGGEST = { perfect: "easy", close: "good", trap: "forgot", wrong: "forgot" };
+const JUDGE_HEAD = {
+  perfect: "✓ 一次写对",
+  close: "≈ 很接近，差一点",
+  trap: "⚠ 命中直译陷阱",
+  wrong: "✗ 没想起来",
+};
+const JUDGE_TONE = { perfect: "perfect", close: "close", trap: "trapv", wrong: "wrong" };
+
+/* 词级 diff（听写）：LCS 对齐 → ok / typo / miss / extra */
+function wordDiff(input, answer) {
+  const tk = (s) => normalize(s).split(" ").filter(Boolean);
+  const A = tk(input), B = tk(answer);
+  const m = A.length, n = B.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = A[i - 1] === B[j - 1]
+        ? dp[i - 1][j - 1] + 1
+        : Math.max(dp[i - 1][j], dp[i][j - 1]);
+  const out = [];
+  let i = m, j = n;
+  while (i > 0 && j > 0) {
+    if (A[i - 1] === B[j - 1]) { out.unshift({ w: B[j - 1], s: "ok" }); i--; j--; }
+    else if (dp[i - 1][j] >= dp[i][j - 1]) { out.unshift({ w: A[i - 1], s: "extra" }); i--; }
+    else { out.unshift({ w: B[j - 1], s: "miss" }); j--; }
+  }
+  while (i > 0) { out.unshift({ w: A[i - 1], s: "extra" }); i--; }
+  while (j > 0) { out.unshift({ w: B[j - 1], s: "miss" }); j--; }
+  return out;
+}
+
+/* ============================================================
+   状态机
+   ============================================================ */
+const state = {
+  mode: "smart",            // smart | recognition | cloze | dictation
+  queue: [],                // { card, mode }
+  pos: 0,
+  phase: "answer",          // answer | graded（recognition 用 front | back）
+  hints: 0,                 // 完形提示已用级数 0-3
+  input: "",                // 完形/听写输入
+  judged: null,             // judge 结果
+  replayLeft: 3,            // 听写重播次数
+  results: [],              // { word, mode, judged, grade }
+  done: false,
+};
+
+const $ = (id) => document.getElementById(id);
+const cardHost = $("cardHost");
+
+function effectiveMode(card) {
+  return state.mode === "smart" ? card.smart : state.mode;
+}
+function buildQueue() {
+  state.queue = CARDS.map((c) => ({ card: c, mode: effectiveMode(c) }));
+  state.pos = 0; state.results = []; state.done = false;
+}
+function resetCardState() {
+  state.phase = "answer"; state.hints = 0; state.input = "";
+  state.judged = null; state.replayLeft = 3;
+}
+
+/* ---------- TTS（原型用 Web Speech API；app 里走 tts.rs 双音轨 word 轨） ---------- */
+let voiceEn = null;
+function pickVoice() {
+  const vs = speechSynthesis.getVoices().filter((v) => /^en(-|_)/i.test(v.lang));
+  voiceEn = vs.find((v) => /Google US|Natural|Samantha|Zira/i.test(v.name)) || vs[0] || null;
+}
+if ("speechSynthesis" in window) {
+  pickVoice();
+  speechSynthesis.onvoiceschanged = pickVoice;
+}
+function speak(text, rate = 0.92) {
+  if (!("speechSynthesis" in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "en-US"; u.rate = rate;
+  if (voiceEn) u.voice = voiceEn;
+  speechSynthesis.speak(u);
+}
+
+/* ============================================================
+   渲染
+   ============================================================ */
+function render() {
+  $("modeDesc").textContent = state.mode === "smart"
+    ? "智能混合：词块→完形 · 熟词→听写 · 新词→识别"
+    : MODE_META[state.mode].desc;
+  document.querySelectorAll(".mode-btn").forEach((b) => b.classList.toggle("on", b.dataset.mode === state.mode));
+  $("queueInfo").textContent = state.done
+    ? `本轮完成 · ${state.results.length} 张`
+    : `第 ${state.pos + 1} / ${state.queue.length} 张`;
+
+  if (state.done) { renderSummary(); return; }
+  const item = state.queue[state.pos];
+  if (!item) { state.done = true; renderSummary(); return; }
+  if (item.mode === "recognition") renderRecognition(item);
+  else if (item.mode === "cloze") renderCloze(item);
+  else renderDictation(item);
+
+  $("statToday").textContent = `${state.results.length}/${state.queue.length}`;
+}
+
+function cardShell(item, innerHtml, metaExtra = "") {
+  const meta = MODE_META[item.mode];
+  return `
+    <div class="card">
+      <div class="card-meta">
+        <span class="mode-pill ${meta.cls}">${meta.pill}</span>
+        <span>来自「${item.card.article}」</span>
+        ${metaExtra || `<span style="margin-left:auto">${state.pos + 1} / ${state.queue.length}</span>`}
+      </div>
+      ${innerHtml}
+    </div>`;
+}
+
+function wordHeader(item) {
+  const c = item.card;
+  return `
+    <div class="word-line">
+      <span class="word serif-en">${c.word}</span>
+      ${c.chunkType ? `<span class="badge">${c.chunkType}</span>` : ""}
+      ${c.phonetic ? `<span class="phonetic">/${c.phonetic}/</span>` : ""}
+      <button class="icon-btn" id="btnSpeakWord" title="发音">🔊</button>
+    </div>`;
+}
+
+/* ---------- 识别卡（现状） ---------- */
+function renderRecognition(item) {
+  const c = item.card;
+  const flipped = state.phase === "graded";
+  const inner = `
+    ${wordHeader(item)}
+    ${flipped ? `
+      <div class="sense-line">${c.senses.map((s) => `<div><span class="pos">${s.pos}</span>${s.cn}</div>`).join("")}</div>
+      ${c.pattern ? `<div class="chunk-detail">记法：<i>${c.pattern}</i></div>` : ""}
+      <div class="source-sentence" id="srcSent">${c.sentence}
+        <span class="from">来自第 1 句 · 点击回到原文</span></div>
+      ${renderGradebar(item)}
+    ` : `
+      <div class="submit-row">
+        <button class="submit-btn" id="btnFlip">翻面 · 想想意思</button>
+        <span class="enter-hint">按 <kbd>Space</kbd> 或 Enter 翻面</span>
+      </div>
+    `}`;
+  cardHost.innerHTML = cardShell(item, inner);
+  $("btnSpeakWord")?.addEventListener("click", () => speak(c.word));
+  $("btnFlip")?.addEventListener("click", () => { state.phase = "graded"; render(); });
+  $("srcSent")?.addEventListener("click", () => toast("原型：跳回原文第 1 句"));
+}
+
+/* ---------- 完形卡 ---------- */
+function renderCloze(item) {
+  const c = item.card;
+  const graded = state.phase === "graded";
+  const judgeR = state.judged;
+
+  /* 句子挖空：句中形式（blank）处替换为输入框 / 判分后显示答案 */
+  const blank = c.blank || c.word;
+  const sentenceParts = buildClozeParts(c.sentence, blank);
+
+  let sentenceHtml;
+  if (!graded) {
+    sentenceHtml = `${sentenceParts.before}<input class="blank-input" id="blankInput" spellcheck="false"
+        autocomplete="off" placeholder="写出被挖空的部分" value="${escapeHtml(state.input)}">${sentenceParts.after}`;
+  } else {
+    const okClass = judgeR === "perfect" ? "w-ok" : judgeR === "close" ? "w-typo" : "w-miss";
+    sentenceHtml = `${sentenceParts.before}<span class="${okClass}">${blank}</span>${sentenceParts.after}`;
+  }
+
+  /* 提示阶梯：1 释义 · 2 首字母 · 3 槽位记法 */
+  let hintsHtml = "";
+  if (!graded) {
+    const hints = [];
+    if (state.hints >= 1) hints.push(`<div class="hint"><span class="h-tag">提示 1</span>${c.senses[0].cn}</div>`);
+    if (state.hints >= 2) hints.push(`<div class="hint"><span class="h-tag">提示 2</span>首字母：${firstLetters(blank)}（${blank.split(/\s+/).length} 词）</div>`);
+    if (state.hints >= 3) hints.push(`<div class="hint"><span class="h-tag">提示 3</span>槽位记法：<i>${c.pattern || c.word}</i></div>`);
+    hintsHtml = `
+      <div class="hints">${hints.join("")}
+        ${state.hints < 3 ? `<button class="hint-btn" id="btnHint">再给一点提示（H）</button>` : ""}
+      </div>`;
+  }
+
+  /* 判分反馈 */
+  let verdictHtml = "";
+  if (graded) {
+    const tone = JUDGE_TONE[judgeR];
+    const ansNote = blank !== c.word ? `（词条原形：${c.word}）` : "";
+    let body = "";
+    if (judgeR === "close") body = `你写的：<b>${escapeHtml(state.input)}</b><br><span class="ans">${blank}</span>${ansNote}`;
+    else if (judgeR === "trap") body = `你写了 <b>${escapeHtml(state.input)}</b> —— ${c.trap || "这是常见直译错误"}。<span class="ans">正确：${blank}</span>${ansNote}`;
+    else if (judgeR === "wrong") body = `<span class="ans">${blank}</span>${ansNote}${c.trap ? `<br>⚠ 别写成：${c.trap}` : ""}`;
+    else body = `<span class="ans">${blank}</span>${ansNote}`;
+    verdictHtml = `
+      <div class="verdict ${tone}">
+        <span class="v-head">${JUDGE_HEAD[judgeR]}${state.hints > 0 ? `<span style="font-weight:400;font-size:11px;opacity:.75">（用了 ${state.hints} 级提示）</span>` : ""}</span>
+        <span class="v-body">${body}</span>
+      </div>
+      <div class="source-sentence" id="srcSent">${c.sentence}<span class="from">整句回顾</span></div>`;
+  }
+
+  const inner = `
+    <div class="cloze-sentence">${sentenceHtml}</div>
+    <div class="cloze-cn">中文提示：<span class="cn-masked" id="cnHint" title="点击显示">${graded ? c.sentenceCn : maskCn(c.sentenceCn)}</span></div>
+    ${hintsHtml}
+    ${verdictHtml}
+    ${graded ? renderGradebar(item) : `
+      <div class="submit-row">
+        <button class="submit-btn" id="btnSubmit">提交判分</button>
+        <button class="submit-btn ghost" id="btnGiveup">想不出来，直接看答案</button>
+        <span class="enter-hint">Enter 提交</span>
+      </div>`}
+    ${!graded ? `<div class="shortcut-hints"><span><kbd>H</kbd> 提示</span><span><kbd>Enter</kbd> 提交</span></div>` : ""}
+  `;
+  cardHost.innerHTML = cardShell(item, inner);
+
+  const input = $("blankInput");
+  if (input) {
+    autoWidth(input);
+    input.addEventListener("input", () => { state.input = input.value; autoWidth(input); });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submitCloze(); } });
+    input.focus();
+  }
+  $("btnSubmit")?.addEventListener("click", submitCloze);
+  $("btnGiveup")?.addEventListener("click", () => { state.phase = "graded"; state.judged = "wrong"; render(); });
+  $("btnHint")?.addEventListener("click", () => { state.hints++; render(); });
+  $("cnHint")?.addEventListener("click", () => { toast("原型：点击显示完整中文"); });
+  $("srcSent")?.addEventListener("click", () => toast("原型：整句回顾 / 跳回原文"));
+}
+
+function submitCloze() {
+  if (state.phase === "graded") return;
+  state.phase = "graded";
+  const c = state.queue[state.pos].card;
+  state.judged = judge(state.input, c.blank || c.word, c.trap, c.accepted);
+  render();
+}
+
+/* ---------- 听写卡 ---------- */
+function renderDictation(item) {
+  const c = item.card;
+  const graded = state.phase === "graded";
+
+  let verdictHtml = "";
+  if (graded) {
+    const diff = wordDiff(state.input, c.sentence);
+    const diffHtml = diff.map((d) =>
+      d.s === "ok" ? `<span class="w-ok">${d.w}</span>`
+      : d.s === "miss" ? `<span class="w-miss">${d.w}</span>`
+      : `<span class="w-extra">${d.w}</span>`).join(" ");
+    const okN = diff.filter((d) => d.s === "ok").length;
+    const pct = Math.round((okN / Math.max(1, normalize(c.sentence).split(" ").length)) * 100);
+    verdictHtml = `
+      <div class="verdict ${JUDGE_TONE[state.judged]}">
+        <span class="v-head">${JUDGE_HEAD[state.judged]} · 词级命中 ${pct}%</span>
+        <span class="diff-line">${diffHtml}</span>
+        <span class="v-body" style="font-size:11px">图例：<span class="w-ok">写对</span> · <span class="w-miss">漏写的词</span> · <span class="w-extra">多写/写错的词</span></span>
+        <span class="v-body"><span class="ans">${c.sentence}</span></span>
+      </div>`;
+  }
+
+  const inner = `
+    ${wordHeader(item)}
+    <div class="dictation-bar">
+      <button class="play-main" id="btnPlay" ${state.replayLeft <= 0 && !graded ? "disabled" : ""}>
+        ▶ ${graded ? "再听一遍" : state.replayLeft < 3 ? "重播句子" : "播放句子"}
+      </button>
+      <span class="replay-left">可重播 <b id="replayN">${state.replayLeft}</b> 次（Space）</span>
+      <span class="replay-left" style="margin-left:auto">写完按 Enter</span>
+    </div>
+    ${graded ? "" : `<textarea class="dict-input" id="dictInput" spellcheck="false"
+      placeholder="听写整句（不区分大小写与标点）">${escapeHtml(state.input)}</textarea>`}
+    ${verdictHtml}
+    ${graded ? renderGradebar(item) : `
+      <div class="submit-row">
+        <button class="submit-btn" id="btnSubmitD">提交判分</button>
+        <button class="submit-btn ghost" id="btnGiveupD">听不出，看句子</button>
+      </div>`}
+  `;
+  cardHost.innerHTML = cardShell(item, inner, `<span style="margin-left:auto">词块/单词整句听写</span>`);
+
+  $("btnSpeakWord")?.addEventListener("click", () => speak(c.word, 0.85));
+  $("btnPlay")?.addEventListener("click", () => {
+    if (state.replayLeft > 0 || state.phase === "graded") {
+      if (state.phase !== "graded") { state.replayLeft--; }
+      speak(c.sentence);
+      render();
+    }
+  });
+  const di = $("dictInput");
+  if (di) {
+    di.addEventListener("input", () => { state.input = di.value; });
+    di.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitDictation(); } });
+    di.focus();
+  }
+  $("btnSubmitD")?.addEventListener("click", submitDictation);
+  $("btnGiveupD")?.addEventListener("click", () => {
+    state.phase = "graded"; state.judged = "wrong"; speak(c.sentence); render();
+  });
+}
+function submitDictation() {
+  if (state.phase === "graded") return;
+  state.phase = "graded";
+  const c = state.queue[state.pos].card;
+  const full = judge(state.input, c.sentence, c.trap, c.accepted);
+  if (full === "perfect" || full === "trap") { state.judged = full; render(); return; }
+  /* 整句的字符级距离对长句过宽：听写按词级命中率复核（≥85% 算接近） */
+  const tk = (s) => normalize(s).split(" ").filter(Boolean);
+  const nAnswer = tk(c.sentence).length;
+  const okN = wordDiff(state.input, c.sentence).filter((d) => d.s === "ok").length;
+  state.judged = okN / Math.max(1, nAnswer) >= 0.85 ? "close" : "wrong";
+  render();
+}
+
+/* ---------- 评分带 ---------- */
+function renderGradebar(item) {
+  const suggest = JUDGE_SUGGEST[state.judged || "wrong"];
+  const bars = [
+    ["forgot", "忘记", "10 分钟", "1"],
+    ["hard", "困难", "1 天", "2"],
+    ["good", "一般", "3 天", "3"],
+    ["easy", "简单", "7 天", "4"],
+  ];
+  return `
+    <div class="gradebar" id="gradebar">
+      ${bars.map(([v, name, next, key]) => `
+        <button class="grade-btn ${v} ${v === suggest ? "focus" : ""}" data-grade="${v}">
+          <span class="name">${name}</span>
+          <span class="next">${next}</span>
+          <span class="kbd">${key}</span>
+        </button>`).join("")}
+    </div>
+    <div class="shortcut-hints"><span>判分已映射到「建议」档，可改选</span></div>`;
+}
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest?.(".grade-btn");
+  if (!btn) return;
+  const item = state.queue[state.pos];
+  state.results.push({ word: item.card.word, mode: item.mode, judged: state.judged, grade: btn.dataset.grade });
+  next();
+});
+
+/* ---------- 摘要 ---------- */
+function renderSummary() {
+  const produced = state.results.filter((x) => x.mode !== "recognition"); // 识别卡无产出判分，不进四格
+  const recogN = state.results.length - produced.length;
+  const r = produced;
+  const count = (j) => r.filter((x) => x.judged === j).length;
+  const p = count("perfect"), cl = count("close"), tp = count("trap"), wr = count("wrong");
+  cardHost.innerHTML = `
+    <div class="summary">
+      <div class="big">本轮产出练习完成 🎉</div>
+      <div class="sub">${r.length} 张产出卡（完形/听写）${recogN > 0 ? ` · 另完成 ${recogN} 张识别卡` : ""} · ${r.filter((x) => x.grade === "easy" || x.grade === "good").length} 张评了「一般/简单」</div>
+      <div class="sum-grid">
+        <div class="sum-cell ok"><div class="n">${p}</div><div class="l">一次写对</div></div>
+        <div class="sum-cell warn"><div class="n">${cl}</div><div class="l">接近差一点</div></div>
+        <div class="sum-cell err"><div class="n">${tp}</div><div class="l">直译陷阱</div></div>
+        <div class="sum-cell mute"><div class="n">${wr}</div><div class="l">未想起</div></div>
+      </div>
+      <div class="sum-note">实现时：判分结果并入 ReviewLogFile 增量记录（schemaVersion 仍为 1，新增可选字段），
+      直译陷阱命中数可以进复习统计，成为「中式直译纠正率」这个独有的长期指标。</div>
+      <div class="submit-row">
+        <button class="submit-btn" id="btnAgain">再来一轮</button>
+        <button class="submit-btn ghost" id="btnBack">回到开头调整模式</button>
+      </div>
+    </div>`;
+  $("btnAgain")?.addEventListener("click", () => { buildQueue(); resetCardState(); state.pos = 0; state.results = []; state.done = false; render(); });
+  $("btnBack")?.addEventListener("click", () => { state.pos = 0; state.results = []; state.done = false; state.phase = "answer"; render(); });
+  $("statToday").textContent = `${state.results.length}/${state.queue.length}`;
+}
+
+/* ---------- 辅助 ---------- */
+function buildClozeParts(sentence, answer) {
+  const idx = sentence.toLowerCase().indexOf(answer.toLowerCase());
+  if (idx < 0) return { before: `<u>${escapeHtml(answer)}</u>`, after: escapeHtml(sentence.slice(sentence.length)) };
+  return {
+    before: escapeHtml(sentence.slice(0, idx)),
+    after: escapeHtml(sentence.slice(idx + answer.length)),
+  };
+}
+function firstLetters(answer) {
+  return answer.split(/\s+/).map((w) => `${w[0]}…`).join(" ");
+}
+function maskCn(cn) {
+  return cn.replace(/[^\s，。]/g, "＿");
+}
+function autoWidth(input) {
+  const probe = document.createElement("span");
+  probe.style.cssText = `position:absolute;visibility:hidden;white-space:pre;font:${getComputedStyle(input).font};`;
+  probe.textContent = input.value || input.placeholder || "";
+  document.body.appendChild(probe);
+  input.style.width = Math.min(340, Math.max(90, probe.offsetWidth + 26)) + "px";
+  probe.remove();
+}
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+}
+
+let toastTimer = null;
+function toast(msg) {
+  document.querySelectorAll(".toast").forEach((t) => t.remove());
+  const t = document.createElement("div");
+  t.className = "toast"; t.textContent = msg;
+  document.body.appendChild(t);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.remove(), 2200);
+}
+
+/* ---------- 全局键盘 ---------- */
+document.addEventListener("keydown", (e) => {
+  if (e.target.matches("input, textarea")) {
+    if (e.key === "Escape") e.target.blur();
+    return;
+  }
+  if (e.key === "Escape") { $("helpDlg").classList.add("hidden"); $("whyDlg").classList.add("hidden"); $("maskLayer").classList.add("hidden"); return; }
+  if (state.done) return;
+  const item = state.queue[state.pos];
+  if (!item) return;
+
+  if (e.key === "1" || e.key === "2" || e.key === "3" || e.key === "4") {
+    if (state.phase === "graded") {
+      const grade = ["forgot", "hard", "good", "easy"][Number(e.key) - 1];
+      state.results.push({ word: item.card.word, mode: item.mode, judged: state.judged, grade });
+      next();
+    }
+    return;
+  }
+  if (e.key === "h" || e.key === "H") {
+    if (item.mode === "cloze" && state.phase === "answer") { state.hints++; render(); }
+    return;
+  }
+  if (e.key === " " || e.key === "Enter") {
+    e.preventDefault();
+    if (item.mode === "recognition" && state.phase === "answer") { state.phase = "graded"; render(); }
+    else if (item.mode === "dictation" && state.phase === "answer" && e.key === " ") {
+      if (state.replayLeft > 0) { state.replayLeft--; speak(item.card.sentence); render(); }
+    }
+  }
+});
+
+function next() {
+  state.pos += 1;
+  if (state.pos >= state.queue.length) { state.done = true; }
+  resetCardState();
+  render();
+}
+
+/* ---------- 模式切换 ---------- */
+$("modeSwitch").addEventListener("click", (e) => {
+  const btn = e.target.closest(".mode-btn");
+  if (!btn) return;
+  state.mode = btn.dataset.mode;
+  buildQueue(); resetCardState();
+  render();
+});
+
+/* ---------- 主题 ---------- */
+const THEMES = ["light", "dark", "sepia", "oled"];
+const THEME_LABEL = { light: "浅色", dark: "深色", sepia: "护眼", oled: "纯黑" };
+let themeIdx = 0;
+$("themeBtn").addEventListener("click", () => {
+  themeIdx = (themeIdx + 1) % THEMES.length;
+  document.documentElement.dataset.theme = THEMES[themeIdx];
+  $("themeBtn").textContent = THEME_LABEL[THEMES[themeIdx]];
+});
+
+/* ---------- 其他 UI ---------- */
+$("bannerClose").addEventListener("click", () => {
+  $("banner").classList.add("hidden");
+  $("layout").classList.add("no-banner");
+});
+$("helpBtn").addEventListener("click", () => { $("maskLayer").classList.remove("hidden"); $("helpDlg").classList.remove("hidden"); });
+$("whyLink").addEventListener("click", (e) => { e.preventDefault(); $("maskLayer").classList.remove("hidden"); $("whyDlg").classList.remove("hidden"); });
+$("maskLayer").addEventListener("click", () => { $("maskLayer").classList.add("hidden"); $("helpDlg").classList.add("hidden"); $("whyDlg").classList.add("hidden"); });
+
+/* ---------- 启动 ---------- */
+buildQueue();
+render();
+
+/* 演示钩子：URL hash 直达关键状态，便于截图/分享
+   #demo=trap    卡1 完形命中直译陷阱的判分反馈
+   #demo=dict    听写卡词级 diff 判分反馈
+   #demo=hints   完形卡三级提示阶梯展开态
+   #demo=summary 一轮完成的结果摘要
+   #demo=dark    深色主题下的完形答题态 */
+(function demoHook() {
+  const demo = new URLSearchParams(location.hash.slice(1)).get("demo");
+  if (!demo) return;
+  if (demo === "dark") {
+    document.documentElement.dataset.theme = "dark";
+    themeIdx = 1; $("themeBtn").textContent = "深色";
+  }
+  if (demo === "trap") {
+    const i = document.getElementById("blankInput");
+    i.value = "take roots"; i.dispatchEvent(new Event("input")); submitCloze();
+  }
+  if (demo === "hints") {
+    state.hints = 3; render();
+  }
+  if (demo === "dict") {
+    state.pos = 3; resetCardState(); render();
+    const ta = document.getElementById("dictInput");
+    ta.value = "The citys tree canopy now cover fourty percent of the streets";
+    ta.dispatchEvent(new Event("input"));
+    submitDictation();
+  }
+  if (demo === "summary") {
+    state.results = [
+      { word: "took root", mode: "cloze", judged: "perfect", grade: "easy" },
+      { word: "comprehension", mode: "recognition", judged: null, grade: "good" },
+      { word: "in the wake of", mode: "cloze", judged: "perfect", grade: "easy" },
+      { word: "canopy", mode: "dictation", judged: "close", grade: "hard" },
+      { word: "buffer against", mode: "cloze", judged: "trap", grade: "forgot" },
+      { word: "settle in", mode: "cloze", judged: "wrong", grade: "forgot" },
+      { word: "attribute X to Y", mode: "cloze", judged: "perfect", grade: "good" },
+      { word: "torrential rain", mode: "dictation", judged: "wrong", grade: "hard" },
+    ];
+    state.done = true; render();
+  }
+})();
+</script>
+</body>
+</html>
