@@ -560,6 +560,9 @@ struct ArticleHeader: View {
                 if let translating = vm.translating {
                     progressChip("翻译中 \(translating.done)/\(translating.total) 段")
                 }
+                if vm.translating == nil, let chunking = vm.chunking {
+                    progressChip("词块标注中 \(chunking.done)/\(chunking.total) 批")
+                }
                 let resumeIdx = article.progress.sentenceIdx
                 if resumeIdx > 0, resumeIdx < article.sentences.count, vm.translating == nil {
                     Button("上次读到第 \(resumeIdx + 1) 句 · 点击继续") {
@@ -686,6 +689,24 @@ struct SentenceRowView: View {
         .help("第 \(pair.idx + 1) 句 · 点击定位")
     }
 
+    /// 词块/生词再现跨度（开关只影响参与合并的候选）。
+    private var spanMarks: [ReaderSentenceText.SpanMark] {
+        let settings = vm.effectiveSettings
+        let spans = buildSentenceSpans(
+            pair.en,
+            settings.chunkHighlight ? pair.chunks : nil,
+            knownIds: settings.showVocabMarks ? vm.knownIds : []
+        )
+        return spans.compactMap { span in
+            ReaderSentenceText.SpanMark(
+                start: span.start,
+                end: span.end,
+                kind: span.kind,
+                chunk: span.chunk
+            )
+        }
+    }
+
     private func sentenceEN(settings: ReaderSettings) -> some View {
         let nsFont = readerNSFont(CGFloat(settings.fontSize), pair: settings.fontPair)
         let lineTarget = (CGFloat(settings.fontSize) / 19.0) * 29 * CGFloat(settings.lineHeight)
@@ -697,11 +718,13 @@ struct SentenceRowView: View {
             lineSpacing: lineSpacing,
             chunkUnderlineColor: NSColor(palette.accent),
             knownUnderlineColor: NSColor(palette.knownColor),
-            marks: [],
+            marks: spanMarks,
             onSelection: { text in vm.lookup(query: text, sentenceIdx: pair.idx) },
-            onWordClick: { word in vm.lookup(query: word, sentenceIdx: pair.idx) }
+            onWordClick: { word in vm.lookup(query: word, sentenceIdx: pair.idx) },
+            onChunkClick: { chunk in vm.openChunkCard(chunk: chunk, sentenceIdx: pair.idx) }
         )
         .frame(maxWidth: 680, alignment: .leading)
+        .help("单击查词，划选查短语；蓝色虚线为词块，点按看释义")
     }
 
     @ViewBuilder
@@ -889,6 +912,8 @@ struct DictColumnView: View {
                         }
                     case .ready(_, let entry, let sentenceIdx):
                         entryBody(entry: entry, sentenceIdx: sentenceIdx)
+                    case .chunkCard(let chunk, let sentenceIdx):
+                        chunkBody(chunk: chunk, sentenceIdx: sentenceIdx)
                     }
                 }
                 .padding(.horizontal, 14)
@@ -909,6 +934,15 @@ struct DictColumnView: View {
                     Text("/\(phonetic.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/")
                         .font(.system(size: 12))
                         .foregroundColor(palette.textTertiary)
+                }
+                if case let .chunkCard(chunk, _) = vm.dict {
+                    Text(chunk.chunkType.label)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(palette.knownColor)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(palette.knownColor.opacity(0.12))
+                        .clipShape(Capsule())
                 }
             }
             Spacer()
@@ -937,6 +971,47 @@ struct DictColumnView: View {
         case .closed: return ""
         case .loading(let q, _), .notAWord(let q, _), .error(let q, _, _): return q
         case .ready(let q, _, _): return q
+        case .chunkCard(let chunk, _): return chunk.text
+        }
+    }
+
+    @ViewBuilder
+    private func chunkBody(chunk: SentenceChunk, sentenceIdx: Int) -> some View {
+        sectionTitle("释义")
+        Text(chunk.gloss)
+            .font(.system(size: 13))
+            .foregroundColor(palette.text)
+        if let pattern = chunk.pattern {
+            sectionTitle("记法")
+            Text(pattern)
+                .font(.system(size: 13, design: .serif))
+                .foregroundColor(palette.textSecondary)
+        }
+        if let trap = chunk.trap {
+            sectionTitle("直译陷阱")
+            Text(trap)
+                .font(.system(size: 12.5))
+                .foregroundColor(palette.err)
+        }
+        sectionTitle("原句")
+        sourceCard(sentenceIdx: sentenceIdx)
+        HStack(spacing: 8) {
+            Button {
+                vm.addCurrentDictVocab()
+            } label: {
+                Label(vm.isInVocab ? "已在生词本" : "收藏词块", systemImage: ReaderIcons.starFill)
+                    .font(.system(size: 12))
+            }
+            .controlSize(.small)
+            .buttonStyle(.borderedProminent)
+            .disabled(vm.isInVocab)
+            Button {
+                vm.lookup(query: chunk.text, sentenceIdx: sentenceIdx)
+            } label: {
+                Text("详查词典").font(.system(size: 12))
+            }
+            .controlSize(.small)
+            .help("查完整词条（音标、多义项、搭配）")
         }
     }
 
@@ -1207,6 +1282,36 @@ struct ReaderSettingsDrawer: View {
                             }
                             pickerRow("正文字体", fontOptions, selection: settings.fontPair) { value in
                                 vm.patchSettings { $0.fontPair = value }
+                            }
+
+                            groupTitle("词块")
+                            HStack {
+                                rowLabel("自动标注词组")
+                                Toggle("", isOn: Binding(
+                                    get: { settings.chunkHighlight },
+                                    set: { value in vm.patchSettings { $0.chunkHighlight = value } }
+                                ))
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                            }
+                            .help("新文章翻译完成后自动标注值得学的词组（会额外消耗接口 token），正文里以蓝色虚线下划线显示，点击看释义并可收藏")
+                            HStack {
+                                rowLabel("生词再现标记")
+                                Toggle("", isOn: Binding(
+                                    get: { settings.showVocabMarks },
+                                    set: { value in vm.patchSettings { $0.showVocabMarks = value } }
+                                ))
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                            }
+                            .help("已收藏的词/词块在正文再次出现时用绿色点线标记，点击可查看")
+                            if vm.article?.chunkState != nil {
+                                HStack {
+                                    rowLabel("重新标注本篇")
+                                    Button("重新标注") { vm.reannotateChunks() }
+                                        .controlSize(.small)
+                                }
+                                .help("清空本篇已有标注，重新跑一遍词组标注")
                             }
 
                             groupTitle("朗读")

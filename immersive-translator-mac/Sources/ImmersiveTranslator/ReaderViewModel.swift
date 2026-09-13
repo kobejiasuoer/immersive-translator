@@ -21,6 +21,8 @@ final class ReaderViewModel: ObservableObject {
         case ready(query: String, entry: ReaderDictEntry, sentenceIdx: Int)
         case notAWord(query: String, sentenceIdx: Int)
         case error(query: String, sentenceIdx: Int, message: String)
+        /// 正文点词块下划线 → 即时卡（无 LLM 调用）。
+        case chunkCard(chunk: SentenceChunk, sentenceIdx: Int)
 
         var isOpen: Bool { self != .closed }
 
@@ -29,6 +31,8 @@ final class ReaderViewModel: ObservableObject {
             case .closed: return nil
             case .loading(let q, _), .ready(let q, _, _), .notAWord(let q, _), .error(let q, _, _):
                 return q
+            case .chunkCard(let chunk, _):
+                return chunk.text
             }
         }
 
@@ -37,11 +41,19 @@ final class ReaderViewModel: ObservableObject {
             case .closed: return 0
             case .loading(_, let i), .ready(_, _, let i), .notAWord(_, let i), .error(_, let i, _):
                 return i
+            case .chunkCard(_, let i):
+                return i
             }
         }
     }
 
     struct StepProgress: Equatable {
+        var done: Int
+        var total: Int
+    }
+
+    /// 词块标注进度（翻译完成后按批跑）。
+    struct ChunkProgress: Equatable {
         var done: Int
         var total: Int
     }
@@ -55,6 +67,7 @@ final class ReaderViewModel: ObservableObject {
     @Published var route: Route = .reading
     @Published var toast: String = ""
     @Published var translating: StepProgress?
+    @Published var chunking: ChunkProgress?
     @Published var dict: DictPanel = .closed
     @Published var searchMatchIdx: Int?
     @Published var activeSentenceIdx: Int = 0
@@ -299,6 +312,10 @@ final class ReaderViewModel: ObservableObject {
                 article.settings = override
             }
         }
+        // 词块开关从关到开：当前文章立刻补标（scheduleSave 已同步 article）。
+        if patch["chunkHighlight"] as? Bool == true, article?.chunkState != .done {
+            ensureAnnotated()
+        }
     }
 
     func resetSettings() {
@@ -402,6 +419,8 @@ final class ReaderViewModel: ObservableObject {
         if isCurrentRun(articleID, runID) {
             translating = nil
         }
+        // 翻译完成后紧接词块标注（不与翻译并发）。
+        ensureAnnotated()
     }
 
     private func translateParagraph(
@@ -475,6 +494,87 @@ final class ReaderViewModel: ObservableObject {
                 return next
             }
         }
+    }
+
+    // MARK: - 词块标注（M4）
+
+    /// 同一时刻只允许一篇文章在标。
+    private var annotatingArticleID: String?
+    private var chunkingTask: Task<Void, Never>?
+
+    /// 文章翻译完成后按批跑 LLM 词块标注；切走文章即停。
+    func ensureAnnotated() {
+        guard let a = article else { return }
+        guard annotatingArticleID == nil else { return }
+        // 设置读实时合并值：开关状态可能来自全局默认或文章覆盖。
+        guard mergeReaderSettings(globalSettings, a.settings).chunkHighlight else { return }
+        guard a.chunkState != .done, !a.sentences.isEmpty else { return }
+        let articleID = a.id
+        chunkingTask?.cancel()
+        chunkingTask = Task { [weak self] in
+            await self?.runChunkAnnotation(articleID: articleID)
+        }
+    }
+
+    private func runChunkAnnotation(articleID: String) async {
+        let batches = chunkBatches((article?.sentences ?? []).map { ChunkBatchItem(idx: $0.idx, en: $0.en) })
+        guard !batches.isEmpty else {
+            scheduleSave { $0.chunkState = .done }
+            return
+        }
+        let sample = article?.sentences.first?.en ?? article?.title ?? ""
+        let target = chat.resolveTarget(for: sample)
+        let system = buildChunkAnnotateSystemPrompt(target: target)
+        annotatingArticleID = articleID
+        defer { annotatingArticleID = nil }
+        chunking = ChunkProgress(done: 0, total: batches.count)
+        var marked = 0
+        var anyError = false
+        var done = 0
+        for batch in batches {
+            guard article?.id == articleID else { return } // 切走文章，整批终止
+            do {
+                let raw = try await chat.complete(systemPrompt: system, userText: buildChunkBatchInput(batch))
+                let byIdx = parseChunkResponse(raw, batch: batch)
+                if !byIdx.isEmpty {
+                    marked += byIdx.values.reduce(0) { $0 + $1.count }
+                    let updates = byIdx
+                    scheduleSave { a in
+                        a.sentences = a.sentences.map { st in
+                            guard let chunks = updates[st.idx] else { return st }
+                            var next = st
+                            next.chunks = chunks
+                            return next
+                        }
+                    }
+                }
+            } catch {
+                anyError = true
+            }
+            done += 1
+            if article?.id != articleID { return }
+            chunking = done < batches.count ? ChunkProgress(done: done, total: batches.count) : nil
+        }
+        scheduleSave { a in
+            a.chunkState = (anyError && marked == 0) ? .failed : .done
+        }
+        if anyError, marked == 0 {
+            showToast("词块标注失败，可在设置里重试")
+        }
+    }
+
+    /// 设置抽屉「重新标注」：清空本篇词块后重跑。
+    func reannotateChunks() {
+        guard article != nil else { return }
+        scheduleSave { a in
+            a.chunkState = .pending
+            a.sentences = a.sentences.map { st in
+                var next = st
+                next.chunks = nil
+                return next
+            }
+        }
+        ensureAnnotated()
     }
 
     /// 单段重试：把该段失败句重置回 pending 后单独重跑。
@@ -640,6 +740,28 @@ final class ReaderViewModel: ObservableObject {
         return vocabWords.contains { $0.id == normalizeWordKey(key) }
     }
 
+    /// 点正文词块下划线 → 即时卡（无 LLM 调用）。
+    func openChunkCard(chunk: SentenceChunk, sentenceIdx: Int) {
+        dict = .chunkCard(chunk: chunk, sentenceIdx: sentenceIdx)
+    }
+
+    /// 词块即时卡「收藏词块」/ 搭配收藏共用。
+    func addChunkVocab(_ chunk: SentenceChunk, sentenceIdx: Int) {
+        guard let currentArticle = article else { return }
+        let word = chunkToVocab(
+            chunk,
+            source: VocabSource(articleId: currentArticle.id, sentenceIdx: sentenceIdx),
+            now: Int64(Date().timeIntervalSince1970 * 1000)
+        )
+        do {
+            try store.saveVocabWord(word)
+            refreshVocab()
+            showToast("已收藏词块：\(word.word)")
+        } catch {
+            showToast("收藏词块失败")
+        }
+    }
+
     func addCurrentDictVocab() {
         guard let currentArticle = article else { return }
         let source = VocabSource(articleId: currentArticle.id, sentenceIdx: dict.sentenceIdx)
@@ -654,6 +776,8 @@ final class ReaderViewModel: ObservableObject {
             } catch {
                 showToast("加入生词本失败")
             }
+        case .chunkCard(let chunk, let idx):
+            addChunkVocab(chunk, sentenceIdx: idx)
         case .loading, .notAWord, .error, .closed:
             break
         }

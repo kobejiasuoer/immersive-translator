@@ -94,6 +94,12 @@ struct ReaderSentenceText: NSViewRepresentable {
             attributed.addAttribute(.underlineColor, value: color, range: range)
             attributed.addAttribute(.cursor, value: NSCursor.pointingHand, range: range)
         }
+        view.markedChunks = marks.compactMap { mark in
+            guard let chunk = mark.chunk else { return nil }
+            let range = NSRange(location: mark.start, length: max(1, mark.end - mark.start))
+            guard range.location + range.length <= full.length else { return nil }
+            return (range, chunk)
+        }
         view.textWasManuallySet = false
         storage.setAttributedString(attributed)
         view.textWasManuallySet = true
@@ -108,6 +114,7 @@ final class ReaderTextView: NSTextView {
     var onSelection: ((String) -> Void)?
     var onWordClick: ((String) -> Void)?
     var onChunkClick: ((SentenceChunk) -> Void)?
+    var markedChunks: [(range: NSRange, chunk: SentenceChunk)] = []
     /// setAttributedString 会清空选区并触发 selection 通知；置位期间不当作用户划选。
     var textWasManuallySet = true
 
@@ -122,11 +129,29 @@ final class ReaderTextView: NSTextView {
                 return
             }
         }
-        // 无选区单击：定位光标处单词
-        if range.length == 0, let word = wordAtMouseLocation(with: event) {
-            onWordClick?(word)
+        // 无选区单击：先看是否命中词块下划线，再回落点词
+        if range.length == 0 {
+            if let chunk = chunkAtMouseLocation(with: event) {
+                onChunkClick?(chunk)
+            } else if let word = wordAtMouseLocation(with: event) {
+                onWordClick?(word)
+            }
         }
         super.mouseUp(with: event)
+    }
+
+    /// 点击命中词块标注范围 → 出即时卡。
+    private func chunkAtMouseLocation(with event: NSEvent) -> SentenceChunk? {
+        guard let layoutManager, let container = textContainer, !markedChunks.isEmpty else { return nil }
+        let location = convert(event.locationInWindow, from: nil)
+        let index = layoutManager.characterIndex(
+            for: location,
+            in: container,
+            fractionOfDistanceBetweenInsertionPoints: nil
+        )
+        return markedChunks.first {
+            index >= $0.range.location && index < NSMaxRange($0.range)
+        }?.chunk
     }
 
     private func wordAtMouseLocation(with event: NSEvent) -> String? {
