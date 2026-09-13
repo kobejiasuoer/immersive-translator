@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import ReaderCore
 
 enum TranslationPanelStatus {
     case loading
@@ -77,7 +78,13 @@ final class TranslationPanelController {
     private let onCancelTranslation: () -> Void
     private let onOCRConfirm: (String) -> Void
     private let onOCRReselect: () -> Void
+    private let onRunQuickAction: (QuickAction, String, String) async throws -> String
+    private let onLookupCard: (String) async throws -> DictCardData?
+    private let onAddVocab: (String, DictCardData?) -> Bool
+    private let onSendToReader: (String) -> Void
     private var panel: NSPanel?
+    private var frameObservers: [Any] = []
+    private var dictPrefetchTask: Task<Void, Never>?
     private var autoHideTask: Task<Void, Never>?
     private var elapsedTask: Task<Void, Never>?
     private var loadingStartedAt: Date?
@@ -91,7 +98,11 @@ final class TranslationPanelController {
         onOpenSettings: @escaping () -> Void,
         onCancelTranslation: @escaping () -> Void,
         onOCRConfirm: @escaping (String) -> Void,
-        onOCRReselect: @escaping () -> Void
+        onOCRReselect: @escaping () -> Void,
+        onRunQuickAction: @escaping (QuickAction, String, String) async throws -> String,
+        onLookupCard: @escaping (String) async throws -> DictCardData?,
+        onAddVocab: @escaping (String, DictCardData?) -> Bool,
+        onSendToReader: @escaping (String) -> Void
     ) {
         self.settingsStore = settingsStore
         self.historyStore = historyStore
@@ -101,11 +112,23 @@ final class TranslationPanelController {
         self.onCancelTranslation = onCancelTranslation
         self.onOCRConfirm = onOCRConfirm
         self.onOCRReselect = onOCRReselect
+        self.onRunQuickAction = onRunQuickAction
+        self.onLookupCard = onLookupCard
+        self.onAddVocab = onAddVocab
+        self.onSendToReader = onSendToReader
+        model.isPinned = UserDefaults.standard.bool(forKey: Self.pinnedKey)
+        model.autoHideEnabled = UserDefaults.standard.bool(forKey: Self.autoHideKey)
     }
+
+    private static let frameKey = "translationPanelFrame"
+    private static let pinnedKey = "translationPanelPinned"
+    private static let autoHideKey = "translationPanelAutoHide"
 
     deinit {
         autoHideTask?.cancel()
         elapsedTask?.cancel()
+        dictPrefetchTask?.cancel()
+        frameObservers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     func show(
@@ -178,6 +201,7 @@ final class TranslationPanelController {
         if wasOCRPreview {
             model.showOriginal = false
         }
+        beginDictPrefetchIfNeeded(original: original)
 
         DiagnosticLogger.log("translation.panel.show status=\(model.status.title) isLoading=\(isLoading) originalLength=\(original.count) translationLength=\(translation.count)")
 
@@ -310,10 +334,14 @@ final class TranslationPanelController {
                 self.onRetry(self.model.original)
             },
             onPinChanged: { [weak self] in
-                self?.scheduleAutoHideIfNeeded()
+                guard let self else { return }
+                UserDefaults.standard.set(self.model.isPinned, forKey: Self.pinnedKey)
+                self.scheduleAutoHideIfNeeded()
             },
             onAutoHideChanged: { [weak self] in
-                self?.scheduleAutoHideIfNeeded()
+                guard let self else { return }
+                UserDefaults.standard.set(self.model.autoHideEnabled, forKey: Self.autoHideKey)
+                self.scheduleAutoHideIfNeeded()
             },
             onToggleFavorite: { [weak self] in
                 self?.toggleFavorite()
@@ -335,6 +363,21 @@ final class TranslationPanelController {
             onOCRReselect: { [weak self] in
                 self?.autoHideTask?.cancel()
                 self?.onOCRReselect()
+            },
+            onQuickAction: { [weak self] action in
+                self?.runQuickAction(action)
+            },
+            onAddToVocab: { [weak self] in
+                self?.addCurrentToVocab()
+            },
+            onSendToReader: { [weak self] in
+                self?.sendToReader()
+            },
+            onRetryEdited: { [weak self] text in
+                guard let self else { return }
+                self.model.editingOriginal = false
+                self.autoHideTask?.cancel()
+                self.onRetry(text)
             },
             onClose: { [weak self] in
                 self?.panel?.orderOut(nil)
@@ -370,7 +413,38 @@ final class TranslationPanelController {
         panel.standardWindowButton(.closeButton)?.isHidden = true
         panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
         panel.standardWindowButton(.zoomButton)?.isHidden = true
+
+        // 浮窗位置/尺寸跨启动记忆：恢复上次保存的 frame，并监听移动/缩放落盘。
+        if let raw = UserDefaults.standard.string(forKey: Self.frameKey) {
+            let frame = NSRectFromString(raw)
+            if frame.width >= panel.minSize.width, frame.height >= panel.minSize.height {
+                let screens = NSScreen.screens
+                if screens.contains(where: { NSIntersectsRect(frame, $0.visibleFrame) || NSPointInRect(frame.origin, $0.visibleFrame) }) {
+                    panel.setFrame(frame, display: false)
+                }
+            }
+        }
+        let moveObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification,
+            object: panel,
+            queue: .main
+        ) { [weak panel] _ in
+            Self.persistFrame(panel)
+        }
+        let resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didEndLiveResizeNotification,
+            object: panel,
+            queue: .main
+        ) { [weak panel] _ in
+            Self.persistFrame(panel)
+        }
+        frameObservers = [moveObserver, resizeObserver]
         return panel
+    }
+
+    private static func persistFrame(_ panel: NSPanel?) {
+        guard let panel else { return }
+        UserDefaults.standard.set(NSStringFromRect(panel.frame), forKey: frameKey)
     }
 
     private func position(_ panel: NSPanel) {
@@ -393,6 +467,99 @@ final class TranslationPanelController {
         }
 
         panel.setFrameOrigin(origin)
+    }
+
+    // MARK: - 词典卡预取 / 快捷动作 / 生词本 / 阅读室（M5）
+
+    /// 词条类文本后台预取：原文像单词/短语且是完整译文时拉词典卡。
+    private func beginDictPrefetchIfNeeded(original: String) {
+        let word = original.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard model.isTranslationOutput, !model.isLoading, isLookupText(word),
+              word != model.dictCardWord else { return }
+        model.dictCard = nil
+        model.dictCardWord = word
+        model.dictCardLoading = true
+        model.showDictCard = true
+        dictPrefetchTask?.cancel()
+        let lookup = onLookupCard
+        dictPrefetchTask = Task { [weak self] in
+            do {
+                let card = try await lookup(word)
+                guard let self, self.model.dictCardWord == word, !Task.isCancelled else { return }
+                self.model.dictCardLoading = false
+                if let card {
+                    self.model.dictCard = card
+                } else {
+                    // not_a_word：收起卡片，回落译文展示
+                    self.model.showDictCard = false
+                }
+            } catch {
+                guard let self, self.model.dictCardWord == word else { return }
+                self.model.dictCardLoading = false
+                self.model.showDictCard = false
+            }
+        }
+    }
+
+    /// 快捷动作：润色/解释语法/总结/换种说法。结果替换译文展示，原文保留可重译。
+    func runQuickAction(_ action: QuickAction) {
+        let source = model.original
+        let draft = model.translationTrimmed
+        guard !source.isEmpty else { return }
+        if action == .polish, draft.isEmpty { return }
+        autoHideTask?.cancel()
+        show(
+            original: source,
+            translation: "正在生成「\(action.label)」…",
+            isLoading: true,
+            source: .panel,
+            status: .loading,
+            message: "正在生成「\(action.label)」"
+        )
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let text = try await self.onRunQuickAction(action, source, draft)
+                self.show(
+                    original: source,
+                    translation: text,
+                    isLoading: false,
+                    source: .panel,
+                    status: .success,
+                    message: "已生成「\(action.label)」· ⌘R 用原文重译",
+                    isTranslationOutput: true
+                )
+            } catch {
+                self.show(
+                    original: source,
+                    translation: (error as? LocalizedError)?.errorDescription ?? "生成失败：\(error)",
+                    isLoading: false,
+                    source: .panel,
+                    status: .error,
+                    message: "「\(action.label)」没有完成"
+                )
+            }
+        }
+    }
+
+    /// 加入生词本：优先用已预取的词典卡；未取到时让回调侧自行补查。
+    func addCurrentToVocab() {
+        let word = model.original.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !word.isEmpty else { return }
+        if onAddVocab(word, model.dictCard) {
+            model.notice = "已加入生词本：\(word)"
+        } else {
+            model.notice = "加入生词本失败"
+        }
+        scheduleAutoHideIfNeeded()
+    }
+
+    /// 发送到阅读室：原文建文章并打开阅读室。
+    func sendToReader() {
+        let text = model.original
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        autoHideTask?.cancel()
+        onSendToReader(text)
     }
 
     private func toggleFavorite() {
@@ -480,6 +647,14 @@ final class TranslationPanelModel: ObservableObject {
     @Published var allowsOpenSettings = false
     @Published var openSettingsTitle = "打开设置"
     @Published var allowsCancel = false
+    // 词典卡（词条类译文的后台预取）
+    @Published var dictCard: DictCardData?
+    @Published var dictCardLoading = false
+    @Published var dictCardWord = ""
+    @Published var showDictCard = false
+    // 原文编辑重翻
+    @Published var editingOriginal = false
+    @Published var editedOriginal = ""
 }
 
 struct TranslationPanelView: View {
@@ -494,6 +669,10 @@ struct TranslationPanelView: View {
     let onCancelTranslation: () -> Void
     let onOCRConfirm: (String) -> Void
     let onOCRReselect: () -> Void
+    let onQuickAction: (QuickAction) -> Void
+    let onAddToVocab: () -> Void
+    let onSendToReader: () -> Void
+    let onRetryEdited: (String) -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -597,6 +776,8 @@ struct TranslationPanelView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 13) {
+                    dictCardSection
+
                     Text(model.primaryText)
                         .textSelection(.enabled)
                         .font(.system(size: model.isLoading ? 15 : 17, weight: model.isLoading ? .regular : .medium))
@@ -616,12 +797,45 @@ struct TranslationPanelView: View {
 
                     DisclosureGroup(isExpanded: $model.showOriginal) {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(model.originalTrimmed.isEmpty ? "没有原文。" : model.originalTrimmed)
-                                .textSelection(.enabled)
-                                .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
-                                .lineSpacing(4)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if model.editingOriginal {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    TextEditor(text: $model.editedOriginal)
+                                        .font(.system(size: 13))
+                                        .frame(minHeight: 84)
+                                        .scrollContentBackground(.hidden)
+                                        .padding(4)
+                                        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+                                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.primary.opacity(0.15)))
+                                    HStack {
+                                        Text("⌘↩ 用编辑后的原文重译 · Esc 取消")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                        Button("取消") { model.editingOriginal = false }
+                                            .controlSize(.small)
+                                        Button("重译") { onRetryEdited(model.editedOriginal) }
+                                            .controlSize(.small)
+                                            .buttonStyle(.borderedProminent)
+                                            .keyboardShortcut(.return, modifiers: .command)
+                                            .disabled(model.editedOriginal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                    }
+                                }
+                            } else {
+                                Text(model.originalTrimmed.isEmpty ? "没有原文。" : model.originalTrimmed)
+                                    .textSelection(.enabled)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.secondary)
+                                    .lineSpacing(4)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                if model.allowsRetry {
+                                    Button("编辑原文后重译") {
+                                        model.editedOriginal = model.original
+                                        model.editingOriginal = true
+                                    }
+                                    .font(.caption)
+                                    .buttonStyle(.link)
+                                }
+                            }
                         }
                         .padding(.top, 6)
                     } label: {
@@ -640,6 +854,115 @@ struct TranslationPanelView: View {
             }
             .frame(minHeight: 136)
         }
+    }
+
+    /// AI 词典卡片：词条类译文的后台预取结果（卡片/译文可一键切换）。
+    @ViewBuilder
+    private var dictCardSection: some View {
+        if model.showDictCard, model.dictCardWord == model.originalTrimmed {
+            if model.dictCardLoading {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(model.dictCardWord)
+                        .font(.system(size: 17, weight: .semibold))
+                    Text("正在查询词典…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else if let card = model.dictCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(card.word)
+                            .font(.system(size: 17, weight: .semibold))
+                        ForEach(Array(card.phonetics.enumerated()), id: \.offset) { _, phonetic in
+                            Text("\(phonetic.label.isEmpty ? "" : "\(phonetic.label) ")/\(phonetic.value)/")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("显示译文") { model.showDictCard = false }
+                            .font(.caption)
+                            .buttonStyle(.link)
+                    }
+                    if !card.translation.isEmpty {
+                        Text(card.translation)
+                            .font(.system(size: 14, weight: .medium))
+                    }
+                    ForEach(Array(card.senses.enumerated()), id: \.offset) { _, sense in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                if !sense.pos.isEmpty {
+                                    Text(sense.pos)
+                                        .font(.caption.weight(.medium))
+                                        .foregroundColor(.accentColor)
+                                }
+                                Text(sense.gloss)
+                                    .font(.system(size: 13.5))
+                            }
+                            ForEach(Array(sense.examples.enumerated()), id: \.offset) { _, example in
+                                exampleLine(example)
+                            }
+                        }
+                    }
+                    if !card.inflections.isEmpty {
+                        Text("词形：\(card.inflections)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if !card.etymology.isEmpty {
+                        Text("记忆：\(card.etymology)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack(spacing: 8) {
+                        Button {
+                            copyToPasteboard(dictCardToText(card), notice: "已复制词条")
+                        } label: {
+                            Label("复制词条", systemImage: "doc.on.doc")
+                                .font(.caption)
+                        }
+                        .controlSize(.small)
+                        Spacer()
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+        } else if model.dictCard != nil, model.dictCardWord == model.originalTrimmed, !model.dictCardLoading {
+            HStack {
+                Button("显示词典卡片") { model.showDictCard = true }
+                    .font(.caption)
+                    .buttonStyle(.link)
+                Spacer()
+            }
+        }
+    }
+
+    /// 例句：查询词命中段高亮。
+    private func exampleLine(_ example: DictExample) -> some View {
+        let parts = splitByWord(example.s, cardWordForHighlight)
+        var joined = Text("")
+        for part in parts {
+            if part.hit {
+                joined = joined + Text(part.text).fontWeight(.semibold).foregroundColor(.accentColor)
+            } else {
+                joined = joined + Text(part.text)
+            }
+        }
+        return VStack(alignment: .leading, spacing: 1) {
+            joined.font(.system(size: 12.5))
+            if !example.t.isEmpty {
+                Text(example.t)
+                    .font(.system(size: 11.5))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.leading, 8)
+    }
+
+    private var cardWordForHighlight: String {
+        model.dictCard?.word ?? model.originalTrimmed
     }
 
     private var ocrPreviewContent: some View {
@@ -742,7 +1065,29 @@ struct TranslationPanelView: View {
         if model.mode == .ocrPreview {
             ocrPreviewActions
         } else {
-            translationActions
+            VStack(alignment: .leading, spacing: 8) {
+                if model.isTranslationOutput, !model.isLoading {
+                    quickActionRow
+                }
+                translationActions
+            }
+        }
+    }
+
+    /// 译文快捷动作：润色 / 解释语法 / 总结 / 换种说法。
+    private var quickActionRow: some View {
+        HStack(spacing: 8) {
+            Text("快捷动作")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(QuickAction.allCases, id: \.rawValue) { action in
+                Button(action.label) {
+                    onQuickAction(action)
+                }
+                .controlSize(.small)
+                .disabled(action == .polish && model.translationTrimmed.isEmpty)
+            }
+            Spacer(minLength: 0)
         }
     }
 

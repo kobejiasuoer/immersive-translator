@@ -527,6 +527,95 @@ final class ReaderCoreTests: XCTestCase {
         XCTAssertEqual(mergeReaderSettings(base, nil), base)
     }
 
+    // MARK: - 面板词条判定 / 词典卡
+
+    func testIsLookupText() {
+        XCTAssertEqual(isLookupText("momentum"), true)
+        XCTAssertEqual(isLookupText("in the wake of"), true)
+        XCTAssertEqual(isLookupText("字符串"), true)
+        XCTAssertEqual(isLookupText("don't"), true)
+        XCTAssertEqual(isLookupText("This is a full sentence."), false)
+        XCTAssertEqual(isLookupText("https://example.com/a"), false)
+        XCTAssertEqual(isLookupText("user_name"), false)
+        XCTAssertEqual(isLookupText("1234"), false) // 纯数字
+        XCTAssertEqual(isLookupText("中英mixed"), false) // 中英混排
+        XCTAssertEqual(isLookupText("一二三四五六七"), false) // CJK 超长
+        XCTAssertEqual(isLookupText("one two three four five"), false) // 5 token
+        XCTAssertEqual(isLookupText("line1\nline2"), false) // 多行
+    }
+
+    func testParseDictResponse() {
+        let raw = """
+        ```json
+        {"word":"momentum","phonetics":[{"label":"UK","value":"/məˈmɛntəm/"}],
+         "translation":"动量；势头","senses":[{"pos":"n.","gloss":"动力；势头",
+         "examples":[{"s":"The campaign took on momentum.","t":"运动获得了势头。"}]}],
+         "inflections":"momenta","etymology":"源自希腊语"}
+        ```
+        """
+        guard case let .card(card) = parseDictResponse(raw, query: "momentum") else {
+            return XCTFail("expected card")
+        }
+        XCTAssertEqual(card.word, "momentum")
+        XCTAssertEqual(card.phonetics.first?.label, "UK")
+        XCTAssertEqual(card.senses.first?.examples.first?.t, "运动获得了势头。")
+        XCTAssertEqual(card.inflections, "momenta")
+
+        // 尾逗号修复
+        let trailing = #"{"word":"x","senses":[{"pos":"","gloss":"甲",}],}"#
+        guard case .card = parseDictResponse(trailing, query: "x") else {
+            return XCTFail("trailing comma should be repaired")
+        }
+
+        guard case .notAWord = parseDictResponse(#"{"error":"not a word"}"#, query: "x") else {
+            return XCTFail("expected notAWord")
+        }
+        guard case .invalid = parseDictResponse("no braces", query: "x") else {
+            return XCTFail("expected invalid")
+        }
+        guard case .invalid = parseDictResponse(#"{"word":"x"}"#, query: "x") else {
+            return XCTFail("expected invalid when no content")
+        }
+    }
+
+    func testDictCardToTextAndSplitByWord() {
+        let card = DictCardData(
+            word: "momentum",
+            phonetics: [DictPhonetic(label: "UK", value: "məˈmɛntəm")],
+            translation: "势头",
+            senses: [DictSense(pos: "n.", gloss: "动力", examples: [DictExample(s: "gain momentum", t: "获得动力")])],
+            inflections: "momenta",
+            etymology: "希腊语"
+        )
+        let text = dictCardToText(card)
+        XCTAssertEqual(text.hasPrefix("momentum UK /məˈmɛntəm/"), true)
+        XCTAssertEqual(text.contains("[n.] 动力"), true)
+        XCTAssertEqual(text.contains("词形: momenta"), true)
+
+        let parts = splitByWord("The momentum of the moment matters.", "momentum")
+        XCTAssertEqual(parts.filter(\.hit).map(\.text), ["momentum"])
+        XCTAssertEqual(parts.filter { !$0.hit }.map(\.text).joined().contains("The "), true)
+        // 词边界：moment 不会命中 momentum
+        let miss = splitByWord("a moment ago", "momentum")
+        XCTAssertEqual(miss.filter(\.hit).count, 0)
+        // CJK 直接子串
+        let cjk = splitByWord("这句话里有动力这个词", "动力")
+        XCTAssertEqual(cjk.filter(\.hit).map(\.text), ["动力"])
+    }
+
+    func testActionPrompts() {
+        let polish = buildActionSystemPrompt(action: .polish, targetLanguage: "简体中文", customStyle: "正式", glossaryText: "a -> 甲")
+        XCTAssertEqual(polish.contains("draft_translation"), true)
+        XCTAssertEqual(polish.contains("正式"), true)
+        let grammar = buildActionSystemPrompt(action: .grammar, targetLanguage: "简体中文", customStyle: "正式", glossaryText: "a -> 甲")
+        XCTAssertEqual(grammar.contains("正式"), false) // 语法解释不注入风格
+        let rephrase = buildActionSystemPrompt(action: .rephrase, targetLanguage: "", customStyle: "", glossaryText: "a -> 甲")
+        XCTAssertEqual(rephrase.contains("3 alternative"), true)
+        let user = buildPolishUserText(source: "Hello", draftTranslation: "你好")
+        XCTAssertEqual(user.contains("<source>"), true)
+        XCTAssertEqual(user.contains("<draft_translation>"), true)
+    }
+
     // MARK: - 语言判定
 
     func testLooksMostlyChineseAndResolve() {
