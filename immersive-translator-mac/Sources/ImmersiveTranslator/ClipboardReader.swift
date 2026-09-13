@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 enum SelectedTextReaderError: LocalizedError {
     case accessibilityNotTrusted
@@ -14,6 +15,10 @@ enum SelectedTextReaderError: LocalizedError {
     }
 }
 
+/// 取词三级策略（对齐 Windows clipboard.rs / uia.rs）：
+/// 1. 模拟 ⌘C 读剪贴板（主路径）；
+/// 2. AXUIElement selectedText 直读兜底（目标 App 不理会合成按键时）；
+/// 3. 等待用户手动 ⌘C（面板提示后监听剪贴板序列号，超时放弃）。
 enum SelectedTextReader {
     @MainActor
     static func readSelectedText() async throws -> String {
@@ -40,12 +45,58 @@ enum SelectedTextReader {
             try? await Task.sleep(nanoseconds: 40_000_000)
         }
 
-        snapshot.restore(to: pasteboard)
-
-        if copiedText.isEmpty {
-            throw SelectedTextReaderError.copyFailed
+        if !copiedText.isEmpty {
+            snapshot.restore(to: pasteboard)
+            return copiedText
         }
-        return copiedText
+
+        // ② AX 直读兜底：clearContents 之后剪贴板没有新内容，恢复快照再问 AX。
+        snapshot.restore(to: pasteboard)
+        if let axText = readSelectedTextViaAccessibility(), !axText.isEmpty {
+            return axText
+        }
+        throw SelectedTextReaderError.copyFailed
+    }
+
+    /// ② AXUIElement 兜底：系统焦点元素的 kAXSelectedTextAttribute 直接读取。
+    /// macOS 的 AX 覆盖比 Windows UIA 好（原生 App / Electron / Safari 均支持），
+    /// 但终端、部分 Java/Electron 自绘区域可能拿不到 → 返回 nil。
+    @MainActor
+    static func readSelectedTextViaAccessibility() -> String? {
+        guard PermissionPrompter.isAccessibilityTrusted() else { return nil }
+        var focusedElement: CFTypeRef?
+        let systemWide = AXUIElementCreateSystemWide()
+        guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedElement) == .success,
+              let element = focusedElement as! AXUIElement? else {
+            return nil
+        }
+        var selectedText: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selectedText) == .success,
+              let value = selectedText else {
+            return nil
+        }
+        let text = value as? String ?? ""
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return clean.isEmpty ? nil : clean
+    }
+
+    /// ③ 等待用户手动 ⌘C：提示后监听剪贴板序列号，出现新文本即返回；
+    /// 超时返回 nil（面板恢复原提示）。取消由 Task 取消实现。
+    @MainActor
+    static func waitForManualCopy(timeout: TimeInterval) async -> String? {
+        let pasteboard = NSPasteboard.general
+        let startChangeCount = pasteboard.changeCount
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if Task.isCancelled { return nil }
+            if pasteboard.changeCount != startChangeCount,
+               let text = pasteboard.string(forType: .string),
+               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return text
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return nil
     }
 
     private static func sendCopyShortcut() {

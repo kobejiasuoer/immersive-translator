@@ -284,6 +284,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     await self?.translateSelectedText()
                 case .translateScreenshot:
                     self?.startScreenSelection()
+                case .openReader:
+                    await self?.triggerReaderHotkey()
                 }
             }
         }
@@ -306,7 +308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "翻译选中文本  \(settingsStore.selectionHotKeyShortcut.title)", action: #selector(menuTranslateSelection), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "截图 OCR 翻译  \(settingsStore.ocrHotKeyShortcut.title)", action: #selector(menuTranslateScreenshot), keyEquivalent: ""))
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "沉浸阅读室...", action: #selector(openReader), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "沉浸阅读室  \(settingsStore.readerHotKeyShortcut.title)", action: #selector(openReader), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "生词本...", action: #selector(openVocabReview), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "翻译历史...", action: #selector(openHistory), keyEquivalent: ""))
@@ -332,7 +334,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func registerHotKeys() {
         guard let report = hotKeyManager?.register(
             selectionShortcut: settingsStore.selectionHotKeyShortcut,
-            ocrShortcut: settingsStore.ocrHotKeyShortcut
+            ocrShortcut: settingsStore.ocrHotKeyShortcut,
+            readerShortcut: settingsStore.readerHotKeyShortcut
         ), !report.warnings.isEmpty else {
             settingsStore.hotKeyRegistrationMessage = nil
             return
@@ -365,6 +368,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.refreshMenu()
             }
             .store(in: &cancellables)
+
+        settingsStore.$readerHotKeyShortcut
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.registerHotKeys()
+                self?.refreshMenu()
+            }
+            .store(in: &cancellables)
     }
 
     private func showWelcomeIfNeeded() {
@@ -391,6 +402,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openReader() {
         readerController.show()
+    }
+
+    /// 阅读室热键：读取当前选中文本送进阅读室并聚焦窗口；
+    /// 没有选区时只打开/聚焦阅读室（对齐 Windows trigger_reader）。
+    @MainActor
+    private func triggerReaderHotkey() async {
+        guard PermissionPrompter.isAccessibilityTrusted() else {
+            readerController.show()
+            return
+        }
+        panelController.show(
+            original: "正在读取选中文本...",
+            translation: "我会临时触发 Command + C，读取后立刻恢复你的剪贴板。",
+            isLoading: true,
+            source: nil,
+            status: .loading,
+            message: "正在读取当前选区"
+        )
+        do {
+            let text = try await SelectedTextReader.readSelectedText()
+            panelController.dismiss()
+            let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if clean.isEmpty {
+                readerController.show()
+            } else {
+                readerController.show(pendingImportText: clean)
+            }
+        } catch {
+            panelController.dismiss()
+            readerController.show()
+        }
     }
 
     @objc private func openVocabReview() {
@@ -936,20 +978,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let text = try await SelectedTextReader.readSelectedText()
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                panelController.show(
-                    original: "没有读取到选中文本",
-                    translation: "请先在当前 App 或网页里选中一段文字，再按 Option + Space。",
-                    isLoading: false,
-                    source: .selection,
-                    status: .warning,
-                    message: "当前没有可翻译的选区",
-                    elapsed: Date().timeIntervalSince(startedAt)
-                )
+                await promptManualCopyFallback(startedAt: startedAt)
                 return
             }
 
             startTranslation(text, source: .selection)
         } catch {
+            // ③ 三级兜底：⌘C 与 AX 都没读到——请用户在原应用里手动按一次 ⌘C。
+            if error is SelectedTextReaderError {
+                await promptManualCopyFallback(startedAt: startedAt)
+                return
+            }
             panelController.show(
                 original: "翻译失败",
                 translation: ErrorMessageFormatter.message(for: error),
@@ -968,6 +1007,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             )
         }
+    }
+
+    /// 取词三级兜底的最后一档：提示「在原应用里按 ⌘C」，监听剪贴板 8 秒。
+    @MainActor
+    private func promptManualCopyFallback(startedAt: Date) async {
+        panelController.show(
+            original: "没有读到选区",
+            translation: "我没有从当前 App 读到选中文本（有些 App 不响应模拟复制）。\n\n请回到原应用，选中想翻译的文字后按一次 ⌘C——我会自动继续；8 秒内没有复制就放弃。",
+            isLoading: true,
+            source: .selection,
+            status: .warning,
+            message: "等待手动复制（8 秒）"
+        )
+        if let text = await SelectedTextReader.waitForManualCopy(timeout: 8) {
+            startTranslation(text, source: .selection)
+            return
+        }
+        panelController.show(
+            original: "没有读取到选中文本",
+            translation: "8 秒内没有等到新的复制内容。请先在当前 App 或网页里选中一段文字，再按 \(settingsStore.selectionHotKeyShortcut.title)。",
+            isLoading: false,
+            source: .selection,
+            status: .warning,
+            message: "当前没有可翻译的选区",
+            elapsed: Date().timeIntervalSince(startedAt),
+            allowsRetry: false,
+            allowsFavorite: false,
+            isTranslationOutput: false
+        )
     }
 
     @MainActor

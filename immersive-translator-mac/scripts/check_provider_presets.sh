@@ -51,7 +51,7 @@ private struct ProviderPresetsCheck {
         var failures: [String] = []
         let presets = ProviderProfile.builtinPresets
 
-        expect(presets.count == 3, "provider presets should expose the three built-in cloud providers", failures: &failures)
+        expect(presets.count == 7, "provider presets should expose the seven built-in providers (6 cloud + 1 local)", failures: &failures)
         expect(Set(presets.map(\.id)).count == presets.count, "provider preset ids should be unique", failures: &failures)
         expect(Set(presets.map(\.displayName)).count == presets.count, "provider preset display names should be unique", failures: &failures)
 
@@ -75,8 +75,28 @@ private struct ProviderPresetsCheck {
             failures: &failures
         )
         expect(
-            !presets.contains { isLocalEndpoint($0.endpoint) },
-            "local provider endpoints should not be exposed as built-in cloud presets",
+            presets.filter { isLocalEndpoint($0.endpoint) }.count == 1,
+            "exactly one built-in preset should use a local endpoint (Ollama)",
+            failures: &failures
+        )
+        expect(
+            presets.contains { $0.id == "dashscope" && $0.endpoint == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions" && $0.model == "qwen-plus" },
+            "DashScope (Qwen) preset should be available with the compatible-mode endpoint",
+            failures: &failures
+        )
+        expect(
+            presets.contains { $0.id == "moonshot" && $0.endpoint.hasPrefix("https://api.moonshot.cn/") && $0.model == "moonshot-v1-8k" },
+            "Moonshot (Kimi) preset should be available",
+            failures: &failures
+        )
+        expect(
+            presets.contains { $0.id == "gemini" && $0.endpoint == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions" && $0.model == "gemini-2.5-flash" },
+            "Gemini preset should be available via the OpenAI-compatible path",
+            failures: &failures
+        )
+        expect(
+            presets.contains { $0.id == "ollama" && $0.endpoint == "http://localhost:11434/v1/chat/completions" && $0.model == "llama3.2" },
+            "Ollama local preset should be available",
             failures: &failures
         )
 
@@ -119,9 +139,14 @@ private struct ProviderPresetsCheck {
 
         expect(url.path.hasSuffix("/chat/completions"), "\(label): normalized URL should end in /chat/completions, got \(url.path)", failures: &failures)
 
-        expect(!isLocalEndpoint(preset.endpoint), "\(label): built-in cloud preset should not use a local endpoint", failures: &failures)
-        expect(url.scheme == "https", "\(label): cloud preset should use HTTPS, got \(url.absoluteString)", failures: &failures)
-        expect(TranslationClient.requiresAPIKey(for: url), "\(label): cloud endpoint should require API Key", failures: &failures)
+        let isLocal = isLocalEndpoint(preset.endpoint)
+        expect(!isLocal || preset.id == "ollama", "\(label): unexpected local endpoint for a built-in preset", failures: &failures)
+        if !isLocal {
+            expect(url.scheme == "https", "\(label): cloud preset should use HTTPS, got \(url.absoluteString)", failures: &failures)
+            expect(TranslationClient.requiresAPIKey(for: url), "\(label): cloud endpoint should require API Key", failures: &failures)
+        } else {
+            expect(!TranslationClient.requiresAPIKey(for: url), "\(label): local endpoint should allow an empty API Key", failures: &failures)
+        }
     }
 
     private static func isLocalEndpoint(_ endpoint: String) -> Bool {

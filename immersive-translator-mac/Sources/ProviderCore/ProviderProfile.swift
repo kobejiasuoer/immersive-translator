@@ -35,9 +35,13 @@ public struct ProviderProfile: Identifiable, Codable, Equatable {
 
     // 硬编码厂商官方模型,不进 UserDefaults
     public static let builtinModelCandidates: [String: [String]] = [
-        "deepseek": ["deepseek-v4-flash", "deepseek-v4", "deepseek-reasoner"],
-        "zhipu":    ["glm-5.2", "glm-5.2-air", "glm-4-flash"],
-        "openai":   ["gpt-5.4-mini", "gpt-5.4", "gpt-4o-mini"],
+        "deepseek":  ["deepseek-v4-flash", "deepseek-v4", "deepseek-reasoner"],
+        "zhipu":     ["glm-5.2", "glm-5.2-air", "glm-4-flash"],
+        "openai":    ["gpt-5.4-mini", "gpt-5.4", "gpt-4o-mini"],
+        "dashscope": ["qwen-plus", "qwen-turbo", "qwen-max"],
+        "moonshot":  ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+        "gemini":    ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"],
+        "ollama":    ["llama3.2", "qwen3:8b", "deepseek-r1:8b"],
         // 自定义 provider 无内置候选,customModels 是唯一来源
     ]
 
@@ -58,6 +62,30 @@ public struct ProviderProfile: Identifiable, Codable, Equatable {
             id: "openai", displayName: "OpenAI",
             endpoint: "https://api.openai.com/v1/chat/completions",
             model: "gpt-5.4-mini",
+            isBuiltin: true, customModels: []
+        ),
+        ProviderProfile(
+            id: "dashscope", displayName: "通义千问",
+            endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            model: "qwen-plus",
+            isBuiltin: true, customModels: []
+        ),
+        ProviderProfile(
+            id: "moonshot", displayName: "Kimi",
+            endpoint: "https://api.moonshot.cn/v1/chat/completions",
+            model: "moonshot-v1-8k",
+            isBuiltin: true, customModels: []
+        ),
+        ProviderProfile(
+            id: "gemini", displayName: "Google Gemini",
+            endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            model: "gemini-2.5-flash",
+            isBuiltin: true, customModels: []
+        ),
+        ProviderProfile(
+            id: "ollama", displayName: "Ollama（本地）",
+            endpoint: "http://localhost:11434/v1/chat/completions",
+            model: "llama3.2",
             isBuiltin: true, customModels: []
         ),
     ]

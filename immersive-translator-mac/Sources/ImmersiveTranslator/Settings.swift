@@ -58,6 +58,10 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(selectionHotKeyShortcut.rawValue, forKey: Keys.selectionHotKeyShortcut) }
     }
 
+    @Published var readerHotKeyShortcut: HotKeyShortcut {
+        didSet { UserDefaults.standard.set(readerHotKeyShortcut.rawValue, forKey: Keys.readerHotKeyShortcut) }
+    }
+
     @Published var ocrHotKeyShortcut: HotKeyShortcut {
         didSet { UserDefaults.standard.set(ocrHotKeyShortcut.rawValue, forKey: Keys.ocrHotKeyShortcut) }
     }
@@ -137,6 +141,7 @@ final class SettingsStore: ObservableObject {
         glossaryText = UserDefaults.standard.string(forKey: Keys.glossaryText) ?? ""
         selectionHotKeyShortcut = Self.loadSelectionHotKeyShortcut()
         ocrHotKeyShortcut = Self.loadOCRHotKeyShortcut()
+        readerHotKeyShortcut = Self.loadReaderHotKeyShortcut()
 
         // 最后赋值带 didSet 的存储属性(self 此时已完全初始化)
         providers = loadedProviders
@@ -261,6 +266,14 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    private static func loadReaderHotKeyShortcut() -> HotKeyShortcut {
+        if let rawValue = UserDefaults.standard.string(forKey: Keys.readerHotKeyShortcut),
+           let shortcut = HotKeyShortcut(rawValue: rawValue) {
+            return shortcut
+        }
+        return .controlOptionR
+    }
+
     private static func loadOCRHotKeyShortcut() -> HotKeyShortcut {
         if let rawValue = UserDefaults.standard.string(forKey: Keys.ocrHotKeyShortcut),
            let shortcut = HotKeyShortcut(rawValue: rawValue) {
@@ -288,6 +301,7 @@ final class SettingsStore: ObservableObject {
         static let glossaryText = "glossaryText"
         static let selectionHotKeyShortcut = "selectionHotKeyShortcut"
         static let ocrHotKeyShortcut = "ocrHotKeyShortcut"
+        static let readerHotKeyShortcut = "readerHotKeyShortcut"
         static let selectionHotKeyPreset = "selectionHotKeyPreset"
         static let ocrHotKeyPreset = "ocrHotKeyPreset"
     }
@@ -970,6 +984,14 @@ struct SettingsView: View {
                             target: .ocr
                         ) { shortcut in
                             settingsStore.ocrHotKeyShortcut = shortcut
+                        }
+
+                        hotKeyRecorderRow(
+                            title: "沉浸阅读室",
+                            shortcut: settingsStore.readerHotKeyShortcut,
+                            target: .reader
+                        ) { shortcut in
+                            settingsStore.readerHotKeyShortcut = shortcut
                         }
 
                         if let conflictMessage = hotKeyConflictMessage {
@@ -3095,10 +3117,16 @@ struct SettingsView: View {
     }
 
     private var hotKeyConflictMessage: String? {
-        guard settingsStore.selectionHotKeyShortcut == settingsStore.ocrHotKeyShortcut else {
-            return nil
+        let shortcuts: [(HotKeyShortcut, String)] = [
+            (settingsStore.selectionHotKeyShortcut, "选中文本翻译"),
+            (settingsStore.ocrHotKeyShortcut, "截图 OCR 翻译"),
+            (settingsStore.readerHotKeyShortcut, "沉浸阅读室")
+        ]
+        let duplicate = shortcuts.first { current in
+            shortcuts.filter { $0.0 == current.0 }.count > 1
         }
-        return "两个功能都使用 \(settingsStore.selectionHotKeyShortcut.title)。请录制不同快捷键，避免只触发其中一个。建议试试：\(hotKeySuggestionText(excluding: settingsStore.selectionHotKeyShortcut))。"
+        guard let (shortcut, title) = duplicate else { return nil }
+        return "\(title)和其它功能都使用 \(shortcut.title)。请录制不同快捷键，避免只触发其中一个。建议试试：\(hotKeySuggestionText(excluding: shortcut))。"
     }
 
     private func hotKeyRecorderRow(
@@ -3136,6 +3164,8 @@ struct SettingsView: View {
                         onRecord(.optionSpace)
                     case .ocr:
                         onRecord(.controlOptionSpace)
+                    case .reader:
+                        onRecord(.controlOptionR)
                     }
                     recordingHotKey = nil
                     hotKeyRecorderMessage = "已恢复 \(title) 默认快捷键。"
@@ -3187,12 +3217,16 @@ struct SettingsView: View {
             return .optionSpace
         case .ocr:
             return .controlOptionSpace
+        case .reader:
+            return .controlOptionR
         }
     }
 
     private func hotKeyRecorderDetailText(for target: HotKeyRecorderTarget, shortcut: HotKeyShortcut) -> String {
-        if shortcut == otherHotKeyShortcut(for: target) {
-            return "与\(otherHotKeyTitle(for: target))重复；建议：\(hotKeySuggestionText(excluding: shortcut, target: target))"
+        let others = otherHotKeyShortcuts(for: target)
+        let titles = otherHotKeyTitles(for: target)
+        if let idx = others.firstIndex(of: shortcut) {
+            return "与\(titles[idx])重复；建议：\(hotKeySuggestionText(excluding: shortcut, target: target))"
         }
         if shortcut == defaultHotKeyShortcut(for: target) {
             return "默认快捷键"
@@ -3201,15 +3235,18 @@ struct SettingsView: View {
     }
 
     private func hotKeyRecorderDetailColor(for target: HotKeyRecorderTarget, shortcut: HotKeyShortcut) -> Color {
-        if shortcut == otherHotKeyShortcut(for: target) {
+        if otherHotKeyShortcuts(for: target).contains(shortcut) {
             return .red
         }
         return shortcut == defaultHotKeyShortcut(for: target) ? Color.secondary : Color.orange
     }
 
     private func hotKeyRecordedMessage(title: String, shortcut: HotKeyShortcut, target: HotKeyRecorderTarget) -> String {
-        if shortcut == otherHotKeyShortcut(for: target) {
-            return "已录制 \(title)：\(shortcut.title)，但它和\(otherHotKeyTitle(for: target))重复；重复组合只会有一个功能能注册成全局热键。建议试试：\(hotKeySuggestionText(excluding: shortcut, target: target))。"
+        let others = otherHotKeyShortcuts(for: target)
+        if others.contains(shortcut) {
+            let titles = otherHotKeyTitles(for: target)
+            let duplicateTitle = others.firstIndex(of: shortcut).map { titles[$0] } ?? "其它功能"
+            return "已录制 \(title)：\(shortcut.title)，但它和\(duplicateTitle)重复；重复组合只会有一个功能能注册成全局热键。建议试试：\(hotKeySuggestionText(excluding: shortcut, target: target))。"
         }
         if shortcut == defaultHotKeyShortcut(for: target) {
             return "已录制 \(title)：\(shortcut.title)，这是默认快捷键；如果没有橙色注册提示，说明已注册为全局热键。"
@@ -3226,27 +3263,32 @@ struct SettingsView: View {
     ) -> String {
         var excludedShortcuts = [shortcut]
         if let target {
-            excludedShortcuts.append(otherHotKeyShortcut(for: target))
+            excludedShortcuts.append(contentsOf: otherHotKeyShortcuts(for: target))
         }
 
         return HotKeyShortcut.suggestionText(excluding: excludedShortcuts)
     }
 
-    private func otherHotKeyShortcut(for target: HotKeyRecorderTarget) -> HotKeyShortcut {
+    /// 其余两个快捷键（重复检测从「另一个」泛化为「其余」）。
+    private func otherHotKeyShortcuts(for target: HotKeyRecorderTarget) -> [HotKeyShortcut] {
         switch target {
         case .selection:
-            return settingsStore.ocrHotKeyShortcut
+            return [settingsStore.ocrHotKeyShortcut, settingsStore.readerHotKeyShortcut]
         case .ocr:
-            return settingsStore.selectionHotKeyShortcut
+            return [settingsStore.selectionHotKeyShortcut, settingsStore.readerHotKeyShortcut]
+        case .reader:
+            return [settingsStore.selectionHotKeyShortcut, settingsStore.ocrHotKeyShortcut]
         }
     }
 
-    private func otherHotKeyTitle(for target: HotKeyRecorderTarget) -> String {
+    private func otherHotKeyTitles(for target: HotKeyRecorderTarget) -> [String] {
         switch target {
         case .selection:
-            return "截图 OCR 翻译"
+            return ["截图 OCR 翻译", "沉浸阅读室"]
         case .ocr:
-            return "选中文本翻译"
+            return ["选中文本翻译", "沉浸阅读室"]
+        case .reader:
+            return ["选中文本翻译", "截图 OCR 翻译"]
         }
     }
 
@@ -3259,6 +3301,7 @@ struct SettingsView: View {
 private enum HotKeyRecorderTarget {
     case selection
     case ocr
+    case reader
 }
 
 private struct HotKeyRecorderBridge: NSViewRepresentable {
