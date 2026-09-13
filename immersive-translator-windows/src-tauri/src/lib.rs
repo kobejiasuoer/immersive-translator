@@ -7,6 +7,7 @@ mod secret_store;
 mod translation;
 mod tts;
 mod uia;
+mod web_extract;
 
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1054,6 +1055,7 @@ pub fn run() {
             reader_store::reader_delete_vocab_word,
             reader_store::reader_record_review,
             reader_store::reader_stats,
+            web_extract::reader_fetch_url,
         ])
         .setup(|app| {
             // 托盘菜单（§8.1）：上组是「动作」（对你当前的内容做点什么），

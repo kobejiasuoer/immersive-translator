@@ -40,6 +40,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 base64 = "0.22"
+regex = "1"
 
 # OCR（PaddleOCR via ONNX Runtime）。
 # ort 用 download-binaries 预下载编译好的 onnxruntime，避免 bindgen/libclang 依赖。
