@@ -1,0 +1,107 @@
+/* 提醒卡（reminder 窗口）：右下角小卡，跟随应用主题令牌。 */
+
+body {
+  background: transparent;
+  overflow: hidden;
+}
+
+.reminder-card {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(16, 24, 40, 0.22), 0 2px 8px rgba(16, 24, 40, 0.12);
+  overflow: hidden;
+}
+
+.reminder-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 14px 0;
+}
+.reminder-logo {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: linear-gradient(135deg, #4c5ff0, #7a5cf0);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.reminder-app {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.reminder-x {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 13px;
+}
+.reminder-x:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+
+.reminder-msg {
+  margin: 8px 14px 0 47px;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text-1);
+  line-height: 1.5;
+}
+.reminder-msg small {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+.reminder-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: auto;
+  padding: 11px 12px;
+  border-top: 1px solid var(--border);
+}
+.reminder-btn {
+  height: 30px;
+  padding: 0 13px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.reminder-btn:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+.reminder-btn.go {
+  color: var(--accent);
+  font-weight: 600;
+}
+.reminder-btn.go:hover {
+  background: var(--accent-soft);
+}
+.reminder-btn.go:disabled {
+  color: var(--text-4);
+  cursor: default;
+  background: transparent;
+}

@@ -4,10 +4,12 @@ import { Settings } from "./views/Settings";
 import { History } from "./views/History";
 import { OcrOverlay } from "./views/OcrOverlay";
 import { ReaderApp } from "./reader/ReaderApp";
+import { ReminderApp } from "./reminder/ReminderApp";
+import { QuickReviewApp } from "./quickreview/QuickReviewApp";
 
 // 多窗口分发：根据当前窗口 label 渲染不同 UI。
 // panel → 翻译浮窗；settings → 设置；history → 历史；ocr-overlay → 截图框选；
-// reader → 沉浸阅读室。
+// reader → 沉浸阅读室；reminder → 复习提醒卡；quick-review → 快速复习迷你窗。
 // 浏览器里调试可用 ?window=settings 直接指定（Tauri 窗口不带该参数，不影响线上）。
 function currentWindowLabel(): string {
   try {
@@ -30,6 +32,12 @@ function App() {
   }
   if (label === "reader") {
     return <ReaderApp />;
+  }
+  if (label === "reminder") {
+    return <ReminderApp />;
+  }
+  if (label === "quick-review") {
+    return <QuickReviewApp />;
   }
   return <TranslationPanel />;
 }

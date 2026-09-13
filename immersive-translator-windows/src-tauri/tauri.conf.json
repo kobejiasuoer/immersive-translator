@@ -86,6 +86,7 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "focusable": true,
+        "transparent": true,
         "visible": false
       },
       {
@@ -97,6 +98,7 @@
         "minHeight": 520,
         "resizable": true,
         "decorations": false,
+        "transparent": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "visible": false,

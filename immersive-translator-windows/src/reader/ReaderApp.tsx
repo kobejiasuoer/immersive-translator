@@ -28,6 +28,7 @@ import {
   readerSaveVocabWord,
 } from "../lib/readerStore";
 import { loadGlobalReaderSettings, saveGlobalReaderSettings } from "./readerSettingsStore";
+import { trayRefreshBadge } from "../lib/reminder";
 import { buildArticleFromText, normalizeWordKey } from "../core/articleBuilder";
 import { looksMostlyChinese, resolveTargetLanguage } from "../core/languageDetect";
 import {
@@ -594,6 +595,8 @@ export function ReaderApp() {
       const file = await readerGetVocab();
       setVocabWords(file.words ?? []);
       setReviewLog(file.reviewLog ?? { schemaVersion: 1, days: [] });
+      // 生词任何变化（收藏/评分/划词新增）都同步托盘角标与菜单文案
+      trayRefreshBadge();
     } catch (error) {
       console.error("[reader] load vocab failed", error);
     }

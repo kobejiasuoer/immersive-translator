@@ -20,6 +20,11 @@ import {
   type ReviewModeSetting,
 } from "../core/readerTypes";
 import { ttsVoices, type TtsVoiceInfo } from "../lib/tauriBridge";
+import {
+  reminderGetConfig,
+  reminderSetConfig,
+  type ReminderConfig,
+} from "../lib/reminder";
 
 interface Props {
   settings: ReaderSettings;
@@ -54,6 +59,7 @@ const THEMES: { value: ReaderTheme; label: string; swatch: string; text: string 
 
 export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState, onReannotate, onPatchReview }: Props) {
   const [voices, setVoices] = useState<TtsVoiceInfo[]>([]);
+  const [rem, setRem] = useState<ReminderConfig | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -62,10 +68,32 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
         if (active) setVoices(list);
       })
       .catch((error) => console.error("[reader] list voices failed", error));
+    reminderGetConfig()
+      .then((config) => {
+        if (active) setRem(config);
+      })
+      .catch((error) => console.error("[reader] load reminder config failed", error));
     return () => {
       active = false;
     };
   }, []);
+
+  function patchReminder(patch: Partial<ReminderConfig>) {
+    setRem((cur) => {
+      if (!cur) return cur;
+      const next = { ...cur, ...patch };
+      void reminderSetConfig(next).catch((error) =>
+        console.error("[reader] save reminder config failed", error),
+      );
+      return next;
+    });
+  }
+
+  function fmtMinute(min: number): string {
+    const h = Math.floor(min / 60) % 24;
+    const m = min % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  }
 
   return (
     <>
@@ -228,6 +256,83 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
                     {REVIEW_MODE_LABELS[m]}
                   </button>
                 ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="drawer-group-title">提醒</div>
+          <div
+            className="drawer-row"
+            title="到点弹系统级提醒卡（每天最多一次）；到期数同时显示在托盘图标角标上"
+          >
+            <span className="label">每日复习提醒</span>
+            <div className="control">
+              <button
+                className={`reader-switch${(rem?.enabled ?? true) ? " on" : ""}`}
+                onClick={() => patchReminder({ enabled: !(rem?.enabled ?? true) })}
+                role="switch"
+                aria-checked={rem?.enabled ?? true}
+                aria-label="每日复习提醒"
+              />
+            </div>
+          </div>
+          <div className="drawer-row">
+            <span className="label">提醒时间</span>
+            <div className="control">
+              <div className="drawer-stepper">
+                <button
+                  onClick={() => rem && patchReminder({ minuteOfDay: Math.max(6 * 60, rem.minuteOfDay - 30) })}
+                  disabled={!rem || rem.minuteOfDay <= 6 * 60}
+                  aria-label="提早半小时"
+                >
+                  −
+                </button>
+                <span className="val">{rem ? fmtMinute(rem.minuteOfDay) : "--:--"}</span>
+                <button
+                  onClick={() => rem && patchReminder({ minuteOfDay: Math.min(23 * 60 + 30, rem.minuteOfDay + 30) })}
+                  disabled={!rem || rem.minuteOfDay >= 23 * 60 + 30}
+                  aria-label="推后半半小时"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="drawer-row" title="此时间段内不弹提醒，只保留托盘角标">
+            <span className="label">免打扰</span>
+            <div className="control">
+              <button
+                className={`reader-switch${(rem?.dndEnabled ?? true) ? " on" : ""}`}
+                onClick={() => patchReminder({ dndEnabled: !(rem?.dndEnabled ?? true) })}
+                role="switch"
+                aria-checked={rem?.dndEnabled ?? true}
+                aria-label="免打扰"
+              />
+            </div>
+          </div>
+          <div className="drawer-row">
+            <span className="label">免打扰时段</span>
+            <div className="control drawer-static">23:00 – 08:00</div>
+          </div>
+          <div className="drawer-row" title="每日阅读目标（复习目标 = 清空到期，随词量自动变）">
+            <span className="label">每日目标 · 阅读</span>
+            <div className="control">
+              <div className="drawer-stepper">
+                <button
+                  onClick={() => rem && patchReminder({ readGoalMin: Math.max(5, rem.readGoalMin - 5) })}
+                  disabled={!rem || rem.readGoalMin <= 5}
+                  aria-label="减少 5 分钟"
+                >
+                  −
+                </button>
+                <span className="val">{rem ? `${rem.readGoalMin} 分钟` : "--"}</span>
+                <button
+                  onClick={() => rem && patchReminder({ readGoalMin: Math.min(60, rem.readGoalMin + 5) })}
+                  disabled={!rem || rem.readGoalMin >= 60}
+                  aria-label="增加 5 分钟"
+                >
+                  +
+                </button>
               </div>
             </div>
           </div>
