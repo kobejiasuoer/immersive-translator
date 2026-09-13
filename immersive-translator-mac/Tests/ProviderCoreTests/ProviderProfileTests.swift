@@ -5,7 +5,7 @@ final class ProviderProfileTests: XCTestCase {
     func testBuiltinPresetsStayUniqueAndOfferTheirCurrentModel() {
         let presets = ProviderProfile.builtinPresets
 
-        XCTAssertEqual(presets.map(\.id), ["deepseek", "zhipu", "openai"])
+        XCTAssertEqual(presets.map(\.id), ["deepseek", "zhipu", "openai", "dashscope", "moonshot", "gemini", "ollama"])
         XCTAssertEqual(Set(presets.map(\.id)).count, presets.count)
         XCTAssertEqual(Set(presets.map(\.displayName)).count, presets.count)
 

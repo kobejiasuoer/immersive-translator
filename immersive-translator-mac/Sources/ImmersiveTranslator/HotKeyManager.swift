@@ -5,6 +5,7 @@ import Foundation
 enum HotKeyAction {
     case translateSelection
     case translateScreenshot
+    case openReader
 }
 
 struct HotKeyShortcut: Equatable, Hashable, RawRepresentable {
@@ -113,6 +114,13 @@ struct HotKeyShortcut: Equatable, Hashable, RawRepresentable {
         keyCode: UInt32(kVK_Space),
         modifiers: UInt32(controlKey | optionKey),
         keyLabel: "Space"
+    )
+
+    /// 阅读室热键默认：⌃⌥R（对齐 Windows Ctrl+Shift+R 的语义，用 Mac 惯用修饰键）。
+    static let controlOptionR = HotKeyShortcut(
+        keyCode: UInt32(kVK_ANSI_R),
+        modifiers: UInt32(controlKey | optionKey),
+        keyLabel: "R"
     )
 
     static let recommendedAlternatives: [HotKeyShortcut] = [
@@ -403,6 +411,7 @@ final class HotKeyManager {
     private var eventHandler: EventHandlerRef?
     private var translateSelectionRef: EventHotKeyRef?
     private var translateScreenshotRef: EventHotKeyRef?
+    private var openReaderRef: EventHotKeyRef?
     private let signature = fourCharCode("imtr")
 
     init(handler: @escaping (HotKeyAction) -> Void) {
@@ -416,6 +425,9 @@ final class HotKeyManager {
         if let translateScreenshotRef {
             UnregisterEventHotKey(translateScreenshotRef)
         }
+        if let openReaderRef {
+            UnregisterEventHotKey(openReaderRef)
+        }
         if let eventHandler {
             RemoveEventHandler(eventHandler)
         }
@@ -423,7 +435,8 @@ final class HotKeyManager {
 
     func register(
         selectionShortcut: HotKeyShortcut = .optionSpace,
-        ocrShortcut: HotKeyShortcut = .controlOptionSpace
+        ocrShortcut: HotKeyShortcut = .controlOptionSpace,
+        readerShortcut: HotKeyShortcut? = nil
     ) -> HotKeyRegistrationReport {
         unregisterHotKeys()
         var warnings: [String] = []
@@ -456,6 +469,8 @@ final class HotKeyManager {
                         manager.handler(.translateSelection)
                     case 2:
                         manager.handler(.translateScreenshot)
+                    case 3:
+                        manager.handler(.openReader)
                     default:
                         break
                     }
@@ -492,8 +507,15 @@ final class HotKeyManager {
             )
         }
 
-        guard selectionShortcut != ocrShortcut else {
-            warnings.append("两个功能使用了同一个快捷键 \(selectionShortcut.title)。请为其中一个功能录制不同组合，建议试试 \(HotKeyShortcut.suggestionText(excluding: [selectionShortcut]))。")
+        let conflicts: [(HotKeyShortcut, String)] = [
+            (selectionShortcut, "选中文本翻译"),
+            (ocrShortcut, "截图 OCR 翻译"),
+            (readerShortcut ?? .controlOptionR, "沉浸阅读室")
+        ]
+        if Set(conflicts.map(\.0)).count != conflicts.count {
+            let duplicate = conflicts.map(\.0)
+                .first { shortcut in conflicts.filter { $0.0 == shortcut }.count > 1 } ?? selectionShortcut
+            warnings.append("多个功能使用了同一个快捷键 \(duplicate.title)。请为其中一个功能录制不同组合，建议试试 \(HotKeyShortcut.suggestionText(excluding: conflicts.map(\.0)))。")
             return HotKeyRegistrationReport(warnings: warnings)
         }
 
@@ -515,6 +537,28 @@ final class HotKeyManager {
                     otherShortcut: selectionShortcut
                 )
             )
+        }
+
+        if let readerShortcut {
+            let readerID = EventHotKeyID(signature: signature, id: 3)
+            let readerStatus = RegisterEventHotKey(
+                readerShortcut.keyCode,
+                readerShortcut.modifiers,
+                readerID,
+                GetApplicationEventTarget(),
+                0,
+                &openReaderRef
+            )
+            if readerStatus != noErr {
+                warnings.append(
+                    registrationFailureMessage(
+                        actionTitle: "沉浸阅读室",
+                        shortcut: readerShortcut,
+                        status: readerStatus,
+                        otherShortcut: selectionShortcut
+                    )
+                )
+            }
         }
 
         return HotKeyRegistrationReport(warnings: warnings)
@@ -550,6 +594,10 @@ final class HotKeyManager {
         if let translateScreenshotRef {
             UnregisterEventHotKey(translateScreenshotRef)
             self.translateScreenshotRef = nil
+        }
+        if let openReaderRef {
+            UnregisterEventHotKey(openReaderRef)
+            self.openReaderRef = nil
         }
     }
 }

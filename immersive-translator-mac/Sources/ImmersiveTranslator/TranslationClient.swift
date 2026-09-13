@@ -138,6 +138,7 @@ final class TranslationClient {
             temperature: 0.2,
             stream: stream,
             thinking: requestOptions.disableThinking ? ThinkingConfig(type: "disabled") : nil,
+            enableThinkingFalse: requestOptions.sendEnableThinkingFalse,
             doSample: requestOptions.sendDoSample ? false : nil,
             maxTokens: requestOptions.maxTokens
         )
@@ -256,13 +257,16 @@ final class TranslationClient {
             DiagnosticLogger.log("translation.response.invalid elapsed=\(String(format: "%.2f", elapsed)) bytes=\(data.count) preview=\(logPreview)")
             throw TranslationClientError.invalidResponse(preview: preview)
         }
-        guard let translation = result.choices.first?.message.content
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              !translation.isEmpty else {
+        guard let rawTranslation = result.choices.first?.message.content.nilIfEmpty,
+              !ReaderChatClient.stripThinkTags(rawTranslation)
+                  .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             logger.error("translation.response.empty_translation elapsed=\(elapsed, privacy: .public) choices=\(result.choices.count, privacy: .public)")
             DiagnosticLogger.log("translation.response.empty_translation elapsed=\(String(format: "%.2f", elapsed)) choices=\(result.choices.count)")
             throw TranslationClientError.emptyTranslation
         }
+        // 剥离推理模型可能混入的 <think>…</think> 噪声（含未闭合）。
+        let translation = ReaderChatClient.stripThinkTags(rawTranslation)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         logger.info("translation.request.success elapsed=\(elapsed, privacy: .public) outputLength=\(translation.count, privacy: .public)")
         DiagnosticLogger.log("translation.request.success elapsed=\(String(format: "%.2f", elapsed)) outputLength=\(translation.count)")
         return TranslationResult(text: translation, elapsed: elapsed, model: resolvedModel, targetLanguage: targetLanguage)
@@ -365,17 +369,18 @@ final class TranslationClient {
                 continue
             }
             content += delta
-            let visibleContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            let displayContent = ReaderChatClient.stripThinkTags(content)
+            let visibleContent = displayContent.trimmingCharacters(in: .whitespacesAndNewlines)
             if visibleContent.isEmpty {
                 onProgress(TranslationProgress(
-                    text: content,
+                    text: displayContent,
                     elapsed: Date().timeIntervalSince(startedAt),
                     isFinal: false,
                     phase: .waitingForVisibleText
                 ))
             } else {
                 onProgress(TranslationProgress(
-                    text: content,
+                    text: displayContent,
                     elapsed: Date().timeIntervalSince(startedAt),
                     isFinal: false
                 ))
@@ -383,7 +388,8 @@ final class TranslationClient {
         }
 
         let elapsed = Date().timeIntervalSince(startedAt)
-        let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedContent = ReaderChatClient.stripThinkTags(content)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedContent.isEmpty {
             onProgress(TranslationProgress(text: trimmedContent, elapsed: elapsed, isFinal: true))
             logger.info("translation.stream.success elapsed=\(elapsed, privacy: .public) outputLength=\(trimmedContent.count, privacy: .public)")
@@ -400,8 +406,11 @@ final class TranslationClient {
 
         if !sawStreamLine,
            let decoded = try? JSONDecoder().decode(ChatCompletionResponse.self, from: fallbackData),
-           let translation = decoded.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines),
-           !translation.isEmpty {
+           let rawTranslation = decoded.choices.first?.message.content.nilIfEmpty,
+           !ReaderChatClient.stripThinkTags(rawTranslation)
+               .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let translation = ReaderChatClient.stripThinkTags(rawTranslation)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             onProgress(TranslationProgress(text: translation, elapsed: elapsed, isFinal: true))
             logger.info("translation.stream.fallback_json elapsed=\(elapsed, privacy: .public) outputLength=\(translation.count, privacy: .public)")
             DiagnosticLogger.log("translation.stream.fallback_json elapsed=\(String(format: "%.2f", elapsed)) outputLength=\(translation.count)")
@@ -744,6 +753,7 @@ final class TranslationClient {
             return RequestOptions(
                 providerName: "deepseek",
                 disableThinking: true,
+                sendEnableThinkingFalse: lowercasedModel.contains("reasoner"),
                 sendDoSample: false,
                 maxTokens: 1024
             )
@@ -755,14 +765,28 @@ final class TranslationClient {
             return RequestOptions(
                 providerName: "zhipu",
                 disableThinking: true,
+                sendEnableThinkingFalse: false,
                 sendDoSample: true,
                 maxTokens: 1024
+            )
+        }
+
+        // 通义千问 Qwen：qwen3 / qwq 系列在兼容模式下关思考 + 发 enable_thinking=false。
+        if host.contains("dashscope") || host.contains("tongyi") || lowercasedModel.hasPrefix("qwen") {
+            let thinkingModel = lowercasedModel.contains("qwen3") || lowercasedModel.contains("qwq")
+            return RequestOptions(
+                providerName: "dashscope",
+                disableThinking: false,
+                sendEnableThinkingFalse: thinkingModel,
+                sendDoSample: false,
+                maxTokens: nil
             )
         }
 
         return RequestOptions(
             providerName: "openai-compatible",
             disableThinking: false,
+            sendEnableThinkingFalse: false,
             sendDoSample: false,
             maxTokens: nil
         )
@@ -1026,6 +1050,8 @@ enum TranslationResponseErrorParser {
 private struct RequestOptions {
     let providerName: String
     let disableThinking: Bool
+    /// Qwen3/QwQ/DeepSeek-reasoner：兼容模式下发 enable_thinking=false。
+    let sendEnableThinkingFalse: Bool
     let sendDoSample: Bool
     let maxTokens: Int?
 }
@@ -1036,6 +1062,7 @@ private struct ChatCompletionRequest: Encodable {
     let temperature: Double
     let stream: Bool
     let thinking: ThinkingConfig?
+    let enableThinkingFalse: Bool
     let doSample: Bool?
     let maxTokens: Int?
 
@@ -1045,8 +1072,23 @@ private struct ChatCompletionRequest: Encodable {
         case temperature
         case stream
         case thinking
+        case enableThinking = "enable_thinking"
         case doSample = "do_sample"
         case maxTokens = "max_tokens"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(model, forKey: .model)
+        try c.encode(messages, forKey: .messages)
+        try c.encode(temperature, forKey: .temperature)
+        try c.encode(stream, forKey: .stream)
+        try c.encodeIfPresent(thinking, forKey: .thinking)
+        if enableThinkingFalse {
+            try c.encode(false, forKey: .enableThinking)
+        }
+        try c.encodeIfPresent(doSample, forKey: .doSample)
+        try c.encodeIfPresent(maxTokens, forKey: .maxTokens)
     }
 }
 
