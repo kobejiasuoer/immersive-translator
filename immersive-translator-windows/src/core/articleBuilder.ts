@@ -69,6 +69,10 @@ export function buildArticleFromText(
     sourceUrl?: string;
     now?: number;
     title?: string;
+    /** 已知中文副标题（内置文库带作者信息导入），置入后跳过标题翻译。 */
+    titleCn?: string;
+    /** 已知难度标签（文库分级 / URL 预览估值）。 */
+    level?: string;
   } = {},
 ): Article | null {
   const trimmed = text.trim();
@@ -105,12 +109,16 @@ export function buildArticleFromText(
     : pickTitle(titleAsFirstLine ? `${firstLine}\n${bodyText}` : trimmed, sentences[0]?.en);
 
   const now = options.now ?? Date.now();
+  const explicitCn = options.titleCn?.trim() ?? "";
   return {
     id: newArticleId(now),
     title,
-    titleCnState: "pending",
+    ...(explicitCn
+      ? { titleCn: explicitCn, titleCnState: "done" as const }
+      : { titleCnState: "pending" as const }),
     sourceType: options.sourceType ?? "paste",
     ...(options.sourceUrl ? { sourceUrl: options.sourceUrl } : {}),
+    ...(options.level ? { level: options.level } : {}),
     wordCount: countWords(bodyText),
     createdAt: now,
     lastReadAt: now,

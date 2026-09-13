@@ -466,14 +466,15 @@ function EmptyState({ onOpenImport }: { onOpenImport: () => void }) {
         <span className="reader-logo" style={{ marginBottom: 6 }}>
           <IconBookOpen size={16} />
         </span>
-        <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-1)" }}>把文章搬进阅读室</div>
-        <div style={{ maxWidth: 380, lineHeight: 1.8 }}>
-          在任意应用选中文字 → 浮窗弹出 → 点「发送到阅读室」；或按
+        <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-1)" }}>从一篇短文开始</div>
+        <div style={{ maxWidth: 400, lineHeight: 1.8 }}>
+          挑一篇感兴趣的英文读进来——逐句精读，查过的词自动进生词本，隔天到期复习。
+          内置分级文库不需要自己找材料。也可以在任意应用里选中文字，点浮窗上的「发送到阅读室」，或按
           <span className="kbd"> Ctrl</span>+<span className="kbd">Shift</span>+
-          <span className="kbd">R</span>。也可以直接粘贴：
+          <span className="kbd">R</span>。
         </div>
         <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={onOpenImport}>
-          粘贴导入文章
+          添加阅读内容
         </button>
       </div>
     </div>

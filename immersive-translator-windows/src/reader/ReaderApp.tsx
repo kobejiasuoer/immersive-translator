@@ -71,7 +71,7 @@ import { PlayBar } from "./PlayBar";
 import { SettingsDrawer } from "./SettingsDrawer";
 import { DictColumn, type DictPanelState } from "./DictColumn";
 import { ReviewView } from "./ReviewView";
-import { ImportDialog } from "./ImportDialog";
+import { ImportDialog, type ImportMeta } from "./ImportDialog";
 import { usePlayback } from "./usePlayback";
 import { IconNext, IconPause, IconPlay, IconPrev } from "../ui/icons";
 
@@ -697,10 +697,13 @@ export function ReaderApp() {
 
   // ---- 导入 / 删除 ----
   const importPaste = useCallback(
-    (text: string, title?: string) => {
+    (text: string, title?: string, meta?: ImportMeta) => {
       const built = buildArticleFromText(text, {
-        sourceType: "paste",
+        sourceType: meta?.sourceType ?? "paste",
+        ...(meta?.sourceUrl ? { sourceUrl: meta.sourceUrl } : {}),
         ...(title ? { title } : {}),
+        ...(meta?.titleCn ? { titleCn: meta.titleCn } : {}),
+        ...(meta?.level ? { level: meta.level } : {}),
       });
       if (!built) {
         showToast("没有识别到正文内容");
@@ -1176,10 +1179,12 @@ export function ReaderApp() {
 
       {importOpen && (
         <ImportDialog
+          vocabWords={vocabWords}
+          articles={articleList}
           onClose={() => setImportOpen(false)}
-          onImport={(text, title) => {
+          onImport={(text, title, meta) => {
             setImportOpen(false);
-            importPaste(text, title);
+            importPaste(text, title, meta);
           }}
         />
       )}

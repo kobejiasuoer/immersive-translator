@@ -5,6 +5,9 @@
 import { IconBookOpen, IconPlus, IconTrash } from "../ui/icons";
 import type { ArticleSummary } from "../core/readerTypes";
 
+/** 今日进度环周长（r=19）。 */
+const RING_LEN = 2 * Math.PI * 19;
+
 interface Props {
   articles: ArticleSummary[];
   activeId: string | null;
@@ -29,6 +32,8 @@ export function ReaderShelf({
   onOpenImport,
 }: Props) {
   const todayTotal = reviewedToday + dueNow;
+  /** 今日已完成占比（进度环）。 */
+  const todayDone = reviewedToday;
 
   return (
     <aside className="reader-shelf">
@@ -95,9 +100,41 @@ export function ReaderShelf({
           {dueNow > 0 && <span className="badge">{dueNow}</span>}
         </div>
         {todayTotal > 0 ? (
-          <div className="reader-review-card">
-            今日复习 <strong>{reviewedToday}</strong> / {todayTotal} · 连续打卡{" "}
-            <strong>{streak}</strong> 天
+          <div className="reader-review-card reader-today-card">
+            <div className="today-ring" aria-hidden>
+              <svg width="46" height="46" viewBox="0 0 46 46">
+                <circle cx="23" cy="23" r="19" fill="none" stroke="var(--border)" strokeWidth="3.5" />
+                <circle
+                  cx="23"
+                  cy="23"
+                  r="19"
+                  fill="none"
+                  stroke="var(--accent)"
+                  strokeWidth="3.5"
+                  strokeLinecap="round"
+                  strokeDasharray={RING_LEN}
+                  strokeDashoffset={RING_LEN * (1 - todayDone / todayTotal)}
+                  transform="rotate(-90 23 23)"
+                />
+              </svg>
+              <span className="today-ring-num">
+                {todayDone}/{todayTotal}
+              </span>
+            </div>
+            <div className="today-main">
+              <div className="today-line">
+                今日复习 <strong>{reviewedToday}</strong> / {todayTotal} · 连续打卡{" "}
+                <strong>{streak}</strong> 天
+              </div>
+              <div className="today-sub">
+                {dueNow > 0 ? `还差 ${dueNow} 个清空今天到期` : "今天的到期已清空 ✓"}
+              </div>
+              {dueNow > 0 && (
+                <button className="btn btn-primary btn-sm today-go" onClick={onOpenReview}>
+                  继续复习
+                </button>
+              )}
+            </div>
           </div>
         ) : (
           <div className="reader-review-card">今日没有到期生词，去阅读里攒几个吧。</div>
