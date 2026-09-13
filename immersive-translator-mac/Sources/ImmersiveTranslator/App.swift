@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import ReaderCore
 
 @main
 enum ImmersiveTranslatorMain {
@@ -229,6 +230,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         },
         onOCRReselect: { [weak self] in
             self?.restartScreenSelectionFromPreview()
+        },
+        onRunQuickAction: { [weak self] action, source, draft in
+            try await self?.runPanelQuickAction(action, source: source, draft: draft) ?? ""
+        },
+        onLookupCard: { [weak self] word in
+            try await self?.lookupPanelDictCard(word) ?? nil
+        },
+        onAddVocab: { [weak self] word, card in
+            self?.addPanelVocab(word: word, card: card) ?? false
+        },
+        onSendToReader: { [weak self] text in
+            self?.sendPanelTextToReader(text)
         }
     )
     private lazy var settingsController = SettingsWindowController(settingsStore: settingsStore)
@@ -248,6 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     )
     private lazy var readerController = ReaderWindowController(settingsStore: settingsStore)
+    private lazy var readerChat = ReaderChatClient(settingsStore: settingsStore)
     private var hotKeyManager: HotKeyManager?
     private var screenSelector: ScreenSelectionController?
     private var ocrSessionCounter = 0
@@ -1451,6 +1465,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
         return true
+    }
+
+    // MARK: - 面板增强回调（M5）
+
+    @MainActor
+    private func runPanelQuickAction(_ action: QuickAction, source: String, draft: String) async throws -> String {
+        let userText = action == .polish
+            ? buildPolishUserText(source: source, draftTranslation: draft)
+            : source
+        let systemPrompt = buildActionSystemPrompt(
+            action: action,
+            targetLanguage: settingsStore.targetLanguage,
+            customStyle: settingsStore.customPrompt,
+            glossaryText: settingsStore.glossaryText
+        )
+        return try await readerChat.complete(systemPrompt: systemPrompt, userText: userText)
+    }
+
+    @MainActor
+    private func lookupPanelDictCard(_ word: String) async throws -> DictCardData? {
+        let raw = try await readerChat.complete(
+            systemPrompt: buildDictionaryPrompt(
+                targetLanguage: settingsStore.targetLanguage,
+                glossaryText: settingsStore.glossaryText
+            ),
+            userText: word
+        )
+        switch parseDictResponse(raw, query: word) {
+        case .card(let card):
+            return card
+        case .notAWord:
+            return nil
+        case .invalid:
+            return nil
+        }
+    }
+
+    /// 加入生词本（划词收藏，无文章来源）：用预取的词典卡拼词条；
+    /// 卡片未就绪时按裸词收藏（释义待复习时补全）。
+    @MainActor
+    private func addPanelVocab(word: String, card: DictCardData?) -> Bool {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let phonetic = card?.phonetics.first?.value
+        var senses: [VocabSense] = []
+        if let card {
+            senses = card.senses.map { VocabSense(pos: $0.pos, cn: $0.gloss.isEmpty ? card.translation : $0.gloss) }
+        }
+        if senses.isEmpty {
+            senses = [VocabSense(pos: "", cn: "划词收藏 · 释义待补全")]
+        }
+        let isChunk = word.split(separator: " ").count > 1
+        let vocab = VocabWord(
+            id: normalizeWordKey(word),
+            word: word,
+            kind: isChunk ? .chunk : .word,
+            phonetic: phonetic,
+            senses: senses,
+            source: VocabSource(articleId: "", sentenceIdx: 0),
+            srs: initialSrs(now: now),
+            addedAt: now
+        )
+        do {
+            try ReaderStore.shared.saveVocabWord(vocab)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    @MainActor
+    private func sendPanelTextToReader(_ text: String) {
+        readerController.show(pendingImportText: text)
     }
 
     @MainActor
