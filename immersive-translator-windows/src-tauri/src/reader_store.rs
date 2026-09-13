@@ -524,6 +524,23 @@ pub fn reader_stats(app: AppHandle, today: String, now_ms: i64) -> Result<Review
     Ok(compute_stats(&file, &today, now_ms))
 }
 
+/// 到期生词数（托盘角标/提醒调度用；与 compute_stats 的 dueNow 同口径）。
+pub fn due_count(app: &AppHandle) -> u32 {
+    let _guard = match STORE_LOCK.lock() {
+        Ok(g) => g,
+        Err(_) => return 0,
+    };
+    let file = match load_vocab(app) {
+        Ok(f) => f,
+        Err(_) => return 0,
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    file.words.iter().filter(|w| w.srs.due_at <= now).count() as u32
+}
+
 /// 到期判定与计数同源：全部由 srs.dueAt <= now 推导。
 fn compute_stats(file: &VocabFile, today: &str, now_ms: i64) -> ReviewStats {
     let due_now = file.words.iter().filter(|w| w.srs.due_at <= now_ms).count() as u32;

@@ -2,9 +2,11 @@ mod clipboard;
 mod history;
 mod ocr;
 mod reader_store;
+mod review_reminder;
 mod screenshot;
 mod secret_store;
 mod translation;
+mod tray_badge;
 mod tts;
 mod uia;
 mod web_extract;
@@ -1012,6 +1014,8 @@ pub fn run() {
         .manage(PendingPanelPayload::default())
         .manage(PendingReaderImport::default())
         .manage(PendingOpenReview::default())
+        .manage(review_reminder::TrayHandles::default())
+        .manage(review_reminder::PendingReminder::default())
         .manage(ActiveHotkeys::default())
         .invoke_handler(tauri::generate_handler![
             take_pending_panel_payload,
@@ -1056,10 +1060,17 @@ pub fn run() {
             reader_store::reader_record_review,
             reader_store::reader_stats,
             web_extract::reader_fetch_url,
+            review_reminder::reminder_get_config,
+            review_reminder::reminder_set_config,
+            review_reminder::reminder_due_now,
+            review_reminder::take_pending_reminder,
+            review_reminder::tray_refresh_badge,
+            review_reminder::open_quick_review,
         ])
         .setup(|app| {
             // 托盘菜单（§8.1）：上组是「动作」（对你当前的内容做点什么），
             // 下组是「窗口/应用」（打开某个界面）。
+            let quick = MenuItem::with_id(app, "quick", "快速复习", true, None::<&str>)?;
             let ocr = MenuItem::with_id(app, "ocr", "截图翻译 (OCR)", true, None::<&str>)?;
             let reader = MenuItem::with_id(app, "reader", "沉浸阅读室", true, None::<&str>)?;
             let vocab = MenuItem::with_id(app, "vocab", "生词本", true, None::<&str>)?;
@@ -1069,10 +1080,10 @@ pub fn run() {
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
-                &[&ocr, &reader, &vocab, &sep, &history, &settings, &quit],
+                &[&quick, &ocr, &reader, &vocab, &sep, &history, &settings, &quit],
             )?;
 
-            TrayIconBuilder::with_id("main")
+            let tray = TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("ImmersiveTranslator")
                 .menu(&menu)
@@ -1082,6 +1093,7 @@ pub fn run() {
                     "settings" => show_window(app, "settings"),
                     "history" => show_window(app, "history"),
                     "reader" => show_reader_window(app),
+                    "quick" => review_reminder::open_quick_review_window(app),
                     "vocab" => {
                         // 生词本：打开阅读室并切到复习页。窗口已存在 → 事件即时切换；
                         // 不存在 → 记下标记，窗口挂载后由 take_pending_open_review 消费。
@@ -1100,6 +1112,16 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
+
+            // 记下托盘与「快速复习」菜单项句柄：到期角标与文案由调度线程刷新。
+            {
+                let handles = app.state::<review_reminder::TrayHandles>();
+                *handles.tray.lock().unwrap() = Some(tray);
+                *handles.quick_item.lock().unwrap() = Some(quick);
+            }
+            // 启动即按当前到期数刷角标，并拉起 30s 周期的提醒调度。
+            review_reminder::update_tray(app.handle());
+            review_reminder::spawn_scheduler(app.handle().clone());
 
             // 注册默认全局热键（启动占位；用户改键后由 reregister_hotkeys 覆盖）：
             //   Ctrl+Shift+Q —— 选中文字翻译

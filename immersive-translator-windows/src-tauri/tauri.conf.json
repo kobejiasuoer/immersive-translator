@@ -75,6 +75,32 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "visible": false
+      },
+      {
+        "label": "reminder",
+        "title": "",
+        "width": 384,
+        "height": 200,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focusable": true,
+        "visible": false
+      },
+      {
+        "label": "quick-review",
+        "title": "快速复习",
+        "width": 440,
+        "height": 640,
+        "minWidth": 380,
+        "minHeight": 520,
+        "resizable": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "center": true
       }
     ],
     "security": {
