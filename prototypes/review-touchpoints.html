@@ -1,0 +1,1087 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>沉浸阅读室 · 复习触点原型（系统通知 + 托盘 + 快速复习）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=Noto+Serif+SC:wght@400;600&family=Noto+Sans+SC:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   沉浸阅读室 · 交互原型 v4 ——「复习触点」
+   补漏水口 2：SRS 做好了但用户不打开就等于没有。
+   桌面场景：Windows toast 到点提醒 + 托盘角标 + 托盘菜单
+   应用内场景：左栏「今日复习卡」升级 + 设置抽屉「提醒」分组
+   两个场景共用一个「快速复习」迷你窗（正式实现 = 独立小窗口）
+   令牌与 reading-room-recall.html 同源
+   ============================================================ */
+
+/* ---------- 令牌 · 浅色（默认，= app light） ---------- */
+:root, [data-theme="light"] {
+  --bg:#f4f5f9;
+  --surface:   #ffffff;
+  --surface-2:#f9fafc;
+  --border:      #e4e7ee;
+  --border-strong:#d6dae4;
+
+  --text-1: #1c2029;
+  --text-2:    #4b5261;
+  --text-3:    #7c8494;
+  --text-4:    #a6adbb;
+
+  --accent:         #4c5ff0;
+  --accent-hover:   #3f52e0;
+  --accent-soft:    #eef0fe;
+  --accent-softer:  #f6f7ff;
+  --accent-hl:      #dde2fd;
+  --on-accent:      #ffffff;
+
+  --ok:        #1f8a4c;
+  --ok-soft:   #e8f5ee;
+  --warn:      #b45309;
+  --warn-soft: #fdf1e3;
+  --err:       #d13438;
+  --err-soft:  #fdeeee;
+
+  --shadow-pop: 0 12px 32px rgba(16, 24, 40, 0.16), 0 3px 10px rgba(16, 24, 40, 0.1);
+  --shadow-card:0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+  --sel: rgba(76, 95, 240, 0.2);
+
+  --wall-a:#e2e6f0; --wall-b:#c8cfdf; --wall-glow:rgba(76,95,240,.14);
+}
+/* ---------- 深色（= app dark） ---------- */
+[data-theme="dark"] {
+  --bg:#1d1f26;
+  --surface:   #262933;
+  --surface-2:#2e313c;
+  --border:      #373b47;
+  --border-strong:#474c5a;
+
+  --text-1: #edeef4;
+  --text-2:    #c4c9d6;
+  --text-3:    #9399ab;
+  --text-4:    #6d7384;
+
+  --accent:         #7d8cff;
+  --accent-hover:   #93a0ff;
+  --accent-soft:    rgba(125, 140, 255, 0.16);
+  --accent-softer:  rgba(125, 140, 255, 0.09);
+  --accent-hl:      rgba(125, 140, 255, 0.30);
+  --on-accent:      #ffffff;
+
+  --ok:        #4cc38a;
+  --ok-soft:   rgba(76, 195, 138, 0.14);
+  --warn:      #e0a458;
+  --warn-soft: rgba(224, 164, 88, 0.14);
+  --err:       #e57070;
+  --err-soft:  rgba(229, 112, 112, 0.14);
+
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  --shadow-card:0 1px 2px rgba(0, 0, 0, 0.3);
+  --sel: rgba(125, 140, 255, 0.3);
+
+  --wall-a:#262b3a; --wall-b:#171a24; --wall-glow:rgba(125,140,255,.10);
+}
+/* ---------- 护眼 ---------- */
+[data-theme="sepia"] {
+  --bg:#f5efdf;
+  --surface:   #fbf7ec;
+  --surface-2:#f1ead7;
+  --border:      #e4dac0;
+  --border-strong:#d2c6a6;
+
+  --text-1: #37301f;
+  --text-2:    #5a5138;
+  --text-3:    #857a5c;
+  --text-4:    #a89d80;
+
+  --accent:         #4c5ff0;
+  --accent-hover:   #3f52e0;
+  --accent-soft:    rgba(76, 95, 240, 0.10);
+  --accent-softer:  rgba(76, 95, 240, 0.06);
+  --accent-hl:      rgba(76, 95, 240, 0.20);
+  --on-accent:      #ffffff;
+
+  --ok:        #35793f;
+  --ok-soft:   rgba(53, 121, 63, 0.12);
+  --warn:      #9a6212;
+  --warn-soft: rgba(154, 98, 18, 0.12);
+  --err:       #b03a32;
+  --err-soft:  rgba(176, 58, 50, 0.12);
+
+  --shadow-pop: 0 12px 32px rgba(80, 66, 32, 0.18), 0 3px 10px rgba(80, 66, 32, 0.10);
+  --shadow-card:0 1px 2px rgba(80, 66, 32, 0.05), 0 1px 3px rgba(80, 66, 32, 0.06);
+  --sel: rgba(76, 95, 240, 0.18);
+
+  --wall-a:#e8dfc8; --wall-b:#d3c6a2; --wall-glow:rgba(76,95,240,.08);
+}
+/* ---------- 纯黑（OLED） ---------- */
+[data-theme="oled"] {
+  --bg:#000000;
+  --surface:   #0a0a0b;
+  --surface-2:#141416;
+  --border:      #212126;
+  --border-strong:#2f2f36;
+
+  --text-1: #e8e7e4;
+  --text-2:    #b0aeab;
+  --text-3:    #77756f;
+  --text-4:    #4c4a46;
+
+  --accent:         #7d8cff;
+  --accent-hover:   #93a0ff;
+  --accent-soft:    rgba(125, 140, 255, 0.13);
+  --accent-softer:  rgba(125, 140, 255, 0.07);
+  --accent-hl:      rgba(125, 140, 255, 0.26);
+  --on-accent:      #0c0c10;
+
+  --ok:        #4cc38a;
+  --ok-soft:   rgba(76, 195, 138, 0.12);
+  --warn:      #e0a458;
+  --warn-soft: rgba(224, 164, 88, 0.12);
+  --err:       #e57070;
+  --err-soft:  rgba(229, 112, 112, 0.12);
+
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.8), 0 3px 10px rgba(0, 0, 0, 0.5);
+  --shadow-card:0 1px 2px rgba(0, 0, 0, 0.6);
+  --sel: rgba(125, 140, 255, 0.28);
+
+  --wall-a:#0d0d0f; --wall-b:#000000; --wall-glow:rgba(125,140,255,.06);
+}
+
+/* ---------- 基底 ---------- */
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  font-size: 13.5px; line-height: 1.6;
+  color: var(--text-1); background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  transition: background .3s ease, color .3s ease;
+}
+::selection { background: var(--sel); }
+button { font-family: inherit; color: inherit; }
+button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px;
+}
+.serif-en { font-family: "Source Serif 4", Georgia, "Times New Roman", serif; }
+.kbd {
+  display: inline-block; padding: 0 5px; border: 1px solid var(--border-strong);
+  border-bottom-width: 2px; border-radius: 4px;
+  font-family: "Segoe UI", sans-serif; font-size: 11px; color: var(--text-2);
+  background: var(--surface);
+}
+
+/* ---------- 原型说明条 ---------- */
+.proto-banner {
+  position: relative; z-index: 30;
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 20px;
+  background: var(--accent-softer);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--text-2);
+}
+.proto-banner .tag {
+  flex: none;
+  padding: 1px 9px; border-radius: 999px;
+  background: var(--accent); color: var(--on-accent);
+  font-weight: 600; font-size: 11px;
+}
+.proto-banner b { color: var(--text-1); }
+.proto-banner .close { margin-left: auto; flex: none; }
+.proto-banner .right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.proto-banner button { flex: none; white-space: nowrap; }
+
+.scene-switch {
+  display: flex; gap: 2px; padding: 2px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+}
+.scene-switch button {
+  height: 24px; padding: 0 10px; border: none; border-radius: 6px;
+  background: transparent; font-size: 11.5px; color: var(--text-3); cursor: pointer;
+}
+.scene-switch button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.tb-btn {
+  height: 26px; min-width: 26px; padding: 0 8px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  border: none; background: transparent; border-radius: 6px;
+  color: var(--text-2); font-size: 12px; cursor: pointer;
+}
+.tb-btn:hover { background: var(--accent-softer); color: var(--text-1); }
+
+.stage { position: absolute; top: 30px; left: 0; right: 0; bottom: 0; }
+.stage.no-banner { top: 0; }
+.scene { position: absolute; inset: 0; }
+.hidden { display: none !important; }
+
+/* ============================================================
+   场景 A · Windows 桌面模拟
+   ============================================================ */
+.desk {
+  background:
+    radial-gradient(900px 520px at 30% 26%, var(--wall-glow), transparent 70%),
+    linear-gradient(165deg, var(--wall-a), var(--wall-b));
+}
+.desk .hint {
+  position: absolute; left: 24px; top: 22px;
+  font-size: 12.5px; color: var(--text-2); opacity: .85; max-width: 340px; line-height: 1.8;
+}
+
+/* 任务栏 */
+.taskbar {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 50px; z-index: 5;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid var(--border);
+  display: flex; align-items: center;
+}
+.tb-center {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 6px; align-items: center;
+}
+.tb-ic {
+  width: 34px; height: 34px; border-radius: 7px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-3); font-size: 13px; cursor: default;
+}
+.tb-ic:hover { background: var(--accent-softer); }
+.tb-ic.win { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 2.5px; padding: 9px; }
+.tb-ic.win i { background: var(--accent); border-radius: 1.5px; }
+.tb-right { margin-left: auto; display: flex; align-items: center; gap: 2px; padding-right: 12px; }
+.tb-right .sys {
+  min-width: 30px; height: 34px; border: none; border-radius: 7px; background: transparent;
+  color: var(--text-2); font-size: 12px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.tb-right .sys:hover { background: var(--accent-softer); }
+.tray-app { position: relative; }
+.tray-app .logo-ic {
+  width: 24px; height: 24px; border-radius: 6px;
+  background: linear-gradient(135deg, #4c5ff0, #7a5cf0);
+  color: #fff; font-size: 11.5px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.tray-badge {
+  position: absolute; top: -4px; right: -6px;
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  background: var(--err); color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
+  border: 2px solid var(--surface);
+  font-variant-numeric: tabular-nums;
+}
+.clock { text-align: right; font-size: 11px; line-height: 1.35; color: var(--text-2); padding: 0 6px; }
+
+/* 托盘菜单 */
+.tray-menu {
+  position: absolute; right: 96px; bottom: 62px; z-index: 20;
+  width: 216px; padding: 5px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: var(--shadow-pop);
+}
+.tray-menu .mi {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 8px 10px; border: none; border-radius: 7px; background: transparent;
+  font-size: 12.5px; color: var(--text-1); text-align: left; cursor: pointer;
+}
+.tray-menu .mi:hover { background: var(--accent-softer); }
+.tray-menu .mi .ic { width: 16px; text-align: center; color: var(--text-3); font-size: 13px; }
+.tray-menu .mi .pill {
+  margin-left: auto; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 10.5px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.tray-menu .sep { height: 1px; margin: 5px 8px; background: var(--border); }
+
+/* Windows 通知 */
+.win-toast {
+  position: absolute; right: 16px; bottom: 64px; z-index: 25;
+  width: 376px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: var(--shadow-pop);
+  padding: 14px 16px 0;
+  animation: toastIn .24s ease-out;
+}
+@keyframes toastIn { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+.win-toast .head { display: flex; align-items: center; gap: 9px; }
+.win-toast .logo-ic {
+  width: 26px; height: 26px; border-radius: 7px; flex: none;
+  background: linear-gradient(135deg, #4c5ff0, #7a5cf0);
+  color: #fff; font-size: 12px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.win-toast .app { font-size: 12px; color: var(--text-3); }
+.win-toast .x {
+  margin-left: auto; width: 26px; height: 26px; border: none; border-radius: 6px;
+  background: transparent; color: var(--text-3); cursor: pointer; font-size: 13px;
+}
+.win-toast .x:hover { background: var(--surface-2); color: var(--text-1); }
+.win-toast .msg { margin: 8px 0 0 35px; font-size: 13px; color: var(--text-1); line-height: 1.65; }
+.win-toast .msg small { display: block; margin-top: 2px; font-size: 12px; color: var(--text-3); }
+.win-toast .acts {
+  display: flex; justify-content: flex-end; gap: 4px;
+  margin: 12px -16px 0; padding: 6px 12px;
+  border-top: 1px solid var(--border);
+}
+.win-toast .acts button {
+  height: 30px; padding: 0 12px; border: none; border-radius: 6px;
+  background: transparent; font-size: 12.5px; cursor: pointer; color: var(--text-2);
+}
+.win-toast .acts button:hover { background: var(--surface-2); }
+.win-toast .acts button.go { color: var(--accent); font-weight: 600; }
+.win-toast .acts button.go:hover { background: var(--accent-softer); }
+
+/* 快速复习迷你窗 */
+.mini-mask { position: absolute; inset: 0; z-index: 28; background: rgba(10, 12, 20, .18); }
+.mini {
+  position: absolute; left: 50%; top: 47%; transform: translate(-50%, -50%); z-index: 29;
+  width: 460px; max-height: 86%;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 14px; box-shadow: var(--shadow-pop);
+  display: flex; flex-direction: column; overflow: hidden;
+  animation: miniIn .18s ease-out;
+}
+@keyframes miniIn { from { opacity: 0; transform: translate(-50%, -47%); } to { opacity: 1; transform: translate(-50%, -50%); } }
+.mini .m-head {
+  display: flex; align-items: center; gap: 9px;
+  padding: 11px 14px; border-bottom: 1px solid var(--border); background: var(--surface-2);
+}
+.mini .m-head .logo-ic {
+  width: 20px; height: 20px; border-radius: 6px;
+  background: linear-gradient(135deg, #4c5ff0, #7a5cf0);
+  color: #fff; font-size: 10px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.mini .m-head .t { font-size: 12.5px; font-weight: 600; }
+.mini .m-head .prog { margin-left: auto; font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.mini .m-head .x {
+  width: 26px; height: 26px; margin-left: 4px; border: none; border-radius: 6px;
+  background: transparent; color: var(--text-3); cursor: pointer; font-size: 13px;
+}
+.mini .m-head .x:hover { background: var(--surface-2); color: var(--text-1); }
+.mini .dots { display: flex; gap: 5px; padding: 12px 18px 0; }
+.mini .dots i { width: 6px; height: 6px; border-radius: 999px; background: var(--border-strong); }
+.mini .dots i.done { background: var(--accent); }
+.mini .dots i.now { background: var(--accent); transform: scale(1.25); }
+.mini .m-body { padding: 14px 22px 18px; overflow-y: auto; }
+.kind-chip {
+  display: inline-block; padding: 1px 9px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 11px; font-weight: 600; margin-bottom: 10px;
+}
+.kind-chip.word { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
+.cloze-sent {
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 19px; line-height: 1.75; color: var(--text-1);
+}
+.cloze-sent .slot {
+  display: inline-block; min-width: 150px;
+  border-bottom: 2px solid var(--accent); text-align: center;
+  padding: 0 6px; margin: 0 3px;
+}
+.cloze-sent .slot input {
+  border: none; background: transparent; text-align: center;
+  font: inherit; color: var(--accent); padding: 0; width: 100%;
+}
+.cloze-sent .slot input:focus { outline: none; }
+.cloze-sent .slot.ok { border-color: var(--ok); }
+.cloze-sent .slot.bad { border-color: var(--err); }
+.cloze-sent .slot .fill { color: var(--err); text-decoration: line-through; }
+.cloze-sent .slot .right-answer { color: var(--ok); }
+.word-face { text-align: center; padding: 8px 0 2px; }
+.word-face .w { font-family: "Source Serif 4", Georgia, serif; font-size: 34px; font-weight: 600; color: var(--text-1); line-height: 1.3; }
+.word-face .ph { font-size: 13px; color: var(--text-3); margin-top: 2px; }
+.word-face .senses { margin: 12px auto 0; max-width: 300px; font-size: 13.5px; color: var(--text-2); text-align: center; }
+.word-face .senses .pos { color: var(--text-4); font-size: 12px; margin-right: 4px; }
+.mini .src-line { margin-top: 12px; font-size: 11.5px; color: var(--text-4); text-align: center; }
+.hint-row { margin-top: 12px; text-align: center; }
+.hint-row a { color: var(--text-3); font-size: 12px; cursor: pointer; text-decoration: underline dotted; }
+.hint-row a:hover { color: var(--accent); }
+.hint-ladder {
+  margin: 10px auto 0; max-width: 360px; padding: 10px 14px;
+  background: var(--accent-softer); border-radius: 9px;
+  font-size: 12.5px; color: var(--text-2); text-align: center; line-height: 1.9;
+}
+.hint-ladder .step { display: block; }
+.hint-ladder .step b { color: var(--accent); font-weight: 600; margin-right: 6px; font-size: 11px; }
+.trap-box {
+  margin: 12px auto 0; max-width: 380px; padding: 10px 14px;
+  background: var(--err-soft); border-radius: 9px;
+  font-size: 12.5px; color: var(--text-1); line-height: 1.7; text-align: left;
+}
+.trap-box b { color: var(--err); font-weight: 600; }
+.grades { display: flex; gap: 8px; margin-top: 16px; }
+.grades button {
+  flex: 1; padding: 8px 0 6px;
+  border: 1px solid var(--border-strong); border-radius: 9px; background: var(--surface);
+  font-size: 12.5px; color: var(--text-1); cursor: pointer;
+}
+.grades button small { display: block; font-size: 10.5px; color: var(--text-4); margin-top: 1px; }
+.grades button:hover { border-color: var(--text-3); background: var(--surface-2); }
+.grades button.sug { border: 2px solid var(--accent); padding: 7px 0 5px; }
+.grades button.sug small { color: var(--accent); }
+.mini .m-foot {
+  padding: 9px 18px; border-top: 1px solid var(--border);
+  font-size: 11.5px; color: var(--text-4); text-align: center;
+}
+/* 完成态 */
+.done-face { text-align: center; padding: 22px 0 10px; }
+.done-face .ring {
+  width: 62px; height: 62px; margin: 0 auto; border-radius: 999px;
+  background: var(--ok-soft); color: var(--ok);
+  display: flex; align-items: center; justify-content: center; font-size: 26px;
+}
+.done-face h3 { margin: 14px 0 2px; font-size: 20px; font-weight: 600; }
+.done-face .streak { font-size: 13px; color: var(--text-2); }
+.done-face .streak b { color: var(--warn); font-size: 15px; }
+.done-face .sub { margin: 6px auto 0; max-width: 300px; font-size: 12px; color: var(--text-3); }
+.done-face .btns { display: flex; gap: 10px; justify-content: center; margin-top: 18px; }
+
+/* 轻提示（桌面场景内） */
+.desk-lite {
+  position: absolute; left: 50%; bottom: 66px; transform: translateX(-50%); z-index: 40;
+  padding: 8px 16px; border-radius: 999px;
+  background: var(--text-1); color: var(--bg);
+  font-size: 12px; box-shadow: var(--shadow-pop);
+}
+
+/* ============================================================
+   场景 B · 阅读室内（左栏今日卡 + 设置抽屉「提醒」分组）
+   ============================================================ */
+.room-wrap { display: flex; align-items: stretch; justify-content: center; padding: 18px 22px 22px; }
+.room {
+  width: min(1120px, 100%);
+  border: 1px solid var(--border-strong); border-radius: 14px;
+  box-shadow: var(--shadow-pop); background: var(--surface);
+  display: flex; flex-direction: column; overflow: hidden; position: relative;
+}
+.room .topbar {
+  height: 50px; flex: none; display: flex; align-items: center; gap: 12px;
+  padding: 0 18px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.room .topbar .logo {
+  width: 24px; height: 24px; border-radius: 7px;
+  background: linear-gradient(135deg, #4c5ff0, #7a5cf0);
+  color: #fff; font-size: 12px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.room .topbar .name { font-weight: 600; font-size: 13.5px; }
+.room .topbar .crumb { color: var(--text-3); font-size: 12px; }
+.room .topbar .crumb::before { content: "/"; margin-right: 9px; color: var(--text-4); }
+.room .rbody { flex: 1; display: flex; min-height: 0; }
+.shelf {
+  width: 252px; flex: none; border-right: 1px solid var(--border); background: var(--surface-2);
+  display: flex; flex-direction: column; padding: 16px 12px 12px;
+}
+.shelf .sec { font-size: 11px; font-weight: 700; color: var(--text-3); letter-spacing: .02em; margin: 0 4px 8px; }
+.shelf .item {
+  padding: 7px 10px; border-radius: 8px; font-size: 12.5px; color: var(--text-2);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.shelf .item.on { background: var(--accent-soft); color: var(--text-1); font-weight: 500; }
+.shelf .item .pct { font-size: 11px; color: var(--text-4); }
+.shelf .spacer2 { flex: 1; }
+.shelf-nav {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 10px; border-radius: 8px; font-size: 12.5px; color: var(--text-2); cursor: pointer;
+}
+.shelf-nav:hover { background: var(--accent-softer); color: var(--text-1); }
+.shelf-nav .badge {
+  min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 10.5px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+/* 升级版「今日复习卡」 */
+.today2 {
+  margin-top: 10px; padding: 12px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+  box-shadow: var(--shadow-card);
+  display: flex; gap: 12px; align-items: center;
+}
+.today2 .ringwrap { position: relative; width: 52px; height: 52px; flex: none; }
+.today2 .ringwrap svg { transform: rotate(-90deg); }
+.today2 .ringwrap .num {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  font-family: "Source Serif 4", Georgia, serif; font-size: 14px; font-weight: 600; color: var(--text-1);
+  line-height: 1;
+}
+.today2 .ringwrap .num small { font-size: 8px; font-weight: 400; color: var(--text-4); margin-top: 1px; }
+.today2 .tm { min-width: 0; }
+.today2 .t1 { font-size: 12.5px; color: var(--text-1); }
+.today2 .t1 b { font-variant-numeric: tabular-nums; }
+.today2 .t2 { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+.today2 .go {
+  margin-top: 7px; height: 26px; padding: 0 12px; border: none; border-radius: 7px;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
+.today2 .go:hover { background: var(--accent-hover); }
+
+.room .rmain { flex: 1; min-width: 0; display: flex; justify-content: center; overflow-y: auto; position: relative; }
+.rmain .col { width: 620px; padding: 36px 24px 60px; }
+.rmain h1 { font-family: "Source Serif 4", Georgia, serif; font-size: 28px; font-weight: 600; margin: 0 0 3px; color: var(--text-1); }
+.rmain .sub { font-size: 14px; color: var(--text-2); margin: 0 0 22px; }
+.pair { padding: 10px 2px; }
+.pair .en { font-family: "Source Serif 4", Georgia, serif; font-size: 18px; line-height: 1.7; color: var(--text-1); }
+.pair .zh { font-family: "Noto Serif SC", serif; font-size: 14px; line-height: 1.8; color: var(--text-3); margin-top: 4px; }
+.pair.active { background: var(--accent-soft); border-radius: 10px; padding-left: 12px; }
+.rmain .note { margin-top: 26px; font-size: 11.5px; color: var(--text-4); }
+
+/* 设置抽屉（只画「提醒」分组） */
+.drawer-mask { position: absolute; inset: 0; background: rgba(10, 12, 20, .25); z-index: 10; }
+.drawer {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 380px; z-index: 11;
+  background: var(--surface); border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-pop);
+  display: flex; flex-direction: column;
+}
+.drawer .d-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px 10px;
+}
+.drawer .d-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.drawer .d-body { flex: 1; overflow-y: auto; padding: 6px 20px 20px; }
+.drawer .grp { font-size: 11px; font-weight: 700; color: var(--text-3); letter-spacing: .02em; margin: 16px 0 4px; }
+.drawer .grp .new { color: var(--accent); font-weight: 600; margin-left: 6px; }
+.set-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 2px; border-bottom: 1px solid var(--border);
+}
+.set-row .lbl { flex: 1; min-width: 0; }
+.set-row .lbl .t { font-size: 13px; color: var(--text-1); }
+.set-row .lbl .d { font-size: 11.5px; color: var(--text-3); margin-top: 1px; }
+.switch {
+  flex: none; width: 38px; height: 22px; border-radius: 999px;
+  background: var(--border-strong); position: relative; cursor: pointer;
+  transition: background .15s ease;
+}
+.switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+  border-radius: 999px; background: #fff;
+  box-shadow: 0 1px 2px rgba(16,24,40,.2);
+  transition: left .15s ease;
+}
+.switch.on { background: var(--accent); }
+.switch.on::after { left: 18px; }
+.stepper { display: flex; align-items: center; gap: 2px; flex: none; }
+.stepper button {
+  width: 24px; height: 24px; border: 1px solid var(--border-strong); border-radius: 6px;
+  background: var(--surface); color: var(--text-2); font-size: 13px; cursor: pointer; line-height: 1;
+}
+.stepper button:hover { color: var(--accent); border-color: var(--accent); }
+.stepper .val { min-width: 56px; text-align: center; font-size: 12.5px; color: var(--text-1); font-variant-numeric: tabular-nums; }
+.drawer .d-foot {
+  flex: none; padding: 12px 20px; border-top: 1px solid var(--border);
+  font-size: 11.5px; color: var(--text-4); line-height: 1.8;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="proto-banner" id="banner">
+  <span class="tag">原型 · 复习触点</span>
+  <span id="bannerText"><b>补漏水口 ②</b> —— SRS 做好了，但用户不打开就等于没有。桌面场景演示：<b>到点 toast 通知</b>、<b>托盘角标</b>、<b>托盘快速复习</b>；阅读室场景演示：<b>左栏今日卡</b>与<b>提醒设置</b>。点通知上的「开始复习」体验迷你窗。</span>
+  <div class="right">
+    <div class="scene-switch" id="sceneSwitch">
+      <button class="on" data-scene="desk">桌面 · 通知与托盘</button>
+      <button data-scene="room">阅读室 · 今日卡与提醒</button>
+    </div>
+    <button class="tb-btn" id="redoBtn" title="重新播放通知（桌面场景）">重新演示</button>
+    <button class="tb-btn" id="themeBtn" title="主题（浅色 / 深色 / 护眼 / 纯黑）">浅色</button>
+    <button class="tb-btn close" id="bannerClose" title="收起说明条">收起</button>
+  </div>
+</div>
+
+<!-- ================= 场景 A · 桌面 ================= -->
+<div class="stage" id="stage">
+  <div class="scene desk" id="sceneDesk">
+    <div class="hint" id="deskHint">演示 Windows 11 桌面。默认每天 <b>20:00</b> 到点弹通知；托盘图标带<b>到期角标</b>，右键点开托盘菜单可直达「快速复习」。—— 点右下角的蓝色图标试试</div>
+
+    <!-- 任务栏 -->
+    <div class="taskbar">
+      <div class="tb-center">
+        <div class="tb-ic win" title="开始"><i></i><i></i><i></i><i></i></div>
+        <div class="tb-ic" title="搜索">⌕</div>
+        <div class="tb-ic" title="文件资源管理器">▤</div>
+        <div class="tb-ic" title="浏览器">◌</div>
+        <div class="tb-ic" title="其他应用">▢</div>
+      </div>
+      <div class="tb-right">
+        <button class="sys" title="隐藏的图标">^</button>
+        <button class="sys" title="网络">≋</button>
+        <button class="sys" title="音量">♪</button>
+        <button class="sys tray-app" id="trayApp" title="沉浸阅读室 — 6 个词到期">
+          <span class="logo-ic">读</span>
+          <span class="tray-badge" id="trayBadge">6</span>
+        </button>
+        <div class="clock">20:00<br>2026/09/13</div>
+      </div>
+    </div>
+
+    <!-- 托盘菜单 -->
+    <div class="tray-menu hidden" id="trayMenu">
+      <button class="mi" data-act="quick"><span class="ic">⚡</span>快速复习<span class="pill" id="menuPill">6</span></button>
+      <button class="mi" data-act="room"><span class="ic">▤</span>沉浸阅读室</button>
+      <div class="sep"></div>
+      <button class="mi" data-act="ocr"><span class="ic">✂</span>截图翻译 (OCR)</button>
+      <button class="mi" data-act="history"><span class="ic">≡</span>翻译历史</button>
+      <button class="mi" data-act="settings"><span class="ic">⚙</span>设置</button>
+      <div class="sep"></div>
+      <button class="mi" data-act="quit"><span class="ic">✕</span>退出</button>
+    </div>
+
+    <!-- 到点通知 -->
+    <div class="win-toast hidden" id="winToast">
+      <div class="head">
+        <span class="logo-ic">读</span>
+        <span class="app">沉浸阅读室</span>
+        <button class="x" id="toastClose" title="关闭">✕</button>
+      </div>
+      <div class="msg">
+        <span id="toastMsg">6 个词今天到期</span>
+        <small id="toastSub">大约 5 分钟 · 完成后角标会消失</small>
+      </div>
+      <div class="acts">
+        <button id="toastLater">今天先不了</button>
+        <button class="go" id="toastGo">开始复习</button>
+      </div>
+    </div>
+
+    <!-- 迷你窗遮罩 + 迷你窗 -->
+    <div class="mini-mask hidden" id="miniMask"></div>
+    <div class="mini hidden" id="miniWin">
+      <div class="m-head">
+        <span class="logo-ic">读</span>
+        <span class="t">快速复习</span>
+        <span class="prog" id="miniProg">1 / 6</span>
+        <button class="x" id="miniClose" title="收起（进度已保存）">✕</button>
+      </div>
+      <div class="dots" id="miniDots"></div>
+      <div class="m-body" id="miniBody"></div>
+      <div class="m-foot" id="miniFoot">Enter 提交 · <span class="kbd">1</span>–<span class="kbd">4</span> 评分 · Esc 收起，随时回到桌面</div>
+    </div>
+
+    <div class="desk-lite hidden" id="deskLite"></div>
+  </div>
+
+  <!-- ================= 场景 B · 阅读室 ================= -->
+  <div class="scene room-wrap hidden" id="sceneRoom">
+    <div class="room">
+      <div class="topbar">
+        <div class="logo">读</div>
+        <span class="name">沉浸阅读室</span>
+        <span class="crumb">The Gift of the Magi</span>
+        <span style="flex:1"></span>
+        <button class="tb-btn" id="drawerBtn">设置</button>
+      </div>
+      <div class="rbody">
+        <aside class="shelf">
+          <div class="sec">书架</div>
+          <div class="item on"><span>The Gift of the Magi</span><span class="pct">34%</span></div>
+          <div class="item"><span>The Happy Prince</span><span class="pct">100%</span></div>
+          <div class="item"><span>Reading · Wikipedia</span><span class="pct">12%</span></div>
+          <div class="spacer2"></div>
+          <div class="shelf-nav" id="roomVocabNav">
+            <span>▤</span> 生词本复习
+            <span class="badge" id="roomBadge">6</span>
+          </div>
+          <!-- 升级版今日复习卡 -->
+          <div class="today2">
+            <div class="ringwrap">
+              <svg width="52" height="52" viewBox="0 0 52 52">
+                <circle cx="26" cy="26" r="21" fill="none" stroke="var(--border)" stroke-width="4"/>
+                <circle id="ringFg" cx="26" cy="26" r="21" fill="none" stroke="var(--accent)" stroke-width="4"
+                        stroke-linecap="round" stroke-dasharray="131.9" stroke-dashoffset="110"/>
+              </svg>
+              <div class="num">1/6<small>今日</small></div>
+            </div>
+            <div class="tm">
+              <div class="t1">今日复习 <b>1</b>/6 · 连续 <b>14</b> 天</div>
+              <div class="t2" id="roomTodaySub">还差 5 个清空今天到期</div>
+              <button class="go" id="roomGo">继续复习</button>
+            </div>
+          </div>
+        </aside>
+        <div class="rmain">
+          <div class="col">
+            <h1>The Gift of the Magi</h1>
+            <p class="sub">麦琪的礼物 · 欧·亨利 · B1 · 34%</p>
+            <div class="pair active">
+              <div class="en">One dollar and eighty-seven cents. That was all. And sixty cents of it was in pennies.</div>
+              <div class="zh">一块八毛七，就这么多。其中六毛还是铜板凑的。</div>
+            </div>
+            <div class="pair">
+              <div class="en">Pennies saved one and two at a time by bulldozing the grocer and the vegetable man.</div>
+              <div class="zh">一个铜板一个铜板地攒，跟杂货店老板和卖菜的磨到面红耳赤才省下来。</div>
+            </div>
+            <p class="note">此处只示意「复习触点」在应用内的落点：左栏今日卡 + 设置抽屉的「提醒」分组。阅读视图本体见 reading-room-v2.html。</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 设置抽屉 · 提醒分组（新增） -->
+      <div class="drawer-mask hidden" id="drawerMask"></div>
+      <div class="drawer" id="drawer">
+        <div class="d-head">
+          <h3>阅读设置</h3>
+          <button class="tb-btn" id="drawerClose" title="关闭">✕</button>
+        </div>
+        <div class="d-body">
+          <div class="grp">版式 / 朗读 / 主题……（现状不变，原型省略）</div>
+          <div class="grp" style="margin-top:10px">提醒<span class="new">新增</span></div>
+          <div class="set-row">
+            <div class="lbl"><div class="t">每日复习提醒</div><div class="d">到点弹系统通知，点开直达快速复习</div></div>
+            <div class="switch on" id="swRemind" role="switch" aria-checked="true" tabindex="0"></div>
+          </div>
+          <div class="set-row">
+            <div class="lbl"><div class="t">提醒时间</div><div class="d">建议放在你通常会休息的时段</div></div>
+            <div class="stepper">
+              <button id="timeMinus">−</button>
+              <span class="val" id="timeVal">20:00</span>
+              <button id="timePlus">＋</button>
+            </div>
+          </div>
+          <div class="set-row">
+            <div class="lbl"><div class="t">免打扰</div><div class="d">此时间段内不弹通知，只保留角标</div></div>
+            <div class="switch on" id="swDnd" role="switch" aria-checked="true" tabindex="0"></div>
+          </div>
+          <div class="set-row">
+            <div class="lbl"><div class="t">免打扰时段</div></div>
+            <span class="val" style="font-size:12.5px;color:var(--text-2)">23:00 – 08:00</span>
+          </div>
+          <div class="set-row">
+            <div class="lbl"><div class="t">每日目标 · 阅读</div><div class="d">复习目标 = 清空到期，随词量自动变</div></div>
+            <div class="stepper">
+              <button id="readMinus">−</button>
+              <span class="val" id="readVal">10 分钟</span>
+              <button id="readPlus">＋</button>
+            </div>
+          </div>
+        </div>
+        <div class="d-foot">
+          提醒与目标会在两端同步（v2.0）。<br>
+          桌面侧的实际效果（通知 / 角标 / 快速复习）切到「桌面」场景查看。
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   状态：与 recall 原型同口径 —— 到期 6（单词 2 + 词块 4），连续 14 天
+   ============================================================ */
+const DUE_TOTAL = 6;
+let reviewed = 0;          // 本迷你窗内已复习数
+let toastShown = false;    // 通知是否已演示过
+let dnd = true, remindOn = true, remindMin = 20 * 60, readGoal = 10;
+
+const $ = (id) => document.getElementById(id);
+
+/* ---------- 主题 ---------- */
+const THEMES = [
+  { id: "light", label: "浅色" },
+  { id: "dark",  label: "深色" },
+  { id: "sepia", label: "护眼" },
+  { id: "oled",  label: "纯黑" },
+];
+let themeIdx = 0;
+$("themeBtn").onclick = () => {
+  themeIdx = (themeIdx + 1) % THEMES.length;
+  document.documentElement.dataset.theme = THEMES[themeIdx].id;
+  $("themeBtn").textContent = THEMES[themeIdx].label;
+};
+
+/* ---------- 轻提示 ---------- */
+let liteTimer = null;
+function lite(msg) {
+  const el = $("deskLite");
+  el.textContent = msg;
+  el.classList.remove("hidden");
+  clearTimeout(liteTimer);
+  liteTimer = setTimeout(() => el.classList.add("hidden"), 2400);
+}
+
+/* ---------- 场景切换 ---------- */
+document.querySelectorAll("#sceneSwitch button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#sceneSwitch button").forEach(x => x.classList.toggle("on", x === b));
+  const desk = b.dataset.scene === "desk";
+  $("sceneDesk").classList.toggle("hidden", !desk);
+  $("sceneRoom").classList.toggle("hidden", desk);
+  $("redoBtn").style.visibility = desk ? "visible" : "hidden";
+  if (desk && !toastShown && reviewed === 0) setTimeout(showToast, 500);
+});
+
+/* ---------- 通知 ---------- */
+function showToast() {
+  toastShown = true;
+  $("toastMsg").textContent = `${DUE_TOTAL - reviewed} 个词今天到期`;
+  $("toastSub").textContent = reviewed > 0
+    ? `已复习 ${reviewed} 个 · 剩下大约 ${Math.max(1, Math.round((DUE_TOTAL - reviewed) * 50 / 60))} 分钟`
+    : "大约 5 分钟 · 完成后角标会消失";
+  $("winToast").classList.remove("hidden");
+}
+$("redoBtn").onclick = () => { closeMenu(); showToast(); };
+function dismissToast() { $("winToast").classList.add("hidden"); }
+$("toastClose").onclick = dismissToast;
+$("toastLater").onclick = () => { dismissToast(); lite("好，今天不再提醒 · 角标保留，明天提醒照常"); };
+$("toastGo").onclick = () => {
+  $("winToast").classList.add("hidden");
+  openMini();
+};
+
+/* ---------- 托盘 ---------- */
+$("trayApp").onclick = (e) => {
+  e.stopPropagation();
+  $("trayMenu").classList.toggle("hidden");
+};
+document.addEventListener("click", (e) => {
+  if (!$("trayMenu").contains(e.target)) closeMenu();
+});
+function closeMenu() { $("trayMenu").classList.add("hidden"); }
+$("trayMenu").querySelectorAll(".mi").forEach(mi => mi.onclick = () => {
+  closeMenu();
+  const act = mi.dataset.act;
+  if (act === "quick") openMini();
+  else if (act === "room") lite("打开阅读室主窗（内容进水口见 content-intake.html）");
+  else if (act === "quit") lite("原型不演示退出");
+  else lite(`打开「${mi.textContent.trim()}」（现状已有）`);
+});
+
+/* ---------- 角标 ---------- */
+function updateBadge() {
+  const left = DUE_TOTAL - reviewed;
+  const b = $("trayBadge");
+  if (left <= 0) { b.style.display = "none"; $("menuPill").style.display = "none"; }
+  else { b.style.display = ""; b.textContent = left; $("menuPill").textContent = left; }
+  const rb = $("roomBadge");
+  rb.style.display = left <= 0 ? "none" : "";
+  rb.textContent = left;
+  $("roomTodaySub").textContent = left > 0 ? `还差 ${left} 个清空今天到期` : "今天的到期已清空 ✓";
+  $("ringFg").style.strokeDashoffset = (131.9 * (1 - reviewed / DUE_TOTAL)).toFixed(1);
+  document.querySelector(".today2 .num").innerHTML =
+    `${Math.min(reviewed, DUE_TOTAL)}/${DUE_TOTAL}<small>今日</small>`;
+  document.querySelector(".today2 .t1").innerHTML =
+    `今日复习 <b>${reviewed}</b>/${DUE_TOTAL} · 连续 <b>${reviewed >= DUE_TOTAL ? 15 : 14}</b> 天`;
+}
+
+/* ---------- 快速复习迷你窗 ---------- */
+const CARDS = [
+  { kind: "chunk", mode: "cloze", q: "The campaign ___ after the debate.",
+    before: "The campaign ", after: " after the debate.", answer: "took on momentum",
+    gloss: "掀起势头；形成声势", pattern: "take on + n.", trap: "直译「带走动量」——这里 take on 是「呈现出、开始具有」",
+    src: "词块 · 来源：The Economist 摘读 第 14 句" },
+  { kind: "word", mode: "recognition", w: "momentum", ph: "/məˈmentəm/",
+    senses: [{ pos: "n.", cn: "势头；冲力" }, { pos: "n.", cn: "动量（物理）" }],
+    src: "单词 · 来源：The Economist 摘读 第 14 句" },
+  { kind: "chunk", mode: "cloze", q: "The hotel was ___ the photos online.",
+    before: "The hotel was ", after: " the photos online.", answer: "a far cry from",
+    gloss: "与……相去甚远", pattern: "a far cry from + n.", trap: "直译「远处的一声哭喊」——实为「差别很大」",
+    src: "词块 · 来源：The Happy Prince 第 3 句" },
+  { kind: "word", mode: "recognition", w: "adverse", ph: "/ˈædvɜːs/",
+    senses: [{ pos: "adj.", cn: "不利的，有害的" }],
+    src: "单词 · 来源：Reading · Wikipedia 第 22 句" },
+  { kind: "chunk", mode: "cloze", q: "The company is ___ bankruptcy.",
+    before: "The company is ", after: " bankruptcy.", answer: "on the verge of",
+    gloss: "濒于，快要", pattern: "on the verge of + n.", trap: "verge 是「边缘」，不是「融合」",
+    src: "词块 · 来源：Reading · Wikipedia 第 9 句" },
+  { kind: "chunk", mode: "cloze", q: "___ cost, the train is the best choice.",
+    before: "", after: " cost, the train is the best choice.", answer: "in terms of",
+    gloss: "就……而言", pattern: "in terms of + n.", trap: "",
+    src: "词块 · 来源：粘贴导入 第 5 句" },
+];
+let cardIdx = 0;
+let miniOpen = false;
+
+function openMini() {
+  miniOpen = true;
+  closeMenu();
+  $("winToast").classList.add("hidden");
+  $("miniMask").classList.remove("hidden");
+  $("miniWin").classList.remove("hidden");
+  if (reviewed >= DUE_TOTAL) renderDone();
+  else { cardIdx = reviewed; renderCard(); }
+  updateDots();
+}
+function closeMini() {
+  miniOpen = false;
+  $("miniMask").classList.add("hidden");
+  $("miniWin").classList.add("hidden");
+}
+$("miniMask").onclick = closeMini;
+$("miniClose").onclick = () => { closeMini(); lite(`已收起 · 还剩 ${DUE_TOTAL - reviewed} 个，角标会一直留着`); };
+
+function updateDots() {
+  const dots = $("miniDots");
+  dots.innerHTML = "";
+  for (let i = 0; i < DUE_TOTAL; i++) {
+    const d = document.createElement("i");
+    if (i < reviewed) d.className = "done";
+    else if (i === reviewed && reviewed < DUE_TOTAL) d.className = "now";
+    dots.appendChild(d);
+  }
+  $("miniProg").textContent = `${Math.min(reviewed + 1, DUE_TOTAL)} / ${DUE_TOTAL}`;
+}
+
+function norm(s) {
+  return s.toLowerCase().replace(/[’']/g, "'").replace(/[.,!?;:]+$/g, "").replace(/\s+/g, " ").trim();
+}
+
+function renderCard() {
+  const c = CARDS[cardIdx];
+  const body = $("miniBody");
+  $("miniFoot").style.display = "";
+  if (c.mode === "cloze") {
+    body.innerHTML = `
+      <span class="kind-chip">词块 · 完形</span>
+      <div class="cloze-sent">${c.before}<span class="slot"><input id="clozeInput" autocomplete="off" spellcheck="false"></span>${c.after}</div>
+      <div class="hint-row"><a id="hintLink">想不起来？看提示</a></div>
+      <div id="hintZone"></div>
+      <div class="src-line">${c.src}</div>
+      <div class="grades hidden" id="gradeRow"></div>`;
+    const input = $("clozeInput");
+    input.focus();
+    $("hintLink").onclick = () => showHint(c);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") submitCloze(c); });
+  } else {
+    body.innerHTML = `
+      <span class="kind-chip word">单词 · 识别</span>
+      <div class="word-face">
+        <div class="w">${c.w}</div>
+        <div class="ph">${c.ph} <button class="tb-btn" id="sayBtn" title="原型不发音" style="height:22px;min-width:22px">♪</button></div>
+        <div id="senseZone"></div>
+      </div>
+      <div class="hint-row"><a id="revealLink">显示释义</a></div>
+      <div class="src-line">${c.src}</div>
+      <div class="grades hidden" id="gradeRow"></div>`;
+    $("revealLink").onclick = () => {
+      $("senseZone").innerHTML = c.senses.map(s =>
+        `<div class="senses"><span class="pos">${s.pos}</span>${s.cn}</div>`).join("");
+      $("revealLink").parentElement.remove();
+      showGrades(c, true);
+    };
+    $("sayBtn").onclick = () => lite("原型不发音；正式实现走 SAPI 双音轨");
+  }
+}
+function showHint(c) {
+  let used = 2;
+  $("hintZone").innerHTML = `
+    <div class="hint-ladder">
+      <span class="step"><b>① 释义</b>${c.gloss}</span>
+      <span class="step"><b>② 槽位</b>${c.pattern}</span>
+    </div>`;
+  $("hintLink").textContent = "用了提示，判分不受影响，评分自己心里有数";
+  $("hintLink").onclick = null;
+  $("hintLink").style.cursor = "default";
+  $("hintLink").dataset.used = used;
+  if ($("clozeInput")) $("clozeInput").focus();
+}
+function submitCloze(c) {
+  const val = norm($("clozeInput").value);
+  if (!val) return;
+  const slot = document.querySelector(".cloze-sent .slot");
+  const ok = val === norm(c.answer);
+  slot.classList.add(ok ? "ok" : "bad");
+  slot.innerHTML = ok
+    ? c.answer
+    : `<span class="fill">${$("clozeInput").value || "…"}</span> <span class="right-answer">${c.answer}</span>`;
+  if (!ok && c.trap) {
+    const box = document.createElement("div");
+    box.className = "trap-box";
+    box.innerHTML = `<b>直译陷阱</b> · ${c.trap}`;
+    $("hintZone").appendChild(box);
+  }
+  showGrades(c, ok);
+}
+function showGrades(c, correct) {
+  const row = $("gradeRow");
+  row.classList.remove("hidden");
+  let sug;
+  if (c.mode === "recognition") sug = 2;                 // 识别卡：建议「一般」
+  else sug = correct ? (document.getElementById("hintLink")?.dataset.used ? 1 : 2) : 0;
+  const G = [
+    { t: "忘记", s: "10 分钟" },
+    { t: "困难", s: "1 天" },
+    { t: "一般", s: "3 天" },
+    { t: "简单", s: "7 天" },
+  ];
+  row.innerHTML = G.map((g, i) =>
+    `<button data-g="${i}" class="${i === sug ? "sug" : ""}">${g.t}<small>${g.s}${i === sug ? " · 建议" : ""}</small></button>`).join("");
+  row.querySelectorAll("button").forEach(b => b.onclick = () => grade(+b.dataset.g));
+  row.querySelector("button").focus();
+}
+function grade() {
+  reviewed++;
+  updateBadge(); updateDots();
+  if (reviewed >= DUE_TOTAL) renderDone();
+  else { cardIdx = reviewed; renderCard(); }
+}
+
+function renderDone() {
+  $("miniDots").innerHTML = "";
+  $("miniProg").textContent = `${DUE_TOTAL} / ${DUE_TOTAL}`;
+  $("miniFoot").style.display = "none";
+  $("miniBody").innerHTML = `
+    <div class="done-face">
+      <div class="ring">✓</div>
+      <h3>今天收工</h3>
+      <div class="streak">连续打卡 <b>15</b> 天</div>
+      <div class="sub">这 6 个词都往后推了一轮。明天新的一批到期时，通知会再来——也可以随时从托盘点开。</div>
+      <div class="btns">
+        <button class="tb-btn" id="doneRoom" style="height:30px;border:1px solid var(--border-strong);border-radius:8px;padding:0 14px">打开阅读室</button>
+        <button class="btn primary" id="doneOk" style="height:30px">完成</button>
+      </div>
+    </div>`;
+  $("doneRoom").onclick = () => lite("打开阅读室主窗（原型省略）");
+  $("doneOk").onclick = () => { closeMini(); updateBadge(); lite("角标已清零 · 明天 20:00 见"); };
+}
+
+/* ---------- 场景 B · 抽屉与开关 ---------- */
+$("drawerBtn").onclick = () => { $("drawer").classList.remove("hidden"); $("drawerMask").classList.remove("hidden"); };
+$("drawerClose").onclick = $("drawerMask").onclick = () => {
+  $("drawer").classList.add("hidden"); $("drawerMask").classList.add("hidden");
+};
+function bindSwitch(id) {
+  const el = $(id);
+  el.onclick = () => {
+    el.classList.toggle("on");
+    el.setAttribute("aria-checked", el.classList.contains("on"));
+  };
+  el.onkeydown = (e) => { if (e.key === " " || e.key === "Enter") el.click(); };
+}
+bindSwitch("swRemind"); bindSwitch("swDnd");
+function fmt(min) { return `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`; }
+$("timeMinus").onclick = () => { remindMin = Math.max(6 * 60, remindMin - 30); $("timeVal").textContent = fmt(remindMin); };
+$("timePlus").onclick = () => { remindMin = Math.min(23 * 60 + 30, remindMin + 30); $("timeVal").textContent = fmt(remindMin); };
+$("readMinus").onclick = () => { readGoal = Math.max(5, readGoal - 5); $("readVal").textContent = `${readGoal} 分钟`; };
+$("readPlus").onclick = () => { readGoal = Math.min(60, readGoal + 5); $("readVal").textContent = `${readGoal} 分钟`; };
+$("roomGo").onclick = openMini;
+$("roomVocabNav").onclick = () => lite("完整复习流见 reading-room-recall.html");
+
+/* ---------- Esc 分层关闭 ---------- */
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!$("trayMenu").classList.contains("hidden")) closeMenu();
+  else if (miniOpen) closeMini();
+  else if (!$("winToast").classList.contains("hidden")) $("winToast").classList.add("hidden");
+});
+
+/* ---------- 说明条 / 初始 ---------- */
+$("bannerClose").onclick = () => {
+  $("banner").style.display = "none";
+  $("stage").classList.add("no-banner");
+};
+updateBadge();
+setTimeout(showToast, 900);   // 进页面自动演示一次到点通知
+</script>
+</body>
+</html>

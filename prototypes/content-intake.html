@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>沉浸阅读室 · 内容进水口原型（链接导入 + 内置文库）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=Noto+Serif+SC:wght@400;600&family=Noto+Sans+SC:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   沉浸阅读室 · 交互原型 v4 ——「内容进水口」
+   补漏水口 1：书架只能靠手动粘贴 → 链接抓取 + 内置分级文库 + 冷启动引导
+   单文件 · 无依赖 · 令牌与 reading-room-recall.html 同源
+   ============================================================ */
+
+/* ---------- 令牌 · 浅色（默认，= app light） ---------- */
+:root, [data-theme="light"] {
+  --bg:#f4f5f9;
+  --surface:   #ffffff;
+  --surface-2:#f9fafc;
+  --border:      #e4e7ee;
+  --border-strong:#d6dae4;
+
+  --text-1: #1c2029;
+  --text-2:    #4b5261;
+  --text-3:    #7c8494;
+  --text-4:    #a6adbb;
+
+  --accent:         #4c5ff0;
+  --accent-hover:   #3f52e0;
+  --accent-soft:    #eef0fe;
+  --accent-softer:  #f6f7ff;
+  --accent-hl:      #dde2fd;
+  --on-accent:      #ffffff;
+
+  --ok:        #1f8a4c;
+  --ok-soft:   #e8f5ee;
+  --warn:      #b45309;
+  --warn-soft: #fdf1e3;
+  --err:       #cf4141;
+  --err-soft:  #fdeeee;
+
+  --shadow-pop: 0 12px 32px rgba(16, 24, 40, 0.16), 0 3px 10px rgba(16, 24, 40, 0.1);
+  --shadow-card:0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+  --sel: rgba(76, 95, 240, 0.2);
+}
+/* ---------- 深色（= app dark） ---------- */
+[data-theme="dark"] {
+  --bg:#1d1f26;
+  --surface:   #262933;
+  --surface-2:#2e313c;
+  --border:      #373b47;
+  --border-strong:#474c5a;
+
+  --text-1: #edeef4;
+  --text-2:    #c4c9d6;
+  --text-3:    #9399ab;
+  --text-4:    #6d7384;
+
+  --accent:         #7d8cff;
+  --accent-hover:   #93a0ff;
+  --accent-soft:    rgba(125, 140, 255, 0.16);
+  --accent-softer:  rgba(125, 140, 255, 0.09);
+  --accent-hl:      rgba(125, 140, 255, 0.30);
+  --on-accent:      #ffffff;
+
+  --ok:        #4cc38a;
+  --ok-soft:   rgba(76, 195, 138, 0.14);
+  --warn:      #e0a458;
+  --warn-soft: rgba(224, 164, 88, 0.14);
+  --err:       #e57070;
+  --err-soft:  rgba(229, 112, 112, 0.14);
+
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  --shadow-card:0 1px 2px rgba(0, 0, 0, 0.3);
+  --sel: rgba(125, 140, 255, 0.3);
+}
+/* ---------- 护眼 ---------- */
+[data-theme="sepia"] {
+  --bg:#f5efdf;
+  --surface:   #fbf7ec;
+  --surface-2:#f1ead7;
+  --border:      #e4dac0;
+  --border-strong:#d2c6a6;
+
+  --text-1: #37301f;
+  --text-2:    #5a5138;
+  --text-3:    #857a5c;
+  --text-4:    #a89d80;
+
+  --accent:         #4c5ff0;
+  --accent-hover:   #3f52e0;
+  --accent-soft:    rgba(76, 95, 240, 0.10);
+  --accent-softer:  rgba(76, 95, 240, 0.06);
+  --accent-hl:      rgba(76, 95, 240, 0.20);
+  --on-accent:      #ffffff;
+
+  --ok:        #35793f;
+  --ok-soft:   rgba(53, 121, 63, 0.12);
+  --warn:      #9a6212;
+  --warn-soft: rgba(154, 98, 18, 0.12);
+  --err:       #b03a32;
+  --err-soft:  rgba(176, 58, 50, 0.12);
+
+  --shadow-pop: 0 12px 32px rgba(80, 66, 32, 0.18), 0 3px 10px rgba(80, 66, 32, 0.10);
+  --shadow-card:0 1px 2px rgba(80, 66, 32, 0.05), 0 1px 3px rgba(80, 66, 32, 0.06);
+  --sel: rgba(76, 95, 240, 0.18);
+}
+/* ---------- 纯黑（OLED） ---------- */
+[data-theme="oled"] {
+  --bg:#000000;
+  --surface:   #0a0a0b;
+  --surface-2:#141416;
+  --border:      #212126;
+  --border-strong:#2f2f36;
+
+  --text-1: #e8e7e4;
+  --text-2:    #b0aeab;
+  --text-3:    #77756f;
+  --text-4:    #4c4a46;
+
+  --accent:         #7d8cff;
+  --accent-hover:   #93a0ff;
+  --accent-soft:    rgba(125, 140, 255, 0.13);
+  --accent-softer:  rgba(125, 140, 255, 0.07);
+  --accent-hl:      rgba(125, 140, 255, 0.26);
+  --on-accent:      #0c0c10;
+
+  --ok:        #4cc38a;
+  --ok-soft:   rgba(76, 195, 138, 0.12);
+  --warn:      #e0a458;
+  --warn-soft: rgba(224, 164, 88, 0.12);
+  --err:       #e57070;
+  --err-soft:  rgba(229, 112, 112, 0.12);
+
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.8), 0 3px 10px rgba(0, 0, 0, 0.5);
+  --shadow-card:0 1px 2px rgba(0, 0, 0, 0.6);
+  --sel: rgba(125, 140, 255, 0.28);
+}
+
+/* ---------- 基底 ---------- */
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  font-size: 13.5px; line-height: 1.6;
+  color: var(--text-1); background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  transition: background .3s ease, color .3s ease;
+}
+::selection { background: var(--sel); }
+button { font-family: inherit; color: inherit; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+.serif-en { font-family: "Source Serif 4", Georgia, "Times New Roman", serif; }
+.kbd {
+  display: inline-block; padding: 0 5px; border: 1px solid var(--border-strong);
+  border-bottom-width: 2px; border-radius: 4px;
+  font-family: "Segoe UI", sans-serif; font-size: 11px; color: var(--text-2);
+  background: var(--surface);
+}
+
+/* ---------- 原型说明条 ---------- */
+.proto-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 20px;
+  background: var(--accent-softer);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--text-2);
+}
+.proto-banner .tag {
+  flex: none;
+  padding: 1px 9px; border-radius: 999px;
+  background: var(--accent); color: var(--on-accent);
+  font-weight: 600; font-size: 11px;
+}
+.proto-banner b { color: var(--text-1); }
+.proto-banner .close { margin-left: auto; flex: none; }
+.proto-banner button { flex: none; white-space: nowrap; }
+
+/* ---------- 顶栏 ---------- */
+.topbar {
+  height: 52px; flex: none;
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.topbar .logo {
+  width: 26px; height: 26px; border-radius: 8px;
+  background: linear-gradient(135deg, #4c5ff0, #7a5cf0);
+  color: #fff; font-size: 13px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.topbar .name { font-weight: 600; font-size: 14px; }
+.topbar .crumb { color: var(--text-3); font-size: 12.5px; }
+.topbar .crumb::before { content: "/"; margin-right: 10px; color: var(--text-4); }
+.tb-btn {
+  height: 30px; min-width: 30px; padding: 0 9px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  border: none; background: transparent; border-radius: 7px;
+  color: var(--text-2); font-size: 12.5px; cursor: pointer;
+}
+.tb-btn:hover { background: var(--accent-softer); color: var(--text-1); }
+.spacer { flex: 1; }
+
+/* ---------- 主布局 ---------- */
+.layout {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  display: flex; flex-direction: column;
+  padding-top: 30px;
+}
+.layout.no-banner { padding-top: 0; }
+.body { flex: 1; display: flex; min-height: 0; }
+
+/* ---------- 左栏 · 书架 ---------- */
+.shelf {
+  width: 240px; flex: none;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  display: flex; flex-direction: column;
+  padding: 18px 10px 14px 0;
+}
+.shelf-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 10px 0 20px;
+  font-size: 11px; font-weight: 700; color: var(--text-3); letter-spacing: .02em;
+}
+.shelf-head .tb-btn { width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); }
+.shelf-head .tb-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-softer); }
+.shelf-list { flex: 1; overflow-y: auto; margin-top: 10px; padding: 0 10px 0 12px; }
+.shelf-empty {
+  margin: 8px 8px 0; padding: 14px 12px;
+  border: 1px dashed var(--border-strong); border-radius: 10px;
+  font-size: 12px; color: var(--text-3); line-height: 1.8;
+}
+.shelf-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 8px 7px 10px; border-radius: 8px;
+  font-size: 12.5px; color: var(--text-2); cursor: pointer;
+}
+.shelf-item:hover { background: var(--surface-2); }
+.shelf-item.active { background: var(--accent-soft); color: var(--text-1); font-weight: 500; }
+.shelf-item.fresh { background: var(--accent-soft); }
+.shelf-item .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shelf-item .pct { font-size: 11px; color: var(--text-4); font-variant-numeric: tabular-nums; }
+.shelf-item .del {
+  flex: none; width: 18px; height: 18px; border: none; border-radius: 5px;
+  background: transparent; color: var(--text-4); cursor: pointer; font-size: 11px; line-height: 1;
+  opacity: 0;
+}
+.shelf-item:hover .del { opacity: 1; }
+.shelf-item .del:hover { background: var(--err-soft); color: var(--err); }
+.shelf-foot { flex: none; border-top: 1px solid var(--border); padding: 10px 12px 4px 14px; }
+.shelf-nav {
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 8px; border-radius: 8px;
+  font-size: 12.5px; color: var(--text-2); cursor: pointer;
+}
+.shelf-nav:hover { background: var(--accent-softer); color: var(--text-1); }
+.shelf-nav .badge {
+  min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 10.5px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.today-card {
+  margin-top: 8px; padding: 9px 10px;
+  border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border);
+  font-size: 11.5px; color: var(--text-3);
+}
+.today-card b { color: var(--text-1); font-variant-numeric: tabular-nums; }
+
+/* ---------- 主区 ---------- */
+.main { flex: 1; min-width: 0; display: flex; justify-content: center; overflow-y: auto; }
+.col { width: 640px; padding: 44px 24px 80px; }
+
+/* 冷启动邀请态 */
+.cold { max-width: 560px; margin: 0 auto; padding-top: 26px; }
+.cold-state { font-size: 12px; color: var(--text-4); }
+.cold-title {
+  margin: 10px 0 8px;
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 30px; font-weight: 600; line-height: 1.3; color: var(--text-1);
+}
+.cold-sub { margin: 0 0 30px; font-size: 13.5px; color: var(--text-3); max-width: 46em; }
+.cold-actions { display: flex; flex-direction: column; gap: 10px; }
+.src-row {
+  display: flex; align-items: center; gap: 14px; text-align: left;
+  padding: 14px 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  cursor: pointer; box-shadow: var(--shadow-card);
+  transition: border-color .15s ease;
+}
+.src-row:hover { border-color: var(--accent); }
+.src-row .ic {
+  flex: none; width: 34px; height: 34px; border-radius: 9px;
+  background: var(--accent-soft); color: var(--accent);
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+}
+.src-row .t { font-size: 13.5px; font-weight: 600; color: var(--text-1); }
+.src-row .d { font-size: 12px; color: var(--text-3); margin-top: 1px; }
+.src-row .go { margin-left: auto; color: var(--text-4); font-size: 15px; flex: none; }
+.src-row.rec .ic { background: var(--accent); color: var(--on-accent); }
+.cold-hint { margin: 26px 0 0; font-size: 12px; color: var(--text-4); line-height: 2; }
+
+/* 已入库 · 文章头预览 */
+.cover { padding-top: 30px; }
+.cover-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text-3); }
+.cover-title {
+  margin: 14px 0 4px;
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 30px; font-weight: 600; line-height: 1.3; color: var(--text-1);
+}
+.cover-sub { margin: 0 0 18px; font-size: 15px; color: var(--text-2); }
+.cover-quote {
+  margin: 0 0 22px; padding: 14px 18px;
+  border-left: 3px solid var(--accent-hl); border-radius: 0 10px 10px 0;
+  background: var(--accent-softer);
+  font-family: "Source Serif 4", Georgia, serif; font-style: italic;
+  font-size: 16.5px; line-height: 1.75; color: var(--text-2);
+}
+.cover-note { margin-top: 14px; font-size: 12px; color: var(--text-4); }
+
+/* 通用按钮 */
+.btn {
+  height: 34px; padding: 0 16px; border-radius: 8px;
+  border: 1px solid var(--border-strong); background: var(--surface);
+  font-size: 12.5px; color: var(--text-2); cursor: pointer;
+}
+.btn:hover { color: var(--text-1); border-color: var(--text-4); }
+.btn.primary {
+  border: none; background: var(--accent); color: var(--on-accent); font-weight: 600;
+}
+.btn.primary:hover { background: var(--accent-hover); }
+.btn.primary:disabled { background: var(--border); color: var(--text-4); cursor: default; }
+.btn.sm { height: 28px; padding: 0 12px; font-size: 12px; }
+
+/* ---------- 导入弹窗 ---------- */
+.overlay {
+  position: fixed; inset: 0; z-index: 40;
+  background: rgba(16, 20, 32, 0.32);
+  display: flex; align-items: center; justify-content: center;
+}
+.dlg {
+  background: var(--surface); border-radius: 16px; box-shadow: var(--shadow-pop);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.import-dlg { width: 880px; max-width: 94vw; height: 660px; max-height: 92vh; }
+.dlg-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: 20px 22px 0;
+}
+.dlg-head h3 { margin: 0; font-size: 17px; font-weight: 600; }
+.dlg-head p { margin: 4px 0 0; font-size: 12.5px; color: var(--text-3); }
+.tabs {
+  display: flex; gap: 4px; margin: 16px 22px 0;
+  padding: 3px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface-2);
+}
+.tab {
+  flex: 1; height: 32px; border: none; border-radius: 8px;
+  background: transparent; font-size: 12.5px; color: var(--text-3); cursor: pointer;
+}
+.tab:hover { color: var(--text-1); }
+.tab.on {
+  background: var(--surface); color: var(--text-1); font-weight: 600;
+  box-shadow: var(--shadow-card);
+}
+.dlg-body { flex: 1; overflow-y: auto; padding: 20px 22px 22px; }
+.tab-pane.hidden, .hidden { display: none !important; }
+
+/* 文库 */
+.lib-hero {
+  display: flex; gap: 20px; align-items: stretch;
+  padding: 20px 22px;
+  border: 1px solid var(--border); border-radius: 14px;
+  background:
+    linear-gradient(0deg, var(--accent-softer), var(--accent-softer));
+}
+.lib-hero .mark {
+  flex: none; width: 64px; height: 88px; border-radius: 6px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-card);
+  display: flex; align-items: center; justify-content: center;
+  font-family: "Source Serif 4", Georgia, serif; font-size: 26px; color: var(--accent);
+  position: relative;
+}
+.lib-hero .mark::after {
+  content: ""; position: absolute; left: 7px; top: 7px; bottom: 7px; width: 1px;
+  background: var(--accent-hl);
+}
+.lib-hero .hbody { flex: 1; min-width: 0; }
+.lib-hero .chip-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lib-hero h4 {
+  margin: 8px 0 2px;
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 22px; font-weight: 600; line-height: 1.3; color: var(--text-1);
+}
+.lib-hero .cn { font-size: 13px; color: var(--text-2); }
+.lib-hero .quote {
+  margin: 12px 0 0;
+  font-family: "Source Serif 4", Georgia, serif; font-style: italic;
+  font-size: 14.5px; line-height: 1.75; color: var(--text-2);
+}
+.lib-hero .meta { margin-top: 10px; font-size: 12px; color: var(--text-3); }
+.lib-hero .cov {
+  display: inline-block; margin-right: 8px; padding: 1px 8px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); font-weight: 600; font-size: 11.5px;
+}
+.lib-hero .cov em { font-style: normal; color: var(--warn); }
+.lib-hero .foot { margin-top: 14px; display: flex; align-items: center; gap: 10px; }
+.lib-hero .why { font-size: 11.5px; color: var(--text-4); }
+
+.goal-row { display: flex; align-items: center; gap: 6px; margin: 20px 0 8px; flex-wrap: wrap; }
+.goal-label { font-size: 12px; color: var(--text-3); margin-right: 4px; }
+.goal-chip {
+  height: 26px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface);
+  font-size: 12px; color: var(--text-2); cursor: pointer;
+}
+.goal-chip:hover { border-color: var(--accent); color: var(--accent); }
+.goal-chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+.book-list { display: flex; flex-direction: column; }
+.book-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 6px; border-bottom: 1px solid var(--border);
+}
+.book-row:last-child { border-bottom: none; }
+.lvl {
+  flex: none; width: 34px; height: 22px; border-radius: 6px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  font-family: "Inter", "Segoe UI", sans-serif; font-size: 11px; font-weight: 600; color: var(--text-2);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.book-row .bm { flex: 1; min-width: 0; }
+.book-row .bt {
+  display: block;
+  font-family: "Source Serif 4", Georgia, serif; font-size: 14.5px; color: var(--text-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.book-row .bcn { display: block; font-size: 11.5px; color: var(--text-3); margin-top: 1px; }
+.book-row .bmeta { flex: none; width: 110px; font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.book-row .bcov { flex: none; width: 150px; font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.book-row .bcov em { font-style: normal; color: var(--warn); }
+.book-row .bcov.none { color: var(--text-4); }
+.lib-foot { margin-top: 14px; font-size: 11.5px; color: var(--text-4); }
+
+/* 链接导入 */
+.url-row { display: flex; gap: 10px; }
+.url-row input {
+  flex: 1; height: 38px; padding: 0 14px;
+  border: 1px solid var(--border-strong); border-radius: 9px;
+  background: var(--surface); color: var(--text-1); font-size: 13px;
+}
+.url-row input::placeholder { color: var(--text-4); }
+.url-row input:focus { border-color: var(--accent); outline: none; }
+.url-hint { margin-top: 8px; font-size: 12px; color: var(--text-3); }
+.url-samples { margin-top: 6px; font-size: 12px; color: var(--text-4); }
+.url-samples a { color: var(--accent); cursor: pointer; text-decoration: none; }
+.url-samples a:hover { text-decoration: underline; }
+
+.url-loading { margin-top: 22px; }
+.skel-line { height: 13px; border-radius: 6px; background: var(--surface-2); position: relative; overflow: hidden; margin-bottom: 12px; }
+.skel-line::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, var(--accent-hl), transparent);
+  animation: shimmer 1.2s infinite;
+}
+.skel-line.w60 { width: 60%; }
+.skel-line.w85 { width: 85%; }
+.skel-line.w40 { width: 40%; }
+@keyframes shimmer { from { transform: translateX(-100%);} to { transform: translateX(100%);} }
+.url-loading .phase { margin-top: 4px; font-size: 12px; color: var(--text-3); }
+
+.preview {
+  margin-top: 22px; padding: 18px 20px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2);
+}
+.pv-src { font-size: 11.5px; color: var(--text-4); display: flex; align-items: center; gap: 6px; }
+.pv-src::before { content: ""; width: 14px; height: 14px; border-radius: 4px; background: var(--accent-hl); }
+.pv-title {
+  margin: 8px 0 2px;
+  font-family: "Source Serif 4", Georgia, serif; font-size: 20px; font-weight: 600; color: var(--text-1);
+}
+.pv-meta { font-size: 12px; color: var(--text-3); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pv-cov { margin-top: 10px; font-size: 12px; color: var(--text-2); }
+.pv-cov b { color: var(--accent); }
+.pv-cov em { font-style: normal; color: var(--warn); }
+.pv-snippet {
+  margin: 12px 0 0;
+  font-family: "Source Serif 4", Georgia, serif; font-size: 13.5px; line-height: 1.8; color: var(--text-2);
+}
+.pv-foot { margin-top: 16px; display: flex; gap: 10px; }
+
+.fetch-fail {
+  margin-top: 22px; padding: 16px 18px;
+  border: 1px solid var(--border); border-left: 3px solid var(--warn);
+  border-radius: 10px; background: var(--warn-soft);
+}
+.fetch-fail .ft { font-size: 13px; font-weight: 600; color: var(--text-1); }
+.fetch-fail .fd { margin: 5px 0 12px; font-size: 12.5px; color: var(--text-2); }
+
+/* 粘贴文本（现状保留） */
+.paste-label { display: block; font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
+.paste-title {
+  width: 100%; height: 34px; padding: 0 12px; margin-bottom: 12px;
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  background: var(--surface); color: var(--text-1); font-size: 13px;
+}
+.paste-title::placeholder { color: var(--text-4); }
+.paste-area {
+  width: 100%; height: 240px; padding: 12px 14px; resize: none;
+  border: 1px solid var(--border-strong); border-radius: 10px;
+  background: var(--surface); color: var(--text-1); font-size: 13px; line-height: 1.7;
+}
+.paste-area::placeholder { color: var(--text-4); }
+.paste-meta { display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px; color: var(--text-3); }
+
+.dlg-foot {
+  flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  padding: 14px 22px; border-top: 1px solid var(--border); background: var(--surface);
+}
+.dlg-foot .tip { margin-right: auto; font-size: 12px; color: var(--text-4); }
+
+/* 应用内轻提示 */
+.lite-toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+  z-index: 60; padding: 9px 18px;
+  background: var(--text-1); color: var(--bg);
+  border-radius: 999px; font-size: 12.5px; box-shadow: var(--shadow-pop);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="layout" id="layout">
+  <!-- 原型说明条 -->
+  <div class="proto-banner" id="banner">
+    <span class="tag">原型 · 内容进水口</span>
+    <span><b>补漏水口 ①</b> —— 书架只有「手动粘贴」一条路。这里演示：<b>链接抓取导入</b>、<b>内置分级文库（今日一篇 + 考试词表挂钩）</b>、冷启动空状态引导。覆盖数随「考试目标」联动；失败态可点「付费墙示例」演示。</span>
+    <button class="tb-btn" id="resetBtn" title="清空书架回到冷启动">重置演示</button>
+    <button class="tb-btn close" id="bannerClose" title="收起说明条">收起</button>
+  </div>
+
+  <!-- 顶栏 -->
+  <div class="topbar">
+    <div class="logo">读</div>
+    <span class="name">沉浸阅读室</span>
+    <span class="crumb" id="crumb">书架</span>
+    <span class="spacer"></span>
+    <button class="tb-btn" id="themeBtn" title="主题（浅色 / 深色 / 护眼 / 纯黑）">浅色</button>
+  </div>
+
+  <div class="body">
+    <!-- 左栏 · 书架 -->
+    <aside class="shelf">
+      <div class="shelf-head">
+        书架
+        <button class="tb-btn" id="addBtn" title="添加阅读内容">＋</button>
+      </div>
+      <div class="shelf-list" id="shelfList"></div>
+      <div class="shelf-foot">
+        <div class="shelf-nav" id="reviewNav">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          生词本复习
+          <span class="badge" id="dueBadge">6</span>
+        </div>
+        <div class="today-card">今日复习 <b>0</b>/6 · 连续打卡 <b>14</b> 天</div>
+      </div>
+    </aside>
+
+    <!-- 主区 -->
+    <div class="main">
+      <div class="col" id="mainCol"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 导入弹窗 -->
+<div class="overlay hidden" id="importOverlay">
+  <div class="dlg import-dlg" role="dialog" aria-modal="true" aria-label="添加阅读内容">
+    <div class="dlg-head">
+      <div>
+        <h3>添加阅读内容</h3>
+        <p>从文库挑一篇、抓一篇网页文章，或粘贴自己的文本 —— 入库后逐句精读，生词自动进生词本</p>
+      </div>
+      <button class="tb-btn" id="dlgClose" title="关闭 (Esc)">✕</button>
+    </div>
+    <div class="tabs" id="tabs">
+      <button class="tab on" data-tab="lib">内置文库</button>
+      <button class="tab" data-tab="url">网页链接</button>
+      <button class="tab" data-tab="paste">粘贴文本</button>
+    </div>
+
+    <div class="dlg-body">
+      <!-- Tab 1 · 内置文库 -->
+      <section class="tab-pane" id="tab-lib">
+        <div class="lib-hero">
+          <div class="mark">G</div>
+          <div class="hbody">
+            <div class="chip-row"><span class="lvl">B1</span><span style="font-size:11.5px;color:var(--text-3)">今日一篇 · 每天换一篇，按你的生词本挑</span></div>
+            <h4>The Gift of the Magi</h4>
+            <div class="cn">麦琪的礼物 · 欧·亨利 · 摘读</div>
+            <p class="quote serif-en">One dollar and eighty-seven cents. That was all. And sixty cents of it was in pennies.</p>
+            <div class="meta" id="heroMeta"></div>
+            <div class="foot">
+              <button class="btn primary" id="heroAdd">开始阅读</button>
+              <span class="why" id="heroWhy"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="goal-row" id="goalRow">
+          <span class="goal-label">按考试目标看覆盖：</span>
+          <button class="goal-chip on" data-goal="kaoyan">考研</button>
+          <button class="goal-chip" data-goal="cet4">四级</button>
+          <button class="goal-chip" data-goal="cet6">六级</button>
+          <button class="goal-chip" data-goal="ielts">雅思</button>
+          <button class="goal-chip" data-goal="gaokao">高考</button>
+        </div>
+        <div class="book-list" id="bookList"></div>
+        <div class="lib-foot">文库每周更新 · 全部取自公版书与公开文章，按难度分级并预标注词表覆盖 · 覆盖数 = 篇内出现的大纲词个数，<em style="font-style:normal;color:var(--warn)">橙色</em>为你生词本里还没掌握的</div>
+      </section>
+
+      <!-- Tab 2 · 网页链接 -->
+      <section class="tab-pane hidden" id="tab-url">
+        <div class="url-row">
+          <input id="urlInput" type="text" spellcheck="false"
+                 placeholder="粘贴文章链接，如 https://en.wikipedia.org/wiki/Reading">
+          <button class="btn primary" id="fetchBtn" disabled>抓取正文</button>
+        </div>
+        <div class="url-hint">支持新闻、博客、维基百科等公开网页；需要登录或付费墙的抓不到，会告诉你原因。</div>
+        <div class="url-samples">试试：
+          <a data-url="https://en.wikipedia.org/wiki/Reading">维基百科 · Reading</a>
+          &nbsp;·&nbsp;
+          <a data-url="https://example.com/news/premium-story">付费墙示例（失败态）</a>
+        </div>
+        <div id="urlState"></div>
+      </section>
+
+      <!-- Tab 3 · 粘贴文本（现状保留） -->
+      <section class="tab-pane hidden" id="tab-paste">
+        <label class="paste-label" for="pasteTitle">标题（可选）</label>
+        <input class="paste-title" id="pasteTitle" type="text" placeholder="留空则自动识别首行作为标题">
+        <textarea class="paste-area" id="pasteArea" spellcheck="false"
+          placeholder="粘贴英文文章…
+
+空行分段；第一行若像标题会自动识别。
+
+例：
+The Speed of Reading
+
+Reading speed was the goal, and comprehension was the test."></textarea>
+        <div class="paste-meta">
+          <span id="pasteStats">0 词 · 0 段</span>
+          <span><span class="kbd">Ctrl</span>+<span class="kbd">Enter</span> 直接开始</span>
+        </div>
+      </section>
+    </div>
+
+    <div class="dlg-foot">
+      <span class="tip" id="footTip">Esc 关闭</span>
+      <button class="btn" id="pasteOpenBtn">打开 .txt 文件…</button>
+      <button class="btn primary hidden" id="pasteSubmit">开始阅读</button>
+    </div>
+  </div>
+</div>
+
+<div class="lite-toast hidden" id="liteToast"></div>
+
+<script>
+/* ============================================================
+   演示状态与数据（原型内写死；正式实现走 readerStore + 抓取命令）
+   ============================================================ */
+const THEMES = [
+  { id: "light", label: "浅色" },
+  { id: "dark",  label: "深色" },
+  { id: "sepia", label: "护眼" },
+  { id: "oled",  label: "纯黑" },
+];
+let themeIdx = 0;
+const themeBtn = document.getElementById("themeBtn");
+themeBtn.onclick = () => {
+  themeIdx = (themeIdx + 1) % THEMES.length;
+  document.documentElement.dataset.theme = THEMES[themeIdx].id;
+  themeBtn.textContent = THEMES[themeIdx].label;
+};
+
+/* --- 内置文库（公版书 + 词表覆盖，覆盖数为演示数据） --- */
+const GOALS = {
+  kaoyan: { label: "考研" },
+  cet4:   { label: "四级" },
+  cet6:   { label: "六级" },
+  ielts:  { label: "雅思" },
+  gaokao: { label: "高考" },
+};
+const BOOKS = [
+  { id: "gift",     en: "The Gift of the Magi", cn: "麦琪的礼物 · 欧·亨利", lvl: "B1", words: "2,160 词", min: "约 16 分钟",
+    cov: { kaoyan: [41, 3], cet4: [33, 2], cet6: [38, 3], ielts: [45, 5], gaokao: [28, 1] },
+    quote: "One dollar and eighty-seven cents. That was all. And sixty cents of it was in pennies." },
+  { id: "happy",    en: "The Happy Prince", cn: "快乐王子 · 奥斯卡·王尔德", lvl: "B1", words: "2,300 词", min: "约 17 分钟",
+    cov: { kaoyan: [52, 5], cet4: [40, 3], cet6: [47, 4], ielts: [56, 6], gaokao: [35, 2] } },
+  { id: "aesop",    en: "Aesop's Fables (Selected)", cn: "伊索寓言 · 选辑", lvl: "A2", words: "1,900 词", min: "约 14 分钟",
+    cov: { kaoyan: [18, 1], cet4: [22, 1], cet6: [20, 1], ielts: [24, 2], gaokao: [25, 1] } },
+  { id: "alice",    en: "Alice's Adventures in Wonderland", cn: "爱丽丝漫游奇境 · 刘易斯·卡罗尔", lvl: "B1", words: "13,500 词", min: "约 100 分钟",
+    cov: { kaoyan: [210, 12], cet4: [160, 8], cet6: [190, 10], ielts: [240, 15], gaokao: [130, 6] } },
+  { id: "callwild", en: "The Call of the Wild", cn: "野性的呼唤 · 杰克·伦敦", lvl: "B2", words: "32,000 词", min: "约 4 小时",
+    cov: { kaoyan: [460, 24], cet4: [330, 15], cet6: [410, 20], ielts: [520, 30], gaokao: [250, 10] } },
+  { id: "holmes",   en: "The Adventures of Sherlock Holmes", cn: "福尔摩斯冒险史 · 柯南·道尔", lvl: "B2", words: "33,500 词", min: "约 4 小时",
+    cov: { kaoyan: [470, 22], cet4: [340, 14], cet6: [420, 19], ielts: [540, 28], gaokao: [260, 11] } },
+  { id: "gatsby",   en: "The Great Gatsby", cn: "了不起的盖茨比 · 菲茨杰拉德", lvl: "C1", words: "47,000 词", min: "约 6 小时",
+    cov: { kaoyan: [610, 35], cet4: [420, 20], cet6: [540, 28], ielts: [680, 40], gaokao: [300, 13] } },
+];
+const WIKI_COV = { kaoyan: [63, 4], cet4: [48, 3], cet6: [55, 3], ielts: [70, 6], gaokao: [40, 2] };
+
+let goal = "kaoyan";
+let shelf = [];          // 已入库文章 {id, title, sub, meta, fresh}
+let heroAdded = false;
+
+/* --- 元素 --- */
+const $ = (id) => document.getElementById(id);
+const mainCol = $("mainCol"), shelfList = $("shelfList"), crumb = $("crumb");
+
+/* --- 轻提示 --- */
+let toastTimer = null;
+function liteToast(msg) {
+  const el = $("liteToast");
+  el.textContent = msg;
+  el.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add("hidden"), 2400);
+}
+
+/* --- 主区渲染：冷启动邀请 / 文章头 --- */
+function renderMain() {
+  if (shelf.length === 0) {
+    crumb.textContent = "书架";
+    mainCol.innerHTML = `
+      <div class="cold">
+        <div class="cold-state">书架还是空的</div>
+        <h2 class="cold-title">从一篇短文开始</h2>
+        <p class="cold-sub">挑一篇感兴趣的英文读进来——逐句精读，查过的词自动进生词本，隔天到期复习。不用先找材料，文库里有按难度分好的。</p>
+        <div class="cold-actions">
+          <button class="src-row rec" data-open="lib">
+            <span class="ic">✦</span>
+            <span><span class="t">从内置文库挑一篇（推荐）</span><br><span class="d">公版书分级文库，标注考试词表覆盖，今天已换新</span></span>
+            <span class="go">›</span>
+          </button>
+          <button class="src-row" data-open="url">
+            <span class="ic">⌘</span>
+            <span><span class="t">抓取一篇网页文章</span><br><span class="d">粘贴链接，正文自动取回、去广告、按段切句</span></span>
+            <span class="go">›</span>
+          </button>
+          <button class="src-row" data-open="paste">
+            <span class="ic">¶</span>
+            <span><span class="t">粘贴一段文本</span><br><span class="d">任何地方复制的英文，直接粘进来（现状保留）</span></span>
+            <span class="go">›</span>
+          </button>
+        </div>
+        <p class="cold-hint">也可以在任意软件里选中英文，点浮窗上的「发送到阅读室」，或按 <span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">R</span>。</p>
+      </div>`;
+    mainCol.querySelectorAll(".src-row").forEach(b =>
+      b.onclick = () => openImport(b.dataset.open));
+    return;
+  }
+  const a = shelf[shelf.length - 1];
+  crumb.textContent = a.title;
+  mainCol.innerHTML = `
+    <div class="cover">
+      <div class="cover-meta">
+        <span class="lvl">${a.lvl}</span><span>${a.meta}</span>
+        <span class="cov-mini" style="padding:1px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-weight:600;font-size:11.5px" id="coverCov"></span>
+      </div>
+      <h1 class="cover-title">${a.title}</h1>
+      <p class="cover-sub">${a.sub}</p>
+      ${a.quote ? `<div class="cover-quote">${a.quote}</div>` : ""}
+      <button class="btn primary" id="startRead">开始阅读</button>
+      <p class="cover-note">原型到这里为止——阅读视图、词典栏与遮罩自测见 prototypes/reading-room-v2.html。</p>
+    </div>`;
+  const covEl = $("coverCov");
+  if (a.cov) {
+    const [n, miss] = a.cov[goal];
+    covEl.textContent = `覆盖${GOALS[goal].label}大纲词 ${n}${miss ? ` · ${miss} 个未掌握` : ""}`;
+  } else { covEl.style.display = "none"; }
+  $("startRead").onclick = () => liteToast("原型演示到此为止：进入 reading-room-v2 的阅读视图");
+}
+
+/* --- 书架渲染 --- */
+function renderShelf() {
+  shelfList.innerHTML = "";
+  if (shelf.length === 0) {
+    shelfList.innerHTML = `<div class="shelf-empty">还没有文章。<br>点右上角「＋」，或从主界面选一种方式开始。</div>`;
+    return;
+  }
+  shelf.forEach((a) => {
+    const el = document.createElement("div");
+    el.className = "shelf-item" + (a.fresh ? " fresh" : "");
+    el.innerHTML = `<span class="t">${a.title}</span><span class="pct">0%</span><button class="del" title="删除文章">✕</button>`;
+    el.querySelector(".del").onclick = (e) => {
+      e.stopPropagation();
+      shelf = shelf.filter((x) => x.id !== a.id);
+      a.fresh = false;
+      renderShelf(); renderMain();
+    };
+    shelfList.appendChild(el);
+    if (a.fresh) setTimeout(() => { a.fresh = false; el.classList.remove("fresh"); }, 1800);
+  });
+}
+
+/* --- 导入弹窗 --- */
+const overlay = $("importOverlay");
+let curTab = "lib";
+function openImport(tab) {
+  curTab = tab || "lib";
+  overlay.classList.remove("hidden");
+  switchTab(curTab);
+}
+function closeImport() { overlay.classList.add("hidden"); }
+$("addBtn").onclick = () => openImport("lib");
+$("dlgClose").onclick = closeImport;
+overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) closeImport(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !overlay.classList.contains("hidden")) closeImport(); });
+
+function switchTab(tab) {
+  curTab = tab;
+  document.querySelectorAll("#tabs .tab").forEach(t => t.classList.toggle("on", t.dataset.tab === tab));
+  ["lib", "url", "paste"].forEach(k => $("tab-" + k).classList.toggle("hidden", k !== tab));
+  $("pasteSubmit").classList.toggle("hidden", tab !== "paste");
+  $("pasteOpenBtn").style.visibility = tab === "paste" ? "visible" : "hidden";
+  $("footTip").textContent = tab === "paste" ? "Ctrl+Enter 直接开始 · Esc 关闭" : "Esc 关闭";
+}
+document.querySelectorAll("#tabs .tab").forEach(t => t.onclick = () => switchTab(t.dataset.tab));
+
+/* --- 文库 tab --- */
+function covHtml(cov) {
+  if (!cov) return `<span class="bcov none">—</span>`;
+  const [n, miss] = cov[goal];
+  return `<span class="bcov">${GOALS[goal].label}大纲词 ${n} · <em>${miss} 未掌握</em></span>`;
+}
+function renderLib() {
+  /* hero */
+  const h = BOOKS[0];
+  const [n, miss] = h.cov[goal];
+  $("heroMeta").innerHTML = `<span class="cov">${GOALS[goal].label}大纲词 ${n}<em> · ${miss} 个未掌握</em></span> ${h.words} · ${h.min}`;
+  $("heroWhy").textContent = miss ? `因为其中 ${miss} 个词在你的生词本里` : "与你的生词本几乎没有重合，适合轻松读";
+  $("heroAdd").textContent = heroAdded ? "已在书架" : "开始阅读";
+  $("heroAdd").disabled = heroAdded;
+  /* 书单 */
+  $("bookList").innerHTML = "";
+  BOOKS.slice(1).forEach(b => {
+    const row = document.createElement("div");
+    row.className = "book-row";
+    const owned = shelf.some(a => a.id === b.id);
+    row.innerHTML = `
+      <span class="lvl">${b.lvl}</span>
+      <div class="bm"><span class="bt">${b.en}</span><span class="bcn">${b.cn}</span></div>
+      <span class="bmeta">${b.words}<br>${b.min}</span>
+      ${covHtml(b.cov)}
+      <button class="btn sm" ${owned ? "disabled" : ""} style="${owned ? "" : "min-width:76px"}">${owned ? "已在书架" : "加入书架"}</button>`;
+    if (!owned) row.querySelector("button").onclick = () => addToShelf(b);
+    $("bookList").appendChild(row);
+  });
+}
+$("goalRow").querySelectorAll(".goal-chip").forEach(c => c.onclick = () => {
+  goal = c.dataset.goal;
+  $("goalRow").querySelectorAll(".goal-chip").forEach(x => x.classList.toggle("on", x === c));
+  renderLib();
+  if (shelf.length) renderMain();
+});
+$("heroAdd").onclick = () => { heroAdded = true; addToShelf(BOOKS[0]); };
+
+function addToShelf(b) {
+  shelf.push({
+    id: b.id, title: b.en, sub: b.cn, lvl: b.lvl,
+    meta: `${b.words} · ${b.min} · 公版文库`,
+    quote: b.quote || "", cov: b.cov, fresh: true,
+  });
+  renderShelf(); renderMain(); renderLib();
+  closeImport();
+  liteToast(`《${b.en}》已加入书架`);
+}
+
+/* --- 链接 tab --- */
+const urlInput = $("urlInput"), fetchBtn = $("fetchBtn"), urlState = $("urlState");
+let fetching = false;
+urlInput.addEventListener("input", () => {
+  fetchBtn.disabled = !/^https?:\/\/.+\..+/.test(urlInput.value.trim()) || fetching;
+});
+document.querySelectorAll(".url-samples a").forEach(a => a.onclick = (e) => {
+  e.preventDefault();
+  urlInput.value = a.dataset.url;
+  urlInput.dispatchEvent(new Event("input"));
+  doFetch();
+});
+fetchBtn.onclick = doFetch;
+
+function doFetch() {
+  const url = urlInput.value.trim();
+  if (!url || fetching) return;
+  fetching = true; fetchBtn.disabled = true;
+  const isFail = url.includes("premium-story");
+  urlState.innerHTML = `
+    <div class="url-loading">
+      <div class="skel-line w40"></div>
+      <div class="skel-line w85"></div>
+      <div class="skel-line w85"></div>
+      <div class="skel-line w60"></div>
+      <div class="phase" id="phase">正在抓取正文…</div>
+    </div>`;
+  const phases = ["正在抓取正文…", "提取正文、去掉导航与广告…", "按段切句、估算难度…"];
+  let pi = 0;
+  const tick = setInterval(() => { pi++; if (pi < phases.length) $("phase").textContent = phases[pi]; }, 600);
+  setTimeout(() => {
+    clearInterval(tick);
+    fetching = false; fetchBtn.disabled = false;
+    if (isFail) {
+      urlState.innerHTML = `
+        <div class="fetch-fail">
+          <div class="ft">没能读取这个链接</div>
+          <div class="fd">检测到付费墙 / 需要登录（也可能是反爬限制）。可以在网页里全选复制正文，切到「粘贴文本」导入——内容是一样的。</div>
+          <button class="btn" id="gotoPaste">切到粘贴文本</button>
+        </div>`;
+      $("gotoPaste").onclick = () => switchTab("paste");
+      return;
+    }
+    const [n, miss] = WIKI_COV[goal];
+    urlState.innerHTML = `
+      <div class="preview">
+        <div class="pv-src">en.wikipedia.org · 预览已按正文清洗</div>
+        <div class="pv-title">Reading</div>
+        <div class="pv-meta"><span class="lvl">B2</span><span>1,180 词 · 12 段 · 约 9 分钟</span></div>
+        <div class="pv-cov">覆盖${GOALS[goal].label}大纲词 <b>${n}</b> · <em>${miss} 个你还没掌握</em></div>
+        <p class="pv-snippet">Reading is the process of taking in the sense or meaning of letters, symbols, or sentence structure, especially by the eye…</p>
+        <div class="pv-foot">
+          <button class="btn primary" id="pvAdd">加入书架并开始阅读</button>
+        </div>
+      </div>`;
+    $("pvAdd").onclick = () => {
+      addToShelf({
+        id: "url-reading", en: "Reading", cn: "来自 en.wikipedia.org",
+        lvl: "B2", words: "1,180 词", min: "约 9 分钟",
+        cov: WIKI_COV, quote: "",
+      });
+      urlState.innerHTML = ""; urlInput.value = "";
+    };
+  }, isFail ? 1400 : 1800);
+}
+
+/* --- 粘贴 tab（现状逻辑照搬） --- */
+const pasteArea = $("pasteArea"), pasteStats = $("pasteStats");
+function countWords(t) { return (t.trim().match(/[A-Za-z'’-]+/g) || []).length; }
+pasteArea.addEventListener("input", () => {
+  const t = pasteArea.value.trim();
+  pasteStats.textContent = t ? `${countWords(t).toLocaleString()} 词 · ${t ? t.split(/\n\s*\n/).length : 0} 段` : "0 词 · 0 段";
+});
+function submitPaste() {
+  const t = pasteArea.value.trim();
+  if (!t) { liteToast("先粘贴一点英文内容"); return; }
+  const first = t.split("\n")[0].trim();
+  const isTitle = first.length <= 80 && !/[.!?。！？]$/.test(first);
+  addToShelf({
+    id: "paste-" + Date.now(), en: isTitle ? first : "未命名文章",
+    cn: isTitle ? "粘贴导入" : "粘贴导入（已从正文取标题）",
+    lvl: "—", words: `${countWords(t).toLocaleString()} 词`, min: `约 ${Math.max(1, Math.round(countWords(t) / 135))} 分钟`,
+    cov: null, quote: "",
+  });
+  pasteArea.value = ""; pasteTitle.value = ""; pasteStats.textContent = "0 词 · 0 段";
+}
+$("pasteSubmit").onclick = submitPaste;
+$("pasteOpenBtn").onclick = () => liteToast("原型省略：同现状，选 .txt 后读入粘贴区");
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && curTab === "paste" && !overlay.classList.contains("hidden")) submitPaste();
+});
+
+/* --- 其他入口 --- */
+$("reviewNav").onclick = () => liteToast("复习流见 prototypes/reading-room-recall.html；复习触点（通知/托盘）见 review-touchpoints.html");
+
+/* --- 重置 / 说明条 --- */
+$("resetBtn").onclick = () => {
+  shelf = []; heroAdded = false; urlState.innerHTML = ""; urlInput.value = "";
+  renderShelf(); renderMain(); renderLib();
+  liteToast("已重置到冷启动");
+};
+$("bannerClose").onclick = () => {
+  $("banner").style.display = "none";
+  $("layout").classList.add("no-banner");
+};
+
+/* --- 初始渲染 --- */
+renderShelf(); renderMain(); renderLib();
+</script>
+</body>
+</html>
