@@ -6,7 +6,8 @@
  * 迷你窗只做 识别 + 完形 两形态（听写需要句子连播语境，留在阅读室复习流）。
  *
  * 卡片可自由前后切换（‹ › 按钮 / ← → 键 / 点圆点），不必评分也能跳过；
- * 每张卡的界面状态独立保存，切走再切回不丢；已评的卡回看时可改评——
+ * 每张卡的界面状态独立保存，切走再切回不丢；识别卡释义可盖回，反复自测；
+ * 已评的卡回看时可改评——
  * 档位按进窗时的原 SRS 重算（不叠加），打卡只在首次评分时记一次。
  */
 
@@ -163,9 +164,10 @@ export function QuickReviewApp() {
       if (gradedShown && ["1", "2", "3", "4"].includes(e.key)) {
         e.preventDefault();
         applyGrade(GRADES[Number(e.key) - 1]);
-      } else if (!typing && card.mode === "recognition" && e.key === " " && !ui.revealed) {
+      } else if (!typing && card.mode === "recognition" && e.key === " ") {
         e.preventDefault();
-        setUi((s) => ({ ...s, revealed: true }));
+        // Space 双向翻面：盖住释义可反复自测
+        setUi((s) => ({ ...s, revealed: !s.revealed }));
       }
     }
     window.addEventListener("keydown", onKey);
@@ -495,6 +497,18 @@ function RecognitionCard({
         <button className="qr-say" onClick={speak} title="发音">
           ♪ {speakError && <small>{speakError}</small>}
         </button>
+        <div className="qr-hint-row">
+          <a
+            onClick={() => setUi((s) => ({ ...s, revealed: !s.revealed }))}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") setUi((s) => ({ ...s, revealed: !s.revealed }));
+            }}
+          >
+            {ui.revealed ? "盖住释义" : "显示释义"}
+          </a>
+        </div>
         {ui.revealed && (
           <div className="qr-senses">
             {word.senses.slice(0, 3).map((s, i) => (
@@ -507,20 +521,6 @@ function RecognitionCard({
           </div>
         )}
       </div>
-      {!ui.revealed && (
-        <div className="qr-hint-row">
-          <a
-            onClick={() => setUi((s) => ({ ...s, revealed: true }))}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") setUi((s) => ({ ...s, revealed: true }));
-            }}
-          >
-            显示释义
-          </a>
-        </div>
-      )}
       {ui.revealed && word.trap && <div className="qr-trap soft">{word.trap}</div>}
       <div className="qr-src">{card.sourceLabel}</div>
     </div>
