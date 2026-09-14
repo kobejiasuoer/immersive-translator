@@ -161,7 +161,10 @@ fn load_config(app: &AppHandle) -> ReminderConfig {
 
 fn save_config(app: &AppHandle, cfg: &ReminderConfig) -> Result<(), String> {
     let path = config_path(app)?;
-    write_atomic(&path, &serde_json::to_string(cfg).map_err(|e| e.to_string())?)
+    write_atomic(
+        &path,
+        &serde_json::to_string(cfg).map_err(|e| e.to_string())?,
+    )
 }
 
 fn write_atomic(path: &std::path::Path, content: &str) -> Result<(), String> {

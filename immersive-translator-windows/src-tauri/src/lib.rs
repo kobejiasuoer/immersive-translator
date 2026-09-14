@@ -1080,7 +1080,9 @@ pub fn run() {
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
-                &[&quick, &ocr, &reader, &vocab, &sep, &history, &settings, &quit],
+                &[
+                    &ocr, &quick, &reader, &vocab, &sep, &history, &settings, &quit,
+                ],
             )?;
 
             let tray = TrayIconBuilder::with_id("main")

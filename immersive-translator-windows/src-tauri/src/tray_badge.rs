@@ -51,13 +51,24 @@ pub fn compose_badge(base_rgba: &[u8], width: u32, height: u32, due: u32) -> Vec
                     continue;
                 }
                 let idx = (y * w + x) * 4;
-                blend_pixel(&mut rgba, idx, BADGE_RGB[0], BADGE_RGB[1], BADGE_RGB[2], alpha);
+                blend_pixel(
+                    &mut rgba,
+                    idx,
+                    BADGE_RGB[0],
+                    BADGE_RGB[1],
+                    BADGE_RGB[2],
+                    alpha,
+                );
             }
         }
     }
 
     // 2) 白色数字（最多 3 位，>999 显示 999）
-    let text = if due > 999 { "999".to_string() } else { due.to_string() };
+    let text = if due > 999 {
+        "999".to_string()
+    } else {
+        due.to_string()
+    };
     let len = text.len();
     let scale = ((radius * 1.35) / 5.0).floor().max(1.0) as usize; // 数字高 ≈ 1.35r（5 行点阵）
     let digit_w = 3 * scale;
@@ -135,7 +146,9 @@ mod tests {
             .any(|px| px[0] == BADGE_RGB[0] && px[1] == BADGE_RGB[1] && px[2] == BADGE_RGB[2]);
         assert!(has_red, "badge circle should paint BADGE_RGB pixels");
         // 且应存在白色数字像素
-        let has_white = out.chunks_exact(4).any(|px| px[0] == 255 && px[1] == 255 && px[2] == 255);
+        let has_white = out
+            .chunks_exact(4)
+            .any(|px| px[0] == 255 && px[1] == 255 && px[2] == 255);
         assert!(has_white, "digits should paint white pixels");
     }
 

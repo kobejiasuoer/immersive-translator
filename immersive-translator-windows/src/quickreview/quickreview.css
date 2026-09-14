@@ -69,23 +69,83 @@ body {
   color: var(--text-1);
 }
 
+.qr-navrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px 0;
+}
+.qr-nav {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0 2px;
+  cursor: pointer;
+}
+.qr-nav:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.qr-nav:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
 .qr-dots {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
   gap: 5px;
   padding: 12px 20px 0;
 }
-.qr-dots i {
+.qr-navrow .qr-dots {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+}
+.qr-dots i,
+.qr-dots button {
+  position: relative;
   width: 6px;
   height: 6px;
+  border: none;
   border-radius: 999px;
+  padding: 0;
   background: var(--border-strong);
 }
-.qr-dots i.done {
+.qr-dots button {
+  cursor: pointer;
+}
+/* 6px 的视觉点太小，垫一层透明热区方便点中 */
+.qr-dots button::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+}
+.qr-dots i.done,
+.qr-dots button.done {
   background: var(--accent);
 }
-.qr-dots i.now {
+.qr-dots i.now,
+.qr-dots button.now {
   background: var(--accent);
   transform: scale(1.3);
+}
+.qr-graded-note {
+  margin: 8px 22px 0;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--text-3);
 }
 
 .qr-body {
@@ -392,7 +452,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .qr-dots i.now {
+  .qr-dots i.now,
+  .qr-dots button.now {
     transform: none;
   }
 }

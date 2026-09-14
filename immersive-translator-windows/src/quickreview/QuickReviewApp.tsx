@@ -4,6 +4,10 @@
  * 与复习流同源：到期判定 srs.dueAt、判分 recallJudge、评分 gradeSrs、
  * 打卡 readerRecordReview；每张卡评分即落盘，收起/关窗不丢进度。
  * 迷你窗只做 识别 + 完形 两形态（听写需要句子连播语境，留在阅读室复习流）。
+ *
+ * 卡片可自由前后切换（‹ › 按钮 / ← → 键 / 点圆点），不必评分也能跳过；
+ * 每张卡的界面状态独立保存，切走再切回不丢；已评的卡回看时可改评——
+ * 档位按进窗时的原 SRS 重算（不叠加），打卡只在首次评分时记一次。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
@@ -32,12 +36,17 @@ const GRADES: ReviewGrade[] = ["forgot", "hard", "good", "easy"];
 type Appearance = Pick<GlobalReaderSettingsShape, "theme" | "fontPair">;
 type GlobalReaderSettingsShape = ReturnType<typeof loadGlobalReaderSettings>;
 
+const DEFAULT_UI: UICardState = { hintLevel: 0, revealed: false, input: "", verdict: null };
+
 export function QuickReviewApp() {
   const [status, setStatus] = useState<"loading" | "ready" | "empty" | "done">("loading");
   const [cards, setCards] = useState<PreparedCard[]>([]);
   const [pos, setPos] = useState(0);
+  /** 每张卡各自的界面状态（输入/提示/翻面/判定），来回切卡互不影响。 */
+  const [uis, setUis] = useState<UICardState[]>([]);
+  /** 本次会话各卡已评的档；null = 还没评过。 */
+  const [grades, setGrades] = useState<(ReviewGrade | null)[]>([]);
   const [streak, setStreak] = useState<number | null>(null);
-  const [ui, setUi] = useState<UICardState>({ hintLevel: 0, revealed: false, input: "", verdict: null });
   const [appearance, setAppearance] = useState<Appearance>({ theme: "light", fontPair: "serif" });
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -72,6 +81,8 @@ export function QuickReviewApp() {
         const prepared = await prepareCards(due);
         if (!active) return;
         setCards(prepared);
+        setUis(prepared.map(() => ({ ...DEFAULT_UI })));
+        setGrades(prepared.map(() => null));
         setStatus("ready");
       } catch (error) {
         console.error("[quick-review] load failed", error);
@@ -90,30 +101,45 @@ export function QuickReviewApp() {
 
   const card = cards[pos];
   const total = cards.length;
+  const ui = uis[pos] ?? DEFAULT_UI;
+  const setUi: SetUi = useCallback(
+    (updater) => setUis((arr) => arr.map((s, i) => (i === pos ? updater(s ?? DEFAULT_UI) : s))),
+    [pos],
+  );
+
+  /** 前后切卡；越界即停在首/尾。 */
+  const go = useCallback(
+    (delta: number) => setPos((p) => Math.min(total - 1, Math.max(0, p + delta))),
+    [total],
+  );
 
   const applyGrade = useCallback(
     (g: ReviewGrade) => {
       if (!card) return;
+      const first = grades[pos] == null;
+      setGrades((arr) => arr.map((x, i) => (i === pos ? g : x)));
+      // 一律按进窗时的原 SRS 重算：改评不会把间隔叠加上一轮的结果
       const graded = { ...card.word, srs: gradeSrs(card.word.srs, g) };
       void readerSaveVocabWord(graded)
-        .then(() => readerRecordReview(dayKey(), Date.now()))
+        .then(() => (first ? readerRecordReview(dayKey(), Date.now()) : null))
         .then((stats) => {
-          setStreak(stats.streak);
+          if (stats) setStreak(stats.streak);
           trayRefreshBadge();
         })
         .catch((error) => console.error("[quick-review] save grade failed", error));
-      if (pos + 1 >= total) {
-        trayRefreshBadge();
-        setStatus("done");
-      } else {
-        setPos(pos + 1);
-        setUi({ hintLevel: 0, revealed: false, input: "", verdict: null });
+      // 首评才前进（尾卡评完即收工）；回看改评留在原地
+      if (first) {
+        if (pos + 1 >= total) {
+          setStatus("done");
+        } else {
+          setPos(pos + 1);
+        }
       }
     },
-    [card, pos, total],
+    [card, pos, total, grades],
   );
 
-  // 键盘：识别卡 Space 翻面；评分出现后 1–4 打分；Esc 收起
+  // 键盘：←/→ 切卡（输入框内不劫持）；识别卡 Space 翻面；1–4 打分；Esc 收起
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
@@ -121,18 +147,30 @@ export function QuickReviewApp() {
         return;
       }
       if (status !== "ready" || !card) return;
+      const target = e.target as HTMLElement | null;
+      const typing = target?.tagName === "INPUT" || target?.isContentEditable === true;
+      if (!typing && e.key === "ArrowLeft") {
+        e.preventDefault();
+        go(-1);
+        return;
+      }
+      if (!typing && e.key === "ArrowRight") {
+        e.preventDefault();
+        go(1);
+        return;
+      }
       const gradedShown = card.mode === "recognition" ? ui.revealed : ui.verdict !== null;
       if (gradedShown && ["1", "2", "3", "4"].includes(e.key)) {
         e.preventDefault();
         applyGrade(GRADES[Number(e.key) - 1]);
-      } else if (card.mode === "recognition" && e.key === " " && !ui.revealed) {
+      } else if (!typing && card.mode === "recognition" && e.key === " " && !ui.revealed) {
         e.preventDefault();
         setUi((s) => ({ ...s, revealed: true }));
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [status, card, ui, applyGrade]);
+  }, [status, card, ui, applyGrade, go, setUi]);
 
   if (status === "loading") {
     return (
@@ -164,12 +202,13 @@ export function QuickReviewApp() {
   }
 
   if (status === "done") {
+    const gradedCount = grades.filter((g) => g !== null).length;
     return (
       <div className="qr-root" data-theme={appearance.theme}>
-        <TitleBar label="快速复习" progress={`${total} / ${total}`} />
+        <TitleBar label="快速复习" progress={`${gradedCount} / ${total}`} />
         <div className="qr-dots" aria-hidden>
-          {Array.from({ length: total }, (_, i) => (
-            <i key={i} className="done" />
+          {cards.map((_, i) => (
+            <i key={i} className={grades[i] ? "done" : ""} />
           ))}
         </div>
         <div className="qr-center">
@@ -180,7 +219,11 @@ export function QuickReviewApp() {
               连续打卡 <b>{streak}</b> 天
             </p>
           )}
-          <p className="qr-sub">这 {total} 个词都往后推了一轮。明天到期时提醒会再来，也可以随时从托盘点开。</p>
+          <p className="qr-sub">
+            {gradedCount >= total
+              ? `这 ${total} 个词都往后推了一轮。明天到期时提醒会再来，也可以随时从托盘点开。`
+              : `本次评了 ${gradedCount} / ${total} 个，没评的仍在到期队列，下次提醒会再来。`}
+          </p>
           <div className="qr-done-btns">
             <button className="qr-btn" onClick={() => void openReaderAndHide()}>
               打开阅读室
@@ -195,15 +238,52 @@ export function QuickReviewApp() {
   }
 
   if (!card) return null;
+  const graded = grades[pos] ?? null;
   const gradedShown = card.mode === "recognition" ? ui.revealed : ui.verdict !== null;
 
   return (
     <div className="qr-root" data-theme={appearance.theme}>
       <TitleBar label="快速复习" progress={`${pos + 1} / ${total}`} />
-      <div className="qr-dots" aria-hidden>
-        {Array.from({ length: total }, (_, i) => (
-          <i key={i} className={i < pos ? "done" : i === pos ? "now" : ""} />
-        ))}
+      <div className="qr-navrow">
+        <button
+          className="qr-nav"
+          disabled={pos === 0}
+          onClick={(e) => {
+            // 点完即失焦：焦点留在按钮上时，Space 会误触按钮而不是翻面
+            e.currentTarget.blur();
+            go(-1);
+          }}
+          aria-label="上一张"
+          title="上一张（←）"
+        >
+          ‹
+        </button>
+        <div className="qr-dots">
+          {cards.map((_, i) => (
+            <button
+              key={i}
+              className={grades[i] ? "done" : i === pos ? "now" : ""}
+              onClick={(e) => {
+                e.currentTarget.blur();
+                setPos(i);
+              }}
+              aria-label={`第 ${i + 1} 张`}
+              title={`第 ${i + 1} 张`}
+            />
+          ))}
+        </div>
+        <button
+          className="qr-nav"
+          disabled={pos >= total - 1}
+          onClick={(e) => {
+            e.currentTarget.blur();
+            go(1);
+          }}
+          aria-label="下一张"
+          title="下一张（→）"
+        >
+          ›
+        </button>
       </div>
 
       <div className="qr-body">
@@ -213,6 +293,12 @@ export function QuickReviewApp() {
           <RecognitionCard card={card} ui={ui} setUi={setUi} />
         )}
       </div>
+
+      {graded && (
+        <div className="qr-graded-note">
+          已评分：{GRADE_LABELS[graded]} · {GRADE_INTERVALS[graded].label}后复习（可直接改评）
+        </div>
+      )}
 
       {gradedShown && (
         <div className="qr-grades">
@@ -237,7 +323,9 @@ export function QuickReviewApp() {
 
       <div className="qr-foot">
         {card.mode === "cloze" ? "Enter 提交" : "Space 翻面"} ·{" "}
-        <span className="qr-kbd">1</span>–<span className="qr-kbd">4</span> 评分 · Esc 收起，随时回到桌面
+        <span className="qr-kbd">1</span>–<span className="qr-kbd">4</span> 评分 ·{" "}
+        <span className="qr-kbd">←</span>
+        <span className="qr-kbd">→</span> 切卡 · Esc 收起，随时回到桌面
       </div>
     </div>
   );
