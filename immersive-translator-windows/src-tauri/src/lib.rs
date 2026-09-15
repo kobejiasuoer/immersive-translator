@@ -1068,6 +1068,12 @@ pub fn run() {
             review_reminder::open_quick_review,
         ])
         .setup(|app| {
+            // 首次启动把安装包里的 OCR 模型释放到 app_data_dir/models/，
+            // 用户无需联网下载（企业内网/代理环境下下载常常失败）。
+            if let Err(e) = ocr::ensure_models_from_bundle(app.handle()) {
+                eprintln!("[ocr] 释放内置模型失败（后续可从设置里重试）: {e}");
+            }
+
             // 托盘菜单（§8.1）：上组是「动作」（对你当前的内容做点什么），
             // 下组是「窗口/应用」（打开某个界面）。
             let quick = MenuItem::with_id(app, "quick", "快速复习", true, None::<&str>)?;

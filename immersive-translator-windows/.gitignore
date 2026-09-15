@@ -16,8 +16,7 @@ npm-debug.log*
 *.swp
 .DS_Store
 
-# OCR 模型（首次使用时下载到 app_data_dir，不进仓库）
-src-tauri/models/*.onnx
+# OCR 模型随安装包分发（tauri.conf.json bundle.resources），必须进仓库
 test_ocr.png
 
 # 更新签名密钥（绝不入仓库）
@@ -32,4 +31,3 @@ release-v*/
 
 # UI 静态预览稿（可由 scripts/gen-ui-preview.mjs 重新生成）
 ui-preview.html
-

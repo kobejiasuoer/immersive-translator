@@ -386,6 +386,42 @@ fn models_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(models)
 }
 
+/// 把打进安装包的模型释放到 app_data_dir/models/（只拷缺失的文件）。
+/// 模型已随安装包分发，正常情况下用户不再需要联网下载；
+/// dev 模式没有资源目录，返回 0 由网络下载兜底。
+pub fn ensure_models_from_bundle(app: &AppHandle) -> Result<usize, String> {
+    let dir = models_dir(app)?;
+    let Ok(resource_dir) = app.path().resource_dir() else {
+        return Ok(0);
+    };
+    let bundled = resource_dir.join("models");
+    let mut copied = 0;
+    for (filename, _) in MODEL_SOURCES {
+        let dest = dir.join(filename);
+        if dest.exists() {
+            continue;
+        }
+        let src = bundled.join(filename);
+        if src.exists() {
+            std::fs::copy(&src, &dest).map_err(|e| format!("释放模型 {filename} 失败: {e}"))?;
+            copied += 1;
+        }
+    }
+    Ok(copied)
+}
+
+/// reqwest 错误只打印最外层（"error sending request for url"），
+/// 真正的原因（dns error / connect timeout / proxy 拒绝）在 source 链里，拼出来便于排查。
+fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut msg = e.to_string();
+    let mut source = e.source();
+    while let Some(inner) = source {
+        msg.push_str(&format!(" ← {inner}"));
+        source = inner.source();
+    }
+    msg
+}
+
 /// 模型下载来源。modelscope 在国内较快且稳定。
 /// 仓库：deadash/paddleocr（含 PaddleOCR v4 的 det + rec onnx）。
 const MODEL_SOURCES: &[(&str, &str)] = &[
@@ -399,13 +435,28 @@ const MODEL_SOURCES: &[(&str, &str)] = &[
     ),
 ];
 
-/// 下载 OCR 模型（det + rec）到 app_data_dir/models/。
+/// 下载/安装 OCR 模型（det + rec）到 app_data_dir/models/。
+/// 优先从安装包释放（离线即可完成）；资源缺失时才走网络下载。
 /// 通过 emit("ocr:download:progress", { downloaded, total, file }) 报告进度。
 #[tauri::command]
 pub async fn ocr_download_models(app: AppHandle) -> Result<(), String> {
     use tauri::Emitter;
 
     let dir = models_dir(&app)?;
+
+    // 先走安装包：模型已随安装程序分发，绝大多数情况到这里就绪。
+    ensure_models_from_bundle(&app)?;
+    let all_present = MODEL_SOURCES
+        .iter()
+        .all(|(filename, _)| dir.join(filename).exists());
+    if all_present {
+        let _ = app.emit(
+            "ocr:download:progress",
+            serde_json::json!({ "file": "*", "status": "complete" }),
+        );
+        return Ok(());
+    }
+
     let client = reqwest::Client::builder()
         // ModelScope 下载服务会拒绝缺少 User-Agent 的请求（HTTP 403）。
         .user_agent(concat!("ImmersiveTranslator/", env!("CARGO_PKG_VERSION")))
@@ -432,7 +483,7 @@ pub async fn ocr_download_models(app: AppHandle) -> Result<(), String> {
             .get(*url)
             .send()
             .await
-            .map_err(|e| format!("下载 {filename} 失败: {e}"))?;
+            .map_err(|e| format!("下载 {filename} 失败: {}", error_chain(&e)))?;
 
         if !resp.status().is_success() {
             return Err(format!(
@@ -445,7 +496,7 @@ pub async fn ocr_download_models(app: AppHandle) -> Result<(), String> {
         let bytes = resp
             .bytes()
             .await
-            .map_err(|e| format!("读取 {filename} 失败: {e}"))?;
+            .map_err(|e| format!("读取 {filename} 失败: {}", error_chain(&e)))?;
 
         std::fs::write(&dest, &bytes).map_err(|e| format!("写入 {filename} 失败: {e}"))?;
 

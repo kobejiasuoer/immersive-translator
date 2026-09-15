@@ -112,6 +112,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "resources": ["models/*.onnx"],
     "windows": {
       "signCommand": "npm.cmd run sign -- %1"
     },
