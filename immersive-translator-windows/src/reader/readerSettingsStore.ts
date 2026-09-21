@@ -34,3 +34,23 @@ export function saveGlobalReaderSettings(settings: ReaderSettings): void {
     /* ignore */
   }
 }
+
+// ---- 跟读评测：麦克风设备偏好（机器本地，不随文章、不进 schema） ----
+
+const MIC_DEVICE_KEY = "immersive-translator-mic-device";
+
+export function loadMicDeviceId(): string {
+  try {
+    return localStorage.getItem(MIC_DEVICE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveMicDeviceId(deviceId: string): void {
+  try {
+    localStorage.setItem(MIC_DEVICE_KEY, deviceId);
+  } catch {
+    /* ignore */
+  }
+}

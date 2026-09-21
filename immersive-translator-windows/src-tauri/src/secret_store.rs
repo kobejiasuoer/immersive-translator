@@ -56,7 +56,17 @@ fn save_secrets(app: &AppHandle, secrets: &SecretsFile) -> Result<(), String> {
     let path = secrets_path(app)?;
     let text = serde_json::to_string_pretty(secrets)
         .map_err(|error| format!("序列化 secrets.json 失败: {error}"))?;
-    std::fs::write(&path, text).map_err(|e| format!("写入 secrets.json 失败: {e}"))
+    atomic_write(&path, text.as_bytes())
+}
+
+/// tmp + rename 原子落盘。直接 write 时中途崩溃/断电会把 secrets.json 截断，
+/// 所有凭据（翻译 Key、讯飞三段等）一起丢；同分区 rename 是原子替换，
+/// 最坏情况丢本次写入，旧文件完好。
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, bytes).map_err(|e| format!("写入 secrets 临时文件失败: {e}"))?;
+    // std::fs::rename 在 Windows 上以 MOVEFILE_REPLACE_EXISTING 语义覆盖已存在目标。
+    std::fs::rename(&tmp, path).map_err(|e| format!("替换 secrets.json 失败: {e}"))
 }
 
 fn encrypt(plain: &str) -> Result<String, String> {
@@ -154,6 +164,8 @@ fn decrypt(b64: &str) -> Result<String, String> {
     }
 }
 
+/// 命令实现已改为直查 entries；这个读取语义保留给单测校验。
+#[cfg(test)]
 fn read_secret_entry(
     secrets: &SecretsFile,
     decrypt_value: impl FnOnce(&str) -> Result<String, String>,
@@ -165,31 +177,55 @@ fn read_secret_entry(
     decrypt_value(encrypted).map_err(|error| format!("无法解密 API Key: {error}"))
 }
 
+/// secret 条目名：缺省 = 翻译 Key（openai_api_key）；自定义名限小写字母/数字/下划线。
+fn normalize_name(name: Option<&str>) -> Result<String, String> {
+    match name {
+        None | Some("") => Ok(SECRET_KEY.to_string()),
+        Some(n) => {
+            if n.len() > 64
+                || !n
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            {
+                return Err(format!("非法 secret 名称: {n}"));
+            }
+            Ok(n.to_string())
+        }
+    }
+}
+
 /// 读取 API Key 明文。凭据不存在返回空串，存储或解密失败返回错误。
+/// name 缺省时读写翻译 Key；传名字读写命名凭据（如讯飞评测三段）。
 #[tauri::command]
-pub fn secret_get(app: AppHandle) -> Result<String, String> {
+pub fn secret_get(app: AppHandle, name: Option<String>) -> Result<String, String> {
+    let key = normalize_name(name.as_deref())?;
     let secrets = load_secrets(&app)?;
-    read_secret_entry(&secrets, decrypt)
+    let Some(encrypted) = secrets.entries.get(&key) else {
+        return Ok(String::new());
+    };
+    decrypt(encrypted).map_err(|error| format!("无法解密 API Key: {error}"))
 }
 
 /// 保存 API Key 明文（加密落盘）。空串会删除条目。
 #[tauri::command]
-pub fn secret_set(app: AppHandle, value: String) -> Result<(), String> {
+pub fn secret_set(app: AppHandle, name: Option<String>, value: String) -> Result<(), String> {
+    let key = normalize_name(name.as_deref())?;
     let mut secrets = load_secrets(&app)?;
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        secrets.entries.remove(SECRET_KEY);
+        secrets.entries.remove(&key);
     } else {
         let b64 = encrypt(trimmed)?;
-        secrets.entries.insert(SECRET_KEY.into(), b64);
+        secrets.entries.insert(key, b64);
     }
     save_secrets(&app, &secrets)
 }
 
 /// 判断加密 API Key 条目是否存在；存储读取失败会明确返回错误。
 #[tauri::command]
-pub fn secret_exists(app: AppHandle) -> Result<bool, String> {
-    Ok(load_secrets(&app)?.entries.contains_key(SECRET_KEY))
+pub fn secret_exists(app: AppHandle, name: Option<String>) -> Result<bool, String> {
+    let key = normalize_name(name.as_deref())?;
+    Ok(load_secrets(&app)?.entries.contains_key(&key))
 }
 
 #[cfg(test)]
@@ -272,5 +308,22 @@ mod tests {
         let error = read_secret_entry(&secrets, |_| Err("DPAPI failure".to_string())).unwrap_err();
 
         assert_eq!(error, "无法解密 API Key: DPAPI failure");
+    }
+
+    #[test]
+    fn normalize_name_defaults_to_translation_key_for_missing_or_empty() {
+        assert_eq!(normalize_name(None).unwrap(), SECRET_KEY);
+        assert_eq!(normalize_name(Some("")).unwrap(), SECRET_KEY);
+    }
+
+    #[test]
+    fn normalize_name_accepts_named_secrets_and_rejects_bad_ones() {
+        assert_eq!(
+            normalize_name(Some("xfyun_ise_app_id")).unwrap(),
+            "xfyun_ise_app_id"
+        );
+        assert!(normalize_name(Some("OpenAI Key")).is_err());
+        assert!(normalize_name(Some("../etc/passwd")).is_err());
+        assert!(normalize_name(Some(&"x".repeat(65))).is_err());
     }
 }

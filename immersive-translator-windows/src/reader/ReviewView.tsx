@@ -51,6 +51,8 @@ interface Props {
   onReviewModeChange: (mode: ReviewModeSetting) => void;
   /** 评分提交：由 ReaderApp 落盘并刷新。 */
   onGrade: (word: VocabWord, grade: ReviewGrade) => void;
+  /** 一次复习判分完成（含模式与判分结论），ReaderApp 归桶落盘到错题记录。 */
+  onRecall?: (wordId: string, mode: RecallMode, judged: RecallVerdict | null, grade: ReviewGrade) => void;
   onJumpToSentence: (articleId: string, sentenceIdx: number) => void;
   onSpeakWord: (text: string) => void;
   /** 听写整句朗读：word 音轨 + 稍慢语速，不打断句子朗读音轨。 */
@@ -60,6 +62,10 @@ interface Props {
   /** 原句含译文（完形卡的中文提示行）。 */
   sourceSentence: (articleId: string, sentenceIdx: number) => { en: string; zh: string | null } | null;
   articleTitle: (articleId: string) => string | null;
+  /** 本轮复习完成的黄金时刻出口：整理笔记 / 去笔记库看复盘 / 回阅读室。 */
+  onGenerateNote?: () => void;
+  onOpenNotes?: () => void;
+  onOpenReader?: () => void;
 }
 
 interface RecallResult {
@@ -148,12 +154,16 @@ export function ReviewView({
   reviewMode,
   onReviewModeChange,
   onGrade,
+  onRecall,
   onJumpToSentence,
   onSpeakWord,
   onSpeakSentence,
   sourcePreview,
   sourceSentence,
   articleTitle,
+  onGenerateNote,
+  onOpenNotes,
+  onOpenReader,
 }: Props) {
   const [results, setResults] = useState<RecallResult[]>([]);
 
@@ -245,8 +255,9 @@ export function ReviewView({
       gradedRef.current.add(current.id);
       setResults((rs) => [...rs, { wordId: current.id, mode: effMode, judged: verdict, grade: g }]);
       onGrade(current, g);
+      onRecall?.(current.id, effMode, verdict, g);
     },
-    [current, effMode, verdict, onGrade],
+    [current, effMode, verdict, onGrade, onRecall],
   );
 
   const submitCloze = useCallback(() => {
@@ -427,6 +438,8 @@ export function ReviewView({
                 setResults([]);
                 gradedRef.current = new Set();
               }}
+              onGenerateNote={onGenerateNote}
+              onOpenNotes={onOpenNotes}
             />
           ) : (
             <div className="review-done">
@@ -436,6 +449,20 @@ export function ReviewView({
                   ? "在阅读室里查词并点击「加入生词本」，复习卡会出现在这里。"
                   : "没有到期的生词了。明天再来看看，或去阅读室继续攒新词。"}
               </div>
+              {(onOpenReader || onOpenNotes) && (
+                <div className="review-done-nav">
+                  {onOpenReader && (
+                    <button className="btn btn-primary btn-sm" onClick={onOpenReader}>
+                      回阅读室
+                    </button>
+                  )}
+                  {onOpenNotes && (
+                    <button className="btn btn-secondary btn-sm" onClick={onOpenNotes}>
+                      去笔记库
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1146,7 +1173,17 @@ function DictationCard({
 
 // ---------- 结果摘要 ----------
 
-function SummaryPanel({ results, onRestart }: { results: RecallResult[]; onRestart: () => void }) {
+function SummaryPanel({
+  results,
+  onRestart,
+  onGenerateNote,
+  onOpenNotes,
+}: {
+  results: RecallResult[];
+  onRestart: () => void;
+  onGenerateNote?: () => void;
+  onOpenNotes?: () => void;
+}) {
   const produced = results.filter((r) => r.mode !== "recognition");
   const recogN = results.length - produced.length;
   const count = (j: RecallVerdict) => produced.filter((r) => r.judged === j).length;
@@ -1174,6 +1211,18 @@ function SummaryPanel({ results, onRestart }: { results: RecallResult[]; onResta
           <div className="n">{count("wrong")}</div>
           <div className="l">未想起</div>
         </div>
+      </div>
+      <div className="review-done-nav">
+        {onGenerateNote && (
+          <button className="btn btn-primary" onClick={onGenerateNote} title="错题记录刚写盘，正是整理笔记的好时机">
+            把这轮错题整理成笔记
+          </button>
+        )}
+        {onOpenNotes && (
+          <button className="btn btn-secondary" onClick={onOpenNotes}>
+            去笔记库看复盘
+          </button>
+        )}
       </div>
       <div className="submit-row" style={{ justifyContent: "center" }}>
         <button className="recall-btn" onClick={onRestart}>

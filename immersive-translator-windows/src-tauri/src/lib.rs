@@ -1,10 +1,12 @@
 mod clipboard;
+mod file_export;
 mod history;
 mod ocr;
 mod reader_store;
 mod review_reminder;
 mod screenshot;
 mod secret_store;
+mod speak_store;
 mod translation;
 mod tray_badge;
 mod tts;
@@ -27,6 +29,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 const DEFAULT_TRANSLATE_HOTKEY: &str = "Ctrl+Shift+Q";
 const DEFAULT_OCR_HOTKEY: &str = "Ctrl+Shift+E";
 const DEFAULT_READER_HOTKEY: &str = "Ctrl+Shift+R";
+
+/// 现场重建窗口时必须带上 tauri.conf.json 里 additionalBrowserArgs 的完整串
+/// （缺省会替换掉 WebView2 默认值）。丢了 --auto-accept-camera-and-microphone-capture，
+/// 重建出的 reader/live-caption 就拿不到麦克风——而这正是重建要兜底的场景。
+pub(crate) const REBUILD_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --auto-accept-camera-and-microphone-capture";
 
 /// 当前生效的（翻译热键, OCR 热键, 阅读室热键），用于热键切换时对比与回滚。
 struct ActiveHotkeys(Mutex<[Shortcut; 3]>);
@@ -84,49 +91,59 @@ fn show_panel_with_payload(app: &AppHandle, payload: PanelPayload) {
     let pending = app.state::<PendingPanelPayload>();
     *pending.0.lock().unwrap() = Some(payload.clone());
 
-    let panel = match app.get_webview_window("panel") {
-        Some(p) => p,
-        None => {
-            // 启动瞬间 WebView2 数据目录被上一实例占用时个别窗口创建会失败
-            // （settings/history 出过同样问题）。panel 缺失时热键表现为
-            // "毫无反应"，这里按 tauri.conf.json 的原配置现场重建。
-            // 重建后前端挂载时会通过 take_pending_panel_payload 拿到本次负载。
-            eprintln!("[panel] panel window missing → rebuilding");
-            clipboard::diag_log("panel window missing → rebuilding");
-            let built = tauri::WebviewWindowBuilder::new(
-                app,
-                "panel",
-                tauri::WebviewUrl::App("index.html".into()),
-            )
-            .title("")
-            .inner_size(460.0, 360.0)
-            .min_inner_size(320.0, 220.0)
-            .resizable(true)
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .visible(false)
-            .center()
-            .build();
-            match built {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("[panel] rebuild failed: {e}");
-                    clipboard::diag_log(&format!("panel rebuild failed: {e}"));
-                    return;
-                }
-            }
+    if let Some(panel) = app.get_webview_window("panel") {
+        // Windows 的 show 本身可能激活窗口，只跳过 set_focus 不足以保留来源焦点。
+        let _ = panel.set_focusable(take_focus);
+        let _ = panel.show();
+        if take_focus {
+            let _ = panel.set_focus();
         }
-    };
-
-    // Windows 的 show 本身可能激活窗口，只跳过 set_focus 不足以保留来源焦点。
-    let _ = panel.set_focusable(take_focus);
-    let _ = panel.show();
-    if take_focus {
-        let _ = panel.set_focus();
+        let _ = panel.emit("panel:shown", payload);
+        return;
     }
-    let _ = panel.emit("panel:shown", payload);
+
+    // 启动瞬间 WebView2 数据目录被上一实例占用时个别窗口创建会失败
+    // （settings/history 出过同样问题）。panel 缺失时热键表现为
+    // "毫无反应"，这里按 tauri.conf.json 的原配置现场重建。
+    // 重建后前端挂载时会通过 take_pending_panel_payload 拿到本次负载。
+    // 注意：build() 不能在事件处理器/同步命令线程里直接调（Windows + WebView2
+    // 有死锁风险，官方建议独立线程），托盘菜单/热键回调正是这种上下文。
+    eprintln!("[panel] panel window missing → rebuilding");
+    clipboard::diag_log("panel window missing → rebuilding");
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let built = tauri::WebviewWindowBuilder::new(
+            &app,
+            "panel",
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title("")
+        .inner_size(460.0, 360.0)
+        .min_inner_size(320.0, 220.0)
+        .resizable(true)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .center()
+        .additional_browser_args(REBUILD_BROWSER_ARGS)
+        .build();
+        let panel = match built {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("[panel] rebuild failed: {e}");
+                clipboard::diag_log(&format!("panel rebuild failed: {e}"));
+                return;
+            }
+        };
+        let _ = panel.set_focusable(take_focus);
+        let _ = panel.show();
+        if take_focus {
+            let _ = panel.set_focus();
+        }
+        let _ = panel.emit("panel:shown", payload);
+    });
 }
 
 #[tauri::command]
@@ -141,14 +158,11 @@ fn clear_pending_panel_payload(state: tauri::State<'_, PendingPanelPayload>) {
     *state.0.lock().unwrap() = None;
 }
 
-/// 打开设置窗口（前端可调用）。对齐托盘「设置」菜单的行为。
+/// 打开设置窗口（前端可调用）。对齐托盘「设置」菜单的行为；
+/// 窗口缺失（被销毁后）时同样走现场重建。
 #[tauri::command]
 fn open_settings(app: tauri::AppHandle) {
-    use tauri::Manager;
-    if let Some(win) = app.get_webview_window("settings") {
-        let _ = win.show();
-        let _ = win.set_focus();
-    }
+    show_window(&app, "settings");
 }
 
 /// 打开历史记录窗口（前端可调用）。
@@ -160,13 +174,17 @@ async fn open_history(app: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
+    // 尺寸与 tauri.conf.json / show_window 重建路径保持一致（780x620），
+    // 两条创建路径尺寸不一致会让历史窗口「时大时小」。
     tauri::WebviewWindowBuilder::new(&app, "history", tauri::WebviewUrl::App("index.html".into()))
         .title("翻译历史")
-        .inner_size(720.0, 560.0)
+        .inner_size(780.0, 620.0)
+        .min_inner_size(560.0, 420.0)
         .resizable(true)
         .minimizable(true)
         .maximizable(false)
         .center()
+        .additional_browser_args(REBUILD_BROWSER_ARGS)
         .build()
         .map_err(|e| format!("打开历史窗口失败: {e}"))?;
     Ok(())
@@ -251,19 +269,29 @@ fn show_window(app: &tauri::AppHandle, label: &str) {
     };
     eprintln!("[show_window] window {label} missing → rebuilding");
     clipboard::diag_log(&format!("window {label} missing → rebuilding"));
-    let built =
-        tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App("index.html".into()))
-            .title(title)
-            .inner_size(w, h)
-            .resizable(true)
-            .minimizable(true)
-            .maximizable(false)
-            .center()
-            .build();
-    if let Err(e) = built {
-        eprintln!("[show_window] rebuild {label} failed: {e}");
-        clipboard::diag_log(&format!("rebuild {label} failed: {e}"));
-    }
+    // build() 挪到独立线程：Windows 上在同步命令/事件处理器里建 WebView 窗口
+    // 有死锁风险（官方文档 Known issues），托盘菜单事件正是这种上下文。
+    let app = app.clone();
+    let label = label.to_string();
+    std::thread::spawn(move || {
+        let built = tauri::WebviewWindowBuilder::new(
+            &app,
+            &label,
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title(title)
+        .inner_size(w, h)
+        .resizable(true)
+        .minimizable(true)
+        .maximizable(false)
+        .center()
+        .additional_browser_args(REBUILD_BROWSER_ARGS)
+        .build();
+        if let Err(e) = built {
+            eprintln!("[show_window] rebuild {label} failed: {e}");
+            clipboard::diag_log(&format!("rebuild {label} failed: {e}"));
+        }
+    });
 }
 
 /// 热键按下后的统一处理：隐藏已显示的 panel，否则模拟 Ctrl+C 读选区再 show。
@@ -410,6 +438,39 @@ fn trigger_reader(app: &AppHandle) {
     });
 }
 
+/// 打开「录音直译」窗口（托盘入口）。窗口在 tauri.conf.json 里预建（隐藏），
+/// 这里展示；缺失时按同一规格现场重建。麦克风可用依赖窗口创建参数里的
+/// --auto-accept-camera-and-microphone-capture（与阅读室一致）。
+fn show_live_caption_window(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("live-caption") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    // build() 挪到独立线程，规避 Windows 事件处理器里建 WebView 窗口的死锁风险。
+    // 规格须与 tauri.conf.json 的 live-caption 窗口一致：少了 always_on_top，
+    // 重建出的字幕窗会掉到普通层级（挂着当字幕就没了置顶）。
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let built = tauri::WebviewWindowBuilder::new(
+            &app,
+            "live-caption",
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title("录音直译")
+        .inner_size(520.0, 680.0)
+        .min_inner_size(380.0, 480.0)
+        .resizable(true)
+        .always_on_top(true)
+        .center()
+        .additional_browser_args(REBUILD_BROWSER_ARGS)
+        .build();
+        if let Err(e) = built {
+            eprintln!("[live-caption] rebuild failed: {e}");
+        }
+    });
+}
+
 fn show_reader_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("reader") {
         let _ = win.show();
@@ -417,23 +478,30 @@ fn show_reader_window(app: &AppHandle) {
         return;
     }
     // 窗口缺失（启动瞬间 WebView2 数据目录被占）时现场重建，规格同 tauri.conf.json。
-    let built = tauri::WebviewWindowBuilder::new(
-        app,
-        "reader",
-        tauri::WebviewUrl::App("index.html".into()),
-    )
-    .title("沉浸阅读室")
-    .inner_size(1200.0, 800.0)
-    .min_inner_size(960.0, 620.0)
-    .resizable(true)
-    .minimizable(true)
-    .maximizable(true)
-    .center()
-    .build();
-    if let Err(e) = built {
-        eprintln!("[reader] rebuild failed: {e}");
-        clipboard::diag_log(&format!("reader rebuild failed: {e}"));
-    }
+    // build() 挪到独立线程：托盘菜单事件处理器里同步建 WebView 窗口在 Windows 上
+    // 有死锁风险，实测表现为阅读室关掉后「再次打开打不开」。
+    clipboard::diag_log("window reader missing → rebuilding");
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let built = tauri::WebviewWindowBuilder::new(
+            &app,
+            "reader",
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title("沉浸阅读室")
+        .inner_size(1200.0, 800.0)
+        .min_inner_size(960.0, 620.0)
+        .resizable(true)
+        .minimizable(true)
+        .maximizable(true)
+        .center()
+        .additional_browser_args(REBUILD_BROWSER_ARGS)
+        .build();
+        if let Err(e) = built {
+            eprintln!("[reader] rebuild failed: {e}");
+            clipboard::diag_log(&format!("reader rebuild failed: {e}"));
+        }
+    });
 }
 
 /// 阅读室窗口挂载时取走待导入文本（与 panel 的 take_pending_panel_payload 同模式）。
@@ -482,11 +550,14 @@ struct HotkeySlot {
 /// 把一组热键从 current 切换到 replacement（数量不限，浮窗 2 键 + 阅读室 1 键）。
 ///
 /// 安全语义（对齐远程单热键版的可回滚设计）：
-/// 1. 有变化的键**先注册新值**；任何注册失败 → 撤销本次已注册的新键，旧键原样保留；
-/// 2. 全部注册成功后**写持久化**；写失败 → 同样撤销已注册新键并报错；
-/// 3. 最后才**注销不再使用的旧键**；注销失败 → 尝试整体回滚到旧配置。
+/// 1. 无冲突的新键**先注册**；任何注册失败 → 撤销本次已注册的新键，旧键原样保留；
+/// 2. 互换/轮换（新键 = 另一个正在改键槽位的旧键，如 A↔B 互换）无法两边同时生效，
+///    作为一组处理：先注销该组旧键腾位，再注册新键；失败 → 恢复该组旧键并回滚第 1 步；
+/// 3. 全部注册成功后**写持久化**；写失败 → 撤销已注册新键、恢复互换组旧键；
+/// 4. 最后**注销不再使用的旧键**；注销失败 → 尝试整体回滚到旧配置。
 ///
-/// 全程不出现「先注销清空、后注册失败导致没有任何热键可用」的空窗。
+/// 普通改键全程不出现「先注销清空、后注册失败导致没有任何热键可用」的空窗；
+/// 互换组的旧键注销与新键注册之间存在不可避免的瞬时缺口。
 /// 返回 Ok(true) 表示真的切换过；Ok(false) 表示目标与当前一致（仅尝试持久化）。
 fn switch_hotkeys(
     slots: &mut [HotkeySlot],
@@ -499,34 +570,88 @@ fn switch_hotkeys(
         return Ok(false);
     }
 
-    // —— 第 1 步：注册有变化的新键（逐个），记录成功项以便回滚 ——
+    // 互换/轮换判定：我的新键恰好是另一个「正在改键」槽位的旧键。
+    let swapped: Vec<bool> = (0..slots.len())
+        .map(|i| {
+            slots[i].replacement != slots[i].current
+                && slots.iter().enumerate().any(|(j, s)| {
+                    j != i && s.current == slots[i].replacement && s.replacement != s.current
+                })
+        })
+        .collect();
+    // 已注册的新键（任何后续失败都要把它们撤掉）。
     let mut registered: Vec<Shortcut> = Vec::new();
-    for slot in slots.iter_mut() {
-        if slot.replacement != slot.current {
-            (slot.register)(slot.replacement).map_err(|error| {
+
+    // —— 第 1 步：注册无冲突的新键（逐个），失败即回滚 ——
+    for i in 0..slots.len() {
+        if slots[i].replacement != slots[i].current && !swapped[i] {
+            let (name, replacement) = (slots[i].name, slots[i].replacement);
+            if let Err(error) = (slots[i].register)(replacement) {
                 for s in &registered {
                     let _ = unregister(*s);
                 }
-                format!("注册{}失败: {error}", slot.name)
-            })?;
-            registered.push(slot.replacement);
+                return Err(format!("注册{name}失败: {error}"));
+            }
+            registered.push(replacement);
         }
     }
 
-    // —— 第 2 步：持久化；失败则撤销刚注册的新键 ——
+    // —— 第 2 步：互换组：先注销全组旧键腾位，再逐个注册新键 ——
+    let mut freed_olds: Vec<Shortcut> = Vec::new();
+    for i in 0..slots.len() {
+        if swapped[i] {
+            let (name, current) = (slots[i].name, slots[i].current);
+            if let Err(error) = unregister(current) {
+                for old in &freed_olds {
+                    if let Some(slot) = slots.iter_mut().find(|s| s.current == *old) {
+                        let _ = (slot.register)(*old);
+                    }
+                }
+                for s in &registered {
+                    let _ = unregister(*s);
+                }
+                return Err(format!("注销{name}旧键失败: {error}"));
+            }
+            freed_olds.push(current);
+        }
+    }
+    for i in 0..slots.len() {
+        if swapped[i] {
+            let (name, replacement) = (slots[i].name, slots[i].replacement);
+            if let Err(error) = (slots[i].register)(replacement) {
+                for s in &registered {
+                    let _ = unregister(*s);
+                }
+                for old in &freed_olds {
+                    if let Some(slot) = slots.iter_mut().find(|s| s.current == *old) {
+                        let _ = (slot.register)(*old);
+                    }
+                }
+                return Err(format!("注册{name}失败: {error}"));
+            }
+            registered.push(replacement);
+        }
+    }
+
+    // —— 第 3 步：持久化；失败则撤销刚注册的新键并恢复互换组旧键 ——
     let replacements: Vec<Shortcut> = slots.iter().map(|s| s.replacement).collect();
     if let Err(error) = persist(&replacements) {
         for s in &registered {
             let _ = unregister(*s);
         }
+        for old in &freed_olds {
+            if let Some(slot) = slots.iter_mut().find(|s| s.current == *old) {
+                let _ = (slot.register)(*old);
+            }
+        }
         return Err(format!("保存热键失败: {error}"));
     }
 
-    // —— 第 3 步：注销不再使用的旧键；失败则尽力回滚到旧配置 ——
+    // —— 第 4 步：注销不再使用的旧键（互换组旧键已注销）；失败则尽力回滚 ——
     let mut removed_old: Vec<Shortcut> = Vec::new();
     let mut unregister_failed = false;
     for slot in slots.iter() {
-        if slot.replacement != slot.current {
+        if slot.replacement != slot.current && !freed_olds.contains(&slot.current) {
             match unregister(slot.current) {
                 Ok(()) => removed_old.push(slot.current),
                 Err(_) => unregister_failed = true,
@@ -540,7 +665,9 @@ fn switch_hotkeys(
                 messages.push(format!("注销新键失败: {error}"));
             }
         }
-        for old in &removed_old {
+        // removed_old 的注销其实成功了（键已空闲）；freed_olds 是互换组腾出来的，
+        // 新键已撤掉，两处都要恢复注册。
+        for old in removed_old.iter().chain(freed_olds.iter()) {
             if let Some(slot) = slots.iter_mut().find(|s| s.current == *old) {
                 if let Err(error) = (slot.register)(*old) {
                     messages.push(format!("恢复旧键失败: {error}"));
@@ -999,6 +1126,75 @@ mod hotkey_switch_tests {
             ]
         );
     }
+
+    #[test]
+    fn swaps_two_hotkeys_by_freeing_olds_first() {
+        // A↔B 互换：两边的新键都占用对方旧键，先腾旧键再注册，一步完成。
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let mut slots = make_slots(
+            &calls,
+            &[
+                ("翻译热键", "Ctrl+Shift+Q", "Ctrl+Shift+E"),
+                ("截图 OCR 热键", "Ctrl+Shift+E", "Ctrl+Shift+Q"),
+            ],
+            &[],
+        );
+        let switched = switch_hotkeys(
+            &mut slots,
+            make_unregister(&calls, &[]),
+            make_persist(&calls),
+        )
+        .unwrap();
+        assert!(switched);
+        let id_q = shortcut("Ctrl+Shift+Q").id();
+        let id_e = shortcut("Ctrl+Shift+E").id();
+        assert_eq!(
+            calls.borrow().clone(),
+            vec![
+                Call::Unregister(id_q),
+                Call::Unregister(id_e),
+                Call::Register(id_e), // 翻译热键换到原 OCR 键
+                Call::Register(id_q), // OCR 热键换到原翻译键
+                Call::Persist(vec![id_e, id_q]),
+            ]
+        );
+    }
+
+    #[test]
+    fn swap_rolls_back_to_old_config_when_register_fails() {
+        // 互换组注册新键失败 → 撤掉已注册新键、恢复旧键，不留残缺配置。
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let mut slots = make_slots(
+            &calls,
+            &[
+                ("翻译热键", "Ctrl+Shift+Q", "Ctrl+Shift+E"),
+                ("截图 OCR 热键", "Ctrl+Shift+E", "Ctrl+Shift+Q"),
+            ],
+            &["Ctrl+Shift+Q"], // OCR 的新键（原翻译键）注册失败
+        );
+        let result = switch_hotkeys(
+            &mut slots,
+            make_unregister(&calls, &[]),
+            make_persist(&calls),
+        );
+        assert!(result.is_err());
+        let id_q = shortcut("Ctrl+Shift+Q").id();
+        let id_e = shortcut("Ctrl+Shift+E").id();
+        assert_eq!(
+            calls.borrow().clone(),
+            vec![
+                // 腾位
+                Call::Unregister(id_q),
+                Call::Unregister(id_e),
+                // 注册新键：翻译→E 成功；OCR→Q 注册失败（桩里失败的注册不留 Call）
+                Call::Register(id_e),
+                // 回滚：撤掉已注册的新键、按腾位顺序恢复旧键
+                Call::Unregister(id_e),
+                Call::Register(id_q),
+                Call::Register(id_e),
+            ]
+        );
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1050,6 +1246,10 @@ pub fn run() {
             reregister_hotkeys,
             take_pending_reader_import,
             take_pending_open_review,
+            file_export::save_text_file,
+            speak_store::speak_list_sessions,
+            speak_store::speak_save_session,
+            speak_store::speak_delete_session,
             reader_store::reader_list_articles,
             reader_store::reader_get_article,
             reader_store::reader_save_article,
@@ -1059,6 +1259,12 @@ pub fn run() {
             reader_store::reader_delete_vocab_word,
             reader_store::reader_record_review,
             reader_store::reader_stats,
+            reader_store::reader_record_recall,
+            reader_store::note_save,
+            reader_store::note_list,
+            reader_store::note_read,
+            reader_store::note_write_replay,
+            reader_store::note_delete,
             web_extract::reader_fetch_url,
             review_reminder::reminder_get_config,
             review_reminder::reminder_set_config,
@@ -1078,6 +1284,7 @@ pub fn run() {
             // 下组是「窗口/应用」（打开某个界面）。
             let quick = MenuItem::with_id(app, "quick", "快速复习", true, None::<&str>)?;
             let ocr = MenuItem::with_id(app, "ocr", "截图翻译 (OCR)", true, None::<&str>)?;
+            let live = MenuItem::with_id(app, "live", "录音直译", true, None::<&str>)?;
             let reader = MenuItem::with_id(app, "reader", "沉浸阅读室", true, None::<&str>)?;
             let vocab = MenuItem::with_id(app, "vocab", "生词本", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
@@ -1087,7 +1294,7 @@ pub fn run() {
             let menu = Menu::with_items(
                 app,
                 &[
-                    &ocr, &quick, &reader, &vocab, &sep, &history, &settings, &quit,
+                    &ocr, &quick, &live, &reader, &vocab, &sep, &history, &settings, &quit,
                 ],
             )?;
 
@@ -1102,6 +1309,7 @@ pub fn run() {
                     "history" => show_window(app, "history"),
                     "reader" => show_reader_window(app),
                     "quick" => review_reminder::open_quick_review_window(app),
+                    "live" => show_live_caption_window(app),
                     "vocab" => {
                         // 生词本：打开阅读室并切到复习页。窗口已存在 → 事件即时切换；
                         // 不存在 → 记下标记，窗口挂载后由 take_pending_open_review 消费。

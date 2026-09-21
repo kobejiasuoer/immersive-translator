@@ -25,6 +25,7 @@ pub enum ArticleSourceType {
     Url,
     Epub,
     Pdf,
+    Docx,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -118,15 +119,33 @@ pub struct ReaderSettingsOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tts_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_voice: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_voice_en: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sentence_pause_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadowing_mode: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadowing_assess: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadowing_pass_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadowing_auto_mic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadowing_silence_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chunk_highlight: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_vocab_marks: Option<bool>,
+    /// 复习模式（smart/recognition/cloze/dictation）。前端约定只入全局默认，
+    /// 这里透传只为契约对齐，不解释语义。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_mode: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -213,6 +232,31 @@ pub struct VocabExample {
     pub zh: Option<String>,
 }
 
+/// 单个复习模式下的错题计数（pass=通过 wrong=答错 trap=踩直译陷阱）。
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecallModeStat {
+    #[serde(default)]
+    pub pass: u32,
+    #[serde(default)]
+    pub wrong: u32,
+    #[serde(default)]
+    pub trap: u32,
+}
+
+/// 一个生词累计的错题记录（复习笔记「为什么记不住」诊断的数据源）。
+/// mode 键 = "recognition" | "cloze" | "dictation"。
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecallStat {
+    #[serde(default)]
+    pub total: RecallModeStat,
+    #[serde(default)]
+    pub by_mode: std::collections::BTreeMap<String, RecallModeStat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_at: Option<i64>,
+}
+
 /// 生词条目类别：单词 / 词块。缺省视为 word（老数据无需迁移）。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -249,6 +293,9 @@ pub struct VocabWord {
     /// source.article_id 为空（划词收藏）时的 LLM 例句，复习卡用作出语境。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub example: Option<VocabExample>,
+    /// 累计错题记录（每次复习判分后累加；老数据缺省 = 无记录）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recall: Option<RecallStat>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -330,10 +377,16 @@ fn write_atomic(path: &PathBuf, content: &str) -> Result<(), String> {
 }
 
 fn load_articles(app: &AppHandle) -> Result<ArticlesFile, String> {
-    let path = articles_path(app)?;
-    let text = match std::fs::read_to_string(&path) {
+    load_articles_from_path(&articles_path(app)?)
+}
+
+/// 只豁免 NotFound：杀软/备份短暂锁文件、双开实例等读错误必须报出来，
+/// 否则调用方拿到空库，下一次保存（复习打卡就会触发）会整体覆盖清空数据。
+fn load_articles_from_path(path: &std::path::Path) -> Result<ArticlesFile, String> {
+    let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(_) => return Ok(empty_articles_file()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(empty_articles_file()),
+        Err(e) => return Err(format!("读取文章数据 {path:?} 失败: {e}")),
     };
     if text.trim().is_empty() {
         return Ok(empty_articles_file());
@@ -345,10 +398,15 @@ fn load_articles(app: &AppHandle) -> Result<ArticlesFile, String> {
 }
 
 fn load_vocab(app: &AppHandle) -> Result<VocabFile, String> {
-    let path = vocab_path(app)?;
-    let text = match std::fs::read_to_string(&path) {
+    load_vocab_from_path(&vocab_path(app)?)
+}
+
+/// 只豁免 NotFound（理由同 load_articles_from_path）。与 secret_store 的读法一致。
+fn load_vocab_from_path(path: &std::path::Path) -> Result<VocabFile, String> {
+    let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(_) => return Ok(empty_vocab_file()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(empty_vocab_file()),
+        Err(e) => return Err(format!("读取生词数据 {path:?} 失败: {e}")),
     };
     if text.trim().is_empty() {
         return Ok(empty_vocab_file());
@@ -524,6 +582,53 @@ pub fn reader_stats(app: AppHandle, today: String, now_ms: i64) -> Result<Review
     Ok(compute_stats(&file, &today, now_ms))
 }
 
+/// 记一次复习判分（bucket = "pass" | "wrong" | "trap"，由前端按 mode/judged/grade 归桶）。
+/// 返回该词更新后的累计错题记录。
+#[tauri::command]
+pub fn reader_record_recall(
+    app: AppHandle,
+    id: String,
+    mode: String,
+    bucket: String,
+    now_ms: i64,
+) -> Result<RecallStat, String> {
+    let bucket = match bucket.as_str() {
+        "pass" | "wrong" | "trap" => bucket,
+        other => return Err(format!("未知的错题分桶: {other}")),
+    };
+    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
+    let mut file = load_vocab(&app)?;
+    file.schema_version = READER_SCHEMA_VERSION;
+    let word = file
+        .words
+        .iter_mut()
+        .find(|w| w.id == id)
+        .ok_or_else(|| format!("生词不存在: {id}"))?;
+    let stat = word.recall.get_or_insert_with(RecallStat::default);
+    let entry = stat.by_mode.entry(mode).or_default();
+    match bucket.as_str() {
+        "pass" => {
+            stat.total.pass += 1;
+            entry.pass += 1;
+        }
+        "wrong" => {
+            stat.total.wrong += 1;
+            entry.wrong += 1;
+        }
+        _ => {
+            stat.total.trap += 1;
+            entry.trap += 1;
+        }
+    }
+    stat.last_at = Some(now_ms);
+    let updated = stat.clone();
+    write_atomic(
+        &vocab_path(&app)?,
+        &serde_json::to_string(&file).map_err(|e| format!("序列化生词失败: {e}"))?,
+    )?;
+    Ok(updated)
+}
+
 /// 到期生词数（托盘角标/提醒调度用；与 compute_stats 的 dueNow 同口径）。
 pub fn due_count(app: &AppHandle) -> u32 {
     let _guard = match STORE_LOCK.lock() {
@@ -655,6 +760,45 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn temporary_path(label: &str) -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        std::env::temp_dir().join(format!(
+            "immersive-translator-reader-store-{}-{}-{label}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    #[test]
+    fn missing_store_file_is_an_empty_library() {
+        let path = temporary_path("missing.json");
+        let _ = std::fs::remove_file(&path);
+
+        let articles = load_articles_from_path(&path).unwrap();
+        assert_eq!(articles.schema_version, READER_SCHEMA_VERSION);
+        assert!(articles.articles.is_empty());
+
+        let vocab = load_vocab_from_path(&path).unwrap();
+        assert_eq!(vocab.schema_version, READER_SCHEMA_VERSION);
+        assert!(vocab.words.is_empty());
+    }
+
+    #[test]
+    fn unreadable_store_file_is_an_error_not_an_empty_library() {
+        // 目录路径：read_to_string 必然失败（权限/共享冲突等的替身）。
+        // 这里锁死「读错误 ≠ 空库」，否则任何保存都会静默清空全部数据。
+        let path = temporary_path("directory");
+        std::fs::create_dir(&path).unwrap();
+
+        let err = load_articles_from_path(&path).unwrap_err();
+        assert!(err.starts_with("读取文章数据"), "{err}");
+        let err = load_vocab_from_path(&path).unwrap_err();
+        assert!(err.starts_with("读取生词数据"), "{err}");
+
+        let _ = std::fs::remove_dir(&path);
+    }
 
     #[test]
     fn civil_roundtrip_and_shift() {
@@ -796,6 +940,292 @@ mod tests {
             },
             added_at: 0,
             example: None,
+            recall: None,
         }
+    }
+}
+
+// ---------- 复习笔记（notes/） ----------
+
+/// 一篇复习笔记的元数据。存在 .md 文件头部的 JSON frontmatter 里，
+/// 与正文一起自包含导出；replay 是 AI 复盘结果（结构由前端定义，此处透传）。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteFileMeta {
+    /// 文件名即 id（学词笔记-YYYY-MM-DD.md）。保存时前端可不传（note_save
+    /// 会做防覆盖去重后回填），故反序列化允许缺省。
+    #[serde(default)]
+    pub file: String,
+    pub created_at: i64,
+    pub words: u32,
+    /// 生成被取消时为 true（只保存了已完成部分）。
+    #[serde(default)]
+    pub partial: bool,
+    #[serde(default)]
+    pub word_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay: Option<serde_json::Value>,
+    /// 最近一次写回（生成时 = created_at；复盘写回时刷新）。
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteContent {
+    pub meta: NoteFileMeta,
+    /// 正文（不含 frontmatter）。
+    pub content: String,
+}
+
+fn notes_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法获取应用数据目录: {e}"))?
+        .join("notes");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建笔记目录: {e}"))?;
+    Ok(dir)
+}
+
+/// frontmatter = 首行 `---` 到下一个 `---` 行之间的单行 JSON。
+fn note_with_frontmatter(meta: &NoteFileMeta, body: &str) -> String {
+    let json = serde_json::to_string(meta).unwrap_or_else(|_| "{}".into());
+    format!("---\n{json}\n---\n{body}")
+}
+
+/// 拆 frontmatter；无 frontmatter（外部拷入的 md）返回 None meta 与原文。
+fn split_note_frontmatter(raw: &str) -> (Option<NoteFileMeta>, String) {
+    let rest = raw
+        .strip_prefix("---\n")
+        .or_else(|| raw.strip_prefix("---\r\n"));
+    let Some(rest) = rest else {
+        return (None, raw.to_string());
+    };
+    // 结束定界符：行首 "---"（兼容 \r\n）。正文从定界符之后取。
+    let end = match rest.find("\n---\n").or_else(|| rest.find("\n---\r\n")) {
+        Some(end) => end,
+        None => return (None, raw.to_string()),
+    };
+    let meta: Option<NoteFileMeta> = serde_json::from_str(rest[..end].trim()).ok();
+    let after = &rest[end..];
+    let body = after
+        .strip_prefix("\n---\n")
+        .or_else(|| after.strip_prefix("\n---\r\n"))
+        .unwrap_or(after);
+    (meta, body.to_string())
+}
+
+/// 同名不覆盖：base.md 存在则依次尝试 base-2.md、base-3.md……
+fn dedup_note_path(dir: &std::path::Path, base: &str) -> PathBuf {
+    let candidate = |n: usize| {
+        if n == 1 {
+            dir.join(format!("{base}.md"))
+        } else {
+            dir.join(format!("{base}-{n}.md"))
+        }
+    };
+    let mut n = 1;
+    while candidate(n).exists() {
+        n += 1;
+    }
+    candidate(n)
+}
+
+/// 笔记基名（不含 .md）只允许纯文件名：拒绝 ../、子目录、盘符、"." 等路径成分。
+fn is_pure_file_name(base: &str) -> bool {
+    !base.is_empty()
+        && std::path::Path::new(base)
+            .file_name()
+            .and_then(|n| n.to_str())
+            == Some(base)
+}
+
+/// 保存一篇新笔记（永不覆盖已有文件），返回带最终文件名的元数据。
+#[tauri::command]
+pub fn note_save(
+    app: AppHandle,
+    base_name: String,
+    content: String,
+    meta: NoteFileMeta,
+) -> Result<NoteFileMeta, String> {
+    let base = base_name.trim().trim_end_matches(".md");
+    // 防路径穿越：与 note_read/note_delete 的读删入口同一判法，否则越界写出的
+    // 笔记不会出现在 note_list 里，从界面上“消失”。
+    if !is_pure_file_name(base) {
+        return Err("无效的笔记文件名".into());
+    }
+    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
+    let dir = notes_dir(&app)?;
+    let path = dedup_note_path(&dir, base);
+    let file = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("无效的笔记文件名")?
+        .to_string();
+    let mut meta = meta;
+    meta.file = file;
+    meta.updated_at = if meta.updated_at > 0 {
+        meta.updated_at
+    } else {
+        meta.created_at
+    };
+    std::fs::write(&path, note_with_frontmatter(&meta, &content))
+        .map_err(|e| format!("写入笔记失败: {e}"))?;
+    Ok(meta)
+}
+
+/// 列出全部笔记（按创建时间倒序；损坏的 frontmatter 跳过）。
+#[tauri::command]
+pub fn note_list(app: AppHandle) -> Result<Vec<NoteFileMeta>, String> {
+    let dir = notes_dir(&app)?;
+    let mut metas = Vec::new();
+    let entries = std::fs::read_dir(&dir).map_err(|e| format!("读取笔记目录失败: {e}"))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let (meta, _) = split_note_frontmatter(&text);
+        if let Some(mut meta) = meta {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                meta.file = name.to_string();
+            }
+            metas.push(meta);
+        }
+    }
+    metas.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(metas)
+}
+
+/// 读取一篇笔记；file 不存在返回 None。
+#[tauri::command]
+pub fn note_read(app: AppHandle, file: String) -> Result<Option<NoteContent>, String> {
+    let dir = notes_dir(&app)?;
+    let path = dir.join(&file);
+    // 只允许纯文件名，防路径穿越。
+    if path.file_name().and_then(|n| n.to_str()) != Some(file.as_str()) {
+        return Err("无效的笔记文件名".into());
+    }
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    let (meta, body) = split_note_frontmatter(&text);
+    let Some(mut meta) = meta else {
+        return Ok(None);
+    };
+    meta.file = file;
+    Ok(Some(NoteContent {
+        meta,
+        content: body,
+    }))
+}
+
+/// 写回 AI 复盘结果（只改 meta.replay / updated_at，正文不动）。
+#[tauri::command]
+pub fn note_write_replay(
+    app: AppHandle,
+    file: String,
+    replay: serde_json::Value,
+    rounds: u32,
+    now_ms: i64,
+) -> Result<NoteFileMeta, String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
+    let dir = notes_dir(&app)?;
+    let path = dir.join(&file);
+    if path.file_name().and_then(|n| n.to_str()) != Some(file.as_str()) {
+        return Err("无效的笔记文件名".into());
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("读取笔记失败: {e}"))?;
+    let (meta, body) = split_note_frontmatter(&text);
+    let mut meta = meta.ok_or("笔记缺少元数据")?;
+    meta.replay = Some(replay);
+    meta.updated_at = now_ms;
+    meta.replay.as_mut().and_then(|r| {
+        r.as_object_mut()
+            .map(|o| o.insert("rounds".into(), serde_json::Value::from(rounds)))
+    });
+    std::fs::write(&path, note_with_frontmatter(&meta, &body))
+        .map_err(|e| format!("写入笔记失败: {e}"))?;
+    Ok(meta)
+}
+
+/// 删除一篇笔记。
+#[tauri::command]
+pub fn note_delete(app: AppHandle, file: String) -> Result<bool, String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
+    let dir = notes_dir(&app)?;
+    let path = dir.join(&file);
+    if path.file_name().and_then(|n| n.to_str()) != Some(file.as_str()) {
+        return Err("无效的笔记文件名".into());
+    }
+    Ok(std::fs::remove_file(&path).is_ok())
+}
+
+#[cfg(test)]
+mod note_tests {
+    use super::*;
+
+    #[test]
+    fn note_frontmatter_roundtrip() {
+        let meta = NoteFileMeta {
+            file: "学词笔记-2026-09-16.md".into(),
+            created_at: 1_700_000_000_000,
+            words: 6,
+            partial: false,
+            word_ids: vec!["inconsistencies".into(), "sourcing from".into()],
+            replay: Some(serde_json::json!({ "verdict": "过了大半", "stillWeak": 2 })),
+            updated_at: 1_700_000_100_000,
+        };
+        let raw = note_with_frontmatter(&meta, "# 复习笔记\n\n正文");
+        let (parsed, body) = split_note_frontmatter(&raw);
+        assert_eq!(parsed.as_ref(), Some(&meta));
+        assert_eq!(body, "# 复习笔记\n\n正文");
+    }
+
+    #[test]
+    fn note_without_frontmatter_parses_to_none() {
+        let (meta, body) = split_note_frontmatter("# 复习笔记\n普通导出的 md");
+        assert!(meta.is_none());
+        assert_eq!(body, "# 复习笔记\n普通导出的 md");
+    }
+
+    #[test]
+    fn note_base_name_rejects_path_components() {
+        // 正常基名（含中文/日期/空格）可用。
+        assert!(is_pure_file_name("学词笔记-2026-09-16"));
+        assert!(is_pure_file_name("my note (2)"));
+        // 路径穿越 / 子目录 / 盘符 / 特殊目录项全部拒绝。
+        assert!(!is_pure_file_name("../secrets"));
+        assert!(!is_pure_file_name("..\\..\\secrets"));
+        assert!(!is_pure_file_name("notes/sub"));
+        assert!(!is_pure_file_name(r"C:\Users\x"));
+        assert!(!is_pure_file_name(".."));
+        assert!(!is_pure_file_name("."));
+        assert!(!is_pure_file_name(""));
+        assert!(!is_pure_file_name("trailing/"));
+    }
+
+    #[test]
+    fn note_frontmatter_tolerates_crlf() {
+        let meta = NoteFileMeta {
+            file: "a.md".into(),
+            created_at: 1,
+            words: 1,
+            partial: true,
+            word_ids: vec![],
+            replay: None,
+            updated_at: 1,
+        };
+        let raw = format!(
+            "---\r\n{}\r\n---\r\n正文",
+            serde_json::to_string(&meta).unwrap()
+        );
+        let (parsed, body) = split_note_frontmatter(&raw);
+        assert_eq!(parsed.as_ref(), Some(&meta));
+        assert_eq!(body, "正文");
     }
 }

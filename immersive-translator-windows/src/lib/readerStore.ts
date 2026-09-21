@@ -7,6 +7,10 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Article,
   ArticleSummary,
+  NoteContent,
+  NoteMeta,
+  NoteReplay,
+  RecallStat,
   VocabWord,
 } from "../core/readerTypes";
 import type { ReviewLogFile, ReviewStats } from "../core/readerSrs";
@@ -14,6 +18,10 @@ import type { ReviewLogFile, ReviewStats } from "../core/readerSrs";
 export type {
   Article,
   ArticleSummary,
+  NoteContent,
+  NoteMeta,
+  NoteReplay,
+  RecallStat,
   ReviewLogFile,
   ReviewStats,
   VocabWord,
@@ -53,4 +61,45 @@ export function readerRecordReview(day: string, nowMs: number): Promise<ReviewSt
 
 export function readerStats(today: string, nowMs: number): Promise<ReviewStats> {
   return invoke<ReviewStats>("reader_stats", { today, nowMs });
+}
+
+/** 记一次复习判分（bucket = "pass" | "wrong" | "trap"），返回该词更新后的错题记录。 */
+export function readerRecordRecall(
+  id: string,
+  mode: string,
+  bucket: string,
+  nowMs: number,
+): Promise<RecallStat> {
+  return invoke<RecallStat>("reader_record_recall", { id, mode, bucket, nowMs });
+}
+
+/** 保存一篇新笔记（永不覆盖已有文件），返回带最终文件名的元数据。 */
+export function noteSave(
+  baseName: string,
+  content: string,
+  meta: Omit<NoteMeta, "file">,
+): Promise<NoteMeta> {
+  return invoke<NoteMeta>("note_save", { baseName, content, meta });
+}
+
+export function noteList(): Promise<NoteMeta[]> {
+  return invoke<NoteMeta[]>("note_list");
+}
+
+export function noteRead(file: string): Promise<NoteContent | null> {
+  return invoke<NoteContent | null>("note_read", { file });
+}
+
+/** 写回 AI 复盘结果，返回更新后的元数据。 */
+export function noteWriteReplay(
+  file: string,
+  replay: NoteReplay,
+  rounds: number,
+  nowMs: number,
+): Promise<NoteMeta> {
+  return invoke<NoteMeta>("note_write_replay", { file, replay, rounds, nowMs });
+}
+
+export function noteDelete(file: string): Promise<boolean> {
+  return invoke<boolean>("note_delete", { file });
 }
