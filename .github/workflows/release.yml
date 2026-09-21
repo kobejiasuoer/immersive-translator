@@ -302,3 +302,108 @@ jobs:
           fi
 
           echo "- GitHub Release: $RELEASE_URL" >> "$GITHUB_STEP_SUMMARY"
+
+  windows:
+    name: Build and upload Windows installer
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: immersive-translator-windows
+    env:
+      APP_NAME: ImmersiveTranslator
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: immersive-translator-windows/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-msvc
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: immersive-translator-windows/src-tauri
+
+      - name: Resolve release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Windows installer (NSIS)
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+            npm run tauri build
+          else
+            echo "::warning::仓库未配置 TAURI_SIGNING_PRIVATE_KEY secret，先构建不带 updater 签名的安装包；latest.json / .sig 由 release-updater 流程补传。"
+            npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          fi
+
+      - name: Collect bundle artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe="src-tauri/target/release/bundle/nsis/${APP_NAME}_${RELEASE_VERSION}_x64-setup.exe"
+          test -f "$exe"
+          echo "EXE_PATH=$exe" >> "$GITHUB_ENV"
+          ls -l src-tauri/target/release/bundle/nsis/
+
+      - name: Wait for release (created by macOS job)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 40); do
+            if gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "Release $RELEASE_TAG 已存在。"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::warning::等待 20 分钟未见 release，由本 job 直接创建。"
+
+      - name: Upload installer and release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets=("$EXE_PATH")
+          if [[ -f "$EXE_PATH.sig" ]]; then
+            assets+=("$EXE_PATH.sig")
+          fi
+          notes="$GITHUB_WORKSPACE/release-notes/v${RELEASE_VERSION}.md"
+          if [[ ! -f "$notes" ]]; then
+            notes=""
+          fi
+          if gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" "${assets[@]}" --clobber
+          else
+            create_args=(release create "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" "${assets[@]}" --title "$APP_NAME $RELEASE_VERSION" --target "$GITHUB_SHA")
+            if [[ -n "$notes" ]]; then
+              create_args+=(--notes-file "$notes")
+            fi
+            gh "${create_args[@]}"
+          fi
+          if [[ -n "$notes" ]]; then
+            gh release edit "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --notes-file "$notes"
+          fi
