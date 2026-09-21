@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UX-3 快速复习窗数据刷新 · 行为对比原型（2026-09-18）</title>
+<!--
+  UX-3 快速复习窗「重开显示旧数据」行为对比原型 · 自包含单文件，双击即开。
+  对应 docs/ux-remediation-plan-2026-09-18.md UX-3 卡（经代码核实后的单点修复方案）。
+  模拟范围：
+    1. Bug 本体（修复前）：迷你窗数据在首次挂载时加载，hide 不销毁 → 托盘重开走
+       复用分支，没有任何数据信号 → 显示旧列表/旧完成态（QuickReviewApp.tsx:68-96
+       空依赖 effect + review_reminder.rs open_quick_review_window 复用分支）。
+    2. 修复后：Rust 在「隐藏→可见」过渡时 emit("quick-review:shown") → 前端 reload()
+       重拉重算；已可见时只 set_focus 不打断会话（保护前后切卡/改评，decisions #14）。
+    3. 即评即落盘：迷你窗评分写回 reader_vocab.json（readerSaveVocabWord 整词保存），
+       重开后按最新库重算队列。
+  演示口径：列表化展示（真实应用是单卡轮播），便于肉眼对比「新旧列表差异」。
+-->
+<style>
+  body[data-theme="day"] {
+    --accent: #4c5ff0; --accent-hover: #3f52e0;
+    --accent-soft: rgba(76,95,240,.10); --accent-softer: rgba(76,95,240,.06);
+    --bg: #f4f5f9; --surface: #fff; --surface-2: #f9fafc;
+    --border: #e4e7ee; --border-strong: #d6dae4;
+    --text-1: #1c2029; --text-2: #4b5261; --text-3: #7c8494; --text-4: #a6adbb;
+    --ok: #16a34a; --ok-soft: #e8f7ee; --err: #dc2626; --err-soft: #fdeaea;
+    --warn: #b45309; --warn-soft: #fdf3e1;
+    --shadow-pop: 0 12px 32px rgba(16,24,40,.16), 0 3px 10px rgba(16,24,40,.1);
+    --wallpaper: radial-gradient(1100px 640px at 60% 18%, #33405e 0%, #232a3d 55%, #1a1f2e 100%);
+    --traybar: rgba(255,255,255,.72);
+  }
+  body[data-theme="sepia"] {
+    --accent: #4c5ff0; --accent-hover: #3f52e0;
+    --accent-soft: rgba(76,95,240,.12); --accent-softer: rgba(76,95,240,.07);
+    --bg: #f5efdf; --surface: #fbf7ec; --surface-2: #f1ead7;
+    --border: #e4dac0; --border-strong: #d2c6a6;
+    --text-1: #37301f; --text-2: #5a5138; --text-3: #857a5c; --text-4: #a89d80;
+    --ok: #35793f; --ok-soft: rgba(53,121,63,.12); --err: #b03a32; --err-soft: rgba(176,58,50,.12);
+    --warn: #9a6212; --warn-soft: rgba(154,98,18,.12);
+    --shadow-pop: 0 12px 32px rgba(80,64,20,.2);
+    --wallpaper: radial-gradient(1100px 640px at 60% 18%, #5a5138 0%, #4a4430 55%, #37331f 100%);
+    --traybar: rgba(251,247,236,.8);
+  }
+  body[data-theme="dark"] {
+    --accent: #7d8cff; --accent-hover: #93a0ff;
+    --accent-soft: rgba(125,140,255,.16); --accent-softer: rgba(125,140,255,.09);
+    --bg: #1d1f26; --surface: #262933; --surface-2: #2e313c;
+    --border: #373b47; --border-strong: #474c5a;
+    --text-1: #edeef4; --text-2: #c4c9d6; --text-3: #9399ab; --text-4: #6f7688;
+    --ok: #5cc48a; --ok-soft: rgba(60,190,120,.16); --err: #f17474; --err-soft: rgba(240,90,90,.16);
+    --warn: #e2a75a; --warn-soft: rgba(226,167,90,.16);
+    --shadow-pop: 0 14px 36px rgba(0,0,0,.55);
+    --wallpaper: radial-gradient(1100px 640px at 60% 18%, #2a2e3f 0%, #1f2330 55%, #14161e 100%);
+    --traybar: rgba(38,41,51,.78);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+    font-size: 13px; line-height: 1.5; color: var(--text-1);
+    background: var(--wallpaper); overflow: hidden; -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: Consolas, "Cascadia Code", monospace; }
+
+  /* ===== 窗口通用 ===== */
+  .win {
+    position: absolute; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 12px; box-shadow: var(--shadow-pop); overflow: hidden;
+    display: none; flex-direction: column;
+  }
+  .win.open { display: flex; }
+  .titlebar {
+    height: 34px; flex: none; display: flex; align-items: center; gap: 8px;
+    padding-left: 12px; background: var(--surface); border-bottom: 1px solid var(--border); user-select: none;
+  }
+  .titlebar .app-ico {
+    width: 15px; height: 15px; border-radius: 4px; flex: none;
+    background: linear-gradient(135deg, #6b7bff 0%, #9a6bff 100%);
+    color: #fff; font-size: 8.5px; display: flex; align-items: center; justify-content: center; font-weight: 700;
+  }
+  .titlebar .t { font-size: 12px; color: var(--text-2); flex: 1; }
+  .titlebar .wbtn {
+    min-width: 42px; height: 34px; display: flex; align-items: center; justify-content: center;
+    color: var(--text-2); cursor: pointer; font-size: 11px; padding: 0 8px;
+  }
+  .titlebar .wbtn:hover { background: var(--accent-soft); color: var(--text-1); }
+
+  /* ===== 快速复习迷你窗 ===== */
+  #mini { width: 400px; height: 470px; right: 356px; top: 56px; z-index: 300; }
+  .mini-status {
+    flex: none; padding: 8px 14px; font-size: 11px; color: var(--text-3);
+    border-bottom: 1px dashed var(--border); display: flex; justify-content: space-between; gap: 8px; align-items: center;
+  }
+  .mini-status b { color: var(--text-2); font-weight: 600; }
+  .stale-warn {
+    display: none; margin: 10px 14px 0; padding: 7px 10px; border-radius: 8px;
+    background: var(--warn-soft); color: var(--warn); font-size: 11.5px; border: 1px solid var(--warn);
+  }
+  .stale-warn.show { display: block; }
+  .mini-list { flex: 1; overflow-y: auto; padding: 10px 14px; }
+  .qcard {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px 12px; margin-bottom: 8px; display: flex; align-items: center; gap: 10px;
+  }
+  .qcard .w { flex: 1; min-width: 0; }
+  .qcard .w b { font-family: Georgia, serif; font-size: 14.5px; }
+  .qcard .w small { display: block; color: var(--text-3); font-size: 11px; }
+  .qcard .ops { display: flex; gap: 5px; }
+  .gbtn {
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-2);
+    border-radius: 7px; padding: 3px 10px; font-size: 11.5px; cursor: pointer; font-family: inherit;
+  }
+  .gbtn:hover { border-color: var(--accent); color: var(--accent); }
+  .gbtn.ok.on { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); font-weight: 600; }
+  .gbtn.no.on { background: var(--err-soft); border-color: var(--err); color: var(--err); font-weight: 600; }
+  .mini-foot { flex: none; padding: 9px 14px; border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: center; background: var(--surface); }
+  .mini-foot .prog { flex: 1; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+  .mini-foot .prog i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .25s; }
+  .mini-foot .pnum { font-size: 11px; color: var(--text-3); }
+  .empty-state { text-align: center; color: var(--text-3); padding: 46px 20px; font-size: 12.5px; }
+  .empty-state .big { font-size: 30px; margin-bottom: 8px; }
+  .sync-flash {
+    position: absolute; inset: 34px 0 0; background: var(--bg); z-index: 5;
+    display: none; align-items: center; justify-content: center; gap: 8px; color: var(--text-3); font-size: 12px;
+  }
+  .sync-flash.show { display: flex; }
+  .spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--border-strong); border-top-color: var(--accent); animation: rot .7s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+
+  /* ===== 阅读室简化面板 ===== */
+  #reader { width: 430px; height: 470px; left: 40px; top: 56px; z-index: 200; }
+  .rd-body { flex: 1; overflow-y: auto; padding: 12px 16px; }
+  .rd-sent { font-family: Georgia, serif; font-size: 15.5px; line-height: 1.55; margin: 0 0 4px; }
+  .rd-sent .hl { border-bottom: 2px solid var(--accent); color: var(--accent); font-weight: 600; }
+  .rd-cn { color: var(--text-3); font-size: 12px; margin: 0 0 10px; }
+  .sec-t { font-size: 11px; color: var(--text-3); font-weight: 600; margin: 14px 0 6px; }
+  .dv-row {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface); margin-bottom: 6px;
+  }
+  .dv-row .w { flex: 1; min-width: 0; }
+  .dv-row .w b { font-family: Georgia, serif; font-size: 13.5px; }
+  .dv-row .w small { color: var(--text-3); margin-left: 6px; font-size: 11px; }
+  .due-tag { font-size: 10px; border-radius: 4px; padding: 0 5px; flex: none; }
+  .due-tag.yes { color: var(--warn); border: 1px solid var(--warn); }
+  .due-tag.no { color: var(--text-4); border: 1px solid var(--border-strong); }
+
+  .btn {
+    background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 6px 14px;
+    font-size: 12px; cursor: pointer; font-family: inherit;
+  }
+  .btn:hover { background: var(--accent-hover); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .btn.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+
+  /* ===== 托盘 ===== */
+  .taskbar {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 42px; z-index: 500;
+    background: var(--traybar); backdrop-filter: blur(12px); border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: flex-end; padding: 0 12px;
+  }
+  .tray-app {
+    width: 26px; height: 26px; border-radius: 6px; cursor: pointer;
+    background: linear-gradient(135deg, #6b7bff 0%, #9a6bff 100%);
+    color: #fff; font-size: 13px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center; user-select: none;
+    transition: transform .12s; position: relative;
+  }
+  .tray-app:hover { transform: translateY(-1px); }
+  .tray-app:focus-visible, .gbtn:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .badge {
+    position: absolute; top: -5px; right: -5px; min-width: 15px; height: 15px; border-radius: 8px;
+    background: var(--err); color: #fff; font-size: 9.5px; display: flex; align-items: center; justify-content: center; padding: 0 4px;
+  }
+  .tray-tip { position: absolute; right: 12px; bottom: 52px; z-index: 600; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; font-size: 11px; color: var(--text-3); box-shadow: var(--shadow-pop); }
+  .hidden-note { display: none; }
+
+  /* ===== 数据库可视化 ===== */
+  #store {
+    position: absolute; left: 40px; bottom: 58px; z-index: 250; width: 430px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 12px; box-shadow: var(--shadow-pop); font-size: 11px;
+  }
+  #store .s-head { display: flex; justify-content: space-between; margin-bottom: 6px; color: var(--text-3); }
+  #store .s-head b { color: var(--text-2); }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chip {
+    border: 1px solid var(--border-strong); border-radius: 99px; padding: 1px 9px; color: var(--text-2);
+    font-size: 10.5px;
+  }
+  .chip.due { border-color: var(--warn); color: var(--warn); background: var(--warn-soft); }
+  .chip.flash { animation: chipflash 1s ease 2; }
+  @keyframes chipflash { 50% { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); } }
+
+  /* ===== 导演台 ===== */
+  #director {
+    position: absolute; right: 16px; bottom: 58px; z-index: 900; width: 302px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--shadow-pop); overflow: hidden;
+  }
+  #director .d-head {
+    padding: 9px 13px; display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid var(--border); cursor: pointer; user-select: none;
+  }
+  #director .d-head b { font-size: 12.5px; }
+  #director .d-head span { color: var(--text-4); font-size: 11px; }
+  #director .d-body { padding: 10px 13px; display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow-y: auto; }
+  #director.folded .d-body { display: none; }
+  .d-sec h4 { margin: 0 0 5px; font-size: 11px; color: var(--text-3); font-weight: 600; }
+  .seg { display: flex; gap: 6px; }
+  .seg button {
+    flex: 1; padding: 6px 4px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text-2); font-size: 11.5px; cursor: pointer; font-family: inherit; white-space: nowrap;
+  }
+  .seg button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-softer); font-weight: 600; }
+  .steps { margin: 0; padding-left: 18px; font-size: 11.5px; color: var(--text-2); }
+  .steps li { margin-bottom: 3px; }
+  #evlog {
+    border: 1px dashed var(--border); border-radius: 8px; padding: 6px 8px;
+    max-height: 130px; overflow-y: auto; font-size: 10.5px; display: flex; flex-direction: column; gap: 3px;
+  }
+  .ev { display: flex; gap: 6px; align-items: baseline; animation: evin .2s ease; }
+  @keyframes evin { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; } }
+  .ev .tt { color: var(--text-4); flex: none; font-size: 9.5px; }
+  .ev .nm { font-weight: 600; }
+  .ev.rust .nm { color: var(--accent); }
+  .ev.invoke .nm { color: #0e7db8; }
+  .ev.write .nm { color: var(--ok); }
+  .ev.info .nm { color: var(--text-3); font-weight: 400; }
+  body[data-theme="dark"] .ev.invoke .nm { color: #6bc1f0; }
+  .legend { font-size: 10.5px; color: var(--text-3); }
+
+  .theme-dots { position: absolute; left: 16px; top: 16px; z-index: 900; display: flex; gap: 8px; }
+  .theme-dots .dot { width: 22px; height: 22px; border-radius: 99px; cursor: pointer; border: 2px solid var(--surface); box-shadow: var(--shadow-pop); }
+  .theme-dots .dot[data-t="day"] { background: #f4f5f9; }
+  .theme-dots .dot[data-t="sepia"] { background: #f5efdf; }
+  .theme-dots .dot[data-t="dark"] { background: #1d1f26; }
+  .theme-dots .dot.on { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  #toasts { position: absolute; left: 50%; bottom: 58px; transform: translateX(-50%); z-index: 990; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .toast { background: rgba(20,22,30,.92); color: #fff; border-radius: 99px; padding: 7px 16px; font-size: 12px; box-shadow: var(--shadow-pop); animation: evin .18s ease; max-width: 460px; }
+  body[data-theme="dark"] .toast { background: rgba(60,64,80,.95); }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body data-theme="day">
+
+<!-- 阅读室（简化） -->
+<div class="win open" id="reader">
+  <div class="titlebar"><div class="app-ico">译</div><div class="t">沉浸阅读室（简化演示面板）</div></div>
+  <div class="rd-body">
+    <p class="rd-sent">Every afternoon, as they were coming from school, the children used to go and play in the Giant's <span class="hl">garden</span>.</p>
+    <p class="rd-cn">每天下午，孩子们放学回来，总喜欢到巨人的花园里去玩耍。</p>
+    <button class="btn ghost" id="btn-add">＋ 收藏生词（<span id="next-word">trail</span>）→ reader:vocab-added</button>
+
+    <div class="sec-t">今日到期（在阅读室里直接评分）</div>
+    <div id="reader-due"></div>
+  </div>
+</div>
+
+<!-- 快速复习迷你窗 -->
+<div class="win" id="mini">
+  <div class="titlebar">
+    <div class="app-ico">译</div><div class="t">快速复习</div>
+    <div class="wbtn" id="mini-hide" title="hide（不是销毁）：进程与界面状态都保留">收起 ⌄</div>
+  </div>
+  <div class="mini-status">
+    <span>数据加载于 <b class="mono" id="load-at">—</b></span>
+    <span id="mini-count"></span>
+  </div>
+  <div class="stale-warn" id="stale-warn"></div>
+  <div class="mini-list" id="mini-list"></div>
+  <div class="sync-flash" id="sync-flash"><span class="spin"></span>同步中…（quick-review:shown → readerGetVocab）</div>
+  <div class="mini-foot">
+    <div class="prog"><i id="prog-bar"></i></div>
+    <span class="pnum" id="prog-num">0 / 0</span>
+  </div>
+</div>
+
+<!-- 共享数据库可视化 -->
+<div id="store">
+  <div class="s-head"><b class="mono">reader_vocab.json</b><span>最后写入：<span class="mono" id="db-time">—</span></span></div>
+  <div class="chips" id="db-chips"></div>
+</div>
+
+<!-- 托盘 -->
+<div class="taskbar">
+  <div class="tray-app" id="tray" title="ImmersiveTranslator — 左键打开快速复习">
+    译<span class="badge" id="badge">0</span>
+  </div>
+</div>
+
+<!-- 导演台 -->
+<div id="director">
+  <div class="d-head" id="d-toggle"><b>UX-3 数据刷新 · 对比原型</b><span>收起 ▾</span></div>
+  <div class="d-body">
+    <div class="d-sec">
+      <h4>模式（切换即重置演示）</h4>
+      <div class="seg" id="seg-mode">
+        <button data-m="before" class="on">修复前（现状 bug）</button>
+        <button data-m="after">修复后</button>
+      </div>
+    </div>
+    <div class="d-sec">
+      <h4>对比走法（两种模式各走一遍）</h4>
+      <ol class="steps">
+        <li>点右下角托盘图标 → 打开迷你窗，记住「数据加载于」时间和列表</li>
+        <li>点迷你窗「收起」（hide，不销毁）</li>
+        <li>回阅读室：给一个到期词打分 + 收藏一个新词</li>
+        <li>再点托盘重开迷你窗：<br/><b>修复前＝旧列表旧时间（bug）</b>；<b>修复后＝自动重拉</b></li>
+        <li>修复后模式下迷你窗开着时再点托盘 → 只聚焦，不打断（改评进度保留）</li>
+      </ol>
+    </div>
+    <div class="d-sec">
+      <h4>事件流（真实代码同名的信号）</h4>
+      <div id="evlog"></div>
+      <div class="legend">emit=Rust→窗口 · invoke=前端→Rust · write=落盘 · 灰=说明</div>
+    </div>
+    <div class="d-sec">
+      <div class="seg">
+        <button id="btn-reset">重置演示</button>
+        <button id="btn-fill">一键走完 ①→④</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="theme-dots">
+  <div class="dot on" data-t="day" title="日间"></div>
+  <div class="dot" data-t="sepia" title="护眼"></div>
+  <div class="dot" data-t="dark" title="暗色"></div>
+</div>
+<div id="toasts"></div>
+
+<script>
+/* ================= 数据层（模拟 reader_vocab.json） ================= */
+var BACKLOG = [
+  { id: "trail", en: "trail", cn: "小径；踪迹" },
+  { id: "scope", en: "scope", cn: "范围；视野" },
+  { id: "utter", en: "utter", cn: "说出；完全的" }
+];
+var db, mini, backlogIdx, mode;
+
+function freshDb() {
+  return {
+    lastWrite: Date.now() - 86400000, // 昨天最后一次写入
+    words: [
+      { id: "abide", en: "abide", cn: "忍受；遵守", due: true, reps: 2 },
+      { id: "blunt", en: "blunt", cn: "直率的；钝的", due: true, reps: 1 },
+      { id: "civic", en: "civic", cn: "城市的；公民的", due: true, reps: 3 },
+      { id: "dwell", en: "dwell", cn: "居住；详述", due: false, reps: 4 }
+    ]
+  };
+}
+
+/* ================= 事件日志 ================= */
+function log(kind, name, note) {
+  var el = document.createElement("div");
+  el.className = "ev " + kind;
+  var d = new Date();
+  function p(n) { return (n < 10 ? "0" : "") + n; }
+  el.innerHTML = '<span class="tt mono">' + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()) + "</span>"
+    + '<span class="nm mono">' + name + "</span>" + (note ? '<span>' + note + "</span>" : "");
+  var box = document.getElementById("evlog");
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+}
+function toast(msg, ms) {
+  var el = document.createElement("div");
+  el.className = "toast"; el.textContent = msg;
+  document.getElementById("toasts").appendChild(el);
+  setTimeout(function () { el.remove(); }, ms || 2600);
+}
+function fmtTime(ts) {
+  var d = new Date(ts);
+  function p(n) { return (n < 10 ? "0" : "") + n; }
+  return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+}
+
+/* ================= 数据库视图 ================= */
+function renderDb(flashId) {
+  document.getElementById("db-time").textContent = fmtTime(db.lastWrite);
+  var dueCount = db.words.filter(function (w) { return w.due; }).length;
+  document.getElementById("badge").textContent = dueCount;
+  document.getElementById("badge").style.display = dueCount ? "flex" : "none";
+  document.getElementById("db-chips").innerHTML = db.words.map(function (w) {
+    return '<span class="chip mono' + (w.due ? " due" : "") + (w.id === flashId ? " flash" : "") + '">'
+      + w.en + (w.due ? " · 到期" : "") + "</span>";
+  }).join("");
+  renderReaderDue();
+}
+
+/* ================= 阅读室面板 ================= */
+function renderReaderDue() {
+  var due = db.words.filter(function (w) { return w.due; });
+  document.getElementById("reader-due").innerHTML = due.length
+    ? due.map(function (w) {
+      return '<div class="dv-row"><div class="w"><b>' + w.en + "</b><small>" + w.cn + "</small></div>"
+        + '<span class="due-tag yes">到期</span>'
+        + '<span class="ops"><button class="gbtn ok" data-rd="' + w.id + '">认识</button>'
+        + '<button class="gbtn no" data-rd="' + w.id + '">忘记</button></span></div>';
+    }).join("")
+    : '<div style="color:var(--text-4);font-size:11.5px">到期已清空 ✓（评分会让词离开到期队列）</div>';
+  document.querySelectorAll("[data-rd]").forEach(function (b) {
+    b.onclick = function () { gradeInReader(b.getAttribute("data-rd"), b.classList.contains("ok")); };
+  });
+  var nw = BACKLOG[backlogIdx];
+  document.getElementById("next-word").textContent = nw ? nw.en : "（已收完）";
+  document.getElementById("btn-add").disabled = !nw;
+}
+function gradeInReader(id, ok) {
+  var w = db.words.filter(function (x) { return x.id === id; })[0];
+  if (ok) { w.due = false; w.reps += 1; } else { w.reps = 0; }
+  db.lastWrite = Date.now();
+  log("write", "readerSaveVocabWord(" + w.en + ")", ok ? "→ 移出到期队列" : "→ 重置仍到期");
+  renderDb(id);
+  checkStale();
+}
+document.getElementById("btn-add").onclick = function () {
+  var nw = BACKLOG[backlogIdx];
+  if (!nw) return;
+  backlogIdx += 1;
+  db.words.push({ id: nw.id, en: nw.en, cn: nw.cn, due: true, reps: 0 });
+  db.lastWrite = Date.now();
+  log("invoke", "reader:vocab-added", "新词 " + nw.en + " 入库（翻译浮窗/词典卡同款信号）");
+  renderDb(nw.id);
+  checkStale();
+};
+
+/* ================= 快速复习迷你窗 ================= */
+function dueWords() {
+  return db.words.filter(function (w) { return w.due; });
+}
+/* 挂载/重拉共用：等价于前端把空依赖 effect 抽成 reload() */
+function buildSession() {
+  mini.session = { loadAt: Date.now(), grades: {} };
+  renderMini();
+}
+function renderMini() {
+  var list = document.getElementById("mini-list");
+  var warn = document.getElementById("stale-warn");
+  warn.classList.remove("show");
+  if (!mini.mounted) {
+    document.getElementById("load-at").textContent = "—";
+    document.getElementById("mini-count").textContent = "";
+    list.innerHTML = '<div class="empty-state"><div class="big">📥</div>迷你窗未打开<br/><span style="font-size:11px">点右下角托盘图标打开（托盘菜单 / 提醒卡同款入口）</span></div>';
+    document.getElementById("prog-bar").style.width = "0";
+    document.getElementById("prog-num").textContent = "0 / 0";
+    return;
+  }
+  document.getElementById("load-at").textContent = fmtTime(mini.session.loadAt);
+  var cards = mini.cards; // 进窗时快照
+  if (!cards.length) {
+    list.innerHTML = '<div class="empty-state"><div class="big">✓</div>到期已清空<br/><span style="font-size:11px">没有需要复习的词</span></div>';
+    document.getElementById("mini-count").textContent = "";
+    document.getElementById("prog-bar").style.width = "100%";
+    document.getElementById("prog-num").textContent = "0 / 0";
+    return;
+  }
+  var doneIds = Object.keys(mini.session.grades);
+  document.getElementById("mini-count").textContent = "到期 " + cards.length + " · 已评 " + doneIds.length;
+  list.innerHTML = cards.map(function (w) {
+    var g = mini.session.grades[w.id];
+    return '<div class="qcard"><div class="w"><b>' + w.en + "</b><small>" + w.cn + "</small></div>"
+      + '<span class="ops"><button class="gbtn ok' + (g === "ok" ? " on" : "") + '" data-q="' + w.id + '">认识</button>'
+      + '<button class="gbtn no' + (g === "forget" ? " on" : "") + '" data-q="' + w.id + '">忘记</button></span></div>';
+  }).join("");
+  document.querySelectorAll("[data-q]").forEach(function (b) {
+    b.onclick = function () { gradeInMini(b.getAttribute("data-q"), b.classList.contains("ok")); };
+  });
+  document.getElementById("prog-bar").style.width = (doneIds.length / cards.length * 100) + "%";
+  document.getElementById("prog-num").textContent = doneIds.length + " / " + cards.length;
+}
+function gradeInMini(id, ok) {
+  var w = db.words.filter(function (x) { return x.id === id; })[0];
+  var first = mini.session.grades[id] == null;
+  mini.session.grades[id] = ok ? "ok" : "forget";
+  if (ok) { w.due = false; w.reps += 1; } else { w.reps = 0; }
+  db.lastWrite = Date.now();
+  log("write", "readerSaveVocabWord(" + w.en + ")", first ? "首评落盘（每卡即评即落盘）" : "改评覆盖");
+  renderDb(id);
+  renderMini();
+}
+document.getElementById("mini-hide").onclick = function () {
+  if (!mini.mounted || !mini.visible) return;
+  mini.visible = false;
+  document.getElementById("mini").classList.remove("open");
+  log("info", "hide()", "窗口隐藏，进程与界面状态都还在（hide ≠ 销毁）");
+};
+
+/* 开窗：托盘菜单 / 提醒卡共用 open_quick_review_window 的语义 */
+function openMini(source) {
+  if (mini.mounted && mini.visible) {
+    log("info", "set_focus()", "已可见 → 仅聚焦，不发信号（不打断进行中的会话/改评）");
+    toast("迷你窗本来就开着：只聚焦，不重置（两种模式行为一致）");
+    return;
+  }
+  var wasHidden = mini.mounted && !mini.visible;
+  mini.mounted = true; mini.visible = true;
+  document.getElementById("mini").classList.add("open");
+  if (mode === "before") {
+    /* 现状：复用分支只有 show()+set_focus()，没有任何数据信号 */
+    if (wasHidden) {
+      log("info", "show() + set_focus()", "窗口已存在 → 复用，无任何数据信号（bug 根源）");
+      mini.cards = mini.cards || dueWords(); // 首次挂载才加载
+      renderMini();
+      checkStale();
+    } else {
+      mini.cards = dueWords(); // 首次挂载：空依赖 effect 加载
+      log("invoke", "readerGetVocab()", "首次挂载加载（之后这个 effect 不会再跑）");
+      buildSession();
+    }
+  } else {
+    if (wasHidden) {
+      log("rust", "emit quick-review:shown", "隐藏→可见过渡（open_quick_review_window 检查 is_visible 后发）");
+      var flash = document.getElementById("sync-flash");
+      flash.classList.add("show");
+      setTimeout(function () {
+        log("invoke", "readerGetVocab()", "listen 到 shown → reload() 重拉重算");
+        mini.cards = dueWords();
+        buildSession();
+        flash.classList.remove("show");
+        renderMini();
+      }, 420);
+      mini.cards = mini.cards || dueWords();
+      renderMini();
+    } else {
+      mini.cards = dueWords();
+      log("rust", "emit quick-review:shown", "冷启动首次 show（前端挂载本就加载，事件冗余无害）");
+      log("invoke", "readerGetVocab()", "首次挂载加载");
+      buildSession();
+    }
+  }
+}
+/* 修复前的过期提示：库比界面新时，重开后给出可视化证据 */
+function checkStale() {
+  if (mode !== "before" || !mini.mounted || !mini.visible || !mini.cards) return;
+  if (db.lastWrite > mini.session.loadAt && db.lastWrite > (mini.staleCheckAt || 0)) {
+    mini.staleCheckAt = Date.now();
+    var warn = document.getElementById("stale-warn");
+    warn.innerHTML = "⚠ 数据已不同步：reader_vocab.json 最后写入 <b class='mono'>" + fmtTime(db.lastWrite)
+      + "</b>，但本窗仍显示加载于 <b class='mono'>" + fmtTime(mini.session.loadAt) + "</b> 的旧列表——切「修复后」看重拉效果";
+    warn.classList.add("show");
+  }
+}
+
+document.getElementById("tray").onclick = function () { openMini("tray"); };
+
+/* ================= 导演台 ================= */
+document.getElementById("seg-mode").addEventListener("click", function (e) {
+  var b = e.target.closest("button"); if (!b || b.classList.contains("on")) return;
+  document.querySelectorAll("#seg-mode button").forEach(function (x) { x.classList.remove("on"); });
+  b.classList.add("on");
+  setMode(b.getAttribute("data-m"));
+});
+function setMode(m) {
+  mode = m;
+  resetAll();
+  toast(m === "before" ? "已切到【修复前】：迷你窗只在首次挂载时读数据" : "已切到【修复后】：隐藏→可见过渡时自动重拉", 3200);
+}
+function resetAll() {
+  db = freshDb();
+  backlogIdx = 0;
+  mini = { mounted: false, visible: false, session: null, cards: null };
+  document.getElementById("mini").classList.remove("open");
+  document.getElementById("evlog").innerHTML = "";
+  document.getElementById("sync-flash").classList.remove("show");
+  log("info", "reset", mode === "before" ? "修复前模式：复现线上 bug" : "修复后模式：quick-review:shown → reload()");
+  renderDb();
+  renderMini();
+}
+document.getElementById("btn-reset").onclick = function () { resetAll(); };
+document.getElementById("btn-fill").onclick = function () {
+  /* 一键走完 ①→④（异步串联演示动作） */
+  resetAll();
+  var wait = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+  (async function () {
+    await wait(250);
+    openMini("tray");                 // ① 首开
+    await wait(900);
+    document.getElementById("mini-hide").click();  // ② 收起
+    await wait(600);
+    document.querySelector("#reader-due .gbtn.ok").click(); // ③a 阅读室评分
+    await wait(500);
+    document.getElementById("btn-add").click();             // ③b 收藏新词
+    await wait(600);
+    openMini("tray");                 // ④ 重开
+    await wait(800);
+    if (mode === "after") toast("✓ 重开即重拉：列表与时间都是最新的", 3200);
+    else toast("✗ bug 复现：列表还是进窗时的旧数据（见黄色警示）", 3600);
+  })();
+};
+document.getElementById("d-toggle").onclick = function () {
+  var d = document.getElementById("director");
+  d.classList.toggle("folded");
+  document.querySelector("#d-toggle span").textContent = d.classList.contains("folded") ? "展开 ▸" : "收起 ▾";
+};
+document.querySelectorAll(".theme-dots .dot").forEach(function (d) {
+  d.onclick = function () {
+    document.querySelectorAll(".theme-dots .dot").forEach(function (x) { x.classList.remove("on"); });
+    d.classList.add("on");
+    document.body.setAttribute("data-theme", d.getAttribute("data-t"));
+  };
+});
+
+/* 初始：修复前模式 */
+mode = "before";
+resetAll();
+</script>
+</body>
+</html>

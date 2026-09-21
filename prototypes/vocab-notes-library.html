@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<!-- ============================================================
+  笔记库 · 交互原型 v3（视觉升级：「朱批」）
+  内容与交互沿用 v2（记忆诊断卡 + AI 复盘闭环），本轮只做视觉：
+  双墨系统 —— 靛蓝管版式，朱红管批语，绿只管通过
+  楷体批语（KaiTi，Windows 自带）· 纸张分层 · 去盒子化 · 印章动效
+  数据与令牌底座 1:1 对齐 styles.css / reader.css（铅字排版·靛蓝批注）。
+  ============================================================ -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>笔记库 · 交互原型 v3</title>
+<style>
+  /* ---------- 令牌：底座抄自 styles.css，纸/朱红为本设计新增层 ---------- */
+  :root {
+    --accent: #4c5ff0; --accent-hover: #3f52e0;
+    --accent-soft: #eef0fe; --accent-softer: #f6f7ff;
+    --accent-grad: linear-gradient(135deg, #4c5ff0 0%, #7a5cf0 100%);
+    --accent-hl: #dde2fd;
+    --ok: #15803d; --ok-soft: #e8f7ee;
+    --warn: #b45309; --warn-soft: #fdf3e1;
+    --err: #dc2626; --err-soft: #fdeaea;
+    --bg: #f4f5f9; --surface: #ffffff; --surface-2: #f9fafc;
+    --border: #e4e7ee; --border-strong: #d6dae4;
+    --text-1: #1c2029; --text-2: #4b5261; --text-3: #7c8494; --text-4: #a6adbb;
+    --radius-sm: 6px; --radius-md: 8px; --radius-lg: 12px; --radius-xl: 16px;
+    --shadow-card: 0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06);
+    --shadow-float: 0 6px 16px rgba(16,24,40,.08), 0 2px 6px rgba(16,24,40,.06);
+    --shadow-pop: 0 12px 32px rgba(16,24,40,.16), 0 3px 10px rgba(16,24,40,.1);
+    --font-ui: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    --font-read-serif-en: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --font-read-serif-cn: "Noto Serif SC", "Source Serif 4", Georgia, "SimSun", serif;
+    --font-kai: "KaiTi", "楷体", "Kaiti SC", "STKaiti", serif;
+    /* 纸与朱批（v3 新增层） */
+    --paper: #fcfaf4;
+    --paper-border: #e8e2d2;
+    --cinnabar: #bf4a35;
+    --ink: #2a2e37;
+    --read-col: 720px;
+  }
+  [data-theme="dark"] {
+    --accent: #7d8cff; --accent-hover: #93a0ff;
+    --accent-soft: rgba(125,140,255,.16); --accent-softer: rgba(125,140,255,.09);
+    --accent-grad: linear-gradient(135deg, #6b7bff 0%, #9a6bff 100%);
+    --accent-hl: rgba(125,140,255,.3);
+    --ok: #5cc48a; --ok-soft: rgba(60,190,120,.16);
+    --warn: #e2a75a; --warn-soft: rgba(226,167,90,.16);
+    --err: #f17474; --err-soft: rgba(240,90,90,.16);
+    --bg: #1d1f26; --surface: #262933; --surface-2: #2e313c;
+    --border: #373b47; --border-strong: #474c5a;
+    --text-1: #edeef4; --text-2: #c4c9d6; --text-3: #9399ab; --text-4: #6f7688;
+    --shadow-card: 0 1px 2px rgba(0,0,0,.3);
+    --shadow-float: 0 8px 20px rgba(0,0,0,.4);
+    --shadow-pop: 0 14px 36px rgba(0,0,0,.55);
+    --paper: #272a34;
+    --paper-border: #3b3f4d;
+    --cinnabar: #e8927f;
+    --ink: #e6e8ef;
+  }
+  [data-theme="sepia"] {
+    --accent: #4c5ff0; --accent-hover: #3f52e0;
+    --accent-soft: rgba(76,95,240,.12); --accent-softer: rgba(76,95,240,.07);
+    --accent-hl: #e2e0f5;
+    --ok: #35793f; --ok-soft: rgba(53,121,63,.12);
+    --warn: #9a6212; --warn-soft: rgba(154,98,18,.12);
+    --err: #b03a32; --err-soft: rgba(176,58,50,.12);
+    --bg: #f5efdf; --surface: #fbf7ec; --surface-2: #f1ead7;
+    --border: #e4dac0; --border-strong: #d2c6a6;
+    --text-1: #37301f; --text-2: #5a5138; --text-3: #857a5c; --text-4: #a89d80;
+    --paper: #fbf5e6;
+    --paper-border: #e3d7ba;
+    --cinnabar: #a53c2c;
+    --ink: #37301f;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--font-ui); background: var(--bg); color: var(--text-1);
+    font-size: 13px; overflow: hidden;
+    transition: background .25s ease, color .25s ease;
+  }
+  button { font-family: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  .app { height: 100vh; display: flex; flex-direction: column; }
+
+  /* ---------- 顶栏（外壳：应用原样，安静） ---------- */
+  .topbar {
+    height: 52px; flex: none; display: flex; align-items: center; gap: 12px;
+    padding: 0 20px; user-select: none;
+  }
+  .logo {
+    width: 21px; height: 21px; border-radius: 6px; background: var(--accent-grad);
+    display: inline-grid; place-items: center; color: #fff;
+    font-family: var(--font-read-serif-cn); font-size: 12px; font-weight: 600; flex: none;
+  }
+  .appname { font-size: 14.5px; font-weight: 600; letter-spacing: .04em; white-space: nowrap; cursor: pointer; }
+  .appname:hover { color: var(--accent); }
+  .crumb { flex: 1; min-width: 0; font-family: var(--font-read-serif-en); font-size: 13.5px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .crumb::before { content: "‹ "; color: var(--text-4); }
+  .tb-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    height: 30px; min-width: 30px; padding: 0 7px; border: none; border-radius: var(--radius-md);
+    background: transparent; color: var(--text-2); cursor: pointer; font-size: 12.5px; flex: none;
+    transition: background .15s ease, color .15s ease;
+  }
+  .tb-btn:hover { background: var(--surface-2); color: var(--text-1); }
+  .theme-dots { display: flex; align-items: center; gap: 6px; margin-right: 4px; }
+  .theme-dot {
+    width: 16px; height: 16px; border-radius: 50%; cursor: pointer; border: 1px solid var(--border-strong);
+    padding: 0; transition: transform .15s ease;
+  }
+  .theme-dot:hover { transform: scale(1.15); }
+  .theme-dot.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
+  .theme-dot.day { background: linear-gradient(135deg, #fff 50%, #4c5ff0 50%); }
+  .theme-dot.sepia { background: linear-gradient(135deg, #f5efdf 50%, #9a6212 50%); }
+  .theme-dot.dark { background: linear-gradient(135deg, #1d1f26 50%, #7d8cff 50%); }
+
+  /* ---------- 左栏：笔记目录（外壳：同书架壳，原样） ---------- */
+  .body { flex: 1; display: flex; min-height: 0; }
+  .shelf {
+    width: 232px; flex: none; display: flex; flex-direction: column;
+    padding: 10px 0 0 14px; border-right: 1px solid var(--border); min-height: 0;
+  }
+  .shelf-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 14px 10px 0; font-size: 11.5px; font-weight: 500;
+    color: var(--text-3); letter-spacing: .18em;
+  }
+  .shelf-count { font-variant-numeric: tabular-nums; letter-spacing: 0; }
+  .shelf-list { flex: 1; overflow-y: auto; padding-right: 6px; }
+  .group {
+    font-size: 11px; color: var(--text-4); letter-spacing: .08em;
+    padding: 12px 0 4px; display: flex; align-items: center; gap: 8px;
+  }
+  .group::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  .item {
+    display: block; width: 100%; text-align: left; position: relative;
+    padding: 7px 10px 7px 16px; margin: 1px 0; border: none;
+    border-radius: var(--radius-md); background: transparent; cursor: pointer;
+    transition: background .15s ease;
+  }
+  .item:hover { background: var(--surface-2); }
+  .item.active { background: var(--accent-soft); }
+  .item.active::before {
+    content: ""; position: absolute; left: 5px; top: 50%; width: 5px; height: 15px;
+    transform: translateY(-50%); background: var(--accent);
+    clip-path: polygon(0 0, 100% 18%, 100% 82%, 0 100%); border-radius: 1px;
+  }
+  .item-t { display: flex; align-items: baseline; gap: 6px; font-size: 13px; color: var(--text-1); font-weight: 500; }
+  .item.active .item-t { color: var(--accent); }
+  .item-t .flag {
+    font-size: 10.5px; font-weight: 400; color: var(--cinnabar);
+    border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; line-height: 1.6;
+  }
+  .item-m { margin-top: 1px; font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .item-m .weak { color: var(--cinnabar); font-weight: 600; }
+  .item .del {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    width: 20px; height: 20px; border: none; border-radius: 5px;
+    background: var(--surface); color: var(--text-3); cursor: pointer;
+    display: none; place-items: center; font-size: 13px; line-height: 1;
+    box-shadow: var(--shadow-card);
+  }
+  .item:hover .del { display: grid; }
+  .item .del:hover { color: var(--err); }
+  .shelf-footer { border-top: 1px solid var(--border); margin-top: 8px; padding: 10px 12px 12px 0; display: flex; flex-direction: column; gap: 6px; }
+  .gen-btn {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    height: 34px; border: none; border-radius: var(--radius-md);
+    background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: background .15s ease;
+  }
+  .gen-btn:hover { background: var(--accent-hover); }
+  .shelf-nav {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    border: none; border-radius: var(--radius-md); background: transparent;
+    color: var(--text-2); font-size: 13px; cursor: pointer; text-align: left;
+  }
+  .shelf-nav:hover { background: var(--surface-2); color: var(--text-1); }
+  .review-card {
+    margin-top: 2px; padding: 8px 10px; border-radius: var(--radius-md);
+    background: var(--surface); border: 1px solid var(--border);
+    font-size: 11.5px; color: var(--text-2); box-shadow: var(--shadow-card);
+  }
+  .review-card strong { color: var(--text-1); }
+
+  /* ---------- 主区：桌面上一页纸 ---------- */
+  .page { flex: 1; overflow-y: auto; min-width: 0; }
+  .sheet {
+    max-width: var(--read-col); margin: 22px auto 44px;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--paper-border); border-radius: 3px;
+    box-shadow: 0 1px 2px rgba(28,30,38,.05), 0 14px 36px rgba(28,30,38,.1);
+    padding: 44px 56px 52px 64px; position: relative;
+    transition: background .25s ease;
+  }
+  /* 笔记本页边线：靛蓝管版式 */
+  .sheet::before {
+    content: ""; position: absolute; left: 34px; top: 10px; bottom: 10px;
+    border-left: 1px solid var(--accent-hl);
+  }
+
+  .note-head { display: flex; align-items: flex-end; gap: 12px; }
+  .note-date {
+    font-family: var(--font-read-serif-cn); font-size: 27px; font-weight: 700;
+    letter-spacing: .01em; line-height: 1.35;
+  }
+  .note-meta { flex: 1; min-width: 0; font-size: 12px; color: var(--text-3); line-height: 1.5; padding-bottom: 5px; }
+  .note-meta .saved { color: var(--ok); }
+  .note-actions { display: flex; gap: 2px; flex: none; }
+  .act {
+    height: 28px; padding: 0 9px; border: none; border-radius: var(--radius-md);
+    background: transparent; color: var(--text-3); cursor: pointer; font-size: 12px;
+    transition: background .15s ease, color .15s ease;
+  }
+  .act:hover { background: var(--surface-2); color: var(--text-1); }
+  .head-rule { border-bottom: 3px double var(--paper-border); margin: 14px 0 8px; }
+
+  /* 节标题：书页分节 */
+  .sec {
+    display: flex; align-items: center; gap: 12px; margin: 30px 0 4px;
+    font-size: 12px; font-weight: 600; color: var(--text-3); letter-spacing: .14em;
+  }
+  .sec::after { content: ""; flex: 1; height: 1px; background: var(--paper-border); }
+
+  /* 先看这里：先生的开学按语（楷体，朱批） */
+  .glance { display: flex; flex-direction: column; gap: 9px; padding-top: 12px; }
+  .glance-item {
+    padding: 1px 0 1px 14px; border-left: 2px solid var(--cinnabar);
+    font-family: var(--font-kai); font-size: 16px; line-height: 1.9; color: var(--ink);
+  }
+  .glance-item .w { font-weight: 700; }
+  .glance-item .dash { color: var(--text-4); padding: 0 6px; }
+  .glance-item em {
+    font-style: normal; color: var(--cinnabar);
+    text-decoration: underline wavy; text-decoration-thickness: 1px; text-underline-offset: 5px;
+  }
+
+  /* ---------- 词条：纸面条目（去盒子） ---------- */
+  .entry { padding: 22px 0 4px; margin-top: 14px; border-top: 1px solid var(--paper-border); }
+  .sec + .entry { border-top: none; margin-top: 0; padding-top: 10px; }
+  .entry-hd { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .word {
+    border: none; background: none; padding: 0; cursor: pointer;
+    font-family: var(--font-read-serif-en); font-size: 25px; font-weight: 700;
+    color: var(--ink); letter-spacing: .005em;
+  }
+  .word:hover { color: var(--accent); }
+  button.word::after { content: "🔊"; font-size: 11px; margin-left: 6px; opacity: 0; transition: opacity .15s ease; }
+  button.word:hover::after, .word.speaking::after { opacity: .8; }
+  .word.speaking { color: var(--accent); }
+  .phon { font-family: Georgia, "Times New Roman", serif; font-style: italic; font-size: 13.5px; color: var(--text-3); }
+  .pos { font-size: 11.5px; color: var(--text-3); }
+  .pos::before { content: "〔"; color: var(--text-4); }
+  .pos::after { content: "〕"; color: var(--text-4); }
+  /* 批改记号：✓ 通过 ✗ 没想起 */
+  .ticks { margin-left: auto; font-family: var(--font-kai); font-size: 14px; letter-spacing: 2px; display: flex; gap: 3px; }
+  .ticks .tk { font-style: normal; }
+  .ticks .tk.pass { color: var(--ok); }
+  .ticks .tk.hit { color: var(--cinnabar); }
+  .ticks-label { font-size: 11px; color: var(--text-4); letter-spacing: 0; margin-left: 2px; }
+
+  /* 批语一：为什么记不住 / 为什么记住了（朱批） */
+  .remark { margin-top: 12px; font-family: var(--font-kai); font-size: 15.5px; line-height: 1.95; color: var(--cinnabar); }
+  .remark .rk { font-size: 12.5px; letter-spacing: .06em; opacity: .8; margin-right: 10px; }
+  .remark b { font-weight: 700; }
+  .remark.ok { color: var(--ok); }
+  .remark .trace {
+    font-family: var(--font-ui); font-size: 11.5px; color: var(--text-4);
+    margin-top: 3px; font-style: normal;
+  }
+
+  .card-cn { margin-top: 10px; font-family: var(--font-read-serif-cn); font-size: 15px; line-height: 1.85; color: var(--ink); }
+  .card-cn .cn-tag { color: var(--text-3); font-size: 13px; margin-right: 4px; }
+
+  /* 批语二：怎么锚住（靛批：靛蓝标签，墨色正文） */
+  .anchor { margin-top: 10px; font-family: var(--font-kai); font-size: 15.5px; line-height: 1.95; color: var(--ink); }
+  .anchor .rk { font-size: 12.5px; letter-spacing: .06em; color: var(--accent); margin-right: 10px; }
+  .anchor b { color: var(--accent); font-weight: 700; }
+
+  .example {
+    margin: 12px 0 0; padding: 6px 0 6px 16px; border-left: 2px solid var(--accent-hl);
+  }
+  .example .en { font-family: var(--font-read-serif-en); font-size: 16px; line-height: 1.7; color: var(--ink); }
+  .example mark { background: var(--accent-hl); color: inherit; padding: 0 2px; border-radius: 3px; }
+  .example .from { margin-top: 4px; font-size: 11.5px; color: var(--text-4); }
+
+  .collos { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+  .collo { display: flex; gap: 9px; font-size: 14px; line-height: 1.75; align-items: baseline; }
+  .collo .k { flex: none; font-size: 11.5px; color: var(--text-4); min-width: 3em; }
+  .collo .en { font-family: var(--font-read-serif-en); color: var(--ink); }
+  .collo .zh { color: var(--text-2); }
+
+  /* 下次怎么测：发丝线上分隔，靛批 */
+  .next-test {
+    margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--paper-border);
+    display: flex; gap: 9px; align-items: baseline;
+    font-family: var(--font-kai); font-size: 15px; line-height: 1.85; color: var(--ink);
+  }
+  .next-test .tag { flex: none; font-family: var(--font-ui); font-size: 11.5px; color: var(--accent); }
+  .next-test .mode { flex: none; color: var(--accent); }
+  .next-test .go {
+    flex: none; margin-left: auto; border: none; background: none; color: var(--accent);
+    font-family: var(--font-ui); font-size: 12px; cursor: pointer; padding: 0;
+  }
+  .next-test .go:hover { text-decoration: underline; }
+
+  /* ---------- AI 复盘：批注区（朱红双细线起头 + 「阅」章） ---------- */
+  .replay { margin-top: 40px; border-top: 3px double var(--cinnabar); }
+  .replay-hd { display: flex; align-items: baseline; gap: 10px; padding: 14px 0 4px; flex-wrap: wrap; }
+  .replay-hd .t { font-family: var(--font-kai); font-size: 18px; font-weight: 700; color: var(--ink); }
+  .replay-hd .sub { font-size: 12px; color: var(--text-3); }
+  .replay-hd .chip {
+    margin-left: auto; font-size: 11.5px; color: var(--cinnabar);
+    border: 1px solid var(--cinnabar); border-radius: 100px; padding: 2px 10px;
+  }
+  .replay-hd .chip.wait { color: var(--text-3); border-color: var(--border-strong); }
+  .replay-bd { padding: 10px 0 18px; display: flex; flex-direction: column; gap: 14px; }
+
+  .loop { display: flex; align-items: baseline; gap: 2px; flex-wrap: wrap; row-gap: 8px; }
+  .loop-step { font-size: 12px; color: var(--text-4); white-space: nowrap; }
+  .loop-step .i { font-size: 12px; margin-right: 3px; }
+  .loop-step.done { color: var(--ok); }
+  .loop-step.now {
+    color: var(--cinnabar); font-weight: 700;
+    border-bottom: 2px solid var(--cinnabar); padding-bottom: 1px;
+  }
+  .loop-arrow { color: var(--text-4); font-size: 12px; padding: 0 5px; }
+
+  .verdict {
+    position: relative; padding: 10px 76px 4px 0;
+    font-family: var(--font-kai); font-size: 16px; line-height: 2.05; color: var(--ink);
+  }
+  .verdict .num { font-variant-numeric: tabular-nums; font-weight: 700; }
+  .verdict .num.okn { color: var(--ok); }
+  .verdict .num.bad { color: var(--cinnabar); }
+  .verdict em { font-style: normal; color: var(--cinnabar); text-decoration: underline wavy; text-decoration-thickness: 1px; text-underline-offset: 5px; }
+  /* 印章：唯一的动效——盖下去 */
+  .seal {
+    position: absolute; right: 2px; top: 12px; width: 48px; height: 48px;
+    border: 2.5px solid var(--cinnabar); border-radius: 9px; color: var(--cinnabar);
+    font-family: var(--font-kai); font-size: 27px; font-weight: 700;
+    display: grid; place-items: center; opacity: .92;
+    box-shadow: inset 0 0 0 1.5px var(--paper);
+    transform: rotate(-5deg);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .seal { animation: stamp .55s .3s cubic-bezier(.16,1.3,.3,1) both; }
+    @keyframes stamp {
+      0% { opacity: 0; transform: scale(1.8) rotate(-18deg); }
+      60% { opacity: .95; transform: scale(.93) rotate(-3deg); }
+      100% { opacity: .92; transform: scale(1) rotate(-5deg); }
+    }
+  }
+
+  .weak-list { display: flex; flex-direction: column; }
+  .weak-row {
+    display: flex; align-items: baseline; gap: 12px; padding: 9px 0;
+    border-top: 1px dashed var(--paper-border);
+    font-size: 13px; line-height: 1.75;
+  }
+  .weak-row:first-child { border-top: none; }
+  .weak-row .w { flex: none; font-family: var(--font-read-serif-en); font-weight: 700; font-size: 15px; color: var(--ink); }
+  .weak-row .why { flex: 1; font-family: var(--font-kai); font-size: 15px; color: var(--ink); }
+  .weak-row .why em { font-style: normal; color: var(--cinnabar); }
+  .weak-row .verdict-chip {
+    flex: none; font-family: var(--font-ui); font-size: 11px; border-radius: 4px; padding: 1px 7px;
+    color: var(--cinnabar); border: 1px solid var(--cinnabar);
+  }
+  .weak-row .verdict-chip.fair { color: var(--warn); border-color: var(--warn); }
+
+  .replay-ft { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--paper-border); padding-top: 14px; }
+  .replay-ft .hint { flex: 1; font-size: 12px; color: var(--text-3); line-height: 1.6; }
+
+  /* 空状态（同纸张） */
+  .empty { text-align: center; padding: 70px 20px; }
+  .empty-icon { font-size: 38px; opacity: .5; }
+  .empty-t { margin-top: 14px; font-family: var(--font-read-serif-cn); font-size: 18px; font-weight: 700; color: var(--ink); }
+  .empty-d { margin-top: 8px; font-size: 13px; color: var(--text-3); line-height: 1.9; }
+  .empty .gen-btn { display: inline-flex; margin-top: 20px; padding: 0 18px; }
+
+  /* ---------- 生成弹窗（外壳：应用样式） ---------- */
+  .overlay {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(10,12,18,.45); z-index: 50; backdrop-filter: blur(1.5px);
+  }
+  .overlay.hidden { display: none; }
+  .modal {
+    width: min(680px, calc(100vw - 48px)); max-height: min(640px, calc(100vh - 48px));
+    display: flex; flex-direction: column;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-xl); box-shadow: var(--shadow-pop); overflow: hidden;
+  }
+  .modal-head { display: flex; align-items: flex-start; justify-content: space-between; padding: 16px 18px 12px; }
+  .modal-head h3 { font-size: 15px; font-weight: 600; }
+  .modal-head p { margin-top: 3px; font-size: 12px; color: var(--text-3); }
+  .stream {
+    flex: 1; min-height: 180px; margin: 0 18px; padding: 14px 16px; overflow: auto;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md);
+    font-family: Consolas, monospace; font-size: 12px; line-height: 1.7;
+    color: var(--text-2); white-space: pre-wrap; word-break: break-word;
+  }
+  .modal-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px 16px; }
+  .status { font-size: 12px; color: var(--ok); display: flex; align-items: center; gap: 6px; }
+  .status .sub { color: var(--text-3); }
+  .foot-btns { display: flex; gap: 8px; flex: none; }
+  .btn {
+    height: 32px; padding: 0 14px; border-radius: var(--radius-md);
+    border: 1px solid var(--border-strong); background: var(--surface);
+    color: var(--text-1); font-size: 12.5px; cursor: pointer; transition: background .15s ease;
+  }
+  .btn:hover { background: var(--surface-2); }
+  .btn.primary { border: none; background: var(--accent); color: #fff; font-weight: 600; }
+  .btn.primary:hover { background: var(--accent-hover); }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%) translateY(16px);
+    background: var(--text-1); color: var(--bg); font-size: 12.5px;
+    padding: 8px 16px; border-radius: 100px; box-shadow: var(--shadow-pop);
+    opacity: 0; pointer-events: none; transition: opacity .2s ease, transform .2s ease; z-index: 60;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .sheet { animation: rise .4s ease both; }
+    @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  @media (max-width: 900px) {
+    .sheet { margin: 0; border-left: none; border-right: none; padding: 28px 22px 40px 30px; }
+    .sheet::before { left: 14px; }
+  }
+</style>
+</head>
+<body data-theme="light">
+<div class="app">
+  <header class="topbar">
+    <span class="logo">译</span>
+    <span class="appname" title="（原型）返回阅读室">沉浸阅读室</span>
+    <span class="crumb">笔记库</span>
+    <div class="theme-dots" role="group" aria-label="主题">
+      <button class="theme-dot day on" data-set-theme="light" title="日间" aria-label="日间主题"></button>
+      <button class="theme-dot sepia" data-set-theme="sepia" title="护眼" aria-label="护眼主题"></button>
+      <button class="theme-dot dark" data-set-theme="dark" title="暗色" aria-label="暗色主题"></button>
+    </div>
+    <button class="tb-btn" title="设置">⚙</button>
+  </header>
+
+  <div class="body">
+    <aside class="shelf">
+      <div class="shelf-header">笔记库 <span class="shelf-count" id="shelfCount">2</span></div>
+      <div class="shelf-list" id="noteList"></div>
+      <div class="shelf-footer">
+        <button class="gen-btn" id="genBtn">＋ 生成新笔记</button>
+        <button class="shelf-nav" onclick="toast('（原型）返回阅读室')">📖 阅读室</button>
+        <div class="review-card">今日复习 <strong>5</strong> / 9 · 连续打卡 <strong>12</strong> 天</div>
+      </div>
+    </aside>
+
+    <main class="page" id="page"></main>
+  </div>
+</div>
+
+<!-- 生成完成弹窗 -->
+<div class="overlay hidden" id="genOverlay" role="dialog" aria-modal="true" aria-label="生成复习笔记">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <h3>生成复习笔记</h3>
+        <p>用你的真实错题记录诊断「为什么记不住」—— 只基于你攒的词和答错的数据，不编造</p>
+      </div>
+      <button class="tb-btn" onclick="closeGen()" title="关闭 (Esc)">✕</button>
+    </div>
+    <pre class="stream">已选 6 个词条（未掌握 4 · 已掌握 2）
+
+诊断材料：
+- inconsistencies：复习 4 次，错 3（完形 2 错：搭配选了 in）
+- inconsistent with：踩陷阱 2 次（答「与……不方便」）
+- volunteers / standardizes：仅识别模式见过，从未产出</pre>
+    <div class="modal-foot">
+      <div class="status">✓ 已自动存入笔记库 <span class="sub">· 已复核，结论均来自错题记录</span></div>
+      <div class="foot-btns">
+        <button class="btn" onclick="toast('（原型）复制到剪贴板')">复制</button>
+        <button class="btn" onclick="toast('（原型）另存为 .md')">另存为…</button>
+        <button class="btn primary" onclick="openInLibrary()">在笔记库打开</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ---------- 假数据：诊断材料来自真实字段（srs.lapses/reps、RecallResult.mode/judged） ---------- */
+const notes = [
+  {
+    id: "n1",
+    timeLabel: "9月16日 14:32", today: true,
+    file: "学词笔记-2026-09-16.md",
+    count: 6, words: 3, chunks: 3, partial: false,
+    replay: {
+      rounds: 1, lastAt: "9月16日 20:05",
+      passed: 4, stillWeak: 2,
+      verdict: "这 6 个词复习 1 轮后，<span class='num okn'>4 个</span>进入 3 天以上间隔；<span class='num bad'>2 个</span>仍在错——你的薄弱点不是「不认识」，是<em>认识但搭配调不出</em>：完形模式连续选错介词，说明记的是中文释义而不是用法。",
+      weak: [
+        { w: "inconsistencies", chip: "完形连错", chipFair: false, why: "两次都在 in / of 之间选错——死记「不一致」没用，记 <em>inconsistencies in the data</em> 整块。" },
+        { w: "sourcing from", chip: "踩陷阱", chipFair: false, why: "又答成「来源自」。主动语态 source sth from sb，倒过来记：公司 <em>sources</em> it <em>from</em> 供应商。" },
+      ],
+    },
+    glance: [
+      { html: "<span class='w'>这批词的通病</span><span class='dash'>——</span>不是不认识，是<em>搭配调不出</em>：认识 inconsistency，但完形里选不出 in the data" },
+      { html: "<span class='w'>sourcing from</span><span class='dash'>——</span>踩过 2 次陷阱（答「来源自」），这是本篇<em>最可能再错</em>的词" },
+      { html: "<span class='w'>volunteers · standardizes</span><span class='dash'>——</span>只在识别模式见过、从未主动产出过，属于<em>眼熟假熟</em>" },
+    ],
+    sections: [
+      {
+        title: "单词", cards: [
+          {
+            word: "inconsistencies", phon: "/ˌɪnkənˈsɪstənsiz/", pos: "名词", speak: true,
+            ticks: { total: 4, hits: 3, label: "4 次里忘 3" },
+            diagnose: {
+              ok: false, q: "批 · 为什么记不住",
+              body: "复习 4 次、忘 3 次，<b>两次都栽在完形</b>：in the data 里选了 of。你是「认识但搭配调不出」——释义背得越熟，介词越被忽略。",
+              trace: "识别 ✓✓ · 完形 ✗✗ · 最近一次错：9月16日 08:40",
+            },
+            cn: [{ tag: "n.", t: "不一致；矛盾；前后不一之处" }],
+            anchor: { q: "记", body: "记整块不记词：<b>inconsistencies in the data</b>——介词就是考点，of 是烟雾弹。" },
+            example: { en: "Like hotel-level |inconsistencies|, sourcing from multiple suppliers may have room-level |inconsistencies|.", from: "出自《Hotel Data Quality》第 12 句 · 9月14日收藏" },
+            collos: [
+              { k: "必记", en: "inconsistencies in the data", zh: "数据里的不一致（考点：in 不是 of）" },
+              { k: "类推", en: "X-level inconsistencies", zh: "hotel-level / room-level 都对" },
+            ],
+            nextTest: { mode: "完形", tip: "考介词：supplier 数据 __ the report 也有不一致——填 in 还是 of？" },
+          },
+          {
+            word: "volunteers", phon: "/ˌvɒlənˈtɪəz/", pos: "名词 / 动词", speak: true,
+            ticks: { total: 2, hits: 0, label: "只认不写" },
+            diagnose: {
+              ok: false, q: "批 · 为什么会忘",
+              body: "只在识别模式见过 2 次、<b>从未主动产出</b>——「眼熟假熟」：翻卡能认，拼不出来。动词义（自愿做）比名词义更生。",
+              trace: "识别 ✓✓ · 完形 / 听写 0 次 · 距下次 2 天",
+            },
+            cn: [{ tag: "n.", t: "志愿者" }, { tag: "v.", t: "自愿做；主动提出" }],
+            anchor: { q: "记", body: "锚在你读的那句上：研究者测的是 <b>volunteers</b> 通读速度——是「人」，不是「志愿活动」。" },
+            example: { en: "Researchers measured how fast |volunteers| could move through a text.", from: "出自《Reading Speed Study》第 3 句 · 9月15日收藏" },
+            collos: [{ k: "必记", en: "volunteer to do sth", zh: "主动提出做某事（动词义考点）" }],
+            nextTest: { mode: "听写", tip: "只听写动词句：Three staff ___ to test the app." },
+          },
+          {
+            word: "standardizes", phon: "/ˈstændərdaɪzɪz/", pos: "动词", speak: true,
+            ticks: { total: 2, hits: 0, label: "连过 2 次" },
+            diagnose: {
+              ok: true, q: "批 · 为什么这次记住了",
+              body: "9月15日完形答对后进入 3 天间隔，<b>出口在「on」</b>：standardize<b>s on</b> sth。保持产出节奏即可。",
+              trace: "识别 ✓ · 完形 ✓（9月15日）· 距下次 3 天",
+            },
+            cn: [{ tag: "v.", t: "使标准化；统一规范" }],
+            anchor: { q: "记", body: "公司场景锚点：standardizes <b>on</b> the same format——「统一用」是 on。" },
+            example: { en: "Our company |standardizes| all reports so every department uses the same simple format.", from: "出自《Internal Reporting》第 8 句 · 9月13日收藏" },
+            collos: [{ k: "必记", en: "standardize on sth", zh: "统一采用（介词 on）" }],
+            nextTest: { mode: "识别", tip: "熟词常规滚动即可，约 9月19日到期。" },
+          },
+        ]
+      },
+      {
+        title: "词块", cards: [
+          {
+            word: "inconsistent with", pos: "搭配",
+            ticks: { total: 3, hits: 2, label: "踩陷阱 2 次" },
+            diagnose: {
+              ok: false, q: "批 · 为什么记不住",
+              body: "3 次里错 2 次、<b>两次都是同一个陷阱</b>：直译成「与……不方便」。不是记忆问题，是中文嗓门太大——见到 with 先默念「和……对不上」。",
+              trace: "完形 ✗✗（均判 trap）· 识别 ✓ · lapses 2",
+            },
+            cn: [{ tag: null, t: "与……不一致" }],
+            anchor: { q: "记", body: "反例锚点：地址<em>和</em>门牌<em>对不上</em> = inconsistent with。" },
+            example: { en: "Locations on Booking.com and Ctrip are also similarly |inconsistent with| street address.", from: "出自《OTAs Data Audit》第 21 句 · 9月16日收藏" },
+            nextTest: { mode: "完形", tip: "专考陷阱句：The price is ___ what was quoted." },
+          },
+          {
+            word: "sourcing from", pos: "搭配",
+            ticks: { total: 2, hits: 2, label: "全错" },
+            diagnose: {
+              ok: false, q: "批 · 为什么记不住",
+              body: "<b>踩陷阱 2 次</b>（都答「来源自」）。这个中文太顺口，顺口就是危险信号。改记主动句式：公司 sources it <b>from</b> 供应商——「从……买」。",
+              trace: "完形 ✗✗（均判 trap）· lapses 2",
+            },
+            cn: [{ tag: null, t: "从……采购 / 获取" }],
+            anchor: { q: "记", body: "「来源自」是翻译腔；采购是主动动作：<b>source sth from sb</b>。" },
+            example: { en: "…, |sourcing| from multiple suppliers may have room-level inconsistencies.", from: "出自《Hotel Data Quality》第 12 句 · 9月14日收藏" },
+            nextTest: { mode: "完形", tip: "考句式方向：We ___ two suppliers in Germany." },
+          },
+          {
+            word: "move through a text", pos: "词块",
+            ticks: null,
+            diagnose: {
+              ok: true, q: "批 · 先说一句",
+              body: "新收词，尚无错题。它与 volunteers 同句出现——两个词一起记：<b>volunteers move through a text</b>。首次复习安排在明天，别攒。",
+              trace: "0 次复习 · 明天首次到期",
+            },
+            cn: [{ tag: null, t: "通读一篇文章" }],
+            example: { en: "Researchers measured how fast volunteers could |move through| a text.", from: "出自《Reading Speed Study》第 3 句 · 9月15日收藏" },
+            nextTest: { mode: "识别", tip: "明天首次到期，先识别后完形。" },
+          },
+        ]
+      },
+    ],
+  },
+  {
+    id: "n2",
+    file: "学词笔记-2026-09-12-0915.md",
+    timeLabel: "9月12日 09:15", today: false,
+    count: 4, words: 2, chunks: 2, partial: true,
+    replay: null,
+    glance: [
+      { html: "<span class='w'>be subject to</span><span class='dash'>——</span>易被「主题」带偏，实义<em>易遭受；须经</em>，看主语定" },
+      { html: "<span class='w'>carry out</span><span class='dash'>——</span>执行研究 / 计划，比 do 正式" },
+    ],
+    sections: [
+      {
+        title: "单词", cards: [
+          {
+            word: "elaborate", phon: "/ɪˈlæbərət/", pos: "形容词 / 动词", speak: true,
+            ticks: null,
+            diagnose: {
+              ok: false, q: "批 · 为什么记不住",
+              body: "这篇生成时被取消，<b>诊断未完成</b>——词库里还没有它的错题记录。先按「眼熟假熟」处理：安排一轮完形。",
+              trace: "识别 ✓（1 次）· 完形 0 次 · 距下次 1 天",
+            },
+            cn: [{ tag: "adj.", t: "精细复杂的；详尽的" }, { tag: "v.", t: "详细阐述（elaborate on）" }],
+            anchor: { q: "记", body: "阐述用 <b>on</b>：She asked me to elaborate <b>on</b> my point。" },
+            example: { en: "She asked me to |elaborate| on my earlier point about pricing.", from: "划词收藏 · LLM 例句" },
+            nextTest: { mode: "完形", tip: "考 on：Could you elaborate ___ that?" },
+          },
+          {
+            word: "trade-off", phon: "/ˈtreɪdɒf/", pos: "名词", speak: true,
+            ticks: { total: 3, hits: 0, label: "连过 3 次" },
+            diagnose: {
+              ok: true, q: "批 · 为什么这次记住了",
+              body: "识别与听写都通过、进入 9 天间隔，这篇笔记里它<b>可以毕业</b>了。",
+              trace: "识别 ✓✓ · 听写 ✓ · 距下次 9 天",
+            },
+            cn: [{ tag: "n.", t: "（二者间的）权衡，取舍" }],
+            anchor: { q: "记", body: "永远和 between 成对：<b>a trade-off between</b> speed and accuracy。" },
+            example: { en: "There is always a |trade-off| between speed and accuracy.", from: "出自《ML Basics》第 5 句 · 9月11日收藏" },
+            nextTest: { mode: "识别", tip: "9月21日左右到期，常规滚动。" },
+          },
+        ]
+      },
+      {
+        title: "词块", cards: [
+          {
+            word: "be subject to", pos: "搭配",
+            ticks: { total: 3, hits: 1, label: "3 次错 1" },
+            diagnose: {
+              ok: false, q: "批 · 为什么记不住",
+              body: "错的那次是把它当「主题」翻。两个义项打架时<em>看主语</em>：物 + be subject to = 易遭受；规定 + be subject to = 须经。",
+              trace: "识别 ✓ · 完形 ✓✗ · lapses 1",
+            },
+            cn: [{ tag: null, t: "易遭受；须经……的" }],
+            anchor: { q: "记", body: "「主题的」是 subject 作形容词的另一义，这里<b>不是</b>。" },
+            example: { en: "The schedule is |subject to| change without notice.", from: "出自《Project Plan》第 14 句 · 9月10日收藏" },
+            nextTest: { mode: "完形", tip: "给两个主语判断义项：Prices are ___ change. / This visa is ___ approval." },
+          },
+        ]
+      },
+    ],
+  },
+];
+
+let currentId = "n1";
+
+/* ---------- 左栏列表 ---------- */
+function renderList() {
+  const today = notes.filter(n => n.today);
+  const earlier = notes.filter(n => !n.today);
+  let html = "";
+  if (today.length) html += `<div class="group">今天</div>` + today.map(itemHtml).join("");
+  if (earlier.length) html += `<div class="group">更早</div>` + earlier.map(itemHtml).join("");
+  document.getElementById("noteList").innerHTML = html;
+  document.getElementById("shelfCount").textContent = notes.length;
+}
+function itemHtml(n) {
+  const weak = n.replay ? ` · <span class="weak">${n.replay.stillWeak} 词仍错</span>` : "";
+  return `<button class="item${n.id === currentId ? " active" : ""}" data-id="${n.id}" title="${n.file}">
+    <span class="item-t">${n.timeLabel}${n.partial ? '<span class="flag">未完成</span>' : ""}</span>
+    <span class="item-m">${n.count} 词条${weak}</span>
+    <span class="del" data-del="${n.id}" title="删除这篇笔记" role="button">✕</span>
+  </button>`;
+}
+
+/* ---------- 主区渲染 ---------- */
+function renderPage() {
+  const page = document.getElementById("page");
+  const n = notes.find(x => x.id === currentId);
+  if (!n) { page.innerHTML = `<div class="sheet">${emptyHtml()}</div>`; return; }
+  const date = n.today ? "今天整理的复习笔记" : n.timeLabel.split(" ")[0] + "整理的复习笔记";
+  page.innerHTML = `<div class="sheet">
+    <div class="note-head">
+      <div class="note-date">${date}</div>
+      <div class="note-actions">
+        <button class="act" onclick="toast('（原型）另存为 .md')">另存为…</button>
+        <button class="act" onclick="toast('（原型）复制全文')">复制</button>
+        <button class="act" onclick="delNote('${n.id}')">删除</button>
+      </div>
+    </div>
+    <div class="note-meta">${n.timeLabel} · ${n.count} 词条（单词 ${n.words} · 词块 ${n.chunks}）${n.partial ? ' · <span style="color:var(--cinnabar)">生成被取消，此为已完成部分</span>' : ''} · <span class="saved">已自动保存</span></div>
+    <div class="head-rule"></div>
+
+    <div class="sec">先看这里</div>
+    <div class="glance">
+      ${n.glance.map(g => `<div class="glance-item">${g.html}</div>`).join("")}
+    </div>
+
+    ${n.sections.map(sec => `
+      <div class="sec">${sec.title}</div>
+      ${sec.cards.map(cardHtml).join("")}
+    `).join("")}
+
+    ${replayHtml(n)}
+  </div>`;
+
+  page.querySelectorAll(".example .en").forEach(el => {
+    el.innerHTML = el.textContent.replace(/\|([^|]+)\|/g, '<mark>$1</mark>');
+  });
+  page.querySelectorAll("button.word[data-speak]").forEach(el => {
+    el.addEventListener("click", () => speak(el));
+  });
+  page.querySelectorAll("[data-goto-test]").forEach(el => {
+    el.addEventListener("click", () => toast("（原型）跳到这个词的测试卡"));
+  });
+}
+
+/* 批改记号：✗ 没想起在前，✓ 通过在后 */
+function ticksHtml(t) {
+  if (!t) return "";
+  const marks =
+    Array.from({ length: t.hits }, () => `<i class="tk hit">✗</i>`).join("") +
+    Array.from({ length: t.total - t.hits }, () => `<i class="tk pass">✓</i>`).join("");
+  return `<span class="ticks" title="批改记号：✗ 没想起 / 踩陷阱，✓ 通过">${marks}<span class="ticks-label">${t.label}</span></span>`;
+}
+
+function cardHtml(c) {
+  return `<article class="entry">
+    <div class="entry-hd">
+      ${c.speak
+        ? `<button class="word" data-speak="${c.word}">${c.word}</button>`
+        : `<span class="word" style="cursor:default">${c.word}</span>`}
+      ${c.phon ? `<span class="phon">${c.phon}</span>` : ""}
+      <span class="pos">${c.pos}</span>
+      ${ticksHtml(c.ticks)}
+    </div>
+    <div class="remark${c.diagnose.ok ? " ok" : ""}"><span class="rk">${c.diagnose.q}</span>${c.diagnose.body}
+      ${c.diagnose.trace ? `<div class="trace">${c.diagnose.trace}</div>` : ""}
+    </div>
+    ${c.cn.length ? `<div class="card-cn">${c.cn.map(x => `${x.tag ? `<span class="cn-tag">${x.tag}</span>` : ""}${x.t}`).join("；")}</div>` : ""}
+    ${c.anchor ? `<div class="anchor"><span class="rk">${c.anchor.q}</span>${c.anchor.body}</div>` : ""}
+    ${c.example ? `<div class="example"><div class="en">${c.example.en}</div>${c.example.from ? `<div class="from">${c.example.from}</div>` : ""}</div>` : ""}
+    ${c.collos ? `<div class="collos">${c.collos.map(x => `<div class="collo"><span class="k">${x.k}</span><span class="en">${x.en}</span><span class="zh">${x.zh}</span></div>`).join("")}</div>` : ""}
+    ${c.nextTest ? `<div class="next-test"><span class="tag">下次怎么测</span><span class="mode">${c.nextTest.mode}</span><span>${c.nextTest.tip}</span><button class="go" data-goto-test>去测 →</button></div>` : ""}
+  </article>`;
+}
+
+/* ---------- AI 复盘 ---------- */
+function replayHtml(n) {
+  if (!n.replay) {
+    return `<div class="replay">
+      <div class="replay-hd">
+        <span class="t">AI 复盘</span>
+        <span class="sub">这篇笔记还没有复习记录</span>
+        <span class="chip wait">等待首轮复习</span>
+      </div>
+      <div class="replay-bd">
+        <div class="loop">${loopSteps(4)}</div>
+        <div class="replay-ft">
+          <span class="hint">复习一轮后回来，这里会出现：哪些词过了、哪些还在错、下一步测什么。</span>
+          <button class="btn primary" onclick="toast('（原型）开始复习')">开始复习</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  const r = n.replay;
+  return `<div class="replay">
+    <div class="replay-hd">
+      <span class="t">AI 复盘</span>
+      <span class="sub">生成后复习 ${r.rounds} 轮 · 最近一次 ${r.lastAt}</span>
+      <span class="chip">${r.passed} 词已过 · ${r.stillWeak} 仍错</span>
+    </div>
+    <div class="replay-bd">
+      <div class="loop">${loopSteps(7)}</div>
+      <div class="verdict">${r.verdict}<span class="seal" aria-hidden="true">阅</span></div>
+      ${r.weak.length ? `<div class="weak-list">
+        ${r.weak.map(wk => `<div class="weak-row">
+          <span class="w">${wk.w}</span>
+          <span class="why">${wk.why}</span>
+          <span class="verdict-chip${wk.chipFair ? " fair" : ""}">${wk.chip}</span>
+        </div>`).join("")}
+      </div>` : ""}
+      <div class="replay-ft">
+        <span class="hint">仍错的 2 词已进入下一篇笔记的默认选词。</span>
+        <button class="btn" onclick="toast('（原型）只测这 2 个词')">只测仍错的词</button>
+        <button class="btn primary" onclick="toast('（原型）生成下一篇笔记')">把这 2 词滚进新笔记</button>
+      </div>
+    </div>
+  </div>`;
+}
+function loopSteps(nowStep) {
+  const steps = [
+    { i: "📖", t: "阅读发现" }, { i: "✎", t: "自动记录" }, { i: "🔍", t: "AI 诊断" },
+    { i: "📝", t: "复习笔记" }, { i: "⏱", t: "间隔复习" }, { i: "✓", t: "再测" },
+    { i: "♻", t: "更新薄弱点" },
+  ];
+  return steps.map((s, i) =>
+    `<span class="loop-step${i < nowStep ? " done" : i === nowStep ? " now" : ""}"><span class="i">${s.i}</span>${s.t}</span>${i < steps.length - 1 ? '<span class="loop-arrow">›</span>' : ""}`
+  ).join("");
+}
+
+function emptyHtml() {
+  return `<div class="empty">
+    <div class="empty-icon">📓</div>
+    <div class="empty-t">笔记库还是空的</div>
+    <div class="empty-d">在阅读里查词、点词块，选「加入生词本」——<br>攒下的词和你的错题记录，会一起整理成复习笔记。</div>
+    <button class="gen-btn" onclick="toast('（原型）去生词本')">去生词本攒词</button>
+  </div>`;
+}
+
+/* ---------- 交互 ---------- */
+document.addEventListener("click", (e) => {
+  const del = e.target.closest("[data-del]");
+  if (del) { e.stopPropagation(); delNote(del.dataset.del); return; }
+  const item = e.target.closest(".item[data-id]");
+  if (item) { currentId = item.dataset.id; renderList(); renderPage(); }
+  const dot = e.target.closest("[data-set-theme]");
+  if (dot) setTheme(dot.dataset.setTheme);
+});
+
+function delNote(id) {
+  const n = notes.find(x => x.id === id);
+  if (!n) return;
+  if (!confirm(`删除 ${n.timeLabel} 的笔记？删除后不可恢复。`)) return;
+  const i = notes.indexOf(n);
+  notes.splice(i, 1);
+  if (currentId === id) currentId = notes.length ? notes[Math.max(0, i - 1)].id : null;
+  renderList(); renderPage();
+  toast("已删除笔记");
+}
+
+function setTheme(t) {
+  document.body.dataset.theme = t;
+  document.querySelectorAll(".theme-dot").forEach(d => d.classList.toggle("on", d.dataset.setTheme === t));
+}
+
+function speak(el) {
+  const u = new SpeechSynthesisUtterance(el.dataset.speak);
+  u.lang = "en-US"; u.rate = 0.92;
+  el.classList.add("speaking");
+  u.onend = () => el.classList.remove("speaking");
+  u.onerror = () => el.classList.remove("speaking");
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+}
+
+document.getElementById("genBtn").addEventListener("click", () => {
+  document.getElementById("genOverlay").classList.remove("hidden");
+});
+function closeGen() { document.getElementById("genOverlay").classList.add("hidden"); }
+function openInLibrary() {
+  closeGen();
+  currentId = "n1"; renderList(); renderPage();
+  document.getElementById("page").scrollTop = 0;
+  toast("已存入笔记库 · 打开了刚生成的笔记");
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeGen();
+});
+
+let toastTimer;
+function toast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg; el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
+}
+
+renderList(); renderPage();
+</script>
+</body>
+</html>

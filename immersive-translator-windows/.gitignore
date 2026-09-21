@@ -31,3 +31,10 @@ release-v*/
 
 # UI 静态预览稿（可由 scripts/gen-ui-preview.mjs 重新生成）
 ui-preview.html
+
+# [SPIKE] 跟读评测验证：讯飞凭据与音频样本（绝不入仓库）
+spike/credentials.json
+spike/tts_credentials.json
+spike/*.wav
+spike/*.mp3
+
