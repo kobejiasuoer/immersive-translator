@@ -1,0 +1,11 @@
+{
+  "version": "0.6.0",
+  "notes": " v0.6.0 大版本：阅读室升级为沉浸式英语学习工作台——新增文件导入（Word/PDF）、学词笔记、口语陪练、录音直译、影子跟读评测与云 TTS 朗读",
+  "pub_date": "2026-09-21T10:10:34Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSeU96WmpWcTg1TmRDelJPQ0NJdHpVWURKQndYUTFIYUIxNlZGb2NXTjU1aWp4VWZidzJtMVNCMFFJOTZnRmhaYWYrSlBCVmZXc0cvR2VnRlpIalphTGw0eFlMaTVhSmdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5OTg1NDE5CWZpbGU6SW1tZXJzaXZlVHJhbnNsYXRvcl8wLjYuMF94NjQtc2V0dXAuZXhlClBGMXJTMGR3U2lhb3lCNW5qWGkreExZMXh6Zyt1Yk85SXBMVjFXU1VuM0gxdkxlZ0pSRG5HQ1RXUUlXUXcvclVFckx0WUw2NjVKU1lEbmxBNG9vMkRRPT0K",
+      "url": "https://gh-proxy.com/https://github.com/kobejiasuoer/immersive-translator/releases/latest/download/ImmersiveTranslator_0.6.0_x64-setup.exe"
+    }
+  }
+}
