@@ -95,6 +95,14 @@ swift build -c release
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$ROOT_DIR/.build/release/$APP_NAME" "$MACOS_DIR/$APP_NAME"
+# SPM 资源 bundle（内置文库 / 考试词表）：Bundle.module 按可执行文件同目录查找
+RESOURCE_BUNDLE="$ROOT_DIR/.build/release/${APP_NAME}_${APP_NAME}.bundle"
+if [[ -d "$RESOURCE_BUNDLE" ]]; then
+    cp -R "$RESOURCE_BUNDLE" "$MACOS_DIR/"
+else
+    echo "error: SPM resource bundle not found at $RESOURCE_BUNDLE" >&2
+    exit 1
+fi
 APP_BUNDLE_ID_ESCAPED="$(xml_escape "$APP_BUNDLE_ID")"
 APP_VERSION_ESCAPED="$(xml_escape "$APP_VERSION")"
 APP_BUILD_ESCAPED="$(xml_escape "$APP_BUILD")"

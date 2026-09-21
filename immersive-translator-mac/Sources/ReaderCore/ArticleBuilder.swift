@@ -88,22 +88,51 @@ public func detectTitleFromText(_ text: String) -> String? {
     return line
 }
 
+/// 导入元信息（内容进水口四入口共用）：来源类型 / 来源地址 / 难度 / 已知中文副标题。
+/// 对齐 Windows ImportDialog 的 ImportMeta。
+public struct ImportMeta {
+    public var sourceType: ArticleSourceType?
+    public var sourceUrl: String?
+    public var level: String?
+    public var titleCn: String?
+
+    public init(
+        sourceType: ArticleSourceType? = nil,
+        sourceUrl: String? = nil,
+        level: String? = nil,
+        titleCn: String? = nil
+    ) {
+        self.sourceType = sourceType
+        self.sourceUrl = sourceUrl
+        self.level = level
+        self.titleCn = titleCn
+    }
+}
+
 public struct BuildArticleOptions {
     public var sourceType: ArticleSourceType = .paste
     public var sourceUrl: String?
     public var now: Int64
     public var title: String?
+    /// 已知中文副标题（内置文库带作者信息导入），置入后跳过标题翻译。
+    public var titleCn: String?
+    /// 已知难度标签（文库分级 / URL 预览估值）。
+    public var level: String?
 
     public init(
         sourceType: ArticleSourceType = .paste,
         sourceUrl: String? = nil,
         now: Int64 = Int64(Date().timeIntervalSince1970 * 1000),
-        title: String? = nil
+        title: String? = nil,
+        titleCn: String? = nil,
+        level: String? = nil
     ) {
         self.sourceType = sourceType
         self.sourceUrl = sourceUrl
         self.now = now
         self.title = title
+        self.titleCn = titleCn
+        self.level = level
     }
 }
 
@@ -142,12 +171,17 @@ public func buildArticleFromText(_ text: String, options: BuildArticleOptions = 
         title = pickTitle(text: combined, firstSentence: sentences.first?.en)
     }
 
+    // 已知中文副标题直接置入并标记 done，跳过标题翻译（对齐 Windows articleBuilder）。
+    let explicitCn = options.titleCn?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
     return Article(
         id: newArticleId(now: options.now),
         title: title,
-        titleCnState: .pending,
+        titleCn: explicitCn.isEmpty ? nil : explicitCn,
+        titleCnState: explicitCn.isEmpty ? .pending : .done,
         sourceUrl: options.sourceUrl,
         sourceType: options.sourceType,
+        level: options.level,
         wordCount: countWords(bodyText),
         createdAt: options.now,
         lastReadAt: options.now,
