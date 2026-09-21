@@ -1,0 +1,53 @@
+name: Updater assets
+
+# 本地持有 updater minisign 私钥（~/.tauri/），但仓库无 API token 时无法直接上传
+# release 资产。流程：本地对 CI 产物签名后，把 .sig 与 latest.json 提交到
+# release-updater/v<version>/ 并推送，本 workflow 用 Actions 内置 token 把它们
+# 附件到对应 tag 的 release（latest.json 资产名必须恰为 latest.json，
+# 自动更新端点 releases/latest/download/latest.json 才能命中）。
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "release-updater/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: updater-assets-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    name: Attach updater signatures to releases
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for dir in release-updater/v*/; do
+            version="$(basename "$dir")"
+            version="${version#v}"
+            tag="v$version"
+            assets=()
+            for f in "$dir"*; do
+              case "$(basename "$f")" in
+                *.sig|latest.json) assets+=("$f") ;;
+              esac
+            done
+            if [[ ${#assets[@]} -eq 0 ]]; then
+              echo "跳过 $dir（无 .sig / latest.json）"
+              continue
+            fi
+            echo "上传到 $tag：${assets[*]}"
+            gh release upload "$tag" -R "$GITHUB_REPOSITORY" "${assets[@]}" --clobber
+          done
