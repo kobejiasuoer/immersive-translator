@@ -4,6 +4,31 @@
 > 签名原理与证书体系见 `UPDATE-SETUP.md`；本文是**按顺序照做即可成功**的操作清单，
 > 包含 2026-09 发布 0.3.0 时实际踩过的坑。
 
+## ⭐ v0.6.0 起的新流程（免 PAT、免本机构建上传）
+
+v0.5.2 之后本机凭据管理器的 PAT 失效，且不想再弹「Connect to GitHub」登录。
+自 v0.6.0 起 Windows 安装包**改由 GitHub Actions 云端构建并上传**，全程只需要
+SSH push 权限：
+
+1. 收尾门禁全绿（vitest / cargo test / pnpm build / `cargo fmt --all` /
+   `npm audit --audit-level=high`，lockfile 与 package.json 同步——CI `npm ci` 会挂）。
+2. 版本号三处 + Cargo.lock 同步升版，提交 `chore(release): bump version to X.Y.Z`。
+3. 推 main，再推 tag `vX.Y.Z`。
+4. `.github/workflows/release.yml` 的 windows job 在 windows-latest 上构建 NSIS
+   安装包并上传到 tag 对应 release（exe 无 Authenticode——签名证书只在本地；
+   minisign updater 校验不受影响）。release 说明取自仓库 `release-notes/vX.Y.Z.md`。
+5. updater 签名补传：下载 release 上的 CI 产物（exe 字节与本机构建不同！），
+   本地 `npx tauri signer sign -k "$(base64 -w0 ~/.tauri/immersive-translator-updater.key)" --password "" <exe>`
+   生成 .sig，按清单 §4 生成 latest.json，两者放入 `release-updater/vX.Y.Z/`
+   提交推送——`updater-assets.yml` 自动把它们附件到 release（资产名恰为
+   `latest.json` 才能命中自动更新端点）。
+6. §6 发布后验证照旧。
+
+若仓库日后配置了 `TAURI_SIGNING_PRIVATE_KEY` secret（base64 后的私钥全文 +
+空密码），第 4 步会直接产出 .sig 并上传，第 5 步可整段跳过。
+
+以下 §1–§6 为 v0.5.x 及之前的本机构建流程，留作参考（网络畅通且有 PAT 时仍可用）。
+
 ## 0. 前置条件（每次发布前核对）
 
 | 项 | 位置 / 获取方式 | 缺失时后果 |
