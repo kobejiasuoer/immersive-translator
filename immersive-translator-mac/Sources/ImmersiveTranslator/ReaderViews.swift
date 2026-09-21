@@ -1305,6 +1305,9 @@ struct ReaderSettingsDrawer: View {
                                 }
                             }
 
+                            groupTitle("提醒")
+                            ReminderSectionView()
+
                             groupTitle("主题")
                             HStack(spacing: 8) {
                                 ForEach(ReaderTheme.allCases, id: \.self) { theme in
@@ -1368,6 +1371,7 @@ struct ReaderSettingsDrawer: View {
     }
 
     @State private var voiceCatalog: [ReaderVoiceInfo] = []
+
 
     private func cloudVoiceField(label: String, text: String, placeholder: String, onCommit: @escaping (String) -> Void) -> some View {
         HStack {
@@ -1775,5 +1779,74 @@ struct ZenControlsView: View {
         .background(palette.surface.opacity(0.92))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+    }
+}
+
+/// 提醒设置组（触点管理器的 config，存 review_reminder.json）。
+struct ReminderSectionView: View {
+    @ObservedObject private var manager = ReviewTouchpointManager.shared
+    @Environment(\.readerPalette) private var palette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                rowLabelView("每日提醒")
+                Toggle("", isOn: Binding(
+                    get: { manager.config.enabled },
+                    set: { value in manager.config.enabled = value }
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+            }
+            if manager.config.enabled {
+                HStack {
+                    rowLabelView("提醒时间")
+                    Picker("", selection: Binding(
+                        get: { manager.config.minuteOfDay },
+                        set: { value in manager.config.minuteOfDay = value }
+                    )) {
+                        ForEach(stride(from: reminderMinuteOfDayMin, through: reminderMinuteOfDayMax, by: 30).map { $0 }, id: \.self) { minute in
+                            Text(reminderMinuteLabel(minute)).tag(minute)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                HStack {
+                    rowLabelView("夜间免打扰")
+                    Toggle("", isOn: Binding(
+                        get: { manager.config.dndEnabled },
+                        set: { value in manager.config.dndEnabled = value }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    if manager.config.dndEnabled {
+                        Text("\(reminderMinuteLabel(manager.config.dndStartMin)) – \(reminderMinuteLabel(manager.config.dndEndMin))")
+                            .font(.system(size: 10.5))
+                            .foregroundColor(palette.textTertiary)
+                    }
+                }
+            }
+            HStack {
+                rowLabelView("阅读目标")
+                Picker("", selection: Binding(
+                    get: { manager.config.readGoalMin },
+                    set: { value in manager.config.readGoalMin = value }
+                )) {
+                    ForEach([5, 10, 15, 20, 30, 45, 60], id: \.self) { minutes in
+                        Text("\(minutes) 分钟/天").tag(minutes)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func rowLabelView(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11.5))
+            .foregroundColor(palette.textSecondary)
+            .frame(width: 76, alignment: .leading)
     }
 }

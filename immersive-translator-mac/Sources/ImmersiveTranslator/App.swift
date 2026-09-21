@@ -294,6 +294,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         observeSettings()
         showWelcomeIfNeeded()
         scheduleAutomaticUpdateCheck()
+        startReviewTouchpoints()
+    }
+
+    /// 复习触点：30s 调度（角标 + 到点弹提醒卡）；菜单文案随到期数动态变。
+    private func startReviewTouchpoints() {
+        let manager = ReviewTouchpointManager.shared
+        manager.onDueCountChange = { [weak self] due in
+            self?.refreshMenu()
+            if let item = self?.statusItem {
+                if due > 0 {
+                    let title = NSMutableAttributedString(string: "译 ", attributes: [
+                        .font: NSFont.menuBarFont(ofSize: 0),
+                    ])
+                    title.append(NSAttributedString(string: String(due), attributes: [
+                        .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize(for: .small), weight: .bold),
+                        .foregroundColor: NSColor.systemRed,
+                    ]))
+                    item.button?.attributedTitle = title
+                } else {
+                    item.button?.title = "译"
+                }
+            }
+        }
+        manager.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -311,6 +335,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "沉浸阅读室  \(settingsStore.readerHotKeyShortcut.title)", action: #selector(openReader), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "生词本...", action: #selector(openVocabReview), keyEquivalent: ""))
+        let quickTitle = ReviewTouchpointManager.shared.dueCount > 0
+            ? "快速复习（\(ReviewTouchpointManager.shared.dueCount) 到期）" : "快速复习"
+        menu.addItem(NSMenuItem(title: quickTitle, action: #selector(openQuickReview), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "录音直译...", action: #selector(toggleLiveCaption), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "翻译历史...", action: #selector(openHistory), keyEquivalent: ""))
@@ -443,6 +470,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleLiveCaption() {
         liveCaptionController.toggle()
+    }
+
+    /// 快速复习结束页「打开阅读室」入口（触点管理器转发）。
+    func openReaderFromTouchpoint() {
+        openReader()
+    }
+
+    @objc private func openQuickReview() {
+        ReviewTouchpointManager.shared.openQuickReview()
     }
 
     @objc private func menuCheckForUpdates() {
