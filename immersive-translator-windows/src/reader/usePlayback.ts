@@ -12,13 +12,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  onTtsBoundary,
-  onTtsEnded,
-  ttsSpeakAdvanced,
-  ttsStopTrack,
-  type ReaderSpeakOptions,
-} from "../lib/tauriBridge";
+import type { ReaderSpeakOptions } from "../lib/tauriBridge";
+import type { SpeechEngine } from "./speechEngine";
 import { looksMostlyChinese } from "../core/languageDetect";
 
 /** 语速快捷档（播放条 1.0× 菜单）。 */
@@ -47,8 +42,12 @@ interface PlaybackConfig {
   /** 当前文章的待读文本（下标即句 idx）。 */
   textsRef: { current: string[] };
   settingsRef: { current: { rate: number; voice: string; sentencePauseMs: number; shadowingMode: boolean } };
+  /** 朗读引擎（本地 SAPI / 讯飞云，稳定调度器对象，ReaderApp 注入）。 */
+  engine: SpeechEngine;
   /** 播放自然结束（最后一句的 ended）。 */
   onFinish?: () => void;
+  /** 当前朗读启动失败，停止后向界面报告。 */
+  onError?: (error: unknown) => void;
 }
 
 export function usePlayback(config: PlaybackConfig): PlaybackHandle {
@@ -63,11 +62,26 @@ export function usePlayback(config: PlaybackConfig): PlaybackHandle {
   const epochRef = useRef(0);
   const pauseTimerRef = useRef<number | null>(null);
   const playingRef = useRef(false);
+  const onErrorRef = useRef(config.onError);
+  onErrorRef.current = config.onError;
 
   const setActiveIdx = useCallback((idx: number) => {
     activeIdxRef.current = idx;
     setActiveIdxState(idx);
   }, []);
+
+  /** 按当前设置构造朗读参数（speak 与 prefetch 用同一构造，预取才能命中缓存）。 */
+  const buildSpeakOpts = useCallback((): ReaderSpeakOptions => {
+    const s = config.settingsRef.current;
+    const opts: ReaderSpeakOptions = {
+      track: "sentence",
+      rate: s.rate,
+      target,
+    };
+    if (s.voice) opts.voice = s.voice;
+    return opts;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
 
   const speakIdx = useCallback(
     (idx: number) => {
@@ -75,21 +89,26 @@ export function usePlayback(config: PlaybackConfig): PlaybackHandle {
       if (idx < 0 || idx >= texts.length) {
         return;
       }
-      const s = config.settingsRef.current;
+      const text = texts[idx];
+      const epoch = epochRef.current;
+      genRef.current = null;
       setActiveIdx(idx);
-      const opts: ReaderSpeakOptions = {
-        track: "sentence",
-        rate: s.rate,
-        target,
-      };
-      if (s.voice) opts.voice = s.voice;
-      ttsSpeakAdvanced(texts[idx], looksMostlyChinese(texts[idx]), opts)
+      config.engine
+        .speak(text, looksMostlyChinese(text), buildSpeakOpts())
         .then((gen) => {
+          if (epoch !== epochRef.current) return;
           genRef.current = gen;
+          // 预取下一句（云引擎合成进缓存，句间切换零等待）。
+          const nextText = config.textsRef.current[idx + 1];
+          if (nextText) {
+            config.engine.prefetch?.(nextText, looksMostlyChinese(nextText), buildSpeakOpts());
+          }
         })
         .catch((error) => {
+          if (epoch !== epochRef.current) return;
           console.error("[reader] tts speak failed", error);
           stop();
+          onErrorRef.current?.(error);
         });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -110,10 +129,10 @@ export function usePlayback(config: PlaybackConfig): PlaybackHandle {
     setPlaying(false);
     setShadowingWait(false);
     genRef.current = null;
-    void ttsStopTrack("sentence").catch((error) =>
+    void config.engine.stopTrack("sentence").catch((error) =>
       console.error("[reader] tts stop failed", error),
     );
-  }, [clearPauseTimer]);
+  }, [clearPauseTimer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** ended 后的推进决策：跟读等待 / 停顿 / 立即下一句 / 结束。 */
   const advanceAfterEnded = useCallback(
@@ -219,54 +238,34 @@ export function usePlayback(config: PlaybackConfig): PlaybackHandle {
       setShadowingWait(false);
       genRef.current = null;
       setActiveIdx(Math.max(0, startIdx));
+      // 切文章/删文章时上一句必须停声：长句可播十几秒，否则新旧文章声音串台。
+      void config.engine.stopTrack("sentence").catch((error) =>
+        console.error("[reader] tts stop failed", error),
+      );
     },
-    [clearPauseTimer, setActiveIdx],
+    [clearPauseTimer, setActiveIdx], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  // tts:ended：只有与最新代数匹配的 sentence 音轨事件才推进。
+  // 引擎 ended：只有与最新代数匹配的 sentence 音轨事件才推进。
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let active = true;
-    onTtsEnded((e) => {
-      if (!active) return;
+    const unlisten = config.engine.onEnded((e) => {
       if (e.track && e.track !== "sentence") return;
       if (genRef.current === null || e.gen !== genRef.current) return;
       genRef.current = null;
       const epoch = epochRef.current;
       advanceAfterEnded(epoch);
-    }).then((u) => {
-      if (active) unlisten = u;
-      else u();
     });
-    return () => {
-      active = false;
-      unlisten?.();
-    };
+    return unlisten;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [advanceAfterEnded]);
-
-  // boundary 事件：句级高亮由逐句朗读 + ended 驱动（decisions #5），
-  // 这里只消费事件确认链路存活，不做词级视觉高亮。
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let active = true;
-    onTtsBoundary(() => {
-      /* 句级高亮不依赖 word boundary；预留调试锚点 */
-    }).then((u) => {
-      if (active) unlisten = u;
-      else u();
-    });
-    return () => {
-      active = false;
-      unlisten?.();
-    };
-  }, []);
 
   // 卸载/文章切换时停声。
   useEffect(() => {
     return () => {
       epochRef.current += 1;
-      void ttsStopTrack("sentence").catch(() => undefined);
+      void config.engine.stopTrack("sentence").catch(() => undefined);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return {
