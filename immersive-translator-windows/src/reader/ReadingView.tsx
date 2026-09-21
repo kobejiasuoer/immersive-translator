@@ -3,7 +3,7 @@
  * 屏 C 划选查词入口。视觉按 §5 句对主从版式，640px 列居中。
  */
 
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import {
   IconBookOpen,
   IconEdit,
@@ -11,6 +11,7 @@ import {
   IconVolume,
 } from "../ui/icons";
 import type { Article, ReaderSettings, SentenceChunk } from "../core/readerTypes";
+import type { WordMark } from "../core/pronunciation";
 import { extractSelectionText } from "../core/readerDict";
 import { buildSentenceSpans, splitBySpans, type ChunkSpan } from "../core/chunkAnnotate";
 
@@ -26,6 +27,8 @@ interface Props {
   searchMatchIdx: number | null;
   /** 生词本归一化 id 集（生词再现标记用）。 */
   knownIds: ReadonlySet<string>;
+  /** 跟读评测词着色（最近一次评测的句子；下一次评测前保持显示）。 */
+  assessMarks: { sentenceIdx: number; marks: WordMark[] } | null;
   onReveal: (idx: number) => void;
   onMask: (idx: number) => void;
   onRevealAll: () => void;
@@ -294,9 +297,11 @@ export function ReadingView(props: Props) {
                   </button>
                   <div className="pair-body">
                   <p className="pair-en" onClick={handleEnClick} title="单击查词，划选查短语">
-                    {(spansBySentence.get(s.idx) ?? NO_SPANS).length === 0
-                      ? s.en
-                      : splitBySpans(s.en, spansBySentence.get(s.idx)!).map((seg, i) =>
+                    {props.assessMarks && props.assessMarks.sentenceIdx === s.idx
+                      ? renderMarkedEn(s.en, props.assessMarks.marks)
+                      : (spansBySentence.get(s.idx) ?? NO_SPANS).length === 0
+                        ? s.en
+                        : splitBySpans(s.en, spansBySentence.get(s.idx)!).map((seg, i) =>
                           seg.span ? (
                             <span
                               key={i}
@@ -434,6 +439,23 @@ export function ReadingView(props: Props) {
       </div>
     </div>
   );
+}
+
+/** 跟读评测词着色：按字符区间给原文词上色（绿/黄/红，漏读加底纹）。 */
+function renderMarkedEn(en: string, marks: WordMark[]): ReactNode[] {
+  const parts: ReactNode[] = [];
+  let pos = 0;
+  marks.forEach((mk, i) => {
+    if (mk.start > pos) parts.push(en.slice(pos, mk.start));
+    parts.push(
+      <span key={i} className={`assess-w ${mk.quality}`} title={`${Math.round(mk.score * 20)} 分`}>
+        {en.slice(mk.start, mk.end)}
+      </span>,
+    );
+    pos = mk.end;
+  });
+  if (pos < en.length) parts.push(en.slice(pos));
+  return parts;
 }
 
 /** 光标处的完整单词（阅读版式下 .pair-en 内单击查词）。 */
