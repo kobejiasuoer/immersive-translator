@@ -7,7 +7,8 @@ struct VocabListPanelView: View {
     @ObservedObject var vm: ReaderViewModel
     @Environment(\.readerPalette) private var palette
 
-    private var due: [VocabWord] { vm.dueWords }
+    /// 复习队列：笔记加练批次优先，否则普通到期队列。
+    private var due: [VocabWord] { vm.reviewQueue }
     private var later: [VocabWord] {
         let dueIds = Set(due.map(\.id))
         return vm.vocabWords
@@ -182,7 +183,8 @@ struct ReviewView: View {
         let grade: ReviewGrade
     }
 
-    private var due: [VocabWord] { vm.dueWords }
+    /// 复习队列：笔记加练批次优先，否则普通到期队列。
+    private var due: [VocabWord] { vm.reviewQueue }
     private var current: VocabWord? {
         guard !due.isEmpty else { return nil }
         let pos = min(max(0, vm.reviewPos), due.count - 1)
@@ -298,7 +300,7 @@ struct ReviewView: View {
         guard !gradedThisRound.contains(word.id) else { return }
         gradedThisRound.insert(word.id)
         results.append(RecallResult(wordId: word.id, mode: effective.mode, judged: verdict, grade: grade))
-        vm.gradeVocab(word, grade)
+        vm.gradeVocab(word, grade, mode: effective.mode, verdict: verdict)
     }
 
     // MARK: - 左列（统计）
@@ -334,6 +336,76 @@ struct ReviewView: View {
                     .font(.system(size: 10.5))
                     .foregroundColor(palette.textTertiary)
                     .lineSpacing(2)
+            }
+
+            if vm.focusReviewIds != nil {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(palette.warn)
+                        Text("加练中 · 只测笔记仍错的词")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(palette.warn)
+                    }
+                    Button("退出加练，回到到期队列") {
+                        vm.focusReviewIds = nil
+                        vm.reviewPos = 0
+                    }
+                    .font(.system(size: 10.5))
+                    .controlSize(.small)
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(palette.warn.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    vm.openNoteDialog()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 11))
+                        Text("生成复习笔记")
+                            .font(.system(size: 11.5))
+                        Spacer()
+                        let unnoted = vm.unnotedWordCount
+                        if unnoted > 0 {
+                            Text("\(unnoted) 未整理")
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 0.5)
+                                .background(Color.orange)
+                                .clipShape(Capsule())
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(palette.accent)
+
+                Button {
+                    vm.openNotes()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "books.vertical")
+                            .font(.system(size: 11))
+                        Text("笔记库")
+                            .font(.system(size: 11.5))
+                        Spacer()
+                        if !vm.notes.isEmpty {
+                            Text("\(vm.notes.count)")
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .foregroundColor(palette.textTertiary)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(palette.text)
             }
         }
         .padding(.horizontal, 12)
