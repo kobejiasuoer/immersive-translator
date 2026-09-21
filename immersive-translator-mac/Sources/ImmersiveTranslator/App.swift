@@ -261,6 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     )
     private lazy var readerController = ReaderWindowController(settingsStore: settingsStore)
+    private lazy var liveCaptionController = LiveCaptionWindowController()
     private lazy var readerChat = ReaderChatClient(settingsStore: settingsStore)
     private var hotKeyManager: HotKeyManager?
     private var screenSelector: ScreenSelectionController?
@@ -310,6 +311,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "沉浸阅读室  \(settingsStore.readerHotKeyShortcut.title)", action: #selector(openReader), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "生词本...", action: #selector(openVocabReview), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "录音直译...", action: #selector(toggleLiveCaption), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "翻译历史...", action: #selector(openHistory), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "检查更新...", action: #selector(menuCheckForUpdates), keyEquivalent: ""))
@@ -437,6 +439,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openVocabReview() {
         readerController.show(openReview: true)
+    }
+
+    @objc private func toggleLiveCaption() {
+        liveCaptionController.toggle()
     }
 
     @objc private func menuCheckForUpdates() {
