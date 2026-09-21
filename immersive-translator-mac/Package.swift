@@ -14,7 +14,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "ImmersiveTranslator",
-            dependencies: ["ProviderCore", "ReaderCore"],
+            dependencies: ["ProviderCore", "ReaderCore", "XfyunCore"],
             resources: [
                 // 内容进水口数据资产：内置文库（6 篇公版书）+ 考试大纲词表。
                 .process("Resources")
@@ -39,6 +39,12 @@ let package = Package(
             name: "ReaderCore",
             dependencies: []
         ),
+        // 讯飞语音三服务（TTS 合成 / IAT 听写 / ISE 评测）的协议与解析层：
+        // HMAC 鉴权、请求帧构造、结果解析、词对齐 DP。网络会话与凭据在应用层。
+        .target(
+            name: "XfyunCore",
+            dependencies: []
+        ),
         .testTarget(
             name: "ProviderCoreTests",
             dependencies: ["ProviderCore"]
@@ -46,6 +52,10 @@ let package = Package(
         .testTarget(
             name: "ReaderCoreTests",
             dependencies: ["ReaderCore"]
+        ),
+        .testTarget(
+            name: "XfyunCoreTests",
+            dependencies: ["XfyunCore"]
         )
     ]
 )

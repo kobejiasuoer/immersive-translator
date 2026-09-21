@@ -1016,6 +1016,10 @@ struct SettingsView: View {
                         }
                     }
 
+                    settingsSection("语音（讯飞）") {
+                        XfyunVoiceSettingsSection()
+                    }
+
                     storageMessage
                 }
                 .padding(24)

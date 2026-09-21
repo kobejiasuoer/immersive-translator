@@ -92,6 +92,26 @@ public enum ReaderFontPair: String, Codable, Equatable, CaseIterable {
     }
 }
 
+/// 朗读引擎：local = 系统 AVSpeechSynthesizer（离线），xfyun = 讯飞在线合成。
+public enum TtsProvider: String, Codable, Equatable, CaseIterable {
+    case local
+    case xfyun
+
+    public var label: String {
+        switch self {
+        case .local: return "系统语音（离线）"
+        case .xfyun: return "讯飞在线合成"
+        }
+    }
+}
+
+/// 跟读评测过关阈值范围（5 分制，默认 4.2 ≈ 84 分）。
+public let readerAssessPassMin = 3.0
+public let readerAssessPassMax = 5.0
+/// 跟读评测静音断句范围（ms）。
+public let readerAssessSilenceMin = 800.0
+public let readerAssessSilenceMax = 3000.0
+
 public struct ReaderSettings: Codable, Equatable {
     public var contrastMode: ContrastMode
     public var maskTranslation: Bool
@@ -111,6 +131,20 @@ public struct ReaderSettings: Codable, Equatable {
     /// 每句停顿 0–2000ms。
     public var sentencePauseMs: Double
     public var shadowingMode: Bool
+    /// 朗读引擎：local = 系统语音（默认），xfyun = 讯飞在线合成（凭据在设置）。
+    public var ttsProvider: TtsProvider
+    /// 讯飞合成发音人（vcn），中文句用它；空串 = xiaoyan。
+    public var cloudVoice: String
+    /// 讯飞合成英文句发音人（vcn）；空串 = 回退 cloudVoice（再缺省 catherine）。
+    public var cloudVoiceEn: String
+    /// 跟读评测：跟读句送讯飞语音评测，达到阈值才放行（凭据在设置配置）。
+    public var shadowingAssess: Bool
+    /// 跟读过关阈值（5 分制），默认 4.2 ≈ 84 分。
+    public var shadowingPassScore: Double
+    /// 跟读评测开麦方式：true = 本句读完自动开麦；false = 出「开口跟读」按钮手动开。
+    public var shadowingAutoMic: Bool
+    /// 跟读评测静音断句：说话停顿超过该毫秒数视为读完，默认 1500。
+    public var shadowingSilenceMs: Double
     /// 词块高亮：文章翻译完成后自动跑 LLM 词块标注。
     public var chunkHighlight: Bool
     /// 生词再现标记：正文中标记已收藏的词/词块。
@@ -132,6 +166,13 @@ public struct ReaderSettings: Codable, Equatable {
         rate: Double = 1,
         sentencePauseMs: Double = 0,
         shadowingMode: Bool = false,
+        ttsProvider: TtsProvider = .local,
+        cloudVoice: String = "",
+        cloudVoiceEn: String = "catherine",
+        shadowingAssess: Bool = false,
+        shadowingPassScore: Double = 4.2,
+        shadowingAutoMic: Bool = true,
+        shadowingSilenceMs: Double = 1500,
         chunkHighlight: Bool = true,
         showVocabMarks: Bool = true,
         reviewMode: ReviewModeSetting = .smart
@@ -149,6 +190,13 @@ public struct ReaderSettings: Codable, Equatable {
         self.rate = rate
         self.sentencePauseMs = sentencePauseMs
         self.shadowingMode = shadowingMode
+        self.ttsProvider = ttsProvider
+        self.cloudVoice = cloudVoice
+        self.cloudVoiceEn = cloudVoiceEn
+        self.shadowingAssess = shadowingAssess
+        self.shadowingPassScore = shadowingPassScore
+        self.shadowingAutoMic = shadowingAutoMic
+        self.shadowingSilenceMs = shadowingSilenceMs
         self.chunkHighlight = chunkHighlight
         self.showVocabMarks = showVocabMarks
         self.reviewMode = reviewMode
@@ -178,6 +226,13 @@ public struct ReaderSettingsOverride: Codable, Equatable {
     public var rate: Double?
     public var sentencePauseMs: Double?
     public var shadowingMode: Bool?
+    public var ttsProvider: String?
+    public var cloudVoice: String?
+    public var cloudVoiceEn: String?
+    public var shadowingAssess: Bool?
+    public var shadowingPassScore: Double?
+    public var shadowingAutoMic: Bool?
+    public var shadowingSilenceMs: Double?
     public var chunkHighlight: Bool?
     public var showVocabMarks: Bool?
     /// reviewMode 只进全局默认，文章覆盖不承载（Windows 同口径）。
@@ -207,7 +262,9 @@ public struct ReaderSettingsOverride: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case contrastMode, maskTranslation, maskStyle, showProgress, zenMode, theme
         case fontSize, lineHeight, fontPair, voice, rate, sentencePauseMs
-        case shadowingMode, chunkHighlight, showVocabMarks, reviewMode
+        case shadowingMode, ttsProvider, cloudVoice, cloudVoiceEn
+        case shadowingAssess, shadowingPassScore, shadowingAutoMic, shadowingSilenceMs
+        case chunkHighlight, showVocabMarks, reviewMode
     }
 
     public init(from decoder: Decoder) throws {
@@ -225,6 +282,13 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         rate = try c.decodeIfPresent(Double.self, forKey: .rate)
         sentencePauseMs = try c.decodeIfPresent(Double.self, forKey: .sentencePauseMs)
         shadowingMode = try c.decodeIfPresent(Bool.self, forKey: .shadowingMode)
+        ttsProvider = try c.decodeIfPresent(String.self, forKey: .ttsProvider)
+        cloudVoice = try c.decodeIfPresent(String.self, forKey: .cloudVoice)
+        cloudVoiceEn = try c.decodeIfPresent(String.self, forKey: .cloudVoiceEn)
+        shadowingAssess = try c.decodeIfPresent(Bool.self, forKey: .shadowingAssess)
+        shadowingPassScore = try c.decodeIfPresent(Double.self, forKey: .shadowingPassScore)
+        shadowingAutoMic = try c.decodeIfPresent(Bool.self, forKey: .shadowingAutoMic)
+        shadowingSilenceMs = try c.decodeIfPresent(Double.self, forKey: .shadowingSilenceMs)
         chunkHighlight = try c.decodeIfPresent(Bool.self, forKey: .chunkHighlight)
         showVocabMarks = try c.decodeIfPresent(Bool.self, forKey: .showVocabMarks)
         reviewMode = try c.decodeIfPresent(String.self, forKey: .reviewMode)
@@ -245,6 +309,13 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         try c.encodeIfPresent(rate, forKey: .rate)
         try c.encodeIfPresent(sentencePauseMs, forKey: .sentencePauseMs)
         try c.encodeIfPresent(shadowingMode, forKey: .shadowingMode)
+        try c.encodeIfPresent(ttsProvider, forKey: .ttsProvider)
+        try c.encodeIfPresent(cloudVoice, forKey: .cloudVoice)
+        try c.encodeIfPresent(cloudVoiceEn, forKey: .cloudVoiceEn)
+        try c.encodeIfPresent(shadowingAssess, forKey: .shadowingAssess)
+        try c.encodeIfPresent(shadowingPassScore, forKey: .shadowingPassScore)
+        try c.encodeIfPresent(shadowingAutoMic, forKey: .shadowingAutoMic)
+        try c.encodeIfPresent(shadowingSilenceMs, forKey: .shadowingSilenceMs)
         try c.encodeIfPresent(chunkHighlight, forKey: .chunkHighlight)
         try c.encodeIfPresent(showVocabMarks, forKey: .showVocabMarks)
         try c.encodeIfPresent(reviewMode, forKey: .reviewMode)
@@ -265,6 +336,13 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         if let v = patch["rate"] as? Double { rate = v }
         if let v = patch["sentencePauseMs"] as? Double { sentencePauseMs = v }
         if let v = patch["shadowingMode"] as? Bool { shadowingMode = v }
+        if let v = patch["ttsProvider"] as? String { ttsProvider = v }
+        if let v = patch["cloudVoice"] as? String { cloudVoice = v }
+        if let v = patch["cloudVoiceEn"] as? String { cloudVoiceEn = v }
+        if let v = patch["shadowingAssess"] as? Bool { shadowingAssess = v }
+        if let v = patch["shadowingPassScore"] as? Double { shadowingPassScore = v }
+        if let v = patch["shadowingAutoMic"] as? Bool { shadowingAutoMic = v }
+        if let v = patch["shadowingSilenceMs"] as? Double { shadowingSilenceMs = v }
         if let v = patch["chunkHighlight"] as? Bool { chunkHighlight = v }
         if let v = patch["showVocabMarks"] as? Bool { showVocabMarks = v }
         if let v = patch["reviewMode"] as? String { reviewMode = v }
@@ -296,6 +374,17 @@ public func mergeReaderSettings(_ global: ReaderSettings, _ override: ReaderSett
         merged.sentencePauseMs = min(2000, max(0, v.rounded()))
     }
     if let v = o.shadowingMode { merged.shadowingMode = v }
+    if let v = o.ttsProvider, let parsed = TtsProvider(rawValue: v) { merged.ttsProvider = parsed }
+    if let v = o.cloudVoice { merged.cloudVoice = v }
+    if let v = o.cloudVoiceEn { merged.cloudVoiceEn = v }
+    if let v = o.shadowingAssess { merged.shadowingAssess = v }
+    if let v = o.shadowingPassScore, v.isFinite {
+        merged.shadowingPassScore = min(readerAssessPassMax, max(readerAssessPassMin, v))
+    }
+    if let v = o.shadowingAutoMic { merged.shadowingAutoMic = v }
+    if let v = o.shadowingSilenceMs, v.isFinite {
+        merged.shadowingSilenceMs = min(readerAssessSilenceMax, max(readerAssessSilenceMin, v.rounded()))
+    }
     if let v = o.chunkHighlight { merged.chunkHighlight = v }
     if let v = o.showVocabMarks { merged.showVocabMarks = v }
     if let v = o.reviewMode, let parsed = ReviewModeSetting(rawValue: v) { merged.reviewMode = parsed }
@@ -319,6 +408,13 @@ public func readerSettingsPatch(from old: ReaderSettings, to new: ReaderSettings
     if old.rate != new.rate { patch["rate"] = new.rate }
     if old.sentencePauseMs != new.sentencePauseMs { patch["sentencePauseMs"] = new.sentencePauseMs }
     if old.shadowingMode != new.shadowingMode { patch["shadowingMode"] = new.shadowingMode }
+    if old.ttsProvider != new.ttsProvider { patch["ttsProvider"] = new.ttsProvider.rawValue }
+    if old.cloudVoice != new.cloudVoice { patch["cloudVoice"] = new.cloudVoice }
+    if old.cloudVoiceEn != new.cloudVoiceEn { patch["cloudVoiceEn"] = new.cloudVoiceEn }
+    if old.shadowingAssess != new.shadowingAssess { patch["shadowingAssess"] = new.shadowingAssess }
+    if old.shadowingPassScore != new.shadowingPassScore { patch["shadowingPassScore"] = new.shadowingPassScore }
+    if old.shadowingAutoMic != new.shadowingAutoMic { patch["shadowingAutoMic"] = new.shadowingAutoMic }
+    if old.shadowingSilenceMs != new.shadowingSilenceMs { patch["shadowingSilenceMs"] = new.shadowingSilenceMs }
     if old.chunkHighlight != new.chunkHighlight { patch["chunkHighlight"] = new.chunkHighlight }
     if old.showVocabMarks != new.showVocabMarks { patch["showVocabMarks"] = new.showVocabMarks }
     return patch
@@ -330,4 +426,6 @@ public func clampReaderSettings(_ settings: inout ReaderSettings) {
     settings.lineHeight = min(2.4, max(1, settings.lineHeight))
     settings.rate = min(readerRateMax, max(readerRateMin, settings.rate))
     settings.sentencePauseMs = min(2000, max(0, settings.sentencePauseMs))
+    settings.shadowingPassScore = min(readerAssessPassMax, max(readerAssessPassMin, settings.shadowingPassScore))
+    settings.shadowingSilenceMs = min(readerAssessSilenceMax, max(readerAssessSilenceMin, settings.shadowingSilenceMs))
 }

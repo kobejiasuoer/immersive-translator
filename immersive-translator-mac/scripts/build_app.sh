@@ -138,6 +138,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
     <true/>
     <key>ITUpdateManifestURL</key>
     <string>$APP_UPDATE_MANIFEST_URL_ESCAPED</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>跟读评测、口语陪练与录音直译需要使用麦克风录音，音频只送你配置的讯飞语音服务。</string>
 </dict>
 </plist>
 PLIST

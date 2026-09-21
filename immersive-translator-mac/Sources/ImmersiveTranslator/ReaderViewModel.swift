@@ -150,13 +150,20 @@ final class ReaderViewModel: ObservableObject {
     /// 当前文章句文与播放设置同步给引擎。
     private func syncPlaybackContext() {
         let settings = effectiveSettings
+        XfyunTtsEngine.shared.updateVoiceConfig(XfyunTtsEngine.VoiceConfig(
+            vcnCn: settings.cloudVoice,
+            vcnEn: settings.cloudVoiceEn
+        ))
         playback.updateContext(
             texts: article?.sentences.map(\.en) ?? [],
             settings: ReaderPlaybackEngine.Settings(
                 rate: settings.rate,
                 voice: settings.voice,
                 sentencePauseMs: settings.sentencePauseMs,
-                shadowingMode: settings.shadowingMode
+                shadowingMode: settings.shadowingMode,
+                ttsProvider: settings.ttsProvider,
+                cloudVoice: settings.cloudVoice,
+                cloudVoiceEn: settings.cloudVoiceEn
             )
         )
     }

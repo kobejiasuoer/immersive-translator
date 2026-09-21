@@ -1205,7 +1205,41 @@ struct ReaderSettingsDrawer: View {
                             }
 
                             groupTitle("朗读")
-                            voiceRow(selection: settings.voice)
+                            HStack {
+                                rowLabel("引擎")
+                                Picker("引擎", selection: Binding(
+                                    get: { settings.ttsProvider },
+                                    set: { value in vm.patchSettings { $0.ttsProvider = value } }
+                                )) {
+                                    ForEach(TtsProvider.allCases, id: \.self) { provider in
+                                        Text(provider.label).tag(provider)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            if settings.ttsProvider == .xfyun {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    if !XfyunCredentialsStore.shared.isComplete(.tts) {
+                                        HStack(spacing: 5) {
+                                            Image(systemName: "exclamationmark.triangle.fill")
+                                                .font(.system(size: 10))
+                                                .foregroundColor(palette.warn)
+                                            Text("讯飞合成凭据未配置，朗读将回落系统语音")
+                                                .font(.system(size: 10.5))
+                                                .foregroundColor(palette.warn)
+                                        }
+                                    }
+                                    cloudVoiceField(label: "中文音色", text: settings.cloudVoice, placeholder: "xiaoyan") { value in
+                                        vm.patchSettings { $0.cloudVoice = value }
+                                    }
+                                    cloudVoiceField(label: "英文音色", text: settings.cloudVoiceEn, placeholder: "catherine") { value in
+                                        vm.patchSettings { $0.cloudVoiceEn = value }
+                                    }
+                                }
+                            } else {
+                                voiceRow(selection: settings.voice)
+                            }
                             sliderRow("语速", value: settings.rate, range: readerRateMin...readerRateMax, step: 0.05, format: String(format: "%.2f×", settings.rate)) { value in
                                 vm.patchSettings { $0.rate = value }
                             }
@@ -1220,6 +1254,37 @@ struct ReaderSettingsDrawer: View {
                                 ))
                                 .toggleStyle(.switch)
                                 .labelsHidden()
+                            }
+                            if settings.shadowingMode {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        rowLabel("跟读评测")
+                                        Toggle("", isOn: Binding(
+                                            get: { settings.shadowingAssess },
+                                            set: { value in vm.patchSettings { $0.shadowingAssess = value } }
+                                        ))
+                                        .toggleStyle(.switch)
+                                        .labelsHidden()
+                                    }
+                                    .help("跟读句送讯飞语音评测，达到阈值才放行（凭据在设置 → 语音）")
+                                    if settings.shadowingAssess {
+                                        sliderRow("过关阈值", value: settings.shadowingPassScore, range: readerAssessPassMin...readerAssessPassMax, step: 0.1, format: String(format: "%.1f 分", settings.shadowingPassScore)) { value in
+                                            vm.patchSettings { $0.shadowingPassScore = value }
+                                        }
+                                        sliderRow("静音断句", value: settings.shadowingSilenceMs, range: readerAssessSilenceMin...readerAssessSilenceMax, step: 100, format: String(format: "%.1fs", settings.shadowingSilenceMs / 1000)) { value in
+                                            vm.patchSettings { $0.shadowingSilenceMs = value }
+                                        }
+                                        HStack {
+                                            rowLabel("读完自动开麦")
+                                            Toggle("", isOn: Binding(
+                                                get: { settings.shadowingAutoMic },
+                                                set: { value in vm.patchSettings { $0.shadowingAutoMic = value } }
+                                            ))
+                                            .toggleStyle(.switch)
+                                            .labelsHidden()
+                                        }
+                                    }
+                                }
                             }
 
                             groupTitle("主题")
@@ -1285,6 +1350,20 @@ struct ReaderSettingsDrawer: View {
     }
 
     @State private var voiceCatalog: [ReaderVoiceInfo] = []
+
+    private func cloudVoiceField(label: String, text: String, placeholder: String, onCommit: @escaping (String) -> Void) -> some View {
+        HStack {
+            rowLabel(label)
+            TextField(placeholder, text: Binding(
+                get: { text },
+                set: { value in onCommit(value) }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 11.5))
+            .frame(maxWidth: .infinity)
+        }
+        .help("讯飞发音人 vcn；建议：catherine（英）、xiaoyan（中）、x4_xiaoyan、aisjiuxu（男）、aisbabyxu（童）")
+    }
 
     private func voiceRow(selection: String) -> some View {
         HStack {
