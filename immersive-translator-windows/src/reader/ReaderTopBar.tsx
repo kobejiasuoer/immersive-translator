@@ -19,11 +19,13 @@ interface Props {
   onPatchSettings: (patch: Partial<ReaderSettings>) => void;
   onOpenDrawer: () => void;
   onSearch: (query: string) => void;
+  /** 非阅读视图（生词本 / 口语陪练）下提供：点击应用名返回阅读室。 */
+  onBackToReading?: () => void;
 }
 
 const THEME_CYCLE: ReaderTheme[] = ["light", "dark", "sepia", "oled"];
 
-export function ReaderTopBar({ articleName, settings, onPatchSettings, onOpenDrawer, onSearch }: Props) {
+export function ReaderTopBar({ articleName, settings, onPatchSettings, onOpenDrawer, onSearch, onBackToReading }: Props) {
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -71,7 +73,18 @@ export function ReaderTopBar({ articleName, settings, onPatchSettings, onOpenDra
       <span className="reader-logo" aria-hidden>
         阅
       </span>
-      <span className="reader-appname">沉浸阅读室</span>
+      {onBackToReading ? (
+        <button
+          type="button"
+          className="reader-appname reader-appname-link"
+          onClick={onBackToReading}
+          title="返回阅读室"
+        >
+          沉浸阅读室
+        </button>
+      ) : (
+        <span className="reader-appname">沉浸阅读室</span>
+      )}
       {articleName && (
         <span className="reader-article-name" title={articleName}>
           {articleName}

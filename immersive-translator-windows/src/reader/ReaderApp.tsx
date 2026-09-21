@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import {
   onTranslationCancelled,
@@ -15,19 +16,34 @@ import {
   takePendingReaderImport,
   takePendingOpenReview,
   translateStream,
-  ttsSpeakAdvanced,
 } from "../lib/tauriBridge";
 import { loadSettingsAsync, hasValidSettings } from "../lib/settingsStore";
 import {
+  noteDelete,
+  noteList,
+  noteRead,
+  noteWriteReplay,
   readerDeleteArticle,
   readerGetArticle,
   readerGetVocab,
   readerListArticles,
+  readerRecordRecall,
   readerRecordReview,
   readerSaveArticle,
   readerSaveVocabWord,
 } from "../lib/readerStore";
-import { loadGlobalReaderSettings, saveGlobalReaderSettings } from "./readerSettingsStore";
+import {
+  buildReplayInput,
+  buildReplaySystemPrompt,
+  findWordByHeading,
+  isStillWeak,
+  parseReplay,
+  recallBucket,
+  verifyReplayWords,
+} from "../core/noteBuilder";
+import { parseNoteMarkdown } from "../core/noteParser";
+import type { NoteMeta, NoteReplay } from "../core/readerTypes";
+import { loadGlobalReaderSettings, loadMicDeviceId, saveGlobalReaderSettings, saveMicDeviceId } from "./readerSettingsStore";
 import { trayRefreshBadge } from "../lib/reminder";
 import { buildArticleFromText, normalizeWordKey } from "../core/articleBuilder";
 import { looksMostlyChinese, resolveTargetLanguage } from "../core/languageDetect";
@@ -37,11 +53,13 @@ import {
   type Article,
   type ArticleSummary,
   type ReaderSettings,
+  type RecallMode,
   type SentenceChunk,
   type SentencePair,
   type VocabCollocation,
   type VocabWord,
 } from "../core/readerTypes";
+import type { RecallVerdict } from "../core/recallJudge";
 import type { ReviewLogFile } from "../core/readerSrs";
 import {
   buildParagraphRequestInput,
@@ -68,15 +86,28 @@ import { ReaderTopBar, ViewMenu } from "./ReaderTopBar";
 import { ReaderShelf } from "./ReaderShelf";
 import { VocabListPanel } from "./VocabListPanel";
 import { ReadingView } from "./ReadingView";
-import { PlayBar } from "./PlayBar";
 import { SettingsDrawer } from "./SettingsDrawer";
 import { DictColumn, type DictPanelState } from "./DictColumn";
 import { ReviewView } from "./ReviewView";
+import { NotesView } from "./NotesView";
+import { VocabNoteDialog } from "./VocabNoteDialog";
 import { ImportDialog, type ImportMeta } from "./ImportDialog";
 import { usePlayback } from "./usePlayback";
+import { useShadowAssess } from "./useShadowAssess";
+import { mapWordsToText } from "../core/pronunciation";
+import {
+  createSapiEngine,
+  createSpeechDispatcher,
+  createXfyunEngine,
+  type XfyunEngineConfig,
+} from "./speechEngine";
+import { loadXfyunTtsCredentials } from "../lib/iseCredentials";
+import type { XfyunTtsCredentials } from "../core/xfyunTts";
+import { AssessStrip, PlayBar } from "./PlayBar";
+import { SpeakView } from "./SpeakView";
 import { IconNext, IconPause, IconPlay, IconPrev } from "../ui/icons";
 
-type ViewRoute = "reading" | "review";
+type ViewRoute = "reading" | "review" | "speak" | "notes";
 
 interface PendingTranslate {
   onDelta?: (text: string) => void;
@@ -94,6 +125,14 @@ export function ReaderApp() {
   const [reviewLog, setReviewLog] = useState<ReviewLogFile>({ schemaVersion: 1, days: [] });
   const [view, setView] = useState<ViewRoute>("reading");
   const [toast, setToast] = useState("");
+  // ---- 笔记库 ----
+  const [notes, setNotes] = useState<NoteMeta[]>([]);
+  const [activeNote, setActiveNote] = useState<{ meta: NoteMeta; parsed: ReturnType<typeof parseNoteMarkdown> } | null>(null);
+  const [noteDialogOpen, setNoteDialogOpen] = useState(false);
+  const [notePreselect, setNotePreselect] = useState<string[] | undefined>(undefined);
+  const [replayBusy, setReplayBusy] = useState(false);
+  /** 加练队列：非空时复习只排这批词（笔记复盘区「开始复习/只测仍错的词」入口）。 */
+  const [focusIds, setFocusIds] = useState<string[] | null>(null);
   const [translating, setTranslating] = useState<{ done: number; total: number } | null>(null);
   const [chunking, setChunking] = useState<{ done: number; total: number } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -159,12 +198,89 @@ export function ReaderApp() {
     showToast(`本篇读完 🎉 共查词 ${lookups} 次 · 生词本新增 ${added} 个`);
   }, [vocabWords, showToast]);
 
+  // ---- 朗读引擎（本地 SAPI / 讯飞在线合成，凭据缺失自动回落本地） ----
+  const [ttsCreds, setTtsCreds] = useState<XfyunTtsCredentials | null>(null);
+  const refreshTtsCreds = useCallback(() => {
+    void loadXfyunTtsCredentials()
+      .then(setTtsCreds)
+      .catch(() => setTtsCreds(null));
+  }, []);
+  useEffect(() => {
+    refreshTtsCreds();
+  }, [refreshTtsCreds]);
+  const ttsCfgRef = useRef<XfyunEngineConfig>({ vcnZh: "", vcnEn: "", rate: 1, creds: null });
+  ttsCfgRef.current = {
+    vcnZh: effectiveSettings.cloudVoice,
+    vcnEn: effectiveSettings.cloudVoiceEn,
+    rate: effectiveSettings.rate,
+    creds: ttsCreds,
+  };
+  const ttsProviderRef = useRef(effectiveSettings.ttsProvider);
+  ttsProviderRef.current = effectiveSettings.ttsProvider;
+  const sapiEngine = useMemo(() => createSapiEngine(), []);
+  const xfyunEngine = useMemo(() => createXfyunEngine(() => ttsCfgRef.current), []);
+  const speechEngine = useMemo(
+    () =>
+      createSpeechDispatcher(() =>
+        ttsProviderRef.current === "xfyun" && ttsCfgRef.current.creds ? xfyunEngine : sapiEngine,
+      ),
+    [sapiEngine, xfyunEngine],
+  );
+
   const playback = usePlayback({
     target: "reader",
     textsRef,
     settingsRef: playbackSettingsRef,
+    engine: speechEngine,
     onFinish: handleFinish,
+    onError: (error) => showToast(`朗读失败，已停止：${error instanceof Error ? error.message : String(error)}。请检查网络或语音设置后重新播放。`),
   });
+
+  // ---- 跟读评测（shadowingMode + shadowingAssess）----
+  const [micDeviceId, setMicDeviceId] = useState<string>(() => loadMicDeviceId());
+  // 渲染期同步 ref，getConfig 永远读到最新阈值/设备/开麦方式。
+  const assessConfigRef = useRef({
+    passScore: effectiveSettings.shadowingPassScore,
+    micDeviceId,
+    autoMic: effectiveSettings.shadowingAutoMic,
+    silenceMs: effectiveSettings.shadowingSilenceMs,
+  });
+  assessConfigRef.current = {
+    passScore: effectiveSettings.shadowingPassScore,
+    micDeviceId,
+    autoMic: effectiveSettings.shadowingAutoMic,
+    silenceMs: effectiveSettings.shadowingSilenceMs,
+  };
+  const assess = useShadowAssess({
+    textsRef,
+    getConfig: () => assessConfigRef.current,
+    leadSpeak: (text) =>
+      speechEngine.speak(text, false, { track: "word", target: "reader", rate: 0.72 }),
+    stopLead: () => {
+      void speechEngine.stopTrack("word").catch(() => undefined);
+    },
+    onAdvance: () => playback.continueAfterShadowing(),
+  });
+  const assessEnabled = effectiveSettings.shadowingMode && effectiveSettings.shadowingAssess;
+
+  // 本句读完进入跟读等待 → 自动开麦；等待结束（过关/跳过/换句）→ 收麦克风。
+  useEffect(() => {
+    if (!assessEnabled) {
+      assess.cancel();
+      return;
+    }
+    if (playback.shadowingWait) void assess.begin(playback.activeIdx);
+    else assess.cancel();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assessEnabled, playback.shadowingWait, playback.activeIdx]);
+
+  /** 最近一次评测的词着色（下一次评测前保持在正文里）。 */
+  const assessMarks = useMemo(() => {
+    if (!article || assess.result == null || assess.sentenceIdx == null) return null;
+    const st = article.sentences[assess.sentenceIdx];
+    if (!st) return null;
+    return { sentenceIdx: assess.sentenceIdx, marks: mapWordsToText(st.en, assess.result.words) };
+  }, [article, assess.result, assess.sentenceIdx]);
 
   // ---- 翻译事件路由（tag → 请求） ----
   useEffect(() => {
@@ -443,12 +559,8 @@ export function ReaderApp() {
             });
           },
         );
-        if (res.status === "done" || res.status === "cancelled") {
-          // cancelled 时已收到的部分也按完整解析尝试（多数句子已完整）
-          const parsed =
-            res.status === "done"
-              ? parseParagraphResponse(res.text, expected)
-              : parseParagraphResponse(res.text, expected);
+        if (res.status === "done") {
+          const parsed = parseParagraphResponse(res.text, expected);
           if (parsed) {
             patchArticle((a) => ({
               ...a,
@@ -458,9 +570,24 @@ export function ReaderApp() {
                 return { ...st, zh: parsed[i], zhState: "done" as const };
               }),
             }));
-          } else if (res.status === "done") {
+          } else {
             markParagraphFailed(sentences);
           }
+        } else if (res.status === "cancelled") {
+          // 取消：流式已完成的句子按部分解析收尾（能救几句是几句）；
+          // 没译出来的标 failed——留着永远 pending 会是空白且没有重试入口。
+          const partial = parsePartialNumbered(res.text, expected);
+          patchArticle((a) => ({
+            ...a,
+            sentences: a.sentences.map((st) => {
+              const i = sentences.findIndex((x) => x.idx === st.idx);
+              if (i < 0) return st;
+              const zh = partial[i];
+              return zh
+                ? { ...st, zh, zhState: "done" as const }
+                : { ...st, zhState: "failed" as const };
+            }),
+          }));
         } else {
           markParagraphFailed(sentences);
         }
@@ -608,6 +735,9 @@ export function ReaderApp() {
       setGlobalSettings(loadGlobalReaderSettings());
       const list = await refreshArticleList();
       await refreshVocab();
+      // 笔记列表随启动加载（而不只进笔记库时）：书架/生词本的「未整理进笔记」
+      // 角标首屏就要用，懒加载会让它在首次进笔记库前虚高成全部生词数。
+      void refreshNotes();
       if (!active) return;
       // 阅读室热键路径：窗口首次挂载时取走待导入文本（nonce 防与事件路径重复）。
       try {
@@ -661,6 +791,7 @@ export function ReaderApp() {
     // 托盘「生词本」（窗口已存在时）：切到复习页
     let unlistenOpenReview: (() => void) | undefined;
     listen("reader:open-review", () => {
+      setFocusIds(null);
       setView("review");
     }).then((u) => {
       if (active) unlistenOpenReview = u;
@@ -676,14 +807,43 @@ export function ReaderApp() {
       else u();
     });
 
+    // 设置窗口保存讯飞凭据后刷新云端合成凭据缓存（其余凭据都是用时加载）。
+    let unlistenCreds: (() => void) | undefined;
+    listen("xfyun:creds-updated", () => {
+      refreshTtsCreds();
+    }).then((u) => {
+      if (active) unlistenCreds = u;
+      else u();
+    });
+
     return () => {
       active = false;
       unlistenArticle?.();
       unlistenImport?.();
       unlistenOpenReview?.();
       unlistenVocab?.();
+      unlistenCreds?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---- 点标题栏 ✕ = 隐藏窗口，不销毁 ----
+  // 窗口一旦销毁，托盘重开就得在 Rust 事件处理器里同步重建 WebView（Windows 上
+  // 有死锁/失败风险，实测表现为「关了就再也打不开」）。隐藏则重开是纯 show()，
+  // 阅读进度与文章列表原样保留，与历史/设置窗口的关闭行为一致。
+  const stopPlaybackRef = useRef(playback.stop);
+  stopPlaybackRef.current = playback.stop;
+  useEffect(() => {
+    const win = getCurrentWindow();
+    const unlistenP = win.onCloseRequested((event) => {
+      event.preventDefault();
+      // 隐藏前停掉朗读/评测，避免窗口看不见了声音还在播。
+      stopPlaybackRef.current();
+      void win.hide();
+    });
+    return () => {
+      void unlistenP.then((u) => u());
+    };
   }, []);
 
   // ---- Web 字体（§4；本地字体兜底已写进令牌） ----
@@ -792,13 +952,14 @@ export function ReaderApp() {
     [requestTranslate],
   );
 
-  const speakWord = useCallback((text: string) => {
-    void ttsSpeakAdvanced(text, looksMostlyChinese(text), {
-      track: "word",
-      target: "reader",
-      rate: 1,
-    }).catch((error) => console.error("[reader] word tts failed", error));
-  }, []);
+  const speakWord = useCallback(
+    (text: string) => {
+      void speechEngine
+        .speak(text, looksMostlyChinese(text), { track: "word", target: "reader", rate: 1 })
+        .catch((error) => console.error("[reader] word tts failed", error));
+    },
+    [speechEngine],
+  );
 
   /** 点正文词块下划线 → 即时卡（无 LLM 调用）。 */
   const openChunkCard = useCallback((sentenceIdx: number, chunk: SentenceChunk) => {
@@ -894,16 +1055,228 @@ export function ReaderApp() {
     [refreshVocab, showToast],
   );
 
+  /** 一次复习判分 → 错题分桶落盘（笔记「为什么记不住」诊断的数据源）。 */
+  const handleRecall = useCallback(
+    (wordId: string, mode: RecallMode, judged: RecallVerdict | null, g: ReviewGrade) => {
+      const bucket = recallBucket(mode, judged, g);
+      void readerRecordRecall(wordId, mode, bucket, Date.now()).catch((error) => {
+        console.error("[reader] record recall failed", error);
+      });
+    },
+    [],
+  );
+
+  /** 加练判分后把词移出队列（与到期队列「评完即走」同一语义）。 */
+  const gradeAndDrainFocus = useCallback(
+    (word: VocabWord, g: ReviewGrade) => {
+      gradeVocab(word, g);
+      setFocusIds((f) => (f ? f.filter((id) => id !== word.id) : f));
+    },
+    [gradeVocab],
+  );
+
+  /** 笔记复盘区「开始复习 / 只测仍错的词」：只排这批词，不等到期。 */
+  const startFocusReview = useCallback(
+    (ids: string[]) => {
+      if (ids.length === 0) {
+        showToast("这篇笔记的词这一轮都通过了，没有要补的");
+        return;
+      }
+      setFocusIds(ids);
+      setReviewPos(0);
+      setView("review");
+    },
+    [showToast],
+  );
+
+  /** 离开复习视图就退出加练（回到普通到期队列）。 */
+  const exitFocus = useCallback(() => setFocusIds(null), []);
+  const goReading = useCallback(() => {
+    setFocusIds(null);
+    setView("reading");
+  }, []);
+  const goReview = useCallback(() => {
+    setFocusIds(null);
+    setView("review");
+  }, []);
+  const goNotes = useCallback(() => {
+    setFocusIds(null);
+    setView("notes");
+  }, []);
+  const goSpeak = useCallback(() => {
+    setFocusIds(null);
+    setView("speak");
+  }, []);
+
+  // ---- 笔记库 ----
+  const replaySeqRef = useRef(0);
+  const refreshNotes = useCallback(async () => {
+    try {
+      const list = await noteList();
+      setNotes(list);
+      return list;
+    } catch (error) {
+      console.error("[reader] list notes failed", error);
+      return [];
+    }
+  }, []);
+
+  const openNote = useCallback(async (file: string) => {
+    try {
+      const content = await noteRead(file);
+      if (!content) return;
+      setActiveNote({ meta: content.meta, parsed: parseNoteMarkdown(content.content) });
+    } catch (error) {
+      console.error("[reader] read note failed", error);
+    }
+  }, []);
+
+  const activeNoteFile = activeNote?.meta.file ?? null;
+  const selectNote = useCallback(
+    (file: string) => {
+      if (file === activeNoteFile) return;
+      void openNote(file);
+    },
+    [activeNoteFile, openNote],
+  );
+
+  const deleteNote = useCallback(
+    (file: string) => {
+      if (!window.confirm("删除这篇笔记？删除后不可恢复。")) return;
+      void noteDelete(file)
+        .then(async (removed) => {
+          if (!removed) return;
+          setActiveNote((cur) => (cur?.meta.file === file ? null : cur));
+          await refreshNotes();
+          showToast("已删除笔记");
+        })
+        .catch((error) => console.error("[reader] delete note failed", error));
+    },
+    [refreshNotes, showToast],
+  );
+
+  /** 生成弹窗「在笔记库打开」：切到笔记库并打开刚存的这篇。 */
+  const openSavedNote = useCallback(
+    async (meta: NoteMeta) => {
+      setNoteDialogOpen(false);
+      goNotes();
+      await refreshNotes();
+      await openNote(meta.file);
+    },
+    [refreshNotes, openNote, goNotes],
+  );
+
+  const openNoteGenerator = useCallback(() => {
+    setNotePreselect(undefined);
+    setNoteDialogOpen(true);
+  }, []);
+
+  /** 复盘后又产生了新的复习记录 → 允许（重新）生成复盘。 */
+  const generateReplay = useCallback(
+    async (meta: NoteMeta) => {
+      const noteWords = vocabWords.filter((w) => meta.wordIds.includes(w.id));
+      // 与笔记库实时口径一致（isStillWeak）：从没测过的词算仍错，不算「已过」，
+      // 否则只测了部分词时会误报「全部通过，无需复盘」。
+      const weak = noteWords.filter(isStillWeak).map((w) => w.id);
+      if (weak.length === 0) {
+        showToast("这一轮全部通过，无需复盘");
+        return;
+      }
+      setReplayBusy(true);
+      try {
+        const weakWords = noteWords.filter((w) => weak.includes(w.id));
+        const tag = `replay${++replaySeqRef.current}`;
+        const res = await requestTranslate(
+          buildReplayInput(noteWords, weak, meta.file),
+          buildReplaySystemPrompt(),
+          tag,
+        );
+        if (res.status !== "done") {
+          showToast(res.status === "cancelled" ? "复盘已取消" : "复盘失败，请重试");
+          return;
+        }
+        const parsedReplay = parseReplay(res.text);
+        if (!parsedReplay) {
+          showToast("复盘结果无法解析，请重试");
+          return;
+        }
+        if (!verifyReplayWords(parsedReplay, weakWords)) {
+          showToast("复盘的仍错词头与记录不符，请重试");
+          return;
+        }
+        const replay: NoteReplay = {
+          rounds: (meta.replay?.rounds ?? 0) + 1,
+          lastAt: Date.now(),
+          passed: noteWords.length - weak.length,
+          stillWeak: weak.length,
+          verdict: parsedReplay.verdict,
+          // 词头按宽容归一化回挂词条（LLM 可能改大小写/加后缀，精确相等会静默丢词）。
+          weak: parsedReplay.weak.map((item) => ({ w: item.w, why: item.why })),
+        };
+        const updated = await noteWriteReplay(meta.file, replay, replay.rounds, Date.now());
+        await refreshNotes();
+        if (activeNoteFile === meta.file) await openNote(meta.file);
+        showToast(`复盘完成：${updated.replay?.stillWeak ?? weak.length} 词仍错`);
+      } catch (error) {
+        console.error("[reader] replay failed", error);
+        showToast("复盘失败，请重试");
+      } finally {
+        setReplayBusy(false);
+      }
+    },
+    [vocabWords, requestTranslate, refreshNotes, openNote, activeNoteFile, showToast],
+  );
+
+  /** 把仍错词滚进新笔记：预选打开生成弹窗。 */
+  const rollIntoNote = useCallback(
+    (replay: NoteReplay) => {
+      const ids = replay.weak
+        .map((item) => findWordByHeading(item.w, vocabWords)?.id)
+        .filter((id): id is string => Boolean(id));
+      if (ids.length === 0) {
+        showToast("没有可滚进的词条");
+        return;
+      }
+      setNotePreselect(ids);
+      setNoteDialogOpen(true);
+    },
+    [vocabWords, showToast],
+  );
+
   useEffect(() => {
     if (view === "review" && vocabWords.length > 0) {
       void loadSourceArticles(vocabWords.map((w) => w.source.articleId));
     }
   }, [view, vocabWords, loadSourceArticles]);
 
+  // 进入笔记库：刷新列表；没有打开的笔记时自动打开最近一篇。
+  useEffect(() => {
+    if (view !== "notes") return;
+    let cancelled = false;
+    void (async () => {
+      const list = await refreshNotes();
+      if (cancelled) return;
+      if (!activeNote && list.length > 0) await openNote(list[0].file);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [view, refreshNotes, openNote, activeNote]);
+
   const stats = useMemo(() => reviewStats(vocabWords, reviewLog), [vocabWords, reviewLog]);
   const dueNow = useMemo(() => dueVocab(vocabWords).length, [vocabWords]);
   /** 到期队列：复习卡与左栏词表共用同一序号，pos 上提在此（左栏词表可跳卡）。 */
   const dueWords = useMemo(() => dueVocab(vocabWords), [vocabWords]);
+  /** 加练模式下复习队列 = 笔记仍错词（无视到期时间）；否则 = 全局到期队列。 */
+  const activeDue = useMemo(
+    () => (focusIds ? vocabWords.filter((w) => focusIds.includes(w.id)) : dueWords),
+    [focusIds, vocabWords, dueWords],
+  );
+  /** 还没整理进任何笔记的生词数（笔记库入口角标：该整理了）。 */
+  const unnotedCount = useMemo(() => {
+    const noted = new Set(notes.flatMap((n) => n.wordIds));
+    return vocabWords.filter((w) => !noted.has(w.id)).length;
+  }, [vocabWords, notes]);
   const [reviewPos, setReviewPos] = useState(0);
   useEffect(() => {
     // 每次进入生词本都从队首开始（离开即卸载，results 随之清零）
@@ -922,7 +1295,8 @@ export function ReaderApp() {
     [openArticle, playback],
   );
 
-  // ---- 键盘（§9-11：空格仅阅读器内生效；J/K/L 备选；方向键不劫持） ----
+  // ---- 键盘（§9-11：空格/J/K/L/H 只在阅读视图生效——笔记库/复习/口语页
+  // 会用空格滚页、J/K 翻列表，劫持会在后台误触朗读；方向键不劫持） ----
   useEffect(() => {
     function isTyping(el: EventTarget | null): boolean {
       return (
@@ -933,7 +1307,7 @@ export function ReaderApp() {
     }
     function onKeyDown(e: KeyboardEvent) {
       if (isTyping(e.target)) return;
-      if (view === "review") return;
+      if (view !== "reading") return;
       if (e.key === " ") {
         e.preventDefault();
         playback.toggle();
@@ -975,11 +1349,26 @@ export function ReaderApp() {
   }, [sourceCache]);
 
   /** 听写卡整句朗读：word 音轨 + 稍慢语速，与句子朗读音轨互不打断。 */
-  const speakRecallSentence = useCallback((text: string) => {
-    void ttsSpeakAdvanced(text, false, { track: "word", target: "reader", rate: 0.92 }).catch(
-      (error) => console.error("[reader] recall sentence tts failed", error),
-    );
-  }, []);
+  const speakRecallSentence = useCallback(
+    (text: string) => {
+      void speechEngine
+        .speak(text, false, { track: "word", target: "reader", rate: 0.92 })
+        .catch((error) => console.error("[reader] recall sentence tts failed", error));
+    },
+    [speechEngine],
+  );
+
+  /** 口语陪练的播报通道。必须引用稳定（useCallback）：SpeakView 的卸载保护
+   * effect 依赖 stopSpeak，内联箭头会让任何 ReaderApp 重渲染都执行 cleanup，
+   * 掐断进行中的录音。 */
+  const speakEnToView = useCallback(
+    (text: string) =>
+      speechEngine.speak(text, false, { track: "sentence", target: "reader", rate: effectiveSettings.rate }),
+    [speechEngine, effectiveSettings.rate],
+  );
+  const stopSpeakTrack = useCallback(() => {
+    void speechEngine.stopTrack("sentence").catch(() => undefined);
+  }, [speechEngine]);
 
   /** 复习模式只进全局默认，不写文章覆盖（复习不随文章变化）。 */
   const patchReviewMode = useCallback(
@@ -1002,7 +1391,10 @@ export function ReaderApp() {
   return (
     <div className="reader-root" data-theme={effectiveSettings.theme} data-font={effectiveSettings.fontPair} style={rootStyle}>
       <ReaderTopBar
-        articleName={view === "review" ? "生词本" : (article?.title ?? null)}
+        articleName={
+          view === "review" ? "生词本" : view === "speak" ? "口语陪练" : view === "notes" ? "笔记库" : (article?.title ?? null)
+        }
+        onBackToReading={view !== "reading" ? goReading : undefined}
         settings={effectiveSettings}
         onPatchSettings={patchSettings}
         onOpenDrawer={() => setDrawerOpen(true)}
@@ -1034,8 +1426,11 @@ export function ReaderApp() {
             dueNow={dueNow}
             reviewedToday={stats.reviewedToday}
             streak={stats.streak}
+            newToNote={unnotedCount}
             onSelect={(id) => void openArticle(id)}
-            onOpenReview={() => setView("review")}
+            onOpenReview={goReview}
+            onOpenSpeak={goSpeak}
+            onOpenNotes={goNotes}
             onDelete={deleteArticle}
             onOpenImport={() => setImportOpen(true)}
           />
@@ -1043,12 +1438,41 @@ export function ReaderApp() {
         {view === "review" && (
           <VocabListPanel
             words={vocabWords}
-            due={dueWords}
+            due={activeDue}
             pos={reviewPos}
             reviewedToday={stats.reviewedToday}
             streak={stats.streak}
+            focusCount={focusIds?.length ?? 0}
+            onExitFocus={exitFocus}
+            newWords={unnotedCount}
             onJumpToCard={setReviewPos}
-            onOpenReader={() => setView("reading")}
+            onOpenReader={goReading}
+            onOpenSpeak={goSpeak}
+            onOpenNotes={goNotes}
+            requestTranslate={requestTranslate}
+            onNoteSaved={(meta) => void openSavedNote(meta)}
+          />
+        )}
+        {view === "notes" && (
+          <NotesView
+            notes={notes}
+            activeId={activeNote?.meta.file ?? null}
+            active={activeNote}
+            words={vocabWords}
+            reviewedToday={stats.reviewedToday}
+            streak={stats.streak}
+            dueNow={dueNow}
+            newWords={unnotedCount}
+            replayBusy={replayBusy}
+            onSelect={selectNote}
+            onDelete={deleteNote}
+            onOpenReader={goReading}
+            onOpenReview={goReview}
+            onStartFocusReview={startFocusReview}
+            onGenerate={openNoteGenerator}
+            onGenerateReplay={(meta) => void generateReplay(meta)}
+            onRollIntoNote={rollIntoNote}
+            onSpeakWord={speakWord}
           />
         )}
 
@@ -1063,6 +1487,7 @@ export function ReaderApp() {
               peekAll={peekAll}
               searchMatchIdx={searchMatchIdx}
               knownIds={knownIds}
+              assessMarks={assessMarks}
               onReveal={(idx) =>
                 patchArticle((a) => ({
                   ...a,
@@ -1114,22 +1539,36 @@ export function ReaderApp() {
               onClose={() => setDict({ status: "closed" })}
             />
           </>
-        ) : (
+        ) : view === "speak" ? (
+          <SpeakView
+            requestTranslate={requestTranslate}
+            speakEn={speakEnToView}
+            subscribeSpeakEnded={speechEngine.onEnded}
+            stopSpeak={stopSpeakTrack}
+            micDeviceId={micDeviceId}
+            onToast={showToast}
+            onBack={goReading}
+          />
+        ) : view === "notes" ? null : (
           <ReviewView
             words={vocabWords}
-            due={dueWords}
+            due={activeDue}
             pos={reviewPos}
             onSetPos={setReviewPos}
             stats={stats}
             reviewMode={effectiveSettings.reviewMode}
             onReviewModeChange={(m) => patchReviewMode({ reviewMode: m })}
-            onGrade={gradeVocab}
+            onGrade={focusIds ? gradeAndDrainFocus : gradeVocab}
+            onRecall={handleRecall}
             onJumpToSentence={jumpToSentence}
             onSpeakWord={speakWord}
             onSpeakSentence={speakRecallSentence}
             sourcePreview={sourcePreview}
             sourceSentence={sourceSentence}
             articleTitle={articleTitle}
+            onGenerateNote={openNoteGenerator}
+            onOpenNotes={goNotes}
+            onOpenReader={goReading}
           />
         )}
       </div>
@@ -1142,11 +1581,15 @@ export function ReaderApp() {
           onPatchSettings={patchSettings}
           onOpenViewMenu={(anchor) => setViewMenuAnchor(anchor)}
           onOpenDrawer={() => setDrawerOpen(true)}
+          assess={assessEnabled ? assess : null}
         />
       )}
 
       {effectiveSettings.zenMode && view === "reading" && (
         <div className="reader-zen-controls">
+          {assessEnabled && playback.shadowingWait && (
+            <AssessStrip assess={assess} passScore={effectiveSettings.shadowingPassScore} />
+          )}
           <button className="reader-skip-btn" onClick={() => playback.step(-1)} title="上一句">
             <IconPrev size={15} />
           </button>
@@ -1171,6 +1614,11 @@ export function ReaderApp() {
           onPatchReview={patchReviewMode}
           onReset={resetSettings}
           onClose={() => setDrawerOpen(false)}
+          micDeviceId={micDeviceId}
+          onMicDevice={(id) => {
+            setMicDeviceId(id);
+            saveMicDeviceId(id);
+          }}
           chunkState={
             article?.chunkState === "done" || article?.chunkState === "failed"
               ? article.chunkState
@@ -1189,6 +1637,16 @@ export function ReaderApp() {
             setImportOpen(false);
             importPaste(text, title, meta);
           }}
+        />
+      )}
+
+      {noteDialogOpen && (
+        <VocabNoteDialog
+          words={vocabWords}
+          requestTranslate={requestTranslate}
+          preselect={notePreselect}
+          onSaved={(meta) => void openSavedNote(meta)}
+          onClose={() => setNoteDialogOpen(false)}
         />
       )}
 

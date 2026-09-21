@@ -191,6 +191,7 @@ fn show_reminder(app: &AppHandle, due: u32) {
             .skip_taskbar(true)
             .focusable(true)
             .visible(false)
+            .additional_browser_args(crate::REBUILD_BROWSER_ARGS)
             .build();
             match built {
                 Ok(w) => w,
@@ -236,6 +237,7 @@ pub fn open_quick_review_window(app: &AppHandle) {
     .skip_taskbar(true)
     .visible(false)
     .center()
+    .additional_browser_args(crate::REBUILD_BROWSER_ARGS)
     .build();
     match built {
         Ok(win) => {

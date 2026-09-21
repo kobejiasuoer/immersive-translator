@@ -7,6 +7,8 @@
 import { useEffect, useState } from "react";
 import {
   DEFAULT_READER_SETTINGS,
+  READER_ASSESS_SILENCE_MAX,
+  READER_ASSESS_SILENCE_MIN,
   READER_FONT_SIZE_MAX,
   READER_FONT_SIZE_MIN,
   READER_RATE_MAX,
@@ -19,7 +21,14 @@ import {
   type ReaderTheme,
   type ReviewModeSetting,
 } from "../core/readerTypes";
-import { ttsVoices, type TtsVoiceInfo } from "../lib/tauriBridge";
+import { ttsVoices, openSettings, type TtsVoiceInfo } from "../lib/tauriBridge";
+import { listMicDevices } from "../core/micRecorder";
+import { iseCredsConfigured, xfyunTtsCredsConfigured } from "../lib/iseCredentials";
+import {
+  DEFAULT_TTS_VCN,
+  DEFAULT_TTS_VCN_EN,
+  XFUYUN_TTS_VOICE_SUGGESTIONS,
+} from "../core/xfyunTts";
 import {
   reminderGetConfig,
   reminderSetConfig,
@@ -37,6 +46,11 @@ interface Props {
   onReannotate?: () => void;
   /** 复习模式修改：只进全局默认，不写文章覆盖（缺省时退回 onPatch）。 */
   onPatchReview?: (patch: Partial<ReaderSettings>) => void;
+  /** 跟读评测麦克风设备 id（机器本地偏好，空串 = 系统默认）。 */
+  micDeviceId: string;
+  onMicDevice: (deviceId: string) => void;
+  /** 讯飞合成凭据保存成功后回调（ReaderApp 重查就绪状态）。 */
+  onXfyunTtsCredsSaved?: () => void;
 }
 
 const CONTRAST_OPTIONS: { value: ContrastMode; label: string }[] = [
@@ -57,9 +71,12 @@ const THEMES: { value: ReaderTheme; label: string; swatch: string; text: string 
   { value: "oled", label: "纯黑", swatch: "#0a0a0b", text: "#b9bdc9" },
 ];
 
-export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState, onReannotate, onPatchReview }: Props) {
+export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState, onReannotate, onPatchReview, micDeviceId, onMicDevice }: Props) {
   const [voices, setVoices] = useState<TtsVoiceInfo[]>([]);
   const [rem, setRem] = useState<ReminderConfig | null>(null);
+  const [micDevices, setMicDevices] = useState<{ deviceId: string; label: string }[]>([]);
+  const [credConfigured, setCredConfigured] = useState<boolean | null>(null);
+  const [ttsConfigured, setTtsConfigured] = useState<boolean | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -73,6 +90,25 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
         if (active) setRem(config);
       })
       .catch((error) => console.error("[reader] load reminder config failed", error));
+    listMicDevices()
+      .then((list) => {
+        if (active) setMicDevices(list);
+      })
+      .catch(() => undefined);
+    iseCredsConfigured()
+      .then((ok) => {
+        if (active) setCredConfigured(ok);
+      })
+      .catch(() => {
+        if (active) setCredConfigured(false);
+      });
+    xfyunTtsCredsConfigured()
+      .then((ok) => {
+        if (active) setTtsConfigured(ok);
+      })
+      .catch(() => {
+        if (active) setTtsConfigured(false);
+      });
     return () => {
       active = false;
     };
@@ -338,14 +374,92 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
           </div>
 
           <div className="drawer-group-title">朗读</div>
+          <div className="drawer-row" title="本地 = Windows 系统 SAPI（离线可用）；讯飞在线 = 云端多音色，每日 500 次免费（凭据在 设置 → 语音）">
+            <span className="label">朗读引擎</span>
+            <div className="control">
+              <div className="seg">
+                <button
+                  className={settings.ttsProvider !== "xfyun" ? "active" : ""}
+                  onClick={() => onPatch({ ttsProvider: "local" })}
+                >
+                  本地系统
+                </button>
+                <button
+                  className={settings.ttsProvider === "xfyun" ? "active" : ""}
+                  onClick={() => onPatch({ ttsProvider: "xfyun" })}
+                >
+                  讯飞在线
+                </button>
+              </div>
+            </div>
+          </div>
+          {settings.ttsProvider === "xfyun" && (
+            <>
+              <div className="drawer-row" title="讯飞中文发音人（vcn）：中文句用它读；完整列表在讯飞控制台「语音合成」可试听，未授权音色会提示 11200。已播句子进缓存（内存+磁盘），重听不耗每日次数">
+                <span className="label">云音色·中文</span>
+                <div className="control" style={{ flex: 1 }}>
+                  <input
+                    className="reader-cred-input"
+                    style={{ flex: 1, width: "auto" }}
+                    list="xfyun-vcn-list"
+                    placeholder={DEFAULT_TTS_VCN}
+                    value={settings.cloudVoice}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(e) => onPatch({ cloudVoice: e.target.value.trim() })}
+                    aria-label="讯飞云音色（中文）"
+                  />
+                </div>
+              </div>
+              <div className="drawer-row" title="讯飞英文发音人（vcn）：英文句用它读，跟读示范不再由中文音色代劳；留空沿用中文音色">
+                <span className="label">云音色·英文</span>
+                <div className="control" style={{ flex: 1 }}>
+                  <input
+                    className="reader-cred-input"
+                    style={{ flex: 1, width: "auto" }}
+                    list="xfyun-vcn-list"
+                    placeholder={DEFAULT_TTS_VCN_EN}
+                    value={settings.cloudVoiceEn}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(e) => onPatch({ cloudVoiceEn: e.target.value.trim() })}
+                    aria-label="讯飞云音色（英文）"
+                  />
+                  <datalist id="xfyun-vcn-list">
+                    {XFUYUN_TTS_VOICE_SUGGESTIONS.map((v) => (
+                      <option key={v.vcn} value={v.vcn}>
+                        {v.label}
+                      </option>
+                    ))}
+                  </datalist>
+                </div>
+              </div>
+              <div className="drawer-row" title="讯飞凭据（评测/合成/听写）在主窗口 设置 → 语音 里集中配置">
+                <span className="label">合成凭据</span>
+                <div className="control" style={{ flex: 1, justifyContent: "flex-end", gap: 8 }}>
+                  <span className={`cred-state${ttsConfigured ? " ok" : ""}`}>
+                    {ttsConfigured === null ? "" : ttsConfigured ? "已配置 ✓" : "未配置"}
+                  </span>
+                  <button
+                    className="reader-tb-btn"
+                    onClick={() => void openSettings().catch(() => undefined)}
+                    title="打开总设置 → 语音"
+                  >
+                    设置
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
           <div className="drawer-row">
-            <span className="label">音色</span>
+            <span className="label">本地音色</span>
             <div className="control">
               <select
                 className="reader-select"
                 value={settings.voice}
+                disabled={settings.ttsProvider === "xfyun"}
                 onChange={(e) => onPatch({ voice: e.target.value })}
-                aria-label="朗读音色"
+                aria-label="本地朗读音色"
               >
                 <option value="">系统默认</option>
                 {voices.map((v) => (
@@ -400,6 +514,110 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
               />
             </div>
           </div>
+          <div
+            className="drawer-row"
+            title="读完一句后自动开麦听你跟读，送讯飞语音评测打分：达标自动过，不达标卡住可「领读」示范。需要先在 设置 → 语音 里填评测凭据"
+          >
+            <span className="label">跟读评测</span>
+            <div className="control">
+              <button
+                className={`reader-switch${settings.shadowingAssess ? " on" : ""}`}
+                disabled={!settings.shadowingMode}
+                onClick={() => onPatch({ shadowingAssess: !settings.shadowingAssess })}
+                role="switch"
+                aria-checked={settings.shadowingAssess}
+                aria-label="跟读评测"
+              />
+            </div>
+          </div>
+          <div className="drawer-row" title="句分达到阈值才放行（满分 5 分）">
+            <span className="label">过关阈值</span>
+            <div className="control" style={{ flex: 1 }}>
+              <input
+                type="range"
+                className="drawer-slider"
+                min={3}
+                max={5}
+                step={0.1}
+                value={settings.shadowingPassScore}
+                disabled={!settings.shadowingAssess}
+                onChange={(e) => onPatch({ shadowingPassScore: Number(e.target.value) })}
+                aria-label="跟读过关阈值"
+              />
+              <span className="drawer-slider-val">
+                {Math.round(settings.shadowingPassScore * 20)} 分（{settings.shadowingPassScore.toFixed(1)}/5）
+              </span>
+            </div>
+          </div>
+          <div className="drawer-row" title="开 = 本句读完自动开麦录音；关 = 出「开口跟读」按钮，点了才录">
+            <span className="label">读完自动开麦</span>
+            <div className="control">
+              <button
+                className={`reader-switch${settings.shadowingAutoMic ? " on" : ""}`}
+                disabled={!settings.shadowingAssess}
+                onClick={() => onPatch({ shadowingAutoMic: !settings.shadowingAutoMic })}
+                role="switch"
+                aria-checked={settings.shadowingAutoMic}
+                aria-label="读完自动开麦"
+              />
+            </div>
+          </div>
+          <div className="drawer-row" title="说话停顿超过该时长即视为读完，自动送评测">
+            <span className="label">静音断句</span>
+            <div className="control" style={{ flex: 1 }}>
+              <input
+                type="range"
+                className="drawer-slider"
+                min={READER_ASSESS_SILENCE_MIN / 1000}
+                max={READER_ASSESS_SILENCE_MAX / 1000}
+                step={0.1}
+                value={settings.shadowingSilenceMs / 1000}
+                disabled={!settings.shadowingAssess}
+                onChange={(e) =>
+                  onPatch({ shadowingSilenceMs: Math.round(Number(e.target.value) * 1000) })
+                }
+                aria-label="静音断句时长"
+              />
+              <span className="drawer-slider-val">
+                {(settings.shadowingSilenceMs / 1000).toFixed(1)}s
+              </span>
+            </div>
+          </div>
+          <div className="drawer-row" title="跟读录音用的麦克风；录不出声音时优先换一个（默认可能选到虚拟声卡）">
+            <span className="label">麦克风</span>
+            <div className="control">
+              <select
+                className="reader-select"
+                value={micDeviceId}
+                onChange={(e) => onMicDevice(e.target.value)}
+                aria-label="跟读麦克风"
+              >
+                <option value="">系统默认</option>
+                {micDevices.map((d) => (
+                  <option key={d.deviceId} value={d.deviceId}>
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {settings.shadowingMode && (
+            <div className="drawer-row" title="讯飞评测凭据在主窗口 设置 → 语音 里集中配置；过关判定与跟读打分都用它">
+              <span className="label">评测凭据</span>
+              <div className="control" style={{ flex: 1, justifyContent: "flex-end", gap: 8 }}>
+                <span className={`cred-state${credConfigured ? " ok" : ""}`}>
+                  {credConfigured === null ? "" : credConfigured ? "已配置 ✓" : "未配置"}
+                </span>
+                <button
+                  className="reader-tb-btn"
+                  onClick={() => void openSettings().catch(() => undefined)}
+                  title="打开总设置 → 语音"
+                >
+                  设置
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="drawer-group-title">主题</div>
           <div className="theme-grid">

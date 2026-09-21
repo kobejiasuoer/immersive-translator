@@ -55,13 +55,16 @@ import {
   IconBookOpen,
   IconInfo,
   IconKeyboard,
+  IconVolume,
 } from "../ui/icons";
+import { XfyunVoiceSection } from "./XfyunVoiceSection";
 
-type SettingsTab = "provider" | "translation" | "glossary" | "hotkeys" | "about";
+type SettingsTab = "provider" | "translation" | "voice" | "glossary" | "hotkeys" | "about";
 
 const TABS: { id: SettingsTab; label: string; icon: ComponentType<{ size?: number }> }[] = [
   { id: "provider", label: "模型服务", icon: IconSparkles },
   { id: "translation", label: "翻译", icon: IconTranslate },
+  { id: "voice", label: "语音", icon: IconVolume },
   { id: "glossary", label: "术语表", icon: IconBookOpen },
   { id: "hotkeys", label: "快捷键", icon: IconKeyboard },
   { id: "about", label: "关于", icon: IconInfo },
@@ -69,7 +72,7 @@ const TABS: { id: SettingsTab; label: string; icon: ComponentType<{ size?: numbe
 
 /**
  * 设置窗口。点托盘「设置」菜单打开。
- * 左侧导航 + 右侧内容的双栏壳；五个分区：模型服务 / 翻译 / 术语表 / 快捷键 / 关于。
+ * 左侧导航 + 右侧内容的双栏壳；六个分区：模型服务 / 翻译 / 语音 / 术语表 / 快捷键 / 关于。
  * apiKey 按服务商分桶经 DPAPI 加密存储，其余字段存 localStorage。
  */
 export function Settings() {
@@ -624,6 +627,21 @@ export function Settings() {
                 />
               </div>
             </div>
+          </>
+        )}
+
+        {activeTab === "voice" && (
+          <>
+            <header className="set-pagehead">
+              <div className="set-pagehead-text">
+                <h2>语音</h2>
+                <p>讯飞语音凭据集中配置：跟读打分、云端朗读、口语识别。三组各自独立，经 DPAPI 加密存储。</p>
+              </div>
+            </header>
+            <XfyunVoiceSection />
+            <p className="provider-caption">
+              之前在阅读室设置抽屉、口语陪练、录音直译里填过的凭据仍然有效（同一套加密存储），无需重复填写。
+            </p>
           </>
         )}
 

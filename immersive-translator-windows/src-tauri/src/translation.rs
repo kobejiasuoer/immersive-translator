@@ -1,13 +1,57 @@
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, State};
 
-/// 全局取消标志。translate_stream 启动时置 false，
-/// cancel_translation 命令置 true，流式循环据此提前退出。
+/// 按 tag 的取消登记。translate_stream 开始时登记在途并清掉自己旧的取消标记，
+/// cancel_translation 按需要取消的 tag 登记，流式循环据此提前退出——
+/// 取消一个请求不再误伤并发的其他流（词块标注/字幕翻译等）。
 #[derive(Default)]
-pub struct CancelFlag(Arc<AtomicBool>);
+pub struct CancelFlag {
+    /// 在途请求的 tag 集合。
+    inflight: Arc<Mutex<HashSet<String>>>,
+    /// 已请求取消的 tag 集合。
+    cancelled: Arc<Mutex<HashSet<String>>>,
+}
+
+impl CancelFlag {
+    fn begin(&self, tag: &str) {
+        self.inflight.lock().unwrap().insert(tag.to_string());
+        self.cancelled.lock().unwrap().remove(tag);
+    }
+
+    fn end(&self, tag: &str) {
+        self.inflight.lock().unwrap().remove(tag);
+        self.cancelled.lock().unwrap().remove(tag);
+    }
+
+    fn is_cancelled(&self, tag: &str) -> bool {
+        self.cancelled.lock().unwrap().contains(tag)
+    }
+
+    /// 取消一个 tag；空串 = 取消当前全部在途请求（兼容旧的全局取消语义）。
+    fn cancel(&self, tag: &str) {
+        if tag.is_empty() {
+            let inflight = self.inflight.lock().unwrap();
+            let mut cancelled = self.cancelled.lock().unwrap();
+            for t in inflight.iter() {
+                cancelled.insert(t.clone());
+            }
+        } else {
+            self.cancelled.lock().unwrap().insert(tag.to_string());
+        }
+    }
+}
+
+/// translate_stream 的 RAII 守卫：任何提前 return 都会把自己从在途集合摘除。
+struct CancelGuard<'a>(&'a CancelFlag, String);
+
+impl Drop for CancelGuard<'_> {
+    fn drop(&mut self) {
+        self.0.end(&self.1);
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -278,11 +322,12 @@ pub async fn translate_stream(
     cancel: State<'_, CancelFlag>,
     req: TranslateRequest,
 ) -> Result<(), String> {
-    // 重置取消标志（新请求开始）
-    cancel.0.store(false, Ordering::SeqCst);
     let target = normalize_endpoint(&req.endpoint);
     let window_label = req.window_label.clone();
     let tag = req.tag.clone();
+    // 登记在途 + 清掉本 tag 可能残留的取消标记；守卫保证所有提前 return 都摘除。
+    cancel.begin(&tag);
+    let _cancel_guard = CancelGuard(&cancel, tag.clone());
     if target.is_empty() {
         let _ = app.emit_to(
             window_label.as_str(),
@@ -403,8 +448,8 @@ pub async fn translate_stream(
         let mut first_token_ms: Option<u128> = None;
 
         while let Some(chunk_result) = stream.next().await {
-            // 用户点了取消：提前结束，发 cancelled 事件
-            if cancel.0.load(Ordering::SeqCst) {
+            // 用户点了取消（本 tag）：提前结束，发 cancelled 事件
+            if cancel.is_cancelled(&tag) {
                 let _ = app.emit_to(
                     window_label.as_str(),
                     "translation:cancelled",
@@ -720,10 +765,11 @@ fn find_ascii_ignore_case(value: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| starts_with_ascii_ignore_case(window, needle))
 }
 
-/// 取消当前正在进行的翻译（流式）。触发后流式循环在下一次 chunk 检查时退出。
+/// 取消正在进行的流式翻译。传 tag 只取消该请求；不传取消全部在途请求。
+/// 被取消的流在下一次 chunk 检查时退出并发 cancelled 事件。
 #[tauri::command]
-pub fn cancel_translation(cancel: State<'_, CancelFlag>) {
-    cancel.0.store(true, Ordering::SeqCst);
+pub fn cancel_translation(cancel: State<'_, CancelFlag>, tag: Option<String>) {
+    cancel.cancel(tag.as_deref().unwrap_or(""));
 }
 
 #[cfg(test)]

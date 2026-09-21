@@ -171,9 +171,12 @@ export async function testConnectivity(
 
 // ---- 取消翻译 ----
 
-/** 取消当前正在进行的流式翻译。 */
-export async function cancelTranslation(): Promise<void> {
-  await invoke("cancel_translation");
+/**
+ * 取消正在进行的流式翻译。传 tag 只取消该请求（不打伤并发的
+ * 词块标注/字幕翻译等其他流）；不传取消当前全部在途请求。
+ */
+export async function cancelTranslation(tag?: string): Promise<void> {
+  await invoke("cancel_translation", { tag: tag ?? null });
 }
 
 export interface CancelledEvent {
@@ -201,6 +204,29 @@ export async function secretGet(): Promise<string> {
 /** 加密保存 API Key；传空串会删除条目。 */
 export async function secretSet(value: string): Promise<void> {
   await invoke("secret_set", { value });
+}
+
+/**
+ * 命名 secret（翻译 Key 之外的第二类凭据，如讯飞评测）。
+ * name 限小写字母/数字/下划线；不存在返回空串，空值删除。
+ */
+export async function secretGetNamed(name: string): Promise<string> {
+  return invoke<string>("secret_get", { name });
+}
+
+export async function secretSetNamed(name: string, value: string): Promise<void> {
+  await invoke("secret_set", { name, value });
+}
+
+export async function secretExistsNamed(name: string): Promise<boolean> {
+  return invoke<boolean>("secret_exists", { name });
+}
+
+// ---- 文件导出（原生另存为） ----
+
+/** 弹原生保存对话框写入 UTF-8 文本（复习笔记 .md 等）；用户取消返回 null。 */
+export async function saveTextFile(defaultName: string, contents: string): Promise<string | null> {
+  return invoke<string | null>("save_text_file", { defaultName, contents });
 }
 
 // ---- 翻译历史 ----

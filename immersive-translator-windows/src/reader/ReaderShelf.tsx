@@ -1,12 +1,10 @@
 /**
- * 左栏 240px（屏 A）：书架（带进度）＋ 生词本入口 ＋ 今日复习卡。
+ * 左栏 240px（屏 A）：书架（带进度）＋ 生词本/口语/笔记库入口 ＋ 今日复习卡。
  */
 
-import { IconBookOpen, IconPlus, IconTrash } from "../ui/icons";
+import { IconBookOpen, IconMic, IconNotebook, IconPlus, IconTrash } from "../ui/icons";
 import type { ArticleSummary } from "../core/readerTypes";
-
-/** 今日进度环周长（r=19）。 */
-const RING_LEN = 2 * Math.PI * 19;
+import { TodayCard } from "./TodayCard";
 
 interface Props {
   articles: ArticleSummary[];
@@ -14,8 +12,12 @@ interface Props {
   dueNow: number;
   reviewedToday: number;
   streak: number;
+  /** 还没整理进任何笔记的生词数（笔记库入口角标：该整理了）。 */
+  newToNote: number;
   onSelect: (id: string) => void;
   onOpenReview: () => void;
+  onOpenSpeak: () => void;
+  onOpenNotes: () => void;
   onDelete: (id: string) => void;
   onOpenImport: () => void;
 }
@@ -26,15 +28,14 @@ export function ReaderShelf({
   dueNow,
   reviewedToday,
   streak,
+  newToNote,
   onSelect,
   onOpenReview,
+  onOpenSpeak,
+  onOpenNotes,
   onDelete,
   onOpenImport,
 }: Props) {
-  const todayTotal = reviewedToday + dueNow;
-  /** 今日已完成占比（进度环）。 */
-  const todayDone = reviewedToday;
-
   return (
     <aside className="reader-shelf">
       <div className="reader-shelf-header">
@@ -99,46 +100,34 @@ export function ReaderShelf({
           生词本复习
           {dueNow > 0 && <span className="badge">{dueNow}</span>}
         </div>
-        {todayTotal > 0 ? (
-          <div className="reader-review-card reader-today-card">
-            <div className="today-ring" aria-hidden>
-              <svg width="46" height="46" viewBox="0 0 46 46">
-                <circle cx="23" cy="23" r="19" fill="none" stroke="var(--border)" strokeWidth="3.5" />
-                <circle
-                  cx="23"
-                  cy="23"
-                  r="19"
-                  fill="none"
-                  stroke="var(--accent)"
-                  strokeWidth="3.5"
-                  strokeLinecap="round"
-                  strokeDasharray={RING_LEN}
-                  strokeDashoffset={RING_LEN * (1 - todayDone / todayTotal)}
-                  transform="rotate(-90 23 23)"
-                />
-              </svg>
-              <span className="today-ring-num">
-                {todayDone}/{todayTotal}
-              </span>
-            </div>
-            <div className="today-main">
-              <div className="today-line">
-                今日复习 <strong>{reviewedToday}</strong> / {todayTotal} · 连续打卡{" "}
-                <strong>{streak}</strong> 天
-              </div>
-              <div className="today-sub">
-                {dueNow > 0 ? `还差 ${dueNow} 个清空今天到期` : "今天的到期已清空 ✓"}
-              </div>
-              {dueNow > 0 && (
-                <button className="btn btn-primary btn-sm today-go" onClick={onOpenReview}>
-                  继续复习
-                </button>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="reader-review-card">今日没有到期生词，去阅读里攒几个吧。</div>
-        )}
+        <div
+          className="reader-shelf-nav"
+          onClick={onOpenSpeak}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onOpenSpeak();
+          }}
+          title="选个场景开口说：你说话，AI 用英语接"
+        >
+          <IconMic size={15} />
+          口语陪练
+        </div>
+        <div
+          className="reader-shelf-nav"
+          onClick={onOpenNotes}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onOpenNotes();
+          }}
+          title="复习笔记自动存在这里，可回看与 AI 复盘"
+        >
+          <IconNotebook size={15} />
+          笔记库
+          {newToNote > 0 && <span className="badge soft">{newToNote}</span>}
+        </div>
+        <TodayCard reviewedToday={reviewedToday} dueNow={dueNow} streak={streak} onGoReview={onOpenReview} />
       </div>
     </aside>
   );
