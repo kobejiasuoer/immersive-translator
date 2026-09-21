@@ -16,7 +16,8 @@
         "paste",
         "url",
         "epub",
-        "pdf"
+        "pdf",
+        "docx"
       ]
     },
     "sentenceZhState": {
@@ -194,6 +195,22 @@
           "type": "string",
           "description": "系统 TTS 音色名；空串 = 引擎默认"
         },
+        "ttsProvider": {
+          "type": "string",
+          "enum": [
+            "local",
+            "xfyun"
+          ],
+          "description": "朗读引擎：local = 系统 SAPI（默认），xfyun = 讯飞在线合成"
+        },
+        "cloudVoice": {
+          "type": "string",
+          "description": "讯飞合成中文句发音人（vcn）；空串 = xiaoyan"
+        },
+        "cloudVoiceEn": {
+          "type": "string",
+          "description": "讯飞合成英文句发音人（vcn）；空串 = 回退 cloudVoice"
+        },
         "rate": {
           "type": "number",
           "minimum": 0.5,
@@ -207,6 +224,26 @@
         "shadowingMode": {
           "type": "boolean"
         },
+        "shadowingAssess": {
+          "type": "boolean",
+          "description": "跟读评测：跟读句送讯飞语音评测，达到阈值才放行"
+        },
+        "shadowingPassScore": {
+          "type": "number",
+          "minimum": 3,
+          "maximum": 5,
+          "description": "跟读过关阈值（5 分制），默认 4.2"
+        },
+        "shadowingAutoMic": {
+          "type": "boolean",
+          "description": "跟读评测开麦方式：true = 读完自动开麦（默认），false = 手动点「开口跟读」"
+        },
+        "shadowingSilenceMs": {
+          "type": "number",
+          "minimum": 800,
+          "maximum": 3000,
+          "description": "跟读评测静音断句时长（毫秒），默认 1500"
+        },
         "chunkHighlight": {
           "type": "boolean",
           "description": "词块高亮：翻译完成后自动跑 LLM 词块标注"
@@ -214,6 +251,16 @@
         "showVocabMarks": {
           "type": "boolean",
           "description": "生词再现标记：正文中标记已收藏的词/词块"
+        },
+        "reviewMode": {
+          "type": "string",
+          "enum": [
+            "smart",
+            "recognition",
+            "cloze",
+            "dictation"
+          ],
+          "description": "复习模式：smart 按卡路由到识别/完形/听写；只入全局默认，不进文章覆盖"
         }
       }
     },
@@ -446,6 +493,17 @@
               "description": "例句中文翻译"
             }
           }
+        },
+        "recall": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/recallStat"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "累计错题记录；缺省 = 无记录（老数据无需迁移）。"
         }
       }
     },
@@ -476,6 +534,258 @@
           }
         }
       }
+    },
+    "speakRole": {
+      "type": "string",
+      "enum": [
+        "user",
+        "assistant"
+      ]
+    },
+    "speakScenarioId": {
+      "type": "string",
+      "enum": [
+        "ordering",
+        "interview",
+        "travel",
+        "smalltalk"
+      ],
+      "description": "口语陪练场景：点餐 / 面试 / 旅行 / 寒暄"
+    },
+    "speakDifficulty": {
+      "type": "string",
+      "enum": [
+        "easy",
+        "medium",
+        "hard"
+      ]
+    },
+    "speakTurn": {
+      "type": "object",
+      "required": [
+        "role",
+        "text",
+        "at"
+      ],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/speakRole"
+        },
+        "text": {
+          "type": "string",
+          "description": "user 轮为 ASR 转写；assistant 轮为英文回复"
+        },
+        "hintZh": {
+          "type": "string",
+          "description": "assistant 轮的中文提示（这句意思 + 怎么接话）"
+        },
+        "shadowScore": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 5,
+          "description": "assistant 轮的跟读评测分（5 分制）；缺省 = 没测"
+        },
+        "at": {
+          "type": "integer",
+          "description": "Unix 毫秒"
+        }
+      }
+    },
+    "speakSession": {
+      "type": "object",
+      "required": [
+        "id",
+        "scenario",
+        "difficulty",
+        "turns",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "scenario": {
+          "$ref": "#/$defs/speakScenarioId"
+        },
+        "difficulty": {
+          "$ref": "#/$defs/speakDifficulty"
+        },
+        "turns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/speakTurn"
+          }
+        },
+        "createdAt": {
+          "type": "integer",
+          "description": "Unix 毫秒"
+        },
+        "updatedAt": {
+          "type": "integer",
+          "description": "Unix 毫秒"
+        }
+      }
+    },
+    "recallModeStat": {
+      "type": "object",
+      "description": "单个复习模式下的错题计数（pass=通过 wrong=答错 trap=踩直译陷阱）。",
+      "properties": {
+        "pass": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wrong": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "trap": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pass",
+        "wrong",
+        "trap"
+      ],
+      "additionalProperties": false
+    },
+    "recallStat": {
+      "type": "object",
+      "description": "生词累计错题记录（每次复习判分后累加；复习笔记「为什么记不住」诊断的数据源）。",
+      "properties": {
+        "total": {
+          "$ref": "#/$defs/recallModeStat"
+        },
+        "byMode": {
+          "type": "object",
+          "description": "键 = recallMode（recognition | cloze | dictation）。",
+          "additionalProperties": {
+            "$ref": "#/$defs/recallModeStat"
+          }
+        },
+        "lastAt": {
+          "type": "number",
+          "description": "最近一次判分的 Unix 毫秒。"
+        }
+      },
+      "required": [
+        "total",
+        "byMode"
+      ],
+      "additionalProperties": false
+    },
+    "noteReplay": {
+      "type": "object",
+      "description": "AI 复盘结果（存在笔记 md 的 JSON frontmatter 里，随文件自包含）。",
+      "properties": {
+        "rounds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "lastAt": {
+          "type": "number"
+        },
+        "passed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stillWeak": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "verdict": {
+          "type": "string"
+        },
+        "weak": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "w": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              },
+              "chip": {
+                "type": "string",
+                "description": "已废弃：UI 按实时错题统计现算着色；旧文件可能仍带此字段。"
+              },
+              "chipFair": {
+                "type": "boolean",
+                "description": "已废弃：同 chip。"
+              }
+            },
+            "required": [
+              "w",
+              "why"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "rounds",
+        "lastAt",
+        "passed",
+        "stillWeak",
+        "verdict",
+        "weak"
+      ],
+      "additionalProperties": false
+    },
+    "noteMeta": {
+      "type": "object",
+      "description": "复习笔记元数据（notes/学词笔记-*.md 头部的 JSON frontmatter；file 由存储层去重后生成）。",
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 1
+        },
+        "file": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "number"
+        },
+        "words": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "partial": {
+          "type": "boolean",
+          "description": "生成被取消：只保存了已完成部分。"
+        },
+        "wordIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "replay": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/noteReplay"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updatedAt": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "file",
+        "createdAt",
+        "words",
+        "partial",
+        "wordIds",
+        "updatedAt"
+      ]
     }
   },
   "oneOf": [
@@ -534,6 +844,25 @@
         },
         "settings": {
           "$ref": "#/$defs/readerSettings"
+        }
+      }
+    },
+    {
+      "title": "reader_speak_sessions.json",
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "sessions"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "$ref": "#/$defs/schemaVersion"
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/speakSession"
+          }
         }
       }
     }
