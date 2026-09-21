@@ -49,6 +49,9 @@ struct ReaderRootView: View {
         .sheet(isPresented: $vm.importSheetShown) {
             ReaderImportSheet(vm: vm)
         }
+        .sheet(isPresented: $vm.noteDialogShown) {
+            ReaderNoteDialogView(vm: vm)
+        }
         .overlay {
             if vm.settingsDrawerShown {
                 ReaderSettingsDrawer(vm: vm)
@@ -190,8 +193,10 @@ struct ReaderBodyView: View {
                     DictColumnView(vm: vm)
                         .frame(width: 320)
                 }
-            } else {
+            } else if vm.route == .review {
                 ReviewView(vm: vm)
+            } else {
+                ReaderNotesView(vm: vm)
             }
         }
         .frame(maxHeight: .infinity)

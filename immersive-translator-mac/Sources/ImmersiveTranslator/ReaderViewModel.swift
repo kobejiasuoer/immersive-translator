@@ -12,6 +12,7 @@ final class ReaderViewModel: ObservableObject {
     enum Route: Equatable {
         case reading
         case review
+        case notes
     }
 
     /// 词典栏状态（DictPanelState）。
@@ -94,6 +95,22 @@ final class ReaderViewModel: ObservableObject {
     @Published var reviewPos: Int = 0
     /// 复习页键盘处理（由 ReviewView 注入，卡片内状态归它管）。
     var reviewKeyHandler: ((NSEvent) -> Bool)?
+    /// 笔记加练队列（笔记复盘区「只测仍错的词」；nil = 普通到期队列）。
+    @Published var focusReviewIds: [String]?
+    /// 笔记库列表（按创建时间倒序）。
+    @Published var notes: [NoteMeta] = []
+    /// 当前打开的笔记文件名。
+    @Published var activeNoteFile: String?
+    /// 当前笔记解析结果（一页纸渲染用）。
+    @Published var activeNote: (meta: NoteMeta, parsed: ParsedNote)?
+    /// AI 复盘进行中。
+    @Published var noteReplayBusy = false
+    /// 生成复习笔记弹窗。
+    @Published var noteDialogShown = false
+    /// 生成弹窗的预选词条（笔记库「滚进新笔记」）。
+    @Published var noteDialogPreselect: [String] = []
+    /// 笔记存储（与 ReaderStore 同一应用支持目录下的 notes/）。
+    let noteStore = NoteStore()
 
 
     init(settingsStore: SettingsStore, store: ReaderStore = .shared) {
@@ -827,13 +844,7 @@ final class ReaderViewModel: ObservableObject {
         _ = query
     }
 
-    // MARK: - 复习（屏 D，M3 完整实现）
-
-    func openReview() {
-        route = .review
-        reviewPos = 0
-        loadSourceArticles(ids: vocabWords.map(\.source.articleId))
-    }
+    // MARK: - 复习（屏 D，M3 完整实现；openReview 见路由区）
 
     /// 复习卡回跳/书证需要原句：把相关文章拉进缓存。
     func loadSourceArticles(ids: [String]) {
@@ -873,11 +884,19 @@ final class ReaderViewModel: ObservableObject {
 
     // MARK: - 复习评分
 
-    /// 应用一档评分并落盘：SRS 演进 + 复习打卡 + 刷新统计。
-    func gradeVocab(_ word: VocabWord, _ grade: ReviewGrade) {
+    /// 应用一档评分并落盘：SRS 演进 + 错题分桶 + 复习打卡 + 刷新统计。
+    /// mode/verdict 来自复习卡的判分上下文（识别卡 judged=nil 按评分归桶）。
+    func gradeVocab(
+        _ word: VocabWord,
+        _ grade: ReviewGrade,
+        mode: RecallMode,
+        verdict: RecallVerdict?
+    ) {
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         var graded = word
         graded.srs = gradeSrs(word.srs, grade, now: now)
+        let bucket = recallBucket(mode: mode, judged: verdict, grade: grade)
+        graded.recall = recordRecallStat(word.recall, mode: mode, bucket: bucket, nowMs: now)
         do {
             try store.saveVocabWord(graded)
             let day = dayKey(nowMs: now)
@@ -889,7 +908,143 @@ final class ReaderViewModel: ObservableObject {
     }
 
     func openReading() {
+        focusReviewIds = nil
         route = .reading
+    }
+
+    func openReview() {
+        focusReviewIds = nil
+        route = .review
+        reviewPos = 0
+        loadSourceArticles(ids: vocabWords.map(\.source.articleId))
+        refreshNotes()  // 「N 未整理」角标需要笔记覆盖数据
+    }
+
+    /// 笔记复盘区「只测仍错的词」：只排这批词，不等到期。
+    func startFocusReview(ids: [String]) {
+        guard !ids.isEmpty else {
+            showToast("这篇笔记的词这一轮都通过了，没有要补的")
+            return
+        }
+        focusReviewIds = ids
+        reviewPos = 0
+        route = .review
+    }
+
+    // MARK: - 笔记库
+
+    func openNotes() {
+        focusReviewIds = nil
+        route = .notes
+        refreshNotes()
+    }
+
+    func refreshNotes() {
+        notes = (try? noteStore.list()) ?? []
+    }
+
+    /// 还没整理进任何笔记的生词数（生成按钮角标：该整理了）。
+    var unnotedWordCount: Int {
+        let covered = Set(notes.flatMap { $0.wordIds })
+        return vocabWords.filter { !covered.contains($0.id) }.count
+    }
+
+    func selectNote(file: String) {
+        guard let loaded = try? noteStore.read(file: file) else { return }
+        activeNoteFile = file
+        activeNote = (loaded.meta, parseNoteMarkdown(loaded.content))
+    }
+
+    func deleteNote(file: String) {
+        _ = try? noteStore.delete(file: file)
+        if activeNoteFile == file {
+            activeNoteFile = nil
+            activeNote = nil
+        }
+        refreshNotes()
+        showToast("笔记已删除")
+    }
+
+    /// 生成弹窗「在笔记库打开」：保存完成后直达。
+    func openSavedNote(meta: NoteMeta) {
+        noteDialogShown = false
+        openNotes()
+        selectNote(file: meta.file)
+    }
+
+    /// 打开生成弹窗（可带预选：笔记库「滚进新笔记」）。
+    func openNoteDialog(preselect: [String] = []) {
+        noteDialogPreselect = preselect
+        noteDialogShown = true
+    }
+
+    /// 笔记生成/复盘共用的流式补全通道（弹窗直接调用）。
+    func streamChat(
+        systemPrompt: String,
+        userText: String,
+        onDelta: @escaping (String) -> Void
+    ) async throws -> String {
+        try await chat.completeStreaming(systemPrompt: systemPrompt, userText: userText, onDelta: onDelta)
+    }
+
+    /// 生成 AI 复盘并写回笔记 frontmatter；返回是否成功。
+    func generateReplay(for meta: NoteMeta) {
+        guard !noteReplayBusy else { return }
+        noteReplayBusy = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.noteReplayBusy = false }
+            let byId = Dictionary(uniqueKeysWithValues: self.vocabWords.map { ($0.id, $0) })
+            let noteWords = meta.wordIds.compactMap { byId[$0] }
+            guard !noteWords.isEmpty else {
+                self.showToast("这篇笔记的词都不在生词本里了")
+                return
+            }
+            let weakIds = meta.wordIds.filter { id in
+                guard let w = byId[id] else { return false }
+                return isStillWeak(w)
+            }
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            let dateHint = dayKey(nowMs: meta.createdAt)
+            do {
+                let raw = try await self.chat.complete(
+                    systemPrompt: buildReplaySystemPrompt(),
+                    userText: buildReplayInput(noteWords, weakIds: weakIds, noteDateHint: dateHint)
+                )
+                guard let parsed = parseReplay(raw), verifyReplayWords(parsed, weakWords: weakIds.compactMap { byId[$0] }) else {
+                    self.showToast("复盘输出无法解析，请重试")
+                    return
+                }
+                let passed = noteWords.count - weakIds.count
+                var replay = NoteReplay(
+                    verdict: parsed.verdict,
+                    weak: parsed.weak.map { NoteReplay.WeakItem(w: $0.w, why: $0.why) },
+                    passed: passed,
+                    stillWeak: weakIds.count
+                )
+                replay.rounds = max(1, (meta.replay?.rounds ?? 0) + (meta.replay == nil ? 0 : 1))
+                if let updated = try? self.noteStore.writeReplay(file: meta.file, replay: replay, rounds: replay.rounds, nowMs: now) {
+                    self.refreshNotes()
+                    if self.activeNoteFile == meta.file {
+                        self.selectNote(file: meta.file)
+                    }
+                    self.showToast("复盘已写回")
+                } else {
+                    self.showToast("复盘写回失败")
+                }
+            } catch {
+                self.showToast("复盘失败：\((error as? LocalizedError)?.errorDescription ?? String(describing: error))")
+            }
+        }
+    }
+
+    /// 复习视图的当前队列：加练批次优先，否则普通到期队列。
+    var reviewQueue: [VocabWord] {
+        if let focus = focusReviewIds {
+            let byId = Dictionary(uniqueKeysWithValues: vocabWords.map { ($0.id, $0) })
+            return focus.compactMap { byId[$0] }
+        }
+        return dueWords
     }
 
     // MARK: - 键盘（空格仅阅读器内生效；J/K/L 备选；H 暂显全部译文）

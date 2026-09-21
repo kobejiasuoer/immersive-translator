@@ -318,6 +318,41 @@ public struct VocabSource: Codable, Equatable {
     }
 }
 
+/// 复习错题的单模式计数（识别 / 完形 / 听写共用结构）。
+public struct RecallModeStat: Codable, Equatable {
+    public var pass: Int
+    public var wrong: Int
+    public var trap: Int
+
+    public init(pass: Int = 0, wrong: Int = 0, trap: Int = 0) {
+        self.pass = pass
+        self.wrong = wrong
+        self.trap = trap
+    }
+}
+
+/// 累计错题记录（每次复习判分后累加；老数据缺省 = 无记录）。
+/// byMode 键 = "recognition" | "cloze" | "dictation"。对齐 Windows RecallStat。
+public struct RecallStat: Codable, Equatable {
+    public var total: RecallModeStat
+    public var byMode: [String: RecallModeStat]
+    /// Unix 毫秒。
+    public var lastAt: Int64?
+
+    public init(total: RecallModeStat = RecallModeStat(), byMode: [String: RecallModeStat] = [:], lastAt: Int64? = nil) {
+        self.total = total
+        self.byMode = byMode
+        self.lastAt = lastAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        total = try c.decodeIfPresent(RecallModeStat.self, forKey: .total) ?? RecallModeStat()
+        byMode = try c.decodeIfPresent([String: RecallModeStat].self, forKey: .byMode) ?? [:]
+        lastAt = try c.decodeIfPresent(Int64.self, forKey: .lastAt)
+    }
+}
+
 /// 无文章来源的生词（划词收藏）配的 LLM 例句。
 public struct VocabExample: Codable, Equatable {
     public var en: String
@@ -389,6 +424,8 @@ public struct VocabWord: Codable, Equatable, Identifiable {
     public var addedAt: Int64
     /// source.articleId 为空（划词收藏）时的 LLM 例句。
     public var example: VocabExample?
+    /// 累计错题记录（每次复习判分后累加；老数据缺省 = 无记录）。
+    public var recall: RecallStat?
 
     public init(
         id: String,
@@ -404,7 +441,8 @@ public struct VocabWord: Codable, Equatable, Identifiable {
         source: VocabSource,
         srs: VocabSrsState,
         addedAt: Int64,
-        example: VocabExample? = nil
+        example: VocabExample? = nil,
+        recall: RecallStat? = nil
     ) {
         self.id = id
         self.word = word
@@ -420,6 +458,7 @@ public struct VocabWord: Codable, Equatable, Identifiable {
         self.srs = srs
         self.addedAt = addedAt
         self.example = example
+        self.recall = recall
     }
 
     /// kind 缺省视为单词。
@@ -427,7 +466,7 @@ public struct VocabWord: Codable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, word, kind, phonetic, senses, forms, collocations
-        case chunkType, pattern, trap, source, srs, addedAt, example
+        case chunkType, pattern, trap, source, srs, addedAt, example, recall
     }
 
     public init(from decoder: Decoder) throws {
@@ -446,6 +485,7 @@ public struct VocabWord: Codable, Equatable, Identifiable {
         srs = try c.decode(VocabSrsState.self, forKey: .srs)
         addedAt = try c.decodeIfPresent(Int64.self, forKey: .addedAt) ?? 0
         example = try c.decodeIfPresent(VocabExample.self, forKey: .example)
+        recall = try c.decodeIfPresent(RecallStat.self, forKey: .recall)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -464,6 +504,7 @@ public struct VocabWord: Codable, Equatable, Identifiable {
         try c.encode(srs, forKey: .srs)
         try c.encode(addedAt, forKey: .addedAt)
         try c.encodeIfPresent(example, forKey: .example)
+        try c.encodeIfPresent(recall, forKey: .recall)
     }
 }
 
