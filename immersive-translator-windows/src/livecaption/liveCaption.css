@@ -1,0 +1,172 @@
+/* 录音直译窗口（live-caption）。复用全局 styles.css 的设计令牌与 .btn/.input。 */
+
+.lc-page {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text-1);
+}
+.lc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px 10px;
+}
+.lc-head h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.lc-direction {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+}
+.lc-dir-btn {
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 5px 12px;
+  border-radius: 7px;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.lc-dir-btn.on {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.lc-dir-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.lc-notice {
+  margin: 0 18px 8px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn, #e5a000);
+  border-radius: 9px;
+  background: var(--surface);
+}
+.lc-stream {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.lc-empty {
+  margin: auto;
+  text-align: center;
+  font-size: 13px;
+  line-height: 2;
+  color: var(--text-3);
+}
+.lc-line {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.lc-src {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-1);
+}
+.lc-dst {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-2);
+  border-top: 1px dashed var(--border);
+  padding-top: 4px;
+}
+.lc-dst.pending {
+  color: var(--text-3);
+  font-style: italic;
+}
+.lc-dst.failed {
+  color: var(--warn, #e5a000);
+}
+.lc-listening {
+  font-size: 12px;
+  color: var(--text-3);
+  text-align: center;
+  padding: 4px 0;
+}
+.lc-listening.on {
+  color: var(--accent);
+}
+.lc-controls {
+  border-top: 1px solid var(--border);
+  padding: 12px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.lc-level {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.lc-level i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.08s linear;
+}
+.lc-controls-row {
+  display: flex;
+  gap: 8px;
+}
+.lc-record-btn {
+  flex: 1;
+}
+.lc-record-btn.stop {
+  background: #e5484d;
+}
+.lc-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.lc-creds-toggle {
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--text-3);
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+.lc-creds {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.lc-creds p {
+  margin: 0 0 3px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
