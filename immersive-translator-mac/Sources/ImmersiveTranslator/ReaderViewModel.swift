@@ -111,6 +111,9 @@ final class ReaderViewModel: ObservableObject {
     @Published var noteDialogPreselect: [String] = []
     /// 笔记存储（与 ReaderStore 同一应用支持目录下的 notes/）。
     let noteStore = NoteStore()
+    /// 跟读评测状态机（shadowingMode + shadowingAssess 时接管跟读等待）。
+    let assess = ShadowAssessController()
+    private let leadSpeaker = LeadSpeaker()
 
 
     init(settingsStore: SettingsStore, store: ReaderStore = .shared) {
@@ -129,9 +132,47 @@ final class ReaderViewModel: ObservableObject {
         playback.onEvent = { [weak self] event in
             self?.handlePlaybackEvent(event)
         }
+        setupShadowAssess()
     }
 
     // MARK: - 播放（M2）
+
+    /// 跟读评测接线：跟读等待出现时按设置接管，放行时复位。
+    private func setupShadowAssess() {
+        assess.textsProvider = { [weak self] in
+            self?.article?.sentences.map(\.en) ?? []
+        }
+        assess.configProvider = { [weak self] in
+            let s = self?.effectiveSettings
+            return (
+                s?.shadowingPassScore ?? 4.2,
+                s?.shadowingAutoMic ?? true,
+                s?.shadowingSilenceMs ?? 1500
+            )
+        }
+        assess.leadProvider = { [weak self] text, done in
+            self?.leadSpeaker.speak(text, rate: ShadowAssessController.leadRate, completion: done)
+        }
+        assess.stopLead = { [weak self] in
+            self?.leadSpeaker.stop()
+        }
+        assess.onAdvance = { [weak self] in
+            self?.playback.continueAfterShadowing()
+        }
+        playback.$shadowingWait
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] waiting in
+                guard let self else { return }
+                let settings = self.effectiveSettings
+                if waiting, settings.shadowingMode, settings.shadowingAssess {
+                    self.assess.begin(idx: self.activeSentenceIdx)
+                } else {
+                    self.assess.cancelAssess()
+                }
+            }
+            .store(in: &cancellables)
+    }
 
     private func handlePlaybackEvent(_ event: ReaderPlaybackEngine.Event) {
         switch event {
@@ -175,6 +216,20 @@ final class ReaderViewModel: ObservableObject {
     func continueAfterShadowing() {
         playback.continueAfterShadowing()
     }
+
+    // MARK: - 跟读评测（转发给 AssessStrip）
+
+    /// 评测是否接管跟读等待（PlayBar 决定显示哪个跟读 UI）。
+    var assessActive: Bool {
+        effectiveSettings.shadowingAssess && assess.state.phase != .idle
+    }
+
+    func assessOpenMic() { assess.openMic() }
+    func assessRetry() { assess.retry() }
+    func assessLead() { assess.lead() }
+    func assessSkip() { assess.skip() }
+    /// 手动「说完」：结束录音送评测（静音 VAD 之外的路）。
+    func assessFinishManually() { assess.finishManually() }
 
     func stopPlayback() {
         playback.stop()

@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import ReaderCore
+import XfyunCore
 
 /// 正文英文句的 NSTextView 互操作：
 /// - 划选文本（mouseup 判定）→ 查短语；
@@ -25,6 +26,8 @@ struct ReaderSentenceText: NSViewRepresentable {
     let onSelection: (String) -> Void
     let onWordClick: (String) -> Void
     var onChunkClick: ((SentenceChunk) -> Void)?
+    /// 跟读评测的词级着色（UTF-16 偏移；nil = 无评测结果）。
+    var assessMarks: [WordMark]?
 
     func makeNSView(context: Context) -> ReaderTextView {
         let view = ReaderTextView(frame: .zero)
@@ -93,6 +96,19 @@ struct ReaderSentenceText: NSViewRepresentable {
             attributed.addAttribute(.underlineStyle, value: NSUnderlineStyle.patternDash.rawValue, range: range)
             attributed.addAttribute(.underlineColor, value: color, range: range)
             attributed.addAttribute(.cursor, value: NSCursor.pointingHand, range: range)
+        }
+        // 跟读评测着色：good 绿 / ok 黄 / bad 红 / missed 灰底纹（漏读）。
+        for mark in assessMarks ?? [] {
+            let range = NSRange(location: mark.start, length: max(1, mark.end - mark.start))
+            guard range.location + range.length <= full.length else { continue }
+            let bg: NSColor
+            switch mark.quality {
+            case .good: bg = NSColor.systemGreen.withAlphaComponent(0.22)
+            case .ok: bg = NSColor.systemYellow.withAlphaComponent(0.28)
+            case .bad: bg = NSColor.systemRed.withAlphaComponent(0.20)
+            case .missed: bg = NSColor.systemGray.withAlphaComponent(0.30)
+            }
+            attributed.addAttribute(.backgroundColor, value: bg, range: range)
         }
         view.markedChunks = marks.compactMap { mark in
             guard let chunk = mark.chunk else { return nil }

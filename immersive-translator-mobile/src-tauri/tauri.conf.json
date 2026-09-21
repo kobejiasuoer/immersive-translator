@@ -18,6 +18,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": []
+    "icon": [],
+    "iOS": {
+      "developmentTeam": "3HX836XLHX"
+    }
   }
 }
