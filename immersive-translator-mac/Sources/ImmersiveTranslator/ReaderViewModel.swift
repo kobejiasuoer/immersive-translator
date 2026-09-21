@@ -13,6 +13,7 @@ final class ReaderViewModel: ObservableObject {
         case reading
         case review
         case notes
+        case speak
     }
 
     /// 词典栏状态（DictPanelState）。
@@ -114,6 +115,8 @@ final class ReaderViewModel: ObservableObject {
     /// 跟读评测状态机（shadowingMode + shadowingAssess 时接管跟读等待）。
     let assess = ShadowAssessController()
     private let leadSpeaker = LeadSpeaker()
+    /// 口语陪练控制器（R3）。
+    let speak = SpeakViewController()
 
 
     init(settingsStore: SettingsStore, store: ReaderStore = .shared) {
@@ -133,9 +136,20 @@ final class ReaderViewModel: ObservableObject {
             self?.handlePlaybackEvent(event)
         }
         setupShadowAssess()
+        setupSpeak()
     }
 
     // MARK: - 播放（M2）
+
+    /// 口语陪练接线：LLM 通道复用阅读室的 chat 客户端。
+    private func setupSpeak() {
+        speak.chatProvider = { [weak self] system, input, onDelta in
+            guard let self else {
+                throw FileImportError("翻译服务不可用")
+            }
+            return try await self.chat.completeStreaming(systemPrompt: system, userText: input, onDelta: onDelta)
+        }
+    }
 
     /// 跟读评测接线：跟读等待出现时按设置接管，放行时复位。
     private func setupShadowAssess() {
@@ -999,6 +1013,12 @@ final class ReaderViewModel: ObservableObject {
         focusReviewIds = nil
         route = .notes
         refreshNotes()
+    }
+
+    func openSpeak() {
+        focusReviewIds = nil
+        route = .speak
+        speak.refreshRecent()
     }
 
     func refreshNotes() {

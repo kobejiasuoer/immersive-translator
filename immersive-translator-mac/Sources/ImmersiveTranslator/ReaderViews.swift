@@ -196,6 +196,8 @@ struct ReaderBodyView: View {
                 }
             } else if vm.route == .review {
                 ReviewView(vm: vm)
+            } else if vm.route == .speak {
+                SpeakView(vm: vm, controller: vm.speak)
             } else {
                 ReaderNotesView(vm: vm)
             }
@@ -255,6 +257,20 @@ struct ReaderShelfView: View {
 
             Divider().opacity(0.5)
             VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    vm.openSpeak()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "bubble.left.and.bubble.right").font(.system(size: 12))
+                        Text("口语陪练").font(.system(size: 12.5))
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(palette.text)
+                .help("场景对话开口说：点餐 / 面试 / 旅行 / 寒暄")
+
                 Button {
                     vm.openReview()
                 } label: {
