@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UX-5 ErrorBoundary · 白屏 → 区域级降级 原型（2026-09-18）</title>
+<!--
+  UX-5 ErrorBoundary 原型 · 自包含单文件，双击即开。
+  对应 docs/ux-remediation-plan-2026-09-18.md UX-5 卡。
+  如实还原关键约束：应用全窗 decorations:false，标题栏也是 React 画的——
+  所以「App.tsx 一处包裹」的边界触发时，标题栏会随内容一起降级（方案已承认此取舍），
+  错误卡自带 [关闭窗口] 按钮补偿，用户无死角可逃。
+  修复前：任何渲染异常 = 整窗白屏，只能 Alt+F4。
+  修复后：错误卡（重试 / 复制诊断 / 关闭窗口），hide 后重开错误卡仍在（状态保留），重试即恢复。
+-->
+<style>
+  body[data-theme="day"] {
+    --accent: #4c5ff0; --accent-hover: #3f52e0;
+    --accent-soft: rgba(76,95,240,.10); --accent-softer: rgba(76,95,240,.06);
+    --bg: #f4f5f9; --surface: #fff; --surface-2: #f9fafc;
+    --border: #e4e7ee; --border-strong: #d6dae4;
+    --text-1: #1c2029; --text-2: #4b5261; --text-3: #7c8494; --text-4: #a6adbb;
+    --ok: #16a34a; --ok-soft: #e8f7ee; --err: #dc2626; --err-soft: #fdeaea;
+    --shadow-pop: 0 12px 32px rgba(16,24,40,.16), 0 3px 10px rgba(16,24,40,.1);
+    --wallpaper: radial-gradient(1100px 640px at 55% 16%, #33405e 0%, #232a3d 55%, #1a1f2e 100%);
+  }
+  body[data-theme="sepia"] {
+    --accent: #4c5ff0; --accent-hover: #3f52e0;
+    --accent-soft: rgba(76,95,240,.12); --accent-softer: rgba(76,95,240,.07);
+    --bg: #f5efdf; --surface: #fbf7ec; --surface-2: #f1ead7;
+    --border: #e4dac0; --border-strong: #d2c6a6;
+    --text-1: #37301f; --text-2: #5a5138; --text-3: #857a5c; --text-4: #a89d80;
+    --ok: #35793f; --ok-soft: rgba(53,121,63,.12); --err: #b03a32; --err-soft: rgba(176,58,50,.12);
+    --shadow-pop: 0 12px 32px rgba(80,64,20,.2);
+    --wallpaper: radial-gradient(1100px 640px at 55% 16%, #5a5138 0%, #4a4430 55%, #37331f 100%);
+  }
+  body[data-theme="dark"] {
+    --accent: #7d8cff; --accent-hover: #93a0ff;
+    --accent-soft: rgba(125,140,255,.16); --accent-softer: rgba(125,140,255,.09);
+    --bg: #1d1f26; --surface: #262933; --surface-2: #2e313c;
+    --border: #373b47; --border-strong: #474c5a;
+    --text-1: #edeef4; --text-2: #c4c9d6; --text-3: #9399ab; --text-4: #6f7688;
+    --ok: #5cc48a; --ok-soft: rgba(60,190,120,.16); --err: #f17474; --err-soft: rgba(240,90,90,.16);
+    --shadow-pop: 0 14px 36px rgba(0,0,0,.55);
+    --wallpaper: radial-gradient(1100px 640px at 55% 16%, #2a2e3f 0%, #1f2330 55%, #14161e 100%);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+    font-size: 13px; line-height: 1.5; color: var(--text-1);
+    background: var(--wallpaper); overflow: hidden; -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: Consolas, "Cascadia Code", monospace; }
+
+  /* 应用窗 */
+  #win {
+    position: absolute; left: 50%; top: 48%; transform: translate(-50%, -50%);
+    width: 640px; height: 560px; z-index: 200;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--shadow-pop); overflow: hidden; display: flex; flex-direction: column;
+    transition: opacity .25s;
+  }
+  #win.gone { opacity: 0; pointer-events: none; }
+  .titlebar {
+    height: 36px; flex: none; display: flex; align-items: center; gap: 8px;
+    padding-left: 14px; background: var(--surface); border-bottom: 1px solid var(--border); user-select: none;
+  }
+  .titlebar .app-ico {
+    width: 16px; height: 16px; border-radius: 4px;
+    background: linear-gradient(135deg, #6b7bff 0%, #9a6bff 100%);
+    color: #fff; font-size: 9px; display: flex; align-items: center; justify-content: center; font-weight: 700;
+  }
+  .titlebar .t { font-size: 12px; color: var(--text-2); flex: 1; }
+  .titlebar .wbtn { min-width: 44px; height: 36px; display: flex; align-items: center; justify-content: center; color: var(--text-2); cursor: pointer; font-size: 11px; }
+  .titlebar .wbtn:hover { background: var(--accent-soft); color: var(--text-1); }
+  .content { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+  /* 正常内容 */
+  .rd-head { padding: 16px 26px 8px; }
+  .rd-head h2 { font-family: Georgia, serif; font-size: 20px; margin: 0 0 2px; }
+  .rd-head p { margin: 0; color: var(--text-3); font-size: 12px; }
+  .rd-body { flex: 1; overflow-y: auto; padding: 10px 26px 20px; }
+  .rd-sent { font-family: Georgia, serif; font-size: 16px; line-height: 26px; margin-bottom: 10px; }
+  .rd-sent small { display: block; font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; font-size: 12.5px; color: var(--text-3); }
+  .vocab-box {
+    margin-top: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+    padding: 10px 14px;
+  }
+  .vocab-box .vb-t { font-size: 11px; color: var(--text-3); font-weight: 600; margin-bottom: 6px; }
+  .vb-row { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; font-size: 12.5px; }
+  .vb-row b { font-family: Georgia, serif; font-size: 13.5px; }
+  .vb-row span { color: var(--text-3); }
+
+  /* 白屏（修复前）：整个窗只剩一块白 */
+  #win.blank { background: #fff; }
+  #win.blank .titlebar, #win.blank .content, #win.blank .errcard { display: none; }
+  #win.blank::after {
+    content: ""; flex: 1;
+  }
+
+  /* 错误卡（修复后）：内容区整体替换，标题栏随之消失（如实还原取舍） */
+  .errcard {
+    flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center;
+    gap: 10px; padding: 30px; text-align: center;
+  }
+  .errcard.show { display: flex; }
+  .errcard .e-ico {
+    width: 52px; height: 52px; border-radius: 14px; background: var(--err-soft);
+    display: flex; align-items: center; justify-content: center; font-size: 24px;
+  }
+  .errcard h3 { margin: 4px 0 0; font-size: 16px; }
+  .errcard .e-sub { color: var(--text-3); font-size: 12px; margin: 0 0 6px; max-width: 380px; }
+  .errcard .e-msg {
+    width: 100%; max-width: 460px; text-align: left; font-size: 11px; color: var(--err);
+    background: var(--err-soft); border-radius: 8px; padding: 8px 12px; overflow-x: auto; white-space: pre;
+  }
+  .errcard .e-ops { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; justify-content: center; }
+  .btn { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 7px 16px; font-size: 12.5px; cursor: pointer; font-family: inherit; }
+  .btn:hover { background: var(--accent-hover); }
+  .btn.ghost2 { background: var(--surface); color: var(--text-2); border: 1px solid var(--border-strong); }
+  .btn.ghost2:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-softer); }
+  .diag {
+    display: none; width: 100%; max-width: 460px; text-align: left; font-size: 10.5px; line-height: 1.55;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+    color: var(--text-2); white-space: pre-wrap; max-height: 150px; overflow-y: auto;
+  }
+  .diag.show { display: block; }
+
+  /* 全屏白屏标注 */
+  #blank-note {
+    position: absolute; left: 50%; top: 82%; transform: translateX(-50%); z-index: 300; display: none;
+    background: var(--err-soft); color: var(--err); border: 1px solid var(--err);
+    border-radius: 10px; padding: 8px 16px; font-size: 12.5px; text-align: center; max-width: 520px;
+  }
+  #blank-note.show { display: block; animation: pop .2s ease; }
+  @keyframes pop { from { opacity: 0; transform: translateX(-50%) scale(.96); } to { opacity: 1; transform: translateX(-50%); } }
+
+  /* 导演台 */
+  #director {
+    position: absolute; right: 30px; top: 40px; width: 300px; z-index: 900;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--shadow-pop); overflow: hidden;
+  }
+  #director .d-head {
+    padding: 9px 13px; display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid var(--border); cursor: pointer; user-select: none;
+  }
+  #director .d-head b { font-size: 12.5px; }
+  #director .d-head span { color: var(--text-4); font-size: 11px; }
+  #director .d-body { padding: 11px 13px; display: flex; flex-direction: column; gap: 11px; }
+  #director.folded .d-body { display: none; }
+  .d-sec h4 { margin: 0 0 5px; font-size: 11px; color: var(--text-3); font-weight: 600; }
+  .seg { display: flex; gap: 6px; }
+  .seg button {
+    flex: 1; padding: 6px 4px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text-2); font-size: 11.5px; cursor: pointer; font-family: inherit; white-space: nowrap;
+  }
+  .seg button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-softer); font-weight: 600; }
+  .btn.wide { width: 100%; }
+  .btn.danger { background: var(--err); }
+  .btn.danger:hover { filter: brightness(1.06); background: var(--err); }
+  .steps { margin: 0; padding-left: 18px; font-size: 11.5px; color: var(--text-2); }
+  .steps li { margin-bottom: 3px; }
+  .note { font-size: 10.5px; color: var(--text-3); border-top: 1px dashed var(--border); padding-top: 8px; }
+
+  .theme-dots { position: absolute; left: 16px; top: 16px; z-index: 900; display: flex; gap: 8px; }
+  .theme-dots .dot { width: 22px; height: 22px; border-radius: 99px; cursor: pointer; border: 2px solid var(--surface); box-shadow: var(--shadow-pop); }
+  .theme-dots .dot[data-t="day"] { background: #f4f5f9; }
+  .theme-dots .dot[data-t="sepia"] { background: #f5efdf; }
+  .theme-dots .dot[data-t="dark"] { background: #1d1f26; }
+  .theme-dots .dot.on { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #toasts { position: absolute; left: 38%; bottom: 70px; transform: translateX(-50%); z-index: 990; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .toast { background: rgba(20,22,30,.92); color: #fff; border-radius: 99px; padding: 7px 16px; font-size: 12px; box-shadow: var(--shadow-pop); max-width: 460px; }
+  body[data-theme="dark"] .toast { background: rgba(60,64,80,.95); }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body data-theme="day">
+
+<!-- 应用窗（阅读室） -->
+<div id="win">
+  <div class="titlebar" id="tb">
+    <div class="app-ico">译</div><div class="t">沉浸阅读室 · 自私的巨人</div>
+    <div class="wbtn">─</div><div class="wbtn" title="关闭">✕</div>
+  </div>
+  <div class="content" id="content">
+    <div class="rd-head">
+      <h2>The Selfish Giant</h2>
+      <p>Oscar Wilde · B2 · 约 12 分钟 · 今日一篇</p>
+    </div>
+    <div class="rd-body">
+      <div class="rd-sent">Every afternoon, as they were coming from school, the children used to go and play in the Giant's garden.<small>每天下午放学以后，孩子们总喜欢到巨人的花园里去玩耍。</small></div>
+      <div class="rd-sent">"My own garden is my own garden," said the Giant; "anyone can understand that, and I will allow nobody to play in it but myself."<small>“我自己的花园就是我自己的花园，”巨人说，“谁都明白，除了我自己，谁都不许在里面玩。”</small></div>
+      <div class="vocab-box" id="vocab-box">
+        <div class="vb-t">本篇生词（3）</div>
+        <div class="vb-row"><b>gruff</b><span>粗哑的 · adj.</span></div>
+        <div class="vb-row"><b>selfish</b><span>自私的 · adj. · 踩过 1 次直译陷阱</span></div>
+        <div class="vb-row"><b>blossom</b><span>花；开花 · n./v.</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="errcard" id="errcard"></div>
+</div>
+
+<div id="blank-note">整窗白屏：标题栏也没了（decorations:false，标题栏也是 React 画的）<br/>没有关闭按钮、没有重试——用户只能 <b>Alt+F4</b> 或任务管理器</div>
+
+<!-- 导演台 -->
+<div id="director">
+  <div class="d-head" id="d-toggle"><b>UX-5 ErrorBoundary · 原型</b><span>收起 ▾</span></div>
+  <div class="d-body">
+    <div class="d-sec">
+      <h4>模式（切换即重置）</h4>
+      <div class="seg" id="seg-mode">
+        <button data-m="before" class="on">修复前（白屏）</button>
+        <button data-m="after">修复后（错误卡）</button>
+      </div>
+    </div>
+    <div class="d-sec">
+      <h4>操作</h4>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <button class="btn danger wide" id="btn-crash">⚡ 注入渲染崩溃（模拟 bug）</button>
+        <button class="btn ghost2 wide" id="btn-reopen" style="display:none">重新打开窗口（show）</button>
+        <button class="btn ghost2 wide" id="btn-altf4" style="display:none">Alt+F4 强关白屏窗</button>
+      </div>
+    </div>
+    <div class="d-sec">
+      <h4>对比走法</h4>
+      <ol class="steps">
+        <li><b>修复前</b>：注入崩溃 → 整窗白屏、标题栏消失 → 只能 Alt+F4（点下方按钮体验）</li>
+        <li><b>修复后</b>：注入崩溃 → 错误卡出现，三个按钮各有分工</li>
+        <li>[复制诊断] → 展开诊断预览（真实应用会复制到剪贴板）</li>
+        <li>[关闭窗口] → hide；再「重新打开」→ 错误卡仍在（状态保留），[重试] 恢复</li>
+      </ol>
+    </div>
+    <div class="note">挂载取舍（方案已如实承认）：App.tsx 一处包裹覆盖 8 窗，标题栏随之降级——由错误卡的 [关闭窗口] 补偿；逐视图包裹留作打磨项。</div>
+  </div>
+</div>
+
+<div class="theme-dots">
+  <div class="dot on" data-t="day" title="日间"></div>
+  <div class="dot" data-t="sepia" title="护眼"></div>
+  <div class="dot" data-t="dark" title="暗色"></div>
+</div>
+<div id="toasts"></div>
+
+<script>
+var mode, crashed, hidden;
+
+function $(id) { return document.getElementById(id); }
+function toast(msg, ms) {
+  var el = document.createElement("div");
+  el.className = "toast"; el.textContent = msg;
+  $("toasts").appendChild(el);
+  setTimeout(function () { el.remove(); }, ms || 3000);
+}
+
+var ERR_MSG = "TypeError: Cannot read properties of undefined (reading 'map')\n    at VocabListPanel (VocabListPanel.tsx:214)\n    at renderWithHooks (react-dom.development.js:15486)";
+var DIAG = [
+  "ImmersiveTranslator 诊断信息（本地生成，未自动上传）",
+  "──────────────────────────────",
+  "版本    : 0.6.0 · Windows 10.0.19045 x64",
+  "窗口    : reader（沉浸阅读室）",
+  "视图    : vocab-panel",
+  "时间    : " + new Date().toLocaleString(),
+  "错误    : " + ERR_MSG.split("\n")[0],
+  "栈摘要  : VocabListPanel:214 ← renderWithHooks",
+  "最近操作: 打开阅读室 → 切到生词本 → 切换主题（暗色）",
+  "数据完整性: reader_vocab.json 最后写入正常（原子写），学习数据无损坏"
+].join("\n");
+
+function renderWin() {
+  var win = $("win");
+  win.classList.toggle("gone", !!hidden);
+  if (hidden) { $("btn-reopen").style.display = "block"; return; }
+  $("btn-reopen").style.display = "none";
+
+  var blank = mode === "before" && crashed;
+  win.classList.toggle("blank", blank);
+  $("blank-note").classList.toggle("show", blank);
+  $("btn-altf4").style.display = blank ? "block" : "none";
+  $("tb").style.display = blank ? "none" : "flex";
+
+  var card = $("errcard");
+  var afterCrash = mode === "after" && crashed;
+  card.classList.toggle("show", !!afterCrash);
+  if (afterCrash) {
+    $("content").style.display = "none";
+    card.innerHTML =
+      '<div class="e-ico">⚠</div>'
+      + "<h3>这部分出了点问题</h3>"
+      + '<p class="e-sub">阅读室的这个区域渲染失败。你的学习数据不受影响；重试通常就能恢复。</p>'
+      + '<div class="e-msg mono">' + ERR_MSG + "</div>"
+      + '<div class="e-ops">'
+      + '<button class="btn" data-a="retry">重试</button>'
+      + '<button class="btn ghost2" data-a="diag">复制诊断</button>'
+      + '<button class="btn ghost2" data-a="close">关闭窗口</button>'
+      + "</div>"
+      + '<div class="diag mono" id="diag">' + DIAG + "</div>";
+    card.querySelectorAll("[data-a]").forEach(function (b) {
+      b.onclick = function () { act(b.getAttribute("data-a")); };
+    });
+  } else {
+    card.innerHTML = "";
+    $("content").style.display = "flex";
+  }
+}
+function act(a) {
+  if (a === "retry") {
+    crashed = false;
+    renderWin();
+    toast("已恢复 ✓ 真实场景中若错误源仍在，会再次降级（数据无损）", 3200);
+    return;
+  }
+  if (a === "diag") {
+    var d = $("diag");
+    d.classList.toggle("show");
+    if (d.classList.contains("show")) toast("诊断信息已复制到剪贴板（errorMessageFormatter 现成链路）", 3000);
+    return;
+  }
+  if (a === "close") {
+    hidden = true;
+    renderWin();
+    toast("窗口已 hide（与正常关闭同语义，进程还在）");
+    return;
+  }
+}
+$("btn-crash").onclick = function () {
+  if (crashed) { toast("已经崩了——先重试或切换模式", 2200); return; }
+  crashed = true; hidden = false;
+  renderWin();
+  if (mode === "before") toast("渲染异常发生……", 2000);
+};
+$("btn-reopen").onclick = function () {
+  hidden = false;
+  renderWin();
+  if (mode === "after" && crashed) toast("重开仍显示错误卡（hide 不清状态）——点 [重试] 恢复", 3000);
+  else if (mode === "before" && crashed) toast("重开仍是白屏（状态还在）——只能再次 Alt+F4", 3000);
+};
+$("btn-altf4").onclick = function () {
+  hidden = true;
+  renderWin();
+  toast("白屏窗只能这样关——这就是修复前的用户处境", 3000);
+};
+$("seg-mode").addEventListener("click", function (e) {
+  var b = e.target.closest("button"); if (!b || b.classList.contains("on")) return;
+  document.querySelectorAll("#seg-mode button").forEach(function (x) { x.classList.remove("on"); });
+  b.classList.add("on");
+  mode = b.getAttribute("data-m");
+  crashed = false; hidden = false;
+  renderWin();
+  $("btn-altf4").style.display = "none";
+  toast(mode === "before" ? "已切到【修复前】：任何渲染异常 = 整窗白屏" : "已切到【修复后】：错误卡（重试 / 复制诊断 / 关闭窗口）", 3000);
+});
+$("d-toggle").onclick = function () {
+  var d = $("director");
+  d.classList.toggle("folded");
+  document.querySelector("#d-toggle span").textContent = d.classList.contains("folded") ? "展开 ▸" : "收起 ▾";
+};
+document.querySelectorAll(".theme-dots .dot").forEach(function (d) {
+  d.onclick = function () {
+    document.querySelectorAll(".theme-dots .dot").forEach(function (x) { x.classList.remove("on"); });
+    d.classList.add("on");
+    document.body.setAttribute("data-theme", d.getAttribute("data-t"));
+  };
+});
+
+mode = "before"; crashed = false; hidden = false;
+renderWin();
+</script>
+</body>
+</html>

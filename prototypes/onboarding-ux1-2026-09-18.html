@@ -1,0 +1,902 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UX-1 首启体验 · 交互原型（2026-09-18）</title>
+<!--
+  UX-1 首启体验交互原型 · 自包含单文件，双击即开。
+  演示范围（对应 docs/ux-remediation-plan-2026-09-18.md UX-1 卡）：
+    1. 首启自动 show 预建 settings 窗并路由到引导视图（show，不新建窗）
+    2. 三卡片：热键表 / 配置翻译接口（内联）/ 内置文章零门槛试读
+    3. 任意关闭路径写 onboarding-done.json（见左下「数据目录」检查器）
+    4. 老用户判定：已有 Key 或已有文章 → 不弹
+    5. 托盘左键：修复前（无反应）vs 修复后（弹菜单）
+  设计令牌取自 src/styles.css（day/sepia/dark 三主题原值）。
+  内容素材取自真实代码：托盘菜单（lib.rs）、服务商（providerPresets.ts）、
+  内置文库六篇（library.json，今日一篇按本地日期轮换，公式同 library.ts）。
+-->
+<style>
+  /* ===== 主题令牌（原值摘自 styles.css） ===== */
+  body[data-theme="day"] {
+    --accent: #4c5ff0; --accent-hover: #3f52e0;
+    --accent-soft: rgba(76, 95, 240, 0.10); --accent-softer: rgba(76, 95, 240, 0.06);
+    --bg: #f4f5f9; --surface: #ffffff; --surface-2: #f9fafc;
+    --border: #e4e7ee; --border-strong: #d6dae4;
+    --text-1: #1c2029; --text-2: #4b5261; --text-3: #7c8494; --text-4: #a6adbb;
+    --ok: #16a34a; --ok-soft: #e8f7ee; --err: #dc2626; --err-soft: #fdeaea;
+    --shadow-card: 0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06);
+    --shadow-float: 0 6px 16px rgba(16,24,40,.08), 0 2px 6px rgba(16,24,40,.06);
+    --shadow-pop: 0 12px 32px rgba(16,24,40,.16), 0 3px 10px rgba(16,24,40,.1);
+    --wallpaper: radial-gradient(1200px 700px at 70% 20%, #33405e 0%, #232a3d 55%, #1a1f2e 100%);
+    --traybar: rgba(255,255,255,.72);
+  }
+  body[data-theme="sepia"] {
+    --accent: #4c5ff0; --accent-hover: #3f52e0;
+    --accent-soft: rgba(76, 95, 240, 0.12); --accent-softer: rgba(76, 95, 240, 0.07);
+    --bg: #f5efdf; --surface: #fbf7ec; --surface-2: #f1ead7;
+    --border: #e4dac0; --border-strong: #d2c6a6;
+    --text-1: #37301f; --text-2: #5a5138; --text-3: #857a5c; --text-4: #a89d80;
+    --ok: #35793f; --ok-soft: rgba(53,121,63,.12); --err: #b03a32; --err-soft: rgba(176,58,50,.12);
+    --shadow-card: 0 1px 3px rgba(80,64,20,.08);
+    --shadow-float: 0 6px 16px rgba(80,64,20,.12);
+    --shadow-pop: 0 12px 32px rgba(80,64,20,.2);
+    --wallpaper: radial-gradient(1200px 700px at 70% 20%, #5a5138 0%, #4a4430 55%, #37331f 100%);
+    --traybar: rgba(251,247,236,.8);
+  }
+  body[data-theme="dark"] {
+    --accent: #7d8cff; --accent-hover: #93a0ff;
+    --accent-soft: rgba(125,140,255,.16); --accent-softer: rgba(125,140,255,.09);
+    --bg: #1d1f26; --surface: #262933; --surface-2: #2e313c;
+    --border: #373b47; --border-strong: #474c5a;
+    --text-1: #edeef4; --text-2: #c4c9d6; --text-3: #9399ab; --text-4: #6f7688;
+    --ok: #5cc48a; --ok-soft: rgba(60,190,120,.16); --err: #f17474; --err-soft: rgba(240,90,90,.16);
+    --shadow-card: 0 1px 2px rgba(0,0,0,.3);
+    --shadow-float: 0 8px 20px rgba(0,0,0,.4);
+    --shadow-pop: 0 14px 36px rgba(0,0,0,.55);
+    --wallpaper: radial-gradient(1200px 700px at 70% 20%, #2a2e3f 0%, #1f2330 55%, #14161e 100%);
+    --traybar: rgba(38,41,51,.78);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    font-size: 13px; line-height: 1.5; color: var(--text-1);
+    background: var(--wallpaper); overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace; }
+
+  /* ===== 桌面 / 任务栏 ===== */
+  .desktop { position: fixed; inset: 0; }
+  .taskbar {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 44px;
+    background: var(--traybar); backdrop-filter: blur(14px);
+    border-top: 1px solid var(--border); display: flex; align-items: center;
+    justify-content: flex-end; gap: 4px; padding: 0 10px; z-index: 500;
+  }
+  .tray-sysicon { color: var(--text-2); font-size: 13px; padding: 4px 5px; user-select: none; opacity: .85; }
+  .tray-app {
+    width: 26px; height: 26px; border-radius: 6px; cursor: pointer; position: relative;
+    background: linear-gradient(135deg, #6b7bff 0%, #9a6bff 100%);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 13px; font-weight: 600; user-select: none;
+    transition: transform .12s ease; margin-left: 4px;
+  }
+  .tray-app:hover { transform: translateY(-1px); }
+  .tray-app.shake { animation: shake .3s ease; }
+  @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-2px)} 75%{transform:translateX(2px)} }
+  .taskbar .clock { color: var(--text-2); font-size: 12px; padding: 0 6px 0 10px; text-align: right; line-height: 1.3; user-select: none; }
+
+  /* 左键无反应提示（修复前） */
+  .tray-hint {
+    position: absolute; right: 14px; bottom: 56px; z-index: 600;
+    background: var(--err-soft); color: var(--err); border: 1px solid var(--err);
+    border-radius: 8px; padding: 6px 12px; font-size: 12px; max-width: 240px;
+    box-shadow: var(--shadow-float); animation: pop-in .16s ease;
+  }
+
+  /* ===== 托盘菜单（Win11 风） ===== */
+  .tray-menu {
+    position: absolute; right: 10px; bottom: 52px; z-index: 700; min-width: 200px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: var(--shadow-pop); padding: 5px; animation: pop-in .14s ease;
+  }
+  .tray-menu .mi {
+    padding: 7px 12px; border-radius: 6px; cursor: pointer; color: var(--text-1);
+    display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  }
+  .tray-menu .mi:hover { background: var(--accent-soft); }
+  .tray-menu .mi .kbd-mini { font-size: 11px; color: var(--text-3); }
+  .tray-menu .sep { height: 1px; background: var(--border); margin: 5px 8px; }
+  @keyframes pop-in { from { opacity: 0; transform: translateY(4px) scale(.98); } to { opacity: 1; transform: none; } }
+
+  /* ===== 窗口通用（自定义标题栏，对应 decorations:false） ===== */
+  .win {
+    position: absolute; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 12px; box-shadow: var(--shadow-pop); overflow: hidden;
+    display: none; flex-direction: column;
+  }
+  .win.open { display: flex; animation: win-in .22s cubic-bezier(.2,.8,.3,1); }
+  @keyframes win-in { from { opacity: 0; transform: scale(.96) translateY(8px); } to { opacity: 1; transform: none; } }
+  .titlebar {
+    height: 36px; flex: none; display: flex; align-items: center; gap: 8px;
+    padding-left: 14px; background: var(--surface); border-bottom: 1px solid var(--border);
+    user-select: none;
+  }
+  .titlebar .app-ico {
+    width: 16px; height: 16px; border-radius: 4px; flex: none;
+    background: linear-gradient(135deg, #6b7bff 0%, #9a6bff 100%);
+    color: #fff; font-size: 9px; display: flex; align-items: center; justify-content: center; font-weight: 700;
+  }
+  .titlebar .t { font-size: 12px; color: var(--text-2); flex: 1; }
+  .titlebar .wbtn {
+    width: 44px; height: 36px; display: flex; align-items: center; justify-content: center;
+    color: var(--text-2); cursor: pointer; font-size: 11px;
+  }
+  .titlebar .wbtn:hover { background: var(--accent-soft); color: var(--text-1); }
+  .titlebar .wbtn.close:hover { background: #e81123; color: #fff; }
+
+  /* ===== settings 窗（含引导视图） ===== */
+  #win-settings { width: 680px; height: 620px; left: 50%; top: 46%; transform: translate(-50%, -50%); z-index: 300; }
+  .set-body { flex: 1; display: flex; min-height: 0; }
+  .set-scroll { flex: 1; overflow-y: auto; padding: 18px 24px 8px; min-height: 0; }
+  .set-side {
+    width: 150px; flex: none; background: var(--surface-2); border-right: 1px solid var(--border);
+    padding: 12px 8px; display: flex; flex-direction: column; gap: 2px;
+  }
+  .set-side .tab { padding: 7px 12px; border-radius: 6px; color: var(--text-2); cursor: pointer; font-size: 12.5px; }
+  .set-side .tab.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  #settings-main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+  /* 引导三卡片 */
+  .ob-head { margin-bottom: 16px; }
+  .ob-head h1 { font-size: 19px; margin: 0 0 4px; }
+  .ob-head p { margin: 0; color: var(--text-3); font-size: 12.5px; }
+  .ob-steps { display: flex; gap: 10px; margin-bottom: 14px; }
+  .ob-step {
+    flex: 1; text-align: center; padding: 6px 0; border-radius: 6px; font-size: 12px;
+    background: var(--surface-2); color: var(--text-3); border: 1px solid var(--border);
+  }
+  .ob-step.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .ob-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--shadow-card); padding: 13px 16px; margin-bottom: 10px;
+  }
+  .ob-card h3 { margin: 0 0 2px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .ob-card .sub { color: var(--text-3); font-size: 12px; margin: 0 0 12px; }
+  .ob-done-tag { font-size: 11px; color: var(--ok); background: var(--ok-soft); border-radius: 99px; padding: 1px 8px; font-weight: 600; }
+
+  /* 热键表 */
+  .hk-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px dashed var(--border); }
+  .hk-row:last-child { border-bottom: none; }
+  .hk-row .name { flex: 1; }
+  .hk-row .name small { display: block; color: var(--text-3); }
+  kbd.kc {
+    font-family: "Cascadia Code", Consolas, monospace; font-size: 11px; color: var(--text-1);
+    background: var(--surface-2); border: 1px solid var(--border-strong); border-bottom-width: 2px;
+    border-radius: 6px; padding: 2px 7px; margin-left: 4px;
+  }
+
+  /* 服务商选择 + key */
+  .pv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .pv-chip {
+    padding: 4px 11px; border-radius: 99px; border: 1px solid var(--border); cursor: pointer;
+    color: var(--text-2); background: var(--surface); font-size: 12px;
+  }
+  .pv-chip.on { border-color: var(--accent); color: var(--accent); background: var(--accent-softer); font-weight: 600; }
+  .pv-hint { font-size: 11.5px; color: var(--text-3); margin: 0 0 10px; }
+  .key-row { display: flex; gap: 8px; }
+  .key-row input {
+    flex: 1; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 8px;
+    color: var(--text-1); padding: 7px 10px; font-size: 12.5px; outline: none; font-family: Consolas, monospace;
+  }
+  .key-row input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-softer); }
+
+  .btn {
+    background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 7px 16px;
+    font-size: 12.5px; cursor: pointer; font-family: inherit;
+  }
+  .btn:hover { background: var(--accent-hover); }
+  .btn.sm { padding: 5px 12px; font-size: 12px; }
+  .btn.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  .btn.ghost:hover { background: var(--accent-softer); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .spin {
+    display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; animation: rot .7s linear infinite;
+    vertical-align: -2px; margin-right: 6px;
+  }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .ok-note { display: none; align-items: center; gap: 6px; margin-top: 10px; color: var(--ok); font-size: 12.5px; font-weight: 600; }
+  .ok-note.show { display: flex; }
+
+  /* 今日文章卡 */
+  .art { display: flex; gap: 14px; align-items: stretch; }
+  .art-cover {
+    width: 76px; flex: none; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(150deg, var(--accent-softer), var(--accent-soft));
+    border: 1px solid var(--border); color: var(--accent); font-size: 26px;
+  }
+  .art-info { flex: 1; min-width: 0; }
+  .art-title { font-size: 14px; font-weight: 700; }
+  .art-title small { color: var(--text-3); font-weight: 400; margin-left: 6px; }
+  .art-meta { font-size: 11.5px; color: var(--text-3); margin: 3px 0 7px; display: flex; gap: 8px; align-items: center; }
+  .lv { border: 1px solid var(--accent); color: var(--accent); border-radius: 4px; padding: 0 5px; font-size: 10.5px; font-weight: 700; }
+  .art-quote { font-size: 12px; color: var(--text-2); font-style: italic; margin: 0 0 10px; }
+
+  .ob-foot {
+    flex: none; display: flex; justify-content: space-between; align-items: center; gap: 14px;
+    padding: 12px 24px 14px; border-top: 1px solid var(--border); background: var(--surface);
+  }
+  .ob-foot .why { color: var(--text-4); font-size: 11px; max-width: 360px; }
+
+  /* ===== 阅读室窗 ===== */
+  #win-reader { width: 760px; height: 620px; left: 50%; top: 44%; transform: translate(-50%, -50%); z-index: 400; background: var(--bg); }
+  .rd-top {
+    height: 44px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 14px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+  }
+  .rd-top .back { color: var(--text-3); cursor: pointer; font-size: 12.5px; }
+  .rd-top .back:hover { color: var(--accent); }
+  .rd-top .rd-title { flex: 1; text-align: center; color: var(--text-2); font-size: 12.5px; }
+  .rd-gear { color: var(--text-3); cursor: pointer; font-size: 14px; }
+  .rd-scroll { flex: 1; overflow-y: auto; padding: 28px 24px 110px; }
+  .rd-article { max-width: 640px; margin: 0 auto; }
+  .rd-article h2 { font-family: Georgia, "Times New Roman", serif; font-size: 22px; margin: 0 0 2px; }
+  .rd-article .rd-cn-title { color: var(--text-3); font-size: 13px; margin-bottom: 6px; }
+  .rd-article .rd-meta { color: var(--text-4); font-size: 11.5px; margin-bottom: 22px; }
+  .rd-sent { margin-bottom: 18px; }
+  .rd-en {
+    font-family: Georgia, "Times New Roman", serif; font-size: 19px; line-height: 29px; color: var(--text-1);
+  }
+  .rd-cn { font-size: 15px; line-height: 24px; color: var(--text-3); margin-top: 3px; }
+  .rd-note { color: var(--text-4); font-size: 11.5px; text-align: center; margin-top: 30px; }
+  .rd-playbar {
+    position: absolute; left: 16px; right: 16px; bottom: 14px; height: 52px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--shadow-float); display: flex; align-items: center; gap: 12px; padding: 0 16px;
+  }
+  .rd-playbar .pb-btn {
+    width: 30px; height: 30px; border-radius: 99px; background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 11px; flex: none;
+  }
+  .rd-playbar .pb-track { flex: 1; height: 4px; border-radius: 2px; background: var(--border-strong); position: relative; }
+  .rd-playbar .pb-track i { position: absolute; left: 0; top: 0; bottom: 0; width: 12%; background: var(--accent); border-radius: 2px; }
+  .rd-playbar .pb-num { color: var(--text-3); font-size: 11px; }
+
+  /* ===== 划词浮窗演示 ===== */
+  #panel-demo {
+    position: absolute; z-index: 800; width: 380px; display: none;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--shadow-pop); padding: 14px 16px; animation: win-in .2s ease;
+  }
+  #panel-demo.open { display: block; }
+  #panel-demo .p-src { font-family: Georgia, serif; font-size: 14px; color: var(--text-1); margin: 0 0 10px; }
+  #panel-demo .p-dst { font-size: 13.5px; color: var(--text-2); margin: 0 0 12px; min-height: 40px; }
+  #panel-demo .p-dst .shimmer {
+    display: inline-block; height: 13px; border-radius: 4px; width: 150px;
+    background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 50%, var(--surface-2) 75%);
+    background-size: 200% 100%; animation: shimmer 1s linear infinite;
+  }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+  #panel-demo .p-actions { display: flex; gap: 6px; align-items: center; color: var(--text-3); font-size: 12px; }
+  #panel-demo .p-actions .a { padding: 3px 7px; border-radius: 6px; cursor: pointer; }
+  #panel-demo .p-actions .a:hover { background: var(--accent-soft); color: var(--accent); }
+  #panel-demo .p-tag {
+    display: inline-block; margin-bottom: 8px; font-size: 10.5px; color: var(--accent);
+    background: var(--accent-softer); border-radius: 4px; padding: 1px 7px;
+  }
+
+  /* ===== 导演台 ===== */
+  #director {
+    position: absolute; left: 16px; top: 16px; z-index: 900; width: 292px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--shadow-pop); overflow: hidden;
+  }
+  #director .d-head {
+    padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid var(--border); cursor: pointer; user-select: none;
+  }
+  #director .d-head b { font-size: 12.5px; }
+  #director .d-head span { color: var(--text-4); font-size: 11px; }
+  #director .d-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; }
+  #director.folded .d-body { display: none; }
+  .d-sec h4 { margin: 0 0 6px; font-size: 11px; color: var(--text-3); font-weight: 600; text-transform: none; }
+  .seg { display: flex; gap: 6px; flex-wrap: wrap; }
+  .seg button {
+    flex: 1; padding: 6px 4px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text-2); font-size: 11.5px; cursor: pointer; font-family: inherit; white-space: nowrap;
+  }
+  .seg button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-softer); font-weight: 600; }
+  .file-list { font-size: 11.5px; border: 1px dashed var(--border); border-radius: 8px; padding: 8px 10px; }
+  .file-list .f { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; color: var(--text-2); }
+  .file-list .f em { font-style: normal; color: var(--text-4); font-size: 10.5px; }
+  .file-list .f.new { color: var(--ok); font-weight: 600; animation: pop-in .3s ease; }
+  .legend { font-size: 11.5px; color: var(--text-2); }
+  .legend li { margin-bottom: 4px; }
+  .legend .n {
+    display: inline-flex; width: 16px; height: 16px; border-radius: 99px; background: var(--accent);
+    color: #fff; font-size: 10px; align-items: center; justify-content: center; margin-right: 6px; flex: none;
+  }
+
+  /* 标注序号圆点 */
+  .anno {
+    position: absolute; z-index: 950; width: 20px; height: 20px; border-radius: 99px;
+    background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+    display: none; align-items: center; justify-content: center; box-shadow: var(--shadow-float);
+    cursor: help; user-select: none;
+  }
+  body.show-anno .anno { display: flex; }
+  .anno[data-tip]:hover::after {
+    content: attr(data-tip); position: absolute; left: 26px; top: -4px; white-space: nowrap;
+    background: var(--surface); border: 1px solid var(--border-strong); color: var(--text-1);
+    border-radius: 8px; padding: 4px 10px; font-size: 11px; font-weight: 400; box-shadow: var(--shadow-float); z-index: 9;
+  }
+  .a1 { left: -10px; top: -10px; } .a2 { right: -10px; top: -10px; }
+
+  /* 主题圆点 */
+  .theme-dots { position: absolute; right: 16px; top: 16px; z-index: 900; display: flex; gap: 8px; }
+  .theme-dots .dot {
+    width: 22px; height: 22px; border-radius: 99px; cursor: pointer; border: 2px solid var(--surface);
+    box-shadow: var(--shadow-float);
+  }
+  .theme-dots .dot[data-t="day"] { background: #f4f5f9; }
+  .theme-dots .dot[data-t="sepia"] { background: #f5efdf; }
+  .theme-dots .dot[data-t="dark"] { background: #1d1f26; }
+  .theme-dots .dot.on { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* toast */
+  #toasts { position: absolute; left: 50%; bottom: 60px; transform: translateX(-50%); z-index: 990; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .toast {
+    background: rgba(20, 22, 30, .92); color: #fff; border-radius: 99px; padding: 8px 18px;
+    font-size: 12.5px; box-shadow: var(--shadow-pop); animation: pop-in .18s ease; max-width: 460px;
+  }
+  body[data-theme="dark"] .toast { background: rgba(60, 64, 80, .95); }
+
+  /* 场景切换全屏遮罩 */
+  #boot {
+    position: fixed; inset: 0; z-index: 999; display: none; align-items: center; justify-content: center;
+    flex-direction: column; gap: 14px; color: #fff; background: #14161e;
+  }
+  #boot.open { display: flex; }
+  #boot .b-spin {
+    width: 30px; height: 30px; border-radius: 50%; border: 3px solid rgba(255,255,255,.2);
+    border-top-color: #7d8cff; animation: rot .8s linear infinite;
+  }
+  #boot .b-t { font-size: 13px; opacity: .85; }
+  #boot .b-s { font-size: 11px; opacity: .5; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body data-theme="day" class="show-anno">
+
+<div class="desktop" id="desktop">
+
+  <!-- ============ settings 窗（首启引导路由到这里） ============ -->
+  <div class="win" id="win-settings">
+    <div class="titlebar">
+      <div class="app-ico">译</div><div class="t">ImmersiveTranslator · 设置</div>
+      <div class="wbtn">─</div><div class="wbtn close" data-close="settings">✕</div>
+      <div class="anno a2" data-tip="首启 show 预建 settings 窗路由到引导（不新建窗口）">①</div>
+    </div>
+    <div class="set-body">
+      <div class="set-side">
+        <div class="tab" data-tab="start active">开始使用</div>
+        <div class="tab">模型服务</div>
+        <div class="tab">语音</div>
+        <div class="tab">热键</div>
+        <div class="tab">关于</div>
+      </div>
+      <div class="set-main" id="settings-main"></div>
+    </div>
+  </div>
+
+  <!-- ============ 阅读室窗（卡片③打开） ============ -->
+  <div class="win" id="win-reader">
+    <div class="titlebar">
+      <div class="app-ico">译</div><div class="t">沉浸阅读室</div>
+      <div class="wbtn">─</div><div class="wbtn close" data-close="reader">✕</div>
+    </div>
+    <div class="rd-top">
+      <div class="back" data-close="reader">‹ 书架</div>
+      <div class="rd-title" id="rd-title"></div>
+      <div class="rd-gear">⚙</div>
+    </div>
+    <div class="rd-scroll">
+      <div class="rd-article" id="rd-article"></div>
+    </div>
+    <div class="rd-playbar">
+      <div class="pb-btn">▶</div>
+      <div class="pb-track"><i></i></div>
+      <div class="pb-num">1 / 96 句</div>
+      <div class="anno a2" data-tip="零门槛试读：导入内置文库今日一篇，直接进阅读流">④</div>
+    </div>
+  </div>
+
+  <!-- ============ 划词浮窗演示（卡片①「看效果」） ============ -->
+  <div id="panel-demo">
+    <span class="p-tag">Ctrl+Shift+Q · 划词翻译</span>
+    <p class="p-src">High above the city, on a tall column, stood the statue of the <b>Happy Prince</b>.</p>
+    <p class="p-dst" id="panel-dst"><span class="shimmer"></span></p>
+    <div class="p-actions">
+      <span class="a">🔊 朗读</span><span class="a">⧉ 复制</span><span class="a" title="加入生词本">生</span>
+      <span class="a" title="收藏到历史">★</span><span class="a" title="翻译历史">🕐</span>
+      <span class="a" title="发送到阅读室">→ 阅读室</span>
+    </div>
+  </div>
+
+  <!-- ============ 任务栏 / 托盘 ============ -->
+  <div class="taskbar">
+    <span class="tray-sysicon">⌗</span>
+    <span class="tray-sysicon">♪</span>
+    <span class="tray-sysicon">⚀</span>
+    <div class="tray-app" id="tray-app" title="ImmersiveTranslator">
+      译
+      <div class="anno a1" data-tip="托盘左键：修复前无反应 / 修复后弹菜单">⑤</div>
+    </div>
+    <div class="clock" id="clock"></div>
+  </div>
+
+  <!-- ============ 导演台 ============ -->
+  <div id="director">
+    <div class="d-head" id="d-toggle"><b>UX-1 首启体验 · 交互原型</b><span>收起 ▾</span></div>
+    <div class="d-body">
+      <div class="d-sec">
+        <h4>场景</h4>
+        <div class="seg" id="seg-scene">
+          <button data-scene="fresh" class="on">全新安装</button>
+          <button data-scene="restart">模拟重启</button>
+          <button data-scene="olduser">老用户升级</button>
+        </div>
+      </div>
+      <div class="d-sec">
+        <h4>托盘左键行为</h4>
+        <div class="seg" id="seg-tray">
+          <button data-tray="before">修复前（现状）</button>
+          <button data-tray="after" class="on">修复后</button>
+        </div>
+      </div>
+      <div class="d-sec">
+        <h4>app_data_dir（marker 判定依据）</h4>
+        <div class="file-list" id="file-list"></div>
+        <div class="anno a2" style="right:-8px;bottom:-8px;position:absolute" data-tip="关闭引导即写 marker；老用户由 Key/文章判定">⑥</div>
+      </div>
+      <div class="d-sec">
+        <h4>演示要点</h4>
+        <ul class="legend" style="padding-left:0;margin:0;list-style:none">
+          <li><span class="n">①</span>首启自动弹出：show 预建 settings 窗（非新建，规避启动建窗不稳前科）</li>
+          <li><span class="n">②</span>卡片一：热键表 + 浮窗效果演示</li>
+          <li><span class="n">③</span>卡片二：配 Key 全流程内联完成，不跳窗</li>
+          <li><span class="n">④</span>卡片三：内置文库「今日一篇」零门槛进阅读室</li>
+          <li><span class="n">⑤</span>托盘左键修复前后对比（点右下角图标）</li>
+          <li><span class="n">⑥</span>关闭写 marker → 模拟重启不再弹；老用户不弹</li>
+        </ul>
+      </div>
+      <div class="d-sec">
+        <div class="seg">
+          <button id="btn-anno" class="on">显示标注</button>
+          <button id="btn-reset">重置原型</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 主题圆点 -->
+  <div class="theme-dots">
+    <div class="dot on" data-t="day" title="日间"></div>
+    <div class="dot" data-t="sepia" title="护眼"></div>
+    <div class="dot" data-t="dark" title="暗色"></div>
+  </div>
+
+  <div id="toasts"></div>
+</div>
+
+<div id="boot"><div class="b-spin"></div><div class="b-t" id="boot-title">正在启动…</div><div class="b-s" id="boot-sub"></div></div>
+
+<script>
+/* ================== 数据（取自真实代码） ================== */
+var LIBRARY = [
+  { en: "The Happy Prince", cn: "快乐王子", author: "Oscar Wilde", level: "B1", minutes: 26,
+    quote: "High above the city, on a tall column, stood the statue of the Happy Prince.",
+    quoteCn: "在城市上空一根高高的立柱上，立着快乐王子的雕像。" },
+  { en: "The Nightingale and the Rose", cn: "夜莺与玫瑰", author: "Oscar Wilde", level: "B1", minutes: 17,
+    quote: "She said that she would dance with me if I brought her red roses.",
+    quoteCn: "她说，只要我采来红玫瑰，她就与我共舞。" },
+  { en: "The Selfish Giant", cn: "自私的巨人", author: "Oscar Wilde", level: "A2", minutes: 12,
+    quote: "Every afternoon, as they were coming from school, the children used to go and play in the Giant's garden.",
+    quoteCn: "每天下午，孩子们放学回来，总喜欢到巨人的花园里去玩耍。" },
+  { en: "The Devoted Friend", cn: "忠实的朋友", author: "Oscar Wilde", level: "B2", minutes: 33,
+    quote: "One morning the old Water-rat put his head out of his hole.",
+    quoteCn: "一天早晨，老河鼠从洞里探出头来。" },
+  { en: "The Remarkable Rocket", cn: "了不起的火箭", author: "Oscar Wilde", level: "B2", minutes: 32,
+    quote: "The King's son was going to be married, so there were general rejoicings.",
+    quoteCn: "王子要结婚了，全国上下喜气洋洋。" },
+  { en: "The Call of the Wild · I", cn: "野性的呼唤 · 第一章", author: "Jack London", level: "B2", minutes: 28,
+    quote: "Buck did not read the newspapers, or he would have known that trouble was brewing.",
+    quoteCn: "巴克不读报纸，否则它就会知道，麻烦正在酝酿。" }
+];
+var PROVIDERS = [
+  { id: "deepseek", name: "DeepSeek", hint: "国内直连，性价比高（推荐）" },
+  { id: "zhipu", name: "智谱 GLM", hint: "GLM-4-Flash 免费，国内直连速度快（推荐）" },
+  { id: "dashscope", name: "阿里云百炼", hint: "阿里云百炼，兼容模式路径" },
+  { id: "moonshot", name: "Kimi", hint: "月之暗面 Kimi，长上下文，适合长文翻译" },
+  { id: "openai", name: "OpenAI", hint: "官方接口，国内直连不稳定，建议配置代理" },
+  { id: "gemini", name: "Gemini", hint: "OpenAI 兼容路径，国内需代理" },
+  { id: "ollama", name: "Ollama", hint: "本机运行，数据不出机器，API Key 可留空" }
+];
+var TRAY_MENU = [
+  { id: "quick", label: "快速复习" },
+  { id: "ocr", label: "截图翻译 (OCR)", kbd: "Ctrl+Shift+E" },
+  { id: "live", label: "录音直译" },
+  { id: "reader", label: "沉浸阅读室", kbd: "Ctrl+Shift+R" },
+  { id: "vocab", label: "生词本" },
+  { sep: true },
+  { id: "history", label: "翻译历史" },
+  { id: "settings", label: "设置" },
+  { id: "quit", label: "退出" }
+];
+
+/* 今日一篇：本地日期轮换（公式同 library.ts） */
+function localDayNumber(now) {
+  var d = new Date(now || Date.now());
+  return Math.floor((d.getTime() - d.getTimezoneOffset() * 60000) / 86400000);
+}
+function todayItem() { return LIBRARY[localDayNumber() % LIBRARY.length]; }
+
+/* ================== 状态 ================== */
+var S = {
+  scene: "fresh",        // fresh | restart | olduser
+  trayFix: "after",      // before | after
+  dismissed: false,      // onboarding-done.json 是否已写
+  hasKey: false,         // 测试连接成功即视为已配 Key（演示口径）
+  provider: "deepseek",
+  testState: "idle",     // idle | testing | ok
+  readerArticle: null
+};
+
+var $ = function (sel) { return document.querySelector(sel); };
+function toast(msg, ms) {
+  var el = document.createElement("div");
+  el.className = "toast"; el.textContent = msg;
+  $("#toasts").appendChild(el);
+  setTimeout(function () { el.style.opacity = "0"; el.style.transition = "opacity .3s"; }, ms || 2400);
+  setTimeout(function () { el.remove(); }, (ms || 2400) + 350);
+}
+
+/* ================== 引导视图渲染 ================== */
+function renderOnboarding() {
+  var item = todayItem();
+  var pv = PROVIDERS.filter(function (p) { return p.id === S.provider; })[0];
+  var testBtn = S.testState === "testing"
+    ? '<button class="btn sm" disabled><span class="spin"></span>测试中…</button>'
+    : (S.testState === "ok"
+      ? '<button class="btn sm" disabled>已连接 ✓</button>'
+      : '<button class="btn sm" id="btn-test">测试连接</button>');
+  var keyInput = S.testState === "ok"
+    ? '<input type="password" value="sk-demo-********************" disabled style="flex:1"/>'
+    : '<input type="password" placeholder="' + (S.provider === "ollama" ? "本地 Ollama 可留空" : "粘贴 API Key（sk-…）") + '" id="key-input"/>';
+
+  $("#settings-main").innerHTML =
+    '<div class="set-scroll">'
+    + '<div class="ob-head">'
+    + '<h1>欢迎 · 三步开始沉浸式翻译</h1>'
+    + '<p>整个过程不超过一分钟；任何一步都可以跳过，之后从设置里随时能回来。</p>'
+    + '</div>'
+    + '<div class="ob-steps">'
+    + '<div class="ob-step on">① 认识热键</div>'
+    + '<div class="ob-step' + (S.testState === "ok" ? " on" : "") + '">② 配置翻译接口</div>'
+    + '<div class="ob-step">③ 读第一篇</div>'
+    + '</div>'
+
+    /* 卡片① 热键 */
+    + '<div class="ob-card" style="position:relative">'
+    + '<div class="anno a2" data-tip="热键表：三个全局热键，装完即生效">②</div>'
+    + '<h3>1 · 记住三个热键 <span class="ob-done-tag">已生效</span></h3>'
+    + '<p class="sub">在任意软件里都可用——现在就选中一段英文试试。</p>'
+    + '<div class="hk-row"><div class="name">划词翻译<small>选中文字，浮窗即出译文</small></div><span><kbd class="kc">Ctrl</kbd><kbd class="kc">Shift</kbd><kbd class="kc">Q</kbd></span></div>'
+    + '<div class="hk-row"><div class="name">截图翻译<small>框选屏幕区域，OCR 识别后翻译</small></div><span><kbd class="kc">Ctrl</kbd><kbd class="kc">Shift</kbd><kbd class="kc">E</kbd></span></div>'
+    + '<div class="hk-row"><div class="name">沉浸阅读室<small>打开阅读室，导入你的材料逐句精读</small></div><span><kbd class="kc">Ctrl</kbd><kbd class="kc">Shift</kbd><kbd class="kc">R</kbd></span></div>'
+    + '<div style="margin-top:10px;text-align:right"><button class="btn ghost sm" id="btn-panel-demo">看浮窗效果 →</button></div>'
+    + '</div>'
+
+    /* 卡片② 配 Key */
+    + '<div class="ob-card" style="position:relative">'
+    + '<div class="anno a2" data-tip="内联配置：选服务商→填 Key→测试，不跳窗">③</div>'
+    + '<h3>2 · 配置翻译接口' + (S.testState === "ok" ? ' <span class="ob-done-tag">✓ 已就绪</span>' : '') + '</h3>'
+    + '<p class="sub">自带 Key（BYOK），密钥经 DPAPI 加密存在本机。国内直连推荐 DeepSeek 或 智谱 GLM。</p>'
+    + '<div class="pv-chips">'
+    + PROVIDERS.map(function (p) {
+      return '<span class="pv-chip' + (p.id === S.provider ? " on" : "") + '" data-pv="' + p.id + '">' + p.name + "</span>";
+    }).join("")
+    + '</div>'
+    + '<p class="pv-hint">' + pv.hint + "</p>"
+    + '<div class="key-row">' + keyInput + testBtn + "</div>"
+    + '<div class="ok-note' + (S.testState === "ok" ? " show" : "") + '" id="ok-note">✓ 连接成功——现在按 Ctrl+Shift+Q 划词就能翻译了</div>'
+    + '</div>'
+
+    /* 卡片③ 试读 */
+    + '<div class="ob-card" style="position:relative">'
+    + '<div class="anno a2" data-tip="零门槛试读：今日一篇按日期轮换（内置文库六篇）">④</div>'
+    + '<h3>3 · 零门槛读第一篇</h3>'
+    + '<p class="sub">不用找材料——内置公版文库每天轮换一篇，点开就能体验逐句翻译与朗读。</p>'
+    + '<div class="art">'
+    + '<div class="art-cover">📖</div>'
+    + '<div class="art-info">'
+    + '<div class="art-title">' + item.en + "<small>" + item.cn + " · " + item.author + "</small></div>"
+    + '<div class="art-meta"><span class="lv">' + item.level + "</span><span>约 " + item.minutes + ' 分钟</span><span>今日一篇</span></div>'
+    + '<p class="art-quote">“' + item.quote + "”</p>"
+    + '<button class="btn sm" id="btn-open-reader">用这篇打开阅读室 →</button>'
+    + "</div></div></div>"
+    + "</div>"
+
+    + '<div class="ob-foot">'
+    + '<span class="why">关闭即不再弹出（写入 onboarding-done.json）；已有 Key 或已有文章的老用户升级后也不会看到本页。</span>'
+    + '<button class="btn" id="btn-finish">开始使用</button>'
+    + "</div>";
+
+  /* 事件绑定 */
+  document.querySelectorAll(".pv-chip").forEach(function (c) {
+    c.onclick = function () {
+      if (S.testState === "ok") return; // 已配好不再换（演示简化）
+      S.provider = c.getAttribute("data-pv"); S.testState = "idle"; renderOnboarding();
+    };
+  });
+  var bt = $("#btn-test");
+  if (bt) bt.onclick = function () {
+    S.testState = "testing"; renderOnboarding();
+    setTimeout(function () {
+      S.testState = "ok"; S.hasKey = true; renderOnboarding();
+      renderFiles(); toast("✓ 连接成功，翻译接口已就绪");
+    }, 900);
+  };
+  $("#btn-panel-demo").onclick = showPanelDemo;
+  $("#btn-open-reader").onclick = function () {
+    S.readerArticle = item; openReader();
+    if (!S.dismissed) writeMarker("阅读室已打开——引导页留在后面，读完随时回来配置。");
+  };
+  $("#btn-finish").onclick = function () { closeSettings(); writeMarker(); };
+}
+
+/* 关闭引导/settings 的统一出口：任何关闭路径都写 marker */
+function closeSettings() { $("#win-settings").classList.remove("open"); }
+function writeMarker(extraMsg) {
+  if (!S.dismissed) {
+    S.dismissed = true; renderFiles();
+    toast("已写入 onboarding-done.json —— 下次启动不再显示引导" + (extraMsg ? "" : ""), 2600);
+    if (extraMsg) toast(extraMsg, 3000);
+  }
+}
+
+/* 正常设置视图（引导结束后从托盘进来的样子，简版） */
+function renderNormalSettings() {
+  var pv = PROVIDERS.filter(function (p) { return p.id === S.provider; })[0];
+  $("#settings-main").innerHTML =
+    '<div class="set-scroll">'
+    + '<h2 style="font-size:16px;margin:0 0 4px">模型服务</h2>'
+    + '<p style="color:var(--text-3);font-size:12px;margin:0 0 14px">选择一个翻译服务商；每家的密钥分开保存，切换互不影响。</p>'
+    + '<div class="ob-card"><h3>' + (S.hasKey ? "✓ " + pv.name + " 已配置" : pv.name)
+    + (S.hasKey ? ' <span class="ob-done-tag">已连接</span>' : "") + "</h3>"
+    + '<p class="sub">' + pv.hint + "</p>"
+    + (S.hasKey
+      ? '<div class="key-row"><input type="password" value="sk-demo-********************" disabled/><button class="btn ghost sm">更换 Key</button></div>'
+      : '<div class="key-row"><input type="password" placeholder="粘贴 API Key（sk-…）"/><button class="btn sm">测试连接</button></div>')
+    + "</div>"
+    + '<p style="color:var(--text-4);font-size:11.5px">（原型仅演示首启相关视图，其余设置页从略）</p>'
+    + "</div>";
+}
+
+/* ================== 阅读室 ================== */
+function openReader() {
+  var it = S.readerArticle || todayItem();
+  $("#rd-title").textContent = it.en + " · " + it.cn;
+  $("#rd-article").innerHTML =
+    "<h2>" + it.en + "</h2>"
+    + '<div class="rd-cn-title">' + it.cn + " · " + it.author + "</div>"
+    + '<div class="rd-meta">' + it.level + " · 约 " + it.minutes + " 分钟 · 内置文库 · 今日一篇</div>"
+    + '<div class="rd-sent"><div class="rd-en">' + it.quote + '</div><div class="rd-cn">' + it.quoteCn + "</div></div>"
+    + '<div class="rd-sent"><div class="rd-en">He was gilded all over with thin leaves of fine gold, for eyes he had two bright sapphires, and a large red ruby glowed on his sword-hilt.</div><div class="rd-cn">他全身贴着薄薄的纯金叶子，一双眼睛是两颗明亮的蓝宝石，剑柄上闪着一颗大大的红宝石。</div></div>'
+    + '<div class="rd-note">—— 原型示意：真实产品在此加载全文、逐句翻译并标注生词与词块 ——</div>';
+  $("#win-reader").classList.add("open");
+}
+
+/* ================== 划词浮窗演示 ================== */
+var panelTimer1, panelTimer2;
+function showPanelDemo() {
+  var p = $("#panel-demo");
+  var st = $("#win-settings").getBoundingClientRect();
+  p.style.left = Math.max(16, st.right - 320) + "px";
+  p.style.top = (st.bottom + 24) + "px";
+  $("#panel-dst").innerHTML = '<span class="shimmer"></span>';
+  p.classList.add("open");
+  clearTimeout(panelTimer1); clearTimeout(panelTimer2);
+  panelTimer1 = setTimeout(function () {
+    $("#panel-dst").textContent = "在城市上空一根高高的立柱上，立着快乐王子的雕像。";
+  }, 850);
+  panelTimer2 = setTimeout(function () {
+    toast("这就是 Ctrl+Shift+Q 的效果——在任意软件里选中文字即可（点击浮窗外区域关闭）");
+  }, 1200);
+}
+document.addEventListener("mousedown", function (e) {
+  var p = $("#panel-demo");
+  if (p.classList.contains("open") && !p.contains(e.target) && e.target.id !== "btn-panel-demo") p.classList.remove("open");
+});
+
+/* ================== 托盘 ================== */
+var trayMenuEl = null;
+function buildTrayMenu() {
+  var m = document.createElement("div");
+  m.className = "tray-menu";
+  TRAY_MENU.forEach(function (it) {
+    if (it.sep) { var s = document.createElement("div"); s.className = "sep"; m.appendChild(s); return; }
+    var d = document.createElement("div");
+    d.className = "mi";
+    d.innerHTML = "<span>" + it.label + "</span>" + (it.kbd ? '<span class="kbd-mini">' + it.kbd + "</span>" : "");
+    d.onclick = function () { onTrayMenu(it.id); };
+    m.appendChild(d);
+  });
+  return m;
+}
+function showTrayMenu() {
+  hideTrayMenu();
+  trayMenuEl = buildTrayMenu();
+  $("#desktop").appendChild(trayMenuEl);
+}
+function hideTrayMenu() { if (trayMenuEl) { trayMenuEl.remove(); trayMenuEl = null; } }
+document.addEventListener("mousedown", function (e) {
+  if (trayMenuEl && !trayMenuEl.contains(e.target) && !e.target.closest("#tray-app")) hideTrayMenu();
+});
+
+function onTrayMenu(id) {
+  hideTrayMenu();
+  if (id === "settings") { openSettings(); return; }
+  if (id === "reader") { S.readerArticle = S.readerArticle || todayItem(); openReader(); return; }
+  if (id === "quit") { toast("（原型聚焦首启体验，退出未演示）"); return; }
+  toast("「" + TRAY_MENU.filter(function (t) { return t.id === id; })[0].label + "」不在本原型演示范围");
+}
+function openSettings() {
+  if (S.dismissed) renderNormalSettings(); else renderOnboarding();
+  $("#win-settings").classList.add("open");
+}
+
+/* 左键：修复前 vs 修复后 */
+$("#tray-app").addEventListener("click", function (e) {
+  if (e.target.classList.contains("anno")) return;
+  if (S.trayFix === "after") { showTrayMenu(); return; }
+  var t = e.currentTarget;
+  t.classList.remove("shake"); void t.offsetWidth; t.classList.add("shake");
+  var old = $(".tray-hint"); if (old) old.remove();
+  var h = document.createElement("div");
+  h.className = "tray-hint";
+  h.innerHTML = "← 左键无任何反应（现状 A1）<br/><b>右键</b>才有菜单 · 切「修复后」看效果";
+  $("#desktop").appendChild(h);
+  setTimeout(function () { if (h.parentNode) h.remove(); }, 2600);
+});
+$("#tray-app").addEventListener("contextmenu", function (e) { e.preventDefault(); showTrayMenu(); });
+
+/* ================== 窗口关闭 ================== */
+document.querySelectorAll("[data-close]").forEach(function (b) {
+  b.onclick = function () {
+    var which = b.getAttribute("data-close");
+    if (which === "settings") { closeSettings(); writeMarker(); }
+    else $("#win-reader").classList.remove("open");
+  };
+});
+
+/* ================== 数据目录检查器 ================== */
+function renderFiles() {
+  var files = [];
+  if (S.scene === "olduser") {
+    files.push(["secrets.json", "已有 LLM Key（DPAPI）"]);
+    files.push(["reader_articles.json", "非空"]);
+  } else {
+    files.push(["secrets.json", S.hasKey ? "已有 LLM Key" : "（尚无 Key）"]);
+    files.push(["reader_articles.json", S.readerArticle ? "1 篇" : "（空）"]);
+  }
+  files.push(["review_reminder.json", "提醒配置"]);
+  var html = files.map(function (f) {
+    return '<div class="f"><span class="mono">' + f[0] + "</span><em>" + f[1] + "</em></div>";
+  }).join("");
+  if (S.dismissed) {
+    html += '<div class="f new"><span class="mono">onboarding-done.json</span><em>刚写入 ✓</em></div>';
+  } else {
+    html += '<div class="f" style="opacity:.45"><span class="mono">onboarding-done.json</span><em>未创建（引导显示中）</em></div>';
+  }
+  $("#file-list").innerHTML = html;
+}
+
+/* ================== 场景切换 ================== */
+function boot(title, sub, cb) {
+  $("#boot-title").textContent = title;
+  $("#boot-sub").textContent = sub || "";
+  $("#boot").classList.add("open");
+  setTimeout(function () {
+    cb();
+    setTimeout(function () { $("#boot").classList.remove("open"); }, 250);
+  }, 900);
+}
+function applyScene(scene) {
+  hideTrayMenu();
+  $("#panel-demo").classList.remove("open");
+  $("#win-reader").classList.remove("open");
+  $("#win-settings").classList.remove("open");
+  var old = $(".tray-hint"); if (old) old.remove();
+
+  if (scene === "fresh") {
+    boot("全新安装 · 首次启动…", "app_data_dir 为空目录", function () {
+      S.dismissed = false; S.hasKey = false; S.testState = "idle"; S.readerArticle = null;
+      renderFiles();
+      /* 首启：show 预建 settings 窗并路由到引导（延迟模拟窗口就绪） */
+      setTimeout(function () { renderOnboarding(); $("#win-settings").classList.add("open"); }, 500);
+    });
+  } else if (scene === "restart") {
+    boot("应用重启中…", "开机自启/手动启动 · marker 已存在则不弹引导", function () {
+      /* dismissed 沿用当前值：关过引导 → 不弹；没关过 → 再弹（与真实逻辑一致） */
+      renderFiles();
+      if (!S.dismissed) setTimeout(function () { renderOnboarding(); $("#win-settings").classList.add("open"); }, 500);
+      else toast("引导未再弹出：onboarding-done.json 已存在 ✓");
+    });
+  } else if (scene === "olduser") {
+    boot("老用户升级到新版…", "secrets.json 已有 Key · reader_articles.json 非空", function () {
+      S.dismissed = true; S.hasKey = true; S.testState = "ok"; S.readerArticle = todayItem();
+      renderFiles();
+      toast("老用户判定成立 → 不弹引导（左下数据目录可见判定依据）");
+    });
+  }
+}
+$("#seg-scene").addEventListener("click", function (e) {
+  var b = e.target.closest("button"); if (!b) return;
+  document.querySelectorAll("#seg-scene button").forEach(function (x) { x.classList.remove("on"); });
+  b.classList.add("on");
+  S.scene = b.getAttribute("data-scene");
+  applyScene(S.scene);
+});
+$("#seg-tray").addEventListener("click", function (e) {
+  var b = e.target.closest("button"); if (!b) return;
+  document.querySelectorAll("#seg-tray button").forEach(function (x) { x.classList.remove("on"); });
+  b.classList.add("on");
+  S.trayFix = b.getAttribute("data-tray");
+  if (S.trayFix === "after") toast("左键单击托盘图标试试 → 现在会弹出菜单");
+  else toast("已切回现状：左键无反应，右键才有菜单");
+});
+
+/* ================== 导演台/主题/标注/重置 ================== */
+$("#d-toggle").onclick = function () {
+  var d = $("#director"); d.classList.toggle("folded");
+  $("#d-toggle span").textContent = d.classList.contains("folded") ? "展开 ▸" : "收起 ▾";
+};
+document.querySelectorAll(".theme-dots .dot").forEach(function (d) {
+  d.onclick = function () {
+    document.querySelectorAll(".theme-dots .dot").forEach(function (x) { x.classList.remove("on"); });
+    d.classList.add("on");
+    document.body.setAttribute("data-theme", d.getAttribute("data-t"));
+  };
+});
+$("#btn-anno").onclick = function () {
+  var on = document.body.classList.toggle("show-anno");
+  this.classList.toggle("on", on); this.textContent = on ? "显示标注" : "隐藏标注";
+};
+$("#btn-reset").onclick = function () {
+  document.querySelectorAll("#seg-scene button").forEach(function (x) { x.classList.remove("on"); });
+  document.querySelector('#seg-scene button[data-scene="fresh"]').classList.add("on");
+  S.scene = "fresh"; applyScene("fresh");
+};
+
+/* 时钟 */
+function tick() {
+  var d = new Date();
+  function p(n) { return (n < 10 ? "0" : "") + n; }
+  $("#clock").innerHTML = p(d.getHours()) + ":" + p(d.getMinutes()) + "<br/>" + (d.getMonth() + 1) + "月" + d.getDate() + "日";
+}
+setInterval(tick, 1000); tick();
+
+/* 初始进入：全新安装场景 */
+renderFiles();
+applyScene("fresh");
+</script>
+</body>
+</html>

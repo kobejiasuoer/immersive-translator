@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UX-4 TTS 失败可见化 · 交互原型（2026-09-18）</title>
+<!--
+  UX-4 TTS 静默失败 → 可见、可懂、可行动 原型 · 自包含单文件，双击即开。
+  对应 docs/ux-remediation-plan-2026-09-18.md UX-4 卡。
+  演示范围（错误分类学与呈现语义，全部按卡内定义）：
+    no-creds     云凭据缺失 → 回落 SAPI + 「去设置」+「本会话不再提示」（每会话提示一次）
+    synth-failed 断网/服务失败 → 本句已跳过 + 「重试本句/停止」（推进不中断）
+    play-blocked 音频设备被占用 → 「重试/停止」
+    speak-failed 引擎启动失败 → 播放暂停在当前句 + 「重试/停止」
+  修复前：一切失败都无 UI——右侧「真相日志」以全知视角揭示用户实际经历（无声/跳句）。
+  错误条在下一次成功播放后自动消失；播放流除 speak-failed 外不中断。
+-->
+<style>
+  body[data-theme="day"] {
+    --accent: #4c5ff0; --accent-hover: #3f52e0;
+    --accent-soft: rgba(76,95,240,.10); --accent-softer: rgba(76,95,240,.06);
+    --bg: #f4f5f9; --surface: #fff; --surface-2: #f9fafc;
+    --border: #e4e7ee; --border-strong: #d6dae4;
+    --text-1: #1c2029; --text-2: #4b5261; --text-3: #7c8494; --text-4: #a6adbb;
+    --ok: #16a34a; --ok-soft: #e8f7ee; --err: #dc2626; --err-soft: #fdeaea;
+    --warn: #b45309; --warn-soft: #fdf3e1;
+    --shadow-pop: 0 12px 32px rgba(16,24,40,.16), 0 3px 10px rgba(16,24,40,.1);
+    --wallpaper: radial-gradient(1100px 640px at 55% 16%, #33405e 0%, #232a3d 55%, #1a1f2e 100%);
+  }
+  body[data-theme="sepia"] {
+    --accent: #4c5ff0; --accent-hover: #3f52e0;
+    --accent-soft: rgba(76,95,240,.12); --accent-softer: rgba(76,95,240,.07);
+    --bg: #f5efdf; --surface: #fbf7ec; --surface-2: #f1ead7;
+    --border: #e4dac0; --border-strong: #d2c6a6;
+    --text-1: #37301f; --text-2: #5a5138; --text-3: #857a5c; --text-4: #a89d80;
+    --ok: #35793f; --ok-soft: rgba(53,121,63,.12); --err: #b03a32; --err-soft: rgba(176,58,50,.12);
+    --warn: #9a6212; --warn-soft: rgba(154,98,18,.12);
+    --shadow-pop: 0 12px 32px rgba(80,64,20,.2);
+    --wallpaper: radial-gradient(1100px 640px at 55% 16%, #5a5138 0%, #4a4430 55%, #37331f 100%);
+  }
+  body[data-theme="dark"] {
+    --accent: #7d8cff; --accent-hover: #93a0ff;
+    --accent-soft: rgba(125,140,255,.16); --accent-softer: rgba(125,140,255,.09);
+    --bg: #1d1f26; --surface: #262933; --surface-2: #2e313c;
+    --border: #373b47; --border-strong: #474c5a;
+    --text-1: #edeef4; --text-2: #c4c9d6; --text-3: #9399ab; --text-4: #6f7688;
+    --ok: #5cc48a; --ok-soft: rgba(60,190,120,.16); --err: #f17474; --err-soft: rgba(240,90,90,.16);
+    --warn: #e2a75a; --warn-soft: rgba(226,167,90,.16);
+    --shadow-pop: 0 14px 36px rgba(0,0,0,.55);
+    --wallpaper: radial-gradient(1100px 640px at 55% 16%, #2a2e3f 0%, #1f2330 55%, #14161e 100%);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+    font-size: 13px; line-height: 1.5; color: var(--text-1);
+    background: var(--wallpaper); overflow: hidden; -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: Consolas, "Cascadia Code", monospace; }
+
+  /* 阅读室窗 */
+  #reader {
+    position: absolute; left: 40px; top: 40px; width: 620px; bottom: 70px; z-index: 200;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--shadow-pop); display: flex; flex-direction: column; overflow: hidden;
+  }
+  .titlebar {
+    height: 34px; flex: none; display: flex; align-items: center; gap: 8px;
+    padding-left: 12px; background: var(--surface); border-bottom: 1px solid var(--border); user-select: none;
+  }
+  .titlebar .app-ico {
+    width: 15px; height: 15px; border-radius: 4px;
+    background: linear-gradient(135deg, #6b7bff 0%, #9a6bff 100%);
+    color: #fff; font-size: 8.5px; display: flex; align-items: center; justify-content: center; font-weight: 700;
+  }
+  .titlebar .t { font-size: 12px; color: var(--text-2); flex: 1; }
+  .rd-scroll { flex: 1; overflow-y: auto; padding: 22px 28px 20px; }
+  .rd-article { max-width: 560px; margin: 0 auto; }
+  .rd-article h2 { font-family: Georgia, serif; font-size: 20px; margin: 0 0 14px; }
+  .sent { margin-bottom: 14px; cursor: default; }
+  .sent .en { font-family: Georgia, serif; font-size: 17px; line-height: 26px; color: var(--text-3); }
+  .sent .cn { font-size: 13px; line-height: 21px; color: var(--text-4); margin-top: 2px; }
+  .sent.cur .en { color: var(--text-1); }
+  .sent.cur .cn { color: var(--text-2); }
+  .sent.cur { position: relative; padding-left: 10px; border-left: 3px solid var(--accent); }
+  .sent.done .en { color: var(--text-2); }
+  .sent.done .cn { color: var(--text-3); }
+  .sent .mk { display: none; font-size: 10px; color: var(--err); margin-left: 6px; vertical-align: 2px; }
+  .sent.silent .mk { display: inline; }
+
+  /* 播放条 + 错误条 */
+  .playdock { flex: none; background: var(--surface); border-top: 1px solid var(--border); }
+  .strip {
+    display: none; align-items: center; gap: 10px; padding: 8px 14px;
+    border-bottom: 1px solid var(--border); font-size: 12px; animation: slidedown .2s ease;
+  }
+  .strip.show { display: flex; }
+  @keyframes slidedown { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; } }
+  .strip.warn { background: var(--warn-soft); color: var(--warn); }
+  .strip.err { background: var(--err-soft); color: var(--err); }
+  .strip .ico { flex: none; font-size: 14px; }
+  .strip .msg { flex: 1; min-width: 0; }
+  .strip .msg small { display: block; opacity: .75; font-size: 10.5px; }
+  .strip .act {
+    flex: none; border: 1px solid currentColor; background: transparent; color: inherit;
+    border-radius: 7px; padding: 3px 10px; font-size: 11.5px; cursor: pointer; font-family: inherit;
+  }
+  .strip .act:hover { background: rgba(0,0,0,.06); }
+  body[data-theme="dark"] .strip .act:hover { background: rgba(255,255,255,.08); }
+  .strip .act.pri { background: currentColor; }
+  .strip .act.pri span { color: #fff; }
+  .strip .act.pri:hover { filter: brightness(1.05); background: currentColor; }
+  .playbar { height: 52px; display: flex; align-items: center; gap: 12px; padding: 0 16px; }
+  .pb-btn {
+    width: 32px; height: 32px; border-radius: 99px; background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 12px; flex: none;
+    border: none; font-family: inherit;
+  }
+  .pb-btn:hover { background: var(--accent-hover); }
+  .pb-track { flex: 1; height: 4px; border-radius: 2px; background: var(--border-strong); position: relative; overflow: hidden; }
+  .pb-track i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent); transition: width .3s; }
+  .pb-num { color: var(--text-3); font-size: 11px; flex: none; }
+  .pb-eng {
+    flex: none; font-size: 10.5px; border: 1px solid var(--border-strong); color: var(--text-3);
+    border-radius: 99px; padding: 1px 9px;
+  }
+  .pb-eng.fb { border-color: var(--warn); color: var(--warn); }
+
+  /* 导演台 */
+  #director {
+    position: absolute; right: 30px; top: 40px; bottom: 70px; width: 320px; z-index: 900;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--shadow-pop); overflow: hidden; display: flex; flex-direction: column;
+  }
+  #director .d-head {
+    padding: 9px 13px; display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; flex: none;
+  }
+  #director .d-head b { font-size: 12.5px; }
+  #director .d-head span { color: var(--text-4); font-size: 11px; }
+  #director.folded .d-body { display: none; }
+  .d-body { padding: 11px 13px; display: flex; flex-direction: column; gap: 11px; overflow-y: auto; }
+  .d-sec h4 { margin: 0 0 5px; font-size: 11px; color: var(--text-3); font-weight: 600; }
+  .seg { display: flex; gap: 6px; flex-wrap: wrap; }
+  .seg button {
+    flex: 1 1 40%; padding: 6px 4px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text-2); font-size: 11.5px; cursor: pointer; font-family: inherit; white-space: nowrap;
+  }
+  .seg button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-softer); font-weight: 600; }
+  #evlog {
+    flex: 1; min-height: 120px; border: 1px dashed var(--border); border-radius: 8px; padding: 7px 9px;
+    font-size: 10.5px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px;
+  }
+  .ev { display: flex; gap: 6px; align-items: baseline; }
+  .ev .tt { color: var(--text-4); flex: none; font-size: 9.5px; }
+  .ev.bad .nx { color: var(--err); }
+  .ev.ok .nx { color: var(--ok); }
+  .ev.warn .nx { color: var(--warn); }
+  .legend { font-size: 10.5px; color: var(--text-3); }
+  .steps { margin: 0; padding-left: 18px; font-size: 11px; color: var(--text-2); }
+  .steps li { margin-bottom: 2px; }
+
+  /* 设置弹层 */
+  #settings-pop {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 950; width: 360px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--shadow-pop); padding: 18px; display: none;
+  }
+  #settings-pop.open { display: block; }
+  #settings-pop h3 { margin: 0 0 4px; font-size: 14px; }
+  #settings-pop .sub { color: var(--text-3); font-size: 11.5px; margin: 0 0 12px; }
+  #settings-pop input {
+    width: 100%; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 8px;
+    color: var(--text-1); padding: 7px 10px; font-size: 12px; outline: none; margin-bottom: 8px; font-family: Consolas, monospace;
+  }
+  #settings-pop input:focus { border-color: var(--accent); }
+  #settings-pop .ops { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+  .btn { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 6px 14px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  .btn:hover { background: var(--accent-hover); }
+  .btn.ghost2 { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border-strong); }
+
+  .theme-dots { position: absolute; right: 30px; bottom: 26px; z-index: 900; display: flex; gap: 8px; }
+  .theme-dots .dot { width: 22px; height: 22px; border-radius: 99px; cursor: pointer; border: 2px solid var(--surface); box-shadow: var(--shadow-pop); }
+  .theme-dots .dot[data-t="day"] { background: #f4f5f9; }
+  .theme-dots .dot[data-t="sepia"] { background: #f5efdf; }
+  .theme-dots .dot[data-t="dark"] { background: #1d1f26; }
+  .theme-dots .dot.on { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #toasts { position: absolute; left: 42%; bottom: 84px; transform: translateX(-50%); z-index: 990; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .toast { background: rgba(20,22,30,.92); color: #fff; border-radius: 99px; padding: 7px 16px; font-size: 12px; box-shadow: var(--shadow-pop); max-width: 470px; }
+  body[data-theme="dark"] .toast { background: rgba(60,64,80,.95); }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body data-theme="day">
+
+<!-- 阅读室 -->
+<div id="reader">
+  <div class="titlebar"><div class="app-ico">译</div><div class="t">沉浸阅读室 · 自私的巨人</div></div>
+  <div class="rd-scroll"><div class="rd-article" id="article"><h2>The Selfish Giant · 播放演示</h2></div></div>
+  <div class="playdock">
+    <div class="strip" id="strip"></div>
+    <div class="playbar">
+      <button class="pb-btn" id="pb" title="播放/暂停">▶</button>
+      <div class="pb-track"><i id="pb-fill"></i></div>
+      <span class="pb-num" id="pb-num">0 / 6</span>
+      <span class="pb-eng" id="pb-eng">本地 SAPI</span>
+    </div>
+  </div>
+</div>
+
+<!-- 导演台 -->
+<div id="director">
+  <div class="d-head" id="d-toggle"><b>UX-4 TTS 失败可见化 · 原型</b><span>收起 ▾</span></div>
+  <div class="d-body">
+    <div class="d-sec">
+      <h4>模式（切换即重置）</h4>
+      <div class="seg" id="seg-mode">
+        <button data-m="before" class="on">修复前（静默）</button>
+        <button data-m="after">修复后（错误条）</button>
+      </div>
+    </div>
+    <div class="d-sec">
+      <h4>引擎</h4>
+      <div class="seg" id="seg-eng">
+        <button data-e="sapi">本地 SAPI</button>
+        <button data-e="cloud" class="on">云 TTS（讯飞）</button>
+      </div>
+    </div>
+    <div class="d-sec">
+      <h4>故障场景（播放中可随时切）</h4>
+      <div class="seg" id="seg-sc">
+        <button data-s="normal" class="on">正常</button>
+        <button data-s="creds">云凭据缺失</button>
+        <button data-s="offline">断网</button>
+        <button data-s="busy">音频设备被占用</button>
+        <button data-s="engfail">引擎启动失败</button>
+      </div>
+    </div>
+    <div class="d-sec" style="flex:1;display:flex;flex-direction:column;min-height:150px">
+      <h4>真相日志（全知视角）</h4>
+      <div id="evlog"></div>
+      <div class="legend" style="margin-top:5px">修复前用户看到的是：<b>毫无反应、无声跳句</b>——只有这份日志知道真相</div>
+    </div>
+    <div class="d-sec">
+      <h4>对比走法</h4>
+      <ol class="steps">
+        <li>修复前：场景切「云凭据缺失」→ 播放 → 界面毫无异常，日志里全是静默回落</li>
+        <li>切「断网」继续放 → 句子无声跳过，无任何提示</li>
+        <li>修复后：同样操作 → 错误条出现：<b>人话 + 动作按钮</b></li>
+        <li>「去设置」补上凭据 / 场景切回「正常」→ 重试或下一句成功后错误条自动消失</li>
+      </ol>
+    </div>
+  </div>
+</div>
+
+<!-- 设置弹层（「去设置」落点） -->
+<div id="settings-pop">
+  <h3>讯飞云 TTS · 语音合成凭据</h3>
+  <p class="sub">密钥经 DPAPI 加密存本机；云音色更自然，断网自动回落本地引擎。</p>
+  <input type="password" placeholder="App ID" id="cred-1" />
+  <input type="password" placeholder="API Secret" id="cred-2" />
+  <input type="password" placeholder="API Key（任意字符即可，原型演示）" id="cred-3" />
+  <div class="ops">
+    <button class="btn ghost2" id="cred-cancel">返回</button>
+    <button class="btn" id="cred-save">保存凭据</button>
+  </div>
+</div>
+
+<div class="theme-dots">
+  <div class="dot on" data-t="day" title="日间"></div>
+  <div class="dot" data-t="sepia" title="护眼"></div>
+  <div class="dot" data-t="dark" title="暗色"></div>
+</div>
+<div id="toasts"></div>
+
+<script>
+var SENTENCES = [
+  { en: "Every afternoon, as they were coming from school, the children used to go and play in the Giant's garden.", cn: "每天下午放学以后，孩子们总喜欢到巨人的花园里去玩耍。" },
+  { en: "One day the Giant came back, and when he saw the children he gave a great roar.", cn: "一天巨人回来了，看见花园里的孩子，他发出一声可怕的怒吼。" },
+  { en: "\u201cWhat are you doing here?\u201d he cried in a very gruff voice.", cn: "“你们在这儿干什么？”他用非常粗哑的声音吼道。" },
+  { en: "The children ran away, and the garden grew cold and frosty.", cn: "孩子们吓跑了，花园从此变得寒冷萧索。" },
+  { en: "Then came the Spring, but the Giant's garden stayed in Winter.", cn: "后来春天来了，巨人的花园却一直留在冬天。" },
+  { en: "\u201cHow selfish I have been!\u201d he said; \u201cnow I know why the Spring would not come here.\u201d", cn: "“我多么自私啊！”他说，“如今我明白春天为什么不来了。”" }
+];
+
+var mode, engine, scenario, playing, idx, timer, session, credsSaved;
+
+function $(id) { return document.getElementById(id); }
+function toast(msg, ms) {
+  var el = document.createElement("div");
+  el.className = "toast"; el.textContent = msg;
+  $("toasts").appendChild(el);
+  setTimeout(function () { el.remove(); }, ms || 2800);
+}
+function hhmmss() {
+  var d = new Date();
+  function p(n) { return (n < 10 ? "0" : "") + n; }
+  return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+}
+function log(kind, text) {
+  var el = document.createElement("div");
+  el.className = "ev " + kind;
+  el.innerHTML = '<span class="tt mono">' + hhmmss() + '</span><span class="nx">' + text + "</span>";
+  var box = $("evlog");
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+}
+
+/* ===== 文章渲染 ===== */
+function renderArticle() {
+  var sents = SENTENCES.map(function (s, i) {
+    var cls = "sent" + (i === idx ? " cur" : i < idx ? " done" : "") + (s.silent ? " silent" : "");
+    var mk = (mode === "before" && s.silent) ? '<span class="mk">无声跳过</span>' : "";
+    return '<div class="' + cls + '" data-i="' + i + '"><div class="en">' + s.en + mk + "</div><div class=\"cn\">" + s.cn + "</div></div>";
+  }).join("");
+  var h = '<h2>The Selfish Giant · 播放演示</h2>';
+  $("article").innerHTML = h + sents;
+  var cur = document.querySelector(".sent.cur");
+  if (cur) cur.scrollIntoView({ block: "nearest" });
+  $("pb-fill").style.width = (idx / SENTENCES.length * 100) + "%";
+  $("pb-num").textContent = idx + " / " + SENTENCES.length;
+}
+
+/* ===== 引擎角标 ===== */
+function renderEngineChip() {
+  var el = $("pb-eng");
+  if (engine === "sapi") { el.textContent = "本地 SAPI"; el.classList.remove("fb"); }
+  else if (session.fallback) { el.textContent = "云 → SAPI 回落"; el.classList.add("fb"); }
+  else { el.textContent = "云 TTS（讯飞）"; el.classList.remove("fb"); }
+}
+
+/* ===== 错误条 ===== */
+var stripKind = null;
+function showStrip(kind) {
+  stripKind = kind;
+  var el = $("strip");
+  var conf = {
+    "no-creds": { cls: "warn", ico: "⚠", msg: "云朗读未配置，已用本地语音",
+      sub: "配置讯飞凭据后可用更自然的云音色", acts: "settings|去设置|pri,dismiss|本会话不再提示" },
+    "synth-failed": { cls: "err", ico: "⚠", msg: "本句合成失败（网络/服务），已跳过",
+      sub: "播放继续，不影响后续句子", acts: "retry|重试本句|pri,stop|停止" },
+    "play-blocked": { cls: "err", ico: "🔇", msg: "播放被系统拒绝（音频设备被占用）",
+      sub: "其他程序正在独占音频设备", acts: "retry|重试|pri,stop|停止" },
+    "speak-failed": { cls: "err", ico: "🔇", msg: "朗读启动失败，已暂停",
+      sub: "播放停在当前句，不会继续推进", acts: "retry|重试|pri,stop|停止" }
+  }[kind];
+  el.className = "strip show " + conf.cls;
+  var acts = conf.acts.split(",").map(function (a) {
+    var p = a.split("|");
+    return '<button class="act' + (p[2] ? " " + p[2] : "") + '" data-act="' + p[0] + '"><span>' + p[1] + "</span></button>";
+  }).join("");
+  el.innerHTML = '<span class="ico">' + conf.ico + '</span><span class="msg">' + conf.msg + "<small>" + conf.sub + "</small></span>" + acts;
+  el.querySelectorAll("[data-act]").forEach(function (b) {
+    b.onclick = function () { onStripAct(b.getAttribute("data-act")); };
+  });
+}
+function hideStrip() { stripKind = null; var el = $("strip"); el.className = "strip"; el.innerHTML = ""; }
+function onStripAct(act) {
+  if (act === "settings") { openSettings(); return; }
+  if (act === "dismiss") { hideStrip(); log("warn", "本会话不再提示（回落继续，静默生效）"); return; }
+  if (act === "stop") { stopPlayback(); log("info", "用户选择停止"); return; }
+  if (act === "retry") {
+    hideStrip();
+    log("info", "重试第 " + (idx + 1) + " 句…");
+    attempt(idx);
+  }
+}
+
+/* ===== 播放状态机 ===== */
+function attempt(i) {
+  var s = SENTENCES[i];
+  s.silent = false;
+  /* 引擎决策：云凭据缺失 → 回落（每会话一次提示） */
+  if (engine === "cloud" && scenario === "creds" && !session.fallback && !credsSaved) {
+    session.fallback = true;
+    if (mode === "after") {
+      showStrip("no-creds");
+      log("warn", "句 " + (i + 1) + "：云凭据缺失 → 错误条「已用本地语音 · 去设置」（每会话一次）");
+    } else {
+      log("bad", "句 " + (i + 1) + "：云凭据缺失 → 静默回落 SAPI，用户毫无感知");
+    }
+    renderEngineChip();
+  }
+  var effEngine = (engine === "cloud" && session.fallback) ? "sapi" : engine;
+  var fail = null;
+  if (scenario === "busy") fail = "play-blocked";
+  else if (scenario === "engfail") fail = "speak-failed";
+  else if (scenario === "offline" && effEngine === "cloud") fail = "synth-failed";
+
+  if (!fail) {
+    if (scenario === "offline" && effEngine === "sapi" && !session.offlineNote) {
+      session.offlineNote = true;
+      log("ok", "本地引擎不受断网影响 ✓ 正常播放");
+    }
+    /* 下一次成功播放自动消失；no-creds 例外：带「去设置」动作，常驻到用户处理 */
+    if (mode === "after" && stripKind !== "no-creds") hideStrip();
+    idx = i + 1;
+    if (idx >= SENTENCES.length) { idx = SENTENCES.length; renderArticle(); stopPlayback(true); log("ok", "播放完成（共 " + SENTENCES.length + " 句）"); return; }
+    renderArticle();
+    scheduleNext();
+    return;
+  }
+  /* 失败分支 */
+  if (fail === "synth-failed" || fail === "play-blocked") {
+    if (mode === "after") { showStrip(fail); log("bad", "句 " + (i + 1) + "：" + (fail === "synth-failed" ? "合成失败" : "播放被拒") + " → 错误条 + 跳过推进"); }
+    else { s.silent = true; log("bad", "句 " + (i + 1) + "：" + (fail === "synth-failed" ? "合成失败" : "播放被拒") + " → 静默跳过，界面无任何提示"); }
+    idx = i + 1;
+    renderArticle();
+    scheduleNext();
+  } else { /* speak-failed：引擎起不来，播放暂停 */
+    playing = false; setPbBtn();
+    if (mode === "after") { showStrip(fail); log("bad", "句 " + (i + 1) + "：引擎启动失败 → 错误条 + 暂停在当前句"); }
+    else log("bad", "句 " + (i + 1) + "：引擎启动失败 → 一片死寂，播放键像坏了");
+    renderArticle();
+  }
+}
+function scheduleNext() {
+  clearTimeout(timer);
+  timer = setTimeout(function () { if (playing) attempt(idx); }, 1250);
+}
+function setPbBtn() { $("pb").textContent = playing ? "⏸" : "▶"; }
+function stopPlayback(finished) {
+  playing = false; clearTimeout(timer); setPbBtn();
+  if (!finished) log("info", "播放已停止");
+}
+$("pb").onclick = function () {
+  playing = !playing; setPbBtn();
+  if (playing) { log("info", "播放：第 " + (idx + 1) + " 句起"); if (idx >= SENTENCES.length) idx = 0; attempt(idx); }
+  else { clearTimeout(timer); log("info", "已暂停"); }
+};
+
+/* ===== 设置弹层 ===== */
+function openSettings() {
+  $("settings-pop").classList.add("open");
+  log("info", "「去设置」→ 打开设置窗语音凭据区（原型为弹层示意）");
+}
+$("cred-cancel").onclick = function () { $("settings-pop").classList.remove("open"); };
+$("cred-save").onclick = function () {
+  credsSaved = true; session.fallback = false;
+  $("settings-pop").classList.remove("open");
+  hideStrip(); /* 问题根源已解除，常驻错误条随之消失 */
+  renderEngineChip();
+  log("ok", "凭据已保存：本会话恢复云引擎决策（下次尝试起生效）");
+  toast("凭据已保存 ✓ 重新播放即可用云音色");
+};
+
+/* ===== 导演台 ===== */
+function bindSeg(id, cb) {
+  $(id).addEventListener("click", function (e) {
+    var b = e.target.closest("button"); if (!b || b.classList.contains("on")) return;
+    $(id).querySelectorAll("button").forEach(function (x) { x.classList.remove("on"); });
+    b.classList.add("on");
+    cb(b.getAttribute("data-" + id.split("-")[1].slice(0, 1)));
+  });
+}
+/* 场景/引擎切换（不打断播放，下一句起生效） */
+$("seg-sc").addEventListener("click", function (e) {
+  var b = e.target.closest("button"); if (!b || b.classList.contains("on")) return;
+  $("seg-sc").querySelectorAll("button").forEach(function (x) { x.classList.remove("on"); });
+  b.classList.add("on");
+  scenario = b.getAttribute("data-s");
+  var names = { normal: "正常", creds: "云凭据缺失", offline: "断网", busy: "音频设备被占用", engfail: "引擎启动失败" };
+  log("info", "场景切到「" + names[scenario] + "」" + (playing ? "（下一句起生效）" : ""));
+});
+$("seg-eng").addEventListener("click", function (e) {
+  var b = e.target.closest("button"); if (!b || b.classList.contains("on")) return;
+  $("seg-eng").querySelectorAll("button").forEach(function (x) { x.classList.remove("on"); });
+  b.classList.add("on");
+  engine = b.getAttribute("data-e");
+  session.fallback = false; /* 换引擎重置回落状态 */
+  renderEngineChip();
+  log("info", "引擎切到「" + (engine === "sapi" ? "本地 SAPI" : "云 TTS") + "」");
+});
+$("seg-mode").addEventListener("click", function (e) {
+  var b = e.target.closest("button"); if (!b || b.classList.contains("on")) return;
+  $("seg-mode").querySelectorAll("button").forEach(function (x) { x.classList.remove("on"); });
+  b.classList.add("on");
+  mode = b.getAttribute("data-m");
+  resetAll();
+  toast(mode === "before" ? "已切到【修复前】：所有失败都静默，看右侧真相日志" : "已切到【修复后】：失败有错误条，可懂可行动", 3200);
+});
+$("d-toggle").onclick = function () {
+  var d = $("director");
+  d.classList.toggle("folded");
+  document.querySelector("#d-toggle span").textContent = d.classList.contains("folded") ? "展开 ▸" : "收起 ▾";
+};
+
+function resetAll() {
+  playing = false; idx = 0; clearTimeout(timer);
+  session = { fallback: false, offlineNote: false };
+  SENTENCES.forEach(function (s) { s.silent = false; });
+  hideStrip(); setPbBtn(); renderArticle(); renderEngineChip();
+  $("evlog").innerHTML = "";
+  log("info", mode === "before" ? "修复前模式：失败全部静默（对照日志看真相）" : "修复后模式：失败显示错误条（人话 + 动作）");
+}
+document.querySelectorAll(".theme-dots .dot").forEach(function (d) {
+  d.onclick = function () {
+    document.querySelectorAll(".theme-dots .dot").forEach(function (x) { x.classList.remove("on"); });
+    d.classList.add("on");
+    document.body.setAttribute("data-theme", d.getAttribute("data-t"));
+  };
+});
+
+mode = "before"; engine = "cloud"; scenario = "normal"; credsSaved = false;
+resetAll();
+</script>
+</body>
+</html>

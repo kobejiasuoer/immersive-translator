@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UX-2 开机自启与回访链 · 交互原型（2026-09-18）</title>
+<!--
+  UX-2 开机自启原型 · 自包含单文件，双击即开。
+  对应 docs/ux-remediation-plan-2026-09-18.md UX-2 卡。
+  演示范围：
+    1. 修复前（现状 A2）：无自启开关 → 重启电脑后应用不在 → 09:00 复习提醒永远丢失
+    2. 修复后：开关落两处（设置·关于 主开关 + 阅读室提醒组 行内开关 + 因果文案），
+       同一状态源；开启写入 HKCU Run 项，关闭删除（无残留）
+    3. 自启行为：开机后只进托盘、不弹任何窗口；提醒卡按时弹出
+    4. 补偿演示：没开自启的用户手动打开应用 → 提醒恢复，但错过的那次不补
+-->
+<style>
+  body[data-theme="day"] {
+    --accent: #4c5ff0; --accent-hover: #3f52e0;
+    --accent-soft: rgba(76,95,240,.10); --accent-softer: rgba(76,95,240,.06);
+    --bg: #f4f5f9; --surface: #fff; --surface-2: #f9fafc;
+    --border: #e4e7ee; --border-strong: #d6dae4;
+    --text-1: #1c2029; --text-2: #4b5261; --text-3: #7c8494; --text-4: #a6adbb;
+    --ok: #16a34a; --ok-soft: #e8f7ee; --err: #dc2626; --err-soft: #fdeaea;
+    --warn: #b45309; --warn-soft: #fdf3e1;
+    --shadow-pop: 0 12px 32px rgba(16,24,40,.16), 0 3px 10px rgba(16,24,40,.1);
+    --wallpaper: radial-gradient(1100px 640px at 55% 16%, #33405e 0%, #232a3d 55%, #1a1f2e 100%);
+    --traybar: rgba(255,255,255,.72);
+  }
+  body[data-theme="sepia"] {
+    --accent: #4c5ff0; --accent-hover: #3f52e0;
+    --accent-soft: rgba(76,95,240,.12); --accent-softer: rgba(76,95,240,.07);
+    --bg: #f5efdf; --surface: #fbf7ec; --surface-2: #f1ead7;
+    --border: #e4dac0; --border-strong: #d2c6a6;
+    --text-1: #37301f; --text-2: #5a5138; --text-3: #857a5c; --text-4: #a89d80;
+    --ok: #35793f; --ok-soft: rgba(53,121,63,.12); --err: #b03a32; --err-soft: rgba(176,58,50,.12);
+    --warn: #9a6212; --warn-soft: rgba(154,98,18,.12);
+    --shadow-pop: 0 12px 32px rgba(80,64,20,.2);
+    --wallpaper: radial-gradient(1100px 640px at 55% 16%, #5a5138 0%, #4a4430 55%, #37331f 100%);
+    --traybar: rgba(251,247,236,.8);
+  }
+  body[data-theme="dark"] {
+    --accent: #7d8cff; --accent-hover: #93a0ff;
+    --accent-soft: rgba(125,140,255,.16); --accent-softer: rgba(125,140,255,.09);
+    --bg: #1d1f26; --surface: #262933; --surface-2: #2e313c;
+    --border: #373b47; --border-strong: #474c5a;
+    --text-1: #edeef4; --text-2: #c4c9d6; --text-3: #9399ab; --text-4: #6f7688;
+    --ok: #5cc48a; --ok-soft: rgba(60,190,120,.16); --err: #f17474; --err-soft: rgba(240,90,90,.16);
+    --warn: #e2a75a; --warn-soft: rgba(226,167,90,.16);
+    --shadow-pop: 0 14px 36px rgba(0,0,0,.55);
+    --wallpaper: radial-gradient(1100px 640px at 55% 16%, #2a2e3f 0%, #1f2330 55%, #14161e 100%);
+    --traybar: rgba(38,41,51,.78);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+    font-size: 13px; line-height: 1.5; color: var(--text-1);
+    background: var(--wallpaper); overflow: hidden; -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: Consolas, "Cascadia Code", monospace; }
+
+  .panel {
+    position: absolute; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 12px; box-shadow: var(--shadow-pop); overflow: hidden;
+  }
+  .p-head {
+    height: 34px; display: flex; align-items: center; gap: 8px; padding-left: 12px;
+    background: var(--surface); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-2); user-select: none;
+  }
+  .p-head .app-ico {
+    width: 15px; height: 15px; border-radius: 4px;
+    background: linear-gradient(135deg, #6b7bff 0%, #9a6bff 100%);
+    color: #fff; font-size: 8.5px; display: flex; align-items: center; justify-content: center; font-weight: 700;
+  }
+  .p-body { padding: 14px 16px; }
+
+  /* 设置窗 · 关于 */
+  #set-win { width: 330px; left: 40px; top: 52px; z-index: 200; }
+  .set-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px dashed var(--border); }
+  .set-row:last-child { border-bottom: none; }
+  .set-row .lbl { flex: 1; }
+  .set-row .lbl small { display: block; color: var(--text-3); font-size: 11px; }
+  .set-row .val { color: var(--text-2); font-size: 12px; }
+
+  /* 开关 */
+  .sw {
+    width: 36px; height: 20px; border-radius: 99px; background: var(--border-strong);
+    position: relative; cursor: pointer; flex: none; transition: background .18s;
+  }
+  .sw::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 99px;
+    background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: left .18s;
+  }
+  .sw.on { background: var(--ok); }
+  .sw.on::after { left: 18px; }
+  .sw.lock { opacity: .4; cursor: not-allowed; }
+
+  .absent-note { color: var(--text-4); font-size: 11px; padding: 9px 0; }
+  .causal { color: var(--text-3); font-size: 11px; margin-top: 4px; }
+  .causal b { color: var(--warn); font-weight: 600; }
+
+  /* 阅读室提醒抽屉 */
+  #drawer { width: 340px; right: 40px; top: 52px; z-index: 200; }
+  #drawer .p-body { padding-top: 8px; }
+  .divider { height: 1px; background: var(--border); margin: 10px -16px; }
+  .group-t { font-size: 11px; color: var(--text-3); font-weight: 600; margin-bottom: 2px; }
+
+  /* 注册表 */
+  #reg { width: 440px; left: 40px; bottom: 62px; z-index: 200; }
+  #reg .p-body { padding: 10px 14px; }
+  .reg-path { font-size: 10.5px; color: var(--text-3); margin-bottom: 6px; }
+  .reg-entry {
+    display: none; align-items: center; gap: 8px; font-size: 11px;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+  }
+  .reg-entry.show { display: flex; }
+  .reg-entry .nm { color: var(--accent); font-weight: 600; }
+  .reg-entry .vl { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .reg-empty { color: var(--text-4); font-size: 11px; }
+  .reg-flash { animation: rf .8s ease 2; }
+  @keyframes rf { 50% { background: var(--ok-soft); border-color: var(--ok); } }
+
+  /* 任务栏 / 托盘 */
+  .taskbar {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 44px; z-index: 500;
+    background: var(--traybar); backdrop-filter: blur(12px); border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 0 12px;
+  }
+  .tray-app {
+    width: 26px; height: 26px; border-radius: 6px; display: none; position: relative;
+    background: linear-gradient(135deg, #6b7bff 0%, #9a6bff 100%);
+    color: #fff; font-size: 13px; font-weight: 600; align-items: center; justify-content: center; user-select: none;
+  }
+  .tray-app.show { display: flex; animation: pop .2s ease; }
+  @keyframes pop { from { opacity: 0; transform: scale(.7); } to { opacity: 1; } }
+  .badge {
+    position: absolute; top: -5px; right: -5px; min-width: 15px; height: 15px; border-radius: 8px;
+    background: var(--err); color: #fff; font-size: 9.5px; display: flex; align-items: center; justify-content: center; padding: 0 4px;
+  }
+  .clock { color: var(--text-2); font-size: 12px; padding: 0 6px 0 10px; text-align: right; line-height: 1.3; }
+  .tray-sysicon { color: var(--text-3); font-size: 13px; padding: 4px 5px; opacity: .8; }
+
+  /* 提醒卡（真实形态：置顶、不抢焦点、双按钮） */
+  #remind {
+    position: absolute; top: 64px; left: 50%; transform: translateX(-50%); z-index: 800; width: 380px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: var(--shadow-pop); padding: 16px 18px; display: none; animation: pop .22s ease;
+  }
+  #remind.show { display: block; }
+  #remind .r-t { font-size: 14px; font-weight: 700; margin-bottom: 2px; }
+  #remind .r-s { color: var(--text-3); font-size: 12px; margin-bottom: 12px; }
+  #remind .r-ops { display: flex; gap: 8px; justify-content: flex-end; }
+  #remind .r-ghost-note { margin-top: 10px; font-size: 10.5px; color: var(--text-4); }
+
+  /* 错过的提醒（幽灵） */
+  #ghost {
+    position: absolute; top: 64px; left: 50%; transform: translateX(-50%) rotate(-1.5deg); z-index: 800; width: 380px;
+    border: 2px dashed var(--text-4); border-radius: 14px; padding: 16px 18px;
+    background: color-mix(in srgb, var(--bg) 55%, transparent); opacity: .82; display: none;
+  }
+  #ghost.show { display: block; animation: pop .22s ease; }
+  #ghost .g-stamp {
+    position: absolute; right: 14px; top: 10px; font-size: 15px; color: var(--err);
+    border: 2px solid var(--err); border-radius: 6px; padding: 1px 8px; transform: rotate(8deg); font-weight: 700; opacity: .85;
+  }
+  #ghost .r-t { text-decoration: line-through; color: var(--text-3); font-size: 14px; font-weight: 700; }
+  #ghost .r-s { color: var(--err); font-size: 12px; margin-top: 6px; }
+  #ghost .g-missed { color: var(--text-4); font-size: 11px; margin-top: 6px; }
+
+  /* 重启遮罩 */
+  #boot {
+    position: fixed; inset: 0; z-index: 999; display: none; align-items: center; justify-content: center;
+    flex-direction: column; gap: 12px; color: #fff; background: #0c0d12;
+  }
+  #boot.open { display: flex; }
+  #boot .b-spin { width: 28px; height: 28px; border-radius: 50%; border: 3px solid rgba(255,255,255,.2); border-top-color: #7d8cff; animation: rot .8s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  #boot .b-t { font-size: 13px; opacity: .9; }
+  #boot .b-s { font-size: 11px; opacity: .5; }
+
+  /* 导演台 */
+  #director {
+    position: absolute; right: 40px; bottom: 62px; z-index: 900; width: 300px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--shadow-pop); overflow: hidden;
+  }
+  #director .d-head {
+    padding: 9px 13px; display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid var(--border); cursor: pointer; user-select: none;
+  }
+  #director .d-head b { font-size: 12.5px; }
+  #director .d-head span { color: var(--text-4); font-size: 11px; }
+  #director .d-body { padding: 11px 13px; display: flex; flex-direction: column; gap: 11px; }
+  #director.folded .d-body { display: none; }
+  .d-sec h4 { margin: 0 0 5px; font-size: 11px; color: var(--text-3); font-weight: 600; }
+  .seg { display: flex; gap: 6px; }
+  .seg button {
+    flex: 1; padding: 6px 4px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text-2); font-size: 11.5px; cursor: pointer; font-family: inherit; white-space: nowrap;
+  }
+  .seg button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-softer); font-weight: 600; }
+  .btn {
+    background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 7px 14px;
+    font-size: 12px; cursor: pointer; font-family: inherit; width: 100%;
+  }
+  .btn:hover { background: var(--accent-hover); }
+  .btn.ghost2 { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border-strong); }
+  .btn.ghost2:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-softer); }
+  .st-line { font-size: 11.5px; color: var(--text-2); }
+  .st-line b { font-weight: 600; }
+  .st-line .bad { color: var(--err); }
+  .st-line .good { color: var(--ok); }
+  .steps { margin: 0; padding-left: 18px; font-size: 11.5px; color: var(--text-2); }
+  .steps li { margin-bottom: 3px; }
+
+  .theme-dots { position: absolute; left: 16px; top: 16px; z-index: 900; display: flex; gap: 8px; }
+  .theme-dots .dot { width: 22px; height: 22px; border-radius: 99px; cursor: pointer; border: 2px solid var(--surface); box-shadow: var(--shadow-pop); }
+  .theme-dots .dot[data-t="day"] { background: #f4f5f9; }
+  .theme-dots .dot[data-t="sepia"] { background: #f5efdf; }
+  .theme-dots .dot[data-t="dark"] { background: #1d1f26; }
+  .theme-dots .dot.on { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #toasts { position: absolute; left: 50%; bottom: 60px; transform: translateX(-50%); z-index: 990; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .toast { background: rgba(20,22,30,.92); color: #fff; border-radius: 99px; padding: 7px 16px; font-size: 12px; box-shadow: var(--shadow-pop); max-width: 480px; animation: pop .18s ease; }
+  body[data-theme="dark"] .toast { background: rgba(60,64,80,.95); }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body data-theme="day">
+
+<!-- 设置窗 · 关于 -->
+<div class="panel" id="set-win">
+  <div class="p-head"><div class="app-ico">译</div>设置 · 关于</div>
+  <div class="p-body">
+    <div class="set-row"><div class="lbl">版本</div><div class="val mono" id="ver">0.6.0</div></div>
+    <div id="as-main"><!-- 修复后：主开关 --></div>
+    <div class="set-row"><div class="lbl">反馈问题<small>邮件深链 + 自动附脱敏诊断</small></div><div class="val">›</div></div>
+  </div>
+</div>
+
+<!-- 阅读室设置抽屉 · 提醒组 -->
+<div class="panel" id="drawer">
+  <div class="p-head"><div class="app-ico">译</div>阅读室 · 设置抽屉 · 提醒</div>
+  <div class="p-body">
+    <div class="group-t">每日提醒</div>
+    <div class="set-row"><div class="lbl">提醒时间</div><div class="val mono">09:00</div></div>
+    <div class="set-row"><div class="lbl">免打扰时段</div><div class="val mono">23:00 – 07:00</div></div>
+    <div class="set-row"><div class="lbl">每日目标</div><div class="val">20 词</div></div>
+    <div class="divider"></div>
+    <div class="group-t">系统</div>
+    <div id="as-drawer"><!-- 修复后：行内开关 + 因果文案 --></div>
+    <div id="drawer-note"><!-- 修复前：现状脚注 --></div>
+  </div>
+</div>
+
+<!-- 注册表 Run 项 -->
+<div class="panel" id="reg">
+  <div class="p-body">
+    <div class="reg-path mono">HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run</div>
+    <div class="reg-entry" id="reg-entry">
+      <span class="nm mono">ImmersiveTranslator</span>
+      <span class="vl mono">"D:\Program Files\ImmersiveTranslator\ImmersiveTranslator.exe" --autostart</span>
+    </div>
+    <div class="reg-empty" id="reg-empty">（无本应用条目）</div>
+  </div>
+</div>
+
+<!-- 提醒卡 -->
+<div id="remind">
+  <div class="r-t">📖 复习提醒 · 09:00</div>
+  <div class="r-s">今天有 <b>12</b> 个生词到期（昨晚阅读攒下的），约 6 分钟。</div>
+  <div class="r-ops"><button class="btn ghost2" style="width:auto" id="r-later">稍后</button><button class="btn" style="width:auto" id="r-go">开始复习</button></div>
+  <div class="r-ghost-note">置顶不抢焦点 · 每天最多一次 · 免打扰时段顺延</div>
+</div>
+
+<!-- 错过的提醒（幽灵） -->
+<div id="ghost">
+  <div class="g-stamp">未送达</div>
+  <div class="r-t">📖 复习提醒 · 09:00</div>
+  <div class="r-s">应用没有在运行——这条提醒永远丢失了。</div>
+  <div class="g-missed" id="ghost-more">12 个到期生词继续滞留 · 角标不可见 · 快速复习窗不会出现</div>
+</div>
+
+<!-- 任务栏 -->
+<div class="taskbar">
+  <span class="tray-sysicon">⌗</span><span class="tray-sysicon">♪</span>
+  <div class="tray-app" id="tray">译<span class="badge">12</span></div>
+  <div class="clock" id="clock">21:47<br/>9月18日</div>
+</div>
+
+<!-- 导演台 -->
+<div id="director">
+  <div class="d-head" id="d-toggle"><b>UX-2 开机自启 · 原型</b><span>收起 ▾</span></div>
+  <div class="d-body">
+    <div class="d-sec">
+      <h4>模式（切换即重置）</h4>
+      <div class="seg" id="seg-mode">
+        <button data-m="before" class="on">修复前（现状 A2）</button>
+        <button data-m="after">修复后</button>
+      </div>
+    </div>
+    <div class="d-sec" id="st-sec">
+      <div class="st-line" id="st-line"></div>
+    </div>
+    <div class="d-sec">
+      <h4>操作</h4>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <button class="btn" id="btn-reboot">重启电脑 →</button>
+        <button class="btn ghost2" id="btn-manual" style="display:none">10:30 · 用户手动打开应用</button>
+      </div>
+    </div>
+    <div class="d-sec">
+      <h4>对比走法</h4>
+      <ol class="steps">
+        <li><b>修复前</b>：设置里根本没有自启选项 → 点「重启电脑」→ 09:00 提醒成幽灵</li>
+        <li><b>修复后</b>：抽屉里的行内开关带因果文案，先读它</li>
+        <li>开开关（两处开关同一状态源；注册表同步写入）</li>
+        <li>再「重启电脑」→ 托盘常驻 + 09:00 提醒照常弹出</li>
+        <li>关开关 → 注册表条目消失（无残留）；重启 → 提醒又丢了</li>
+      </ol>
+    </div>
+  </div>
+</div>
+
+<div class="theme-dots">
+  <div class="dot on" data-t="day" title="日间"></div>
+  <div class="dot" data-t="sepia" title="护眼"></div>
+  <div class="dot" data-t="dark" title="暗色"></div>
+</div>
+<div id="toasts"></div>
+<div id="boot"><div class="b-spin"></div><div class="b-t" id="boot-t">正在重启…</div><div class="b-s" id="boot-s"></div></div>
+
+<script>
+var mode, autostart, rebooted, manualOpened, missedShown;
+
+function $(id) { return document.getElementById(id); }
+function toast(msg, ms) {
+  var el = document.createElement("div");
+  el.className = "toast"; el.textContent = msg;
+  $("toasts").appendChild(el);
+  setTimeout(function () { el.remove(); }, ms || 2800);
+}
+
+/* ===== 开关渲染（两处同一状态源） ===== */
+function renderSwitches() {
+  var main = $("as-main"), drawer = $("as-drawer"), note = $("drawer-note");
+  if (mode === "before") {
+    main.innerHTML = '<div class="absent-note">开机自启：此版本未提供该选项（现状 A2）</div>';
+    drawer.innerHTML = "";
+    note.innerHTML = '<div class="causal">提醒、角标与快速复习都只在应用运行时有效——当前版本重启电脑后它们会全部失效。</div>';
+    return;
+  }
+  var on = autostart ? " on" : "";
+  main.innerHTML =
+    '<div class="set-row"><div class="lbl">开机自启<small>开机后仅进托盘，不弹任何窗口</small></div>'
+    + '<div class="sw' + on + '" id="sw-main" role="switch" aria-checked="' + !!autostart + '" tabindex="0"></div></div>';
+  drawer.innerHTML =
+    '<div class="set-row"><div class="lbl">开机自启</div>'
+    + '<div class="sw' + on + '" id="sw-drawer" role="switch" aria-checked="' + !!autostart + '" tabindex="0"></div></div>'
+    + '<div class="causal">' + (autostart
+      ? '✓ 已开启：重启电脑后复习提醒照常弹出。'
+      : '<b>复习提醒需要应用在后台运行</b>——建议开启开机自启，否则重启后提醒不会弹出。') + '</div>';
+  note.innerHTML = "";
+  $("sw-main").onclick = function () { toggleAutostart(); };
+  $("sw-drawer").onclick = function () { toggleAutostart(); };
+}
+function toggleAutostart() {
+  autostart = !autostart;
+  renderSwitches(); renderReg(true);
+  toast(autostart ? "已写入注册表 Run 项（默认关，尊重用户）" : "已删除注册表 Run 项（无残留）");
+}
+
+/* ===== 注册表视图 ===== */
+function renderReg(flash) {
+  var e = $("reg-entry"), empty = $("reg-empty");
+  var show = mode === "after" && autostart;
+  e.classList.toggle("show", !!show);
+  empty.style.display = show ? "none" : "block";
+  if (show && flash) { e.classList.remove("reg-flash"); void e.offsetWidth; e.classList.add("reg-flash"); }
+}
+
+/* ===== 状态行 ===== */
+function renderStatus() {
+  var el = $("st-line");
+  if (mode === "before") {
+    el.innerHTML = '自启能力：<b class="bad">无</b> · 应用状态：' + (rebooted && !manualOpened ? '<b class="bad">未运行</b>' : (rebooted ? '运行中（手动）' : '运行中'));
+  } else {
+    el.innerHTML = '自启：<b class="' + (autostart ? "good" : "bad") + '">' + (autostart ? "开" : "关") + "</b> · 应用状态："
+      + (rebooted ? (autostart || manualOpened ? "运行中" + (autostart && !manualOpened ? "（自启）" : "（手动）") : '<b class="bad">未运行</b>') : "运行中");
+  }
+  $("btn-manual").style.display = (rebooted && !(mode === "after" && autostart) && !manualOpened) ? "block" : "none";
+}
+
+/* ===== 重启模拟 ===== */
+function reboot() {
+  rebooted = true; manualOpened = false; missedShown = false;
+  $("remind").classList.remove("show");
+  $("ghost").classList.remove("show");
+  $("tray").classList.remove("show");
+  var boot = $("boot");
+  boot.classList.add("open");
+  $("boot-t").textContent = "正在重启…"; $("boot-s").textContent = "";
+  setTimeout(function () {
+    $("boot-t").textContent = "08:00 · 开机完成";
+    $("boot-s").textContent = (mode === "after" && autostart) ? "ImmersiveTranslator 随系统自启（仅托盘，无窗口）" : "启动项中没有本应用";
+    $("clock").innerHTML = "08:00<br/>9月19日";
+    renderStatus();
+  }, 1000);
+  setTimeout(function () {
+    boot.classList.remove("open");
+    if (mode === "after" && autostart) {
+      $("tray").classList.add("show");
+      toast("应用已随系统自启：托盘常驻、角标可见、没有任何窗口弹出", 3200);
+    }
+  }, 1700);
+  setTimeout(function () {
+    $("clock").innerHTML = "09:00<br/>9月19日";
+    if (mode === "after" && autostart) {
+      $("remind").classList.add("show");
+      toast("09:00 复习提醒照常弹出 ✓", 3000);
+    } else {
+      missedShown = true;
+      $("ghost").classList.add("show");
+      toast("09:00：提醒没有弹出——应用不在运行", 3200);
+    }
+  }, 2600);
+}
+$("r-go").onclick = function () { $("remind").classList.remove("show"); toast("（原型到此为止：真实应用会打开快速复习窗）"); };
+$("r-later").onclick = function () { $("remind").classList.remove("show"); toast("已顺延：30 分钟后再提醒一次"); };
+$("btn-reboot").onclick = reboot;
+$("btn-manual").onclick = function () {
+  manualOpened = true;
+  $("tray").classList.add("show");
+  renderStatus();
+  if (missedShown) {
+    $("ghost-more").innerHTML = '12 个到期生词继续滞留 · <b style="color:var(--warn)">09:00 那次提醒已永远错过</b>';
+    toast("应用打开了，提醒恢复——但错过的那次不会补", 3400);
+  } else {
+    toast("应用已启动，托盘常驻");
+  }
+};
+
+/* ===== 导演台 / 主题 ===== */
+function resetAll() {
+  autostart = false; rebooted = false; manualOpened = false; missedShown = false;
+  $("remind").classList.remove("show");
+  $("ghost").classList.remove("show");
+  $("ghost-more").innerHTML = "12 个到期生词继续滞留 · 角标不可见 · 快速复习窗不会出现";
+  $("tray").classList.remove("show");
+  $("clock").innerHTML = "21:47<br/>9月18日";
+  $("ver").textContent = mode === "before" ? "0.5.2（现状）" : "0.6.0";
+  renderSwitches(); renderReg(false); renderStatus();
+}
+$("seg-mode").addEventListener("click", function (e) {
+  var b = e.target.closest("button"); if (!b || b.classList.contains("on")) return;
+  document.querySelectorAll("#seg-mode button").forEach(function (x) { x.classList.remove("on"); });
+  b.classList.add("on");
+  mode = b.getAttribute("data-m");
+  resetAll();
+  toast(mode === "before" ? "已切到【修复前】：设置里没有自启选项（现状）" : "已切到【修复后】：两处开关 + 因果文案 + 注册表同步", 3200);
+});
+$("d-toggle").onclick = function () {
+  var d = $("director");
+  d.classList.toggle("folded");
+  document.querySelector("#d-toggle span").textContent = d.classList.contains("folded") ? "展开 ▸" : "收起 ▾";
+};
+document.querySelectorAll(".theme-dots .dot").forEach(function (d) {
+  d.onclick = function () {
+    document.querySelectorAll(".theme-dots .dot").forEach(function (x) { x.classList.remove("on"); });
+    d.classList.add("on");
+    document.body.setAttribute("data-theme", d.getAttribute("data-t"));
+  };
+});
+
+mode = "before";
+resetAll();
+</script>
+</body>
+</html>
