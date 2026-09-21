@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import ReaderCore
+import XfyunCore
 
 // MARK: - 主题环境
 
@@ -726,7 +727,8 @@ struct SentenceRowView: View {
             marks: spanMarks,
             onSelection: { text in vm.lookup(query: text, sentenceIdx: pair.idx) },
             onWordClick: { word in vm.lookup(query: word, sentenceIdx: pair.idx) },
-            onChunkClick: { chunk in vm.openChunkCard(chunk: chunk, sentenceIdx: pair.idx) }
+            onChunkClick: { chunk in vm.openChunkCard(chunk: chunk, sentenceIdx: pair.idx) },
+            assessMarks: pair.idx == vm.activeSentenceIdx ? vm.assess.state.marks : nil
         )
         .frame(maxWidth: 680, alignment: .leading)
         .help("单击查词，划选查短语；蓝色虚线为词块，点按看释义")
@@ -1516,7 +1518,9 @@ struct PlayBarView: View {
             progressTrack
             countLabel
             HStack(spacing: 8) {
-                if vm.shadowingWait {
+                if vm.shadowingWait, vm.assessActive {
+                    AssessStripView(vm: vm)
+                } else if vm.shadowingWait {
                     HStack(spacing: 6) {
                         Text("请跟读当前句").font(.system(size: 11.5)).foregroundColor(palette.warn)
                         Button("继续") { vm.continueAfterShadowing() }
