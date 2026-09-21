@@ -9,8 +9,8 @@
 
 export const READER_SCHEMA_VERSION = 1;
 
-/** 一篇文章的来源。epub / pdf 本轮未实现，仅预留枚举。 */
-export type ArticleSourceType = "paste" | "url" | "epub" | "pdf";
+/** 一篇文章的来源。pdf / docx 为本地文件导入；epub 未实现，仅预留枚举。 */
+export type ArticleSourceType = "paste" | "url" | "epub" | "pdf" | "docx";
 
 /** 单句译文的翻译状态。 */
 export type SentenceZhState = "pending" | "done" | "failed" | "edited";
@@ -143,6 +143,53 @@ export interface VocabWord {
   addedAt: number;
   /** source.articleId 为空（划词收藏）时的 LLM 例句，复习卡用作出语境。 */
   example?: VocabExample;
+  /** 累计错题记录（每次复习判分后累加；老数据缺省 = 无记录）。 */
+  recall?: RecallStat;
+}
+
+/** 单个复习模式下的错题计数。 */
+export interface RecallModeStat {
+  pass: number;
+  wrong: number;
+  trap: number;
+}
+
+/** 一个生词累计的错题记录（复习笔记「为什么记不住」诊断的数据源）。 */
+export interface RecallStat {
+  total: RecallModeStat;
+  /** 键 = RecallMode（"recognition" | "cloze" | "dictation"）。 */
+  byMode: Record<string, RecallModeStat>;
+  lastAt?: number;
+}
+
+/** AI 复盘结果（存进笔记 meta，结构由前端定义）。verdict/weak[].why 为纯文本。
+ * weak[].chip/chipFair 已废弃（UI 按实时错题统计现算着色），旧文件里的字段仅透传。 */
+export interface NoteReplay {
+  /** 复盘轮次（第 1 次复盘 = 1）。 */
+  rounds: number;
+  lastAt: number;
+  passed: number;
+  stillWeak: number;
+  verdict: string;
+  weak: { w: string; why: string }[];
+}
+
+/** 一篇复习笔记的元数据（存在 md 文件头部的 JSON frontmatter 里，随文件自包含）。 */
+export interface NoteMeta {
+  /** 文件名即 id（学词笔记-YYYY-MM-DD.md）。 */
+  file: string;
+  createdAt: number;
+  words: number;
+  partial: boolean;
+  wordIds: string[];
+  replay: NoteReplay | null;
+  updatedAt: number;
+}
+
+export interface NoteContent {
+  meta: NoteMeta;
+  /** 正文（不含 frontmatter）。 */
+  content: string;
 }
 
 export interface VocabSrsState {
@@ -193,11 +240,25 @@ export interface ReaderSettings {
   fontPair: ReaderFontPair;
   /** 系统音色名；空串 = 引擎默认。 */
   voice: string;
+  /** 朗读引擎：local = 系统 SAPI（离线），xfyun = 讯飞在线合成（云音色，凭据在设置抽屉）。 */
+  ttsProvider: "local" | "xfyun";
+  /** 讯飞合成发音人（vcn），中文句用它；空串 = xiaoyan。 */
+  cloudVoice: string;
+  /** 讯飞合成英文句发音人（vcn）；空串 = 回退 cloudVoice（再缺省 catherine）。 */
+  cloudVoiceEn: string;
   /** 0.5–2.0。 */
   rate: number;
   /** 每句停顿 0–2000ms。 */
   sentencePauseMs: number;
   shadowingMode: boolean;
+  /** 跟读评测：跟读句送讯飞语音评测，达到阈值才放行（凭据在设置抽屉配置）。 */
+  shadowingAssess: boolean;
+  /** 跟读过关阈值（5 分制），默认 4.2 ≈ 84 分。 */
+  shadowingPassScore: number;
+  /** 跟读评测开麦方式：true = 本句读完自动开麦；false = 出「开口跟读」按钮手动开。 */
+  shadowingAutoMic: boolean;
+  /** 跟读评测静音断句：说话停顿超过该毫秒数视为读完，默认 1500。 */
+  shadowingSilenceMs: number;
   /** 词块高亮：文章翻译完成后自动跑 LLM 词块标注（会额外消耗 token）。 */
   chunkHighlight: boolean;
   /** 生词再现标记：正文中标记已收藏的词/词块（纯本地计算）。 */
@@ -217,9 +278,16 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   lineHeight: 1,
   fontPair: "serif",
   voice: "",
+  ttsProvider: "local",
+  cloudVoice: "",
+  cloudVoiceEn: "catherine",
   rate: 1,
   sentencePauseMs: 0,
   shadowingMode: false,
+  shadowingAssess: false,
+  shadowingPassScore: 4.2,
+  shadowingAutoMic: true,
+  shadowingSilenceMs: 1500,
   chunkHighlight: true,
   showVocabMarks: true,
   reviewMode: "smart",
@@ -230,6 +298,12 @@ export const READER_FONT_SIZE_MIN = 14;
 export const READER_FONT_SIZE_MAX = 24;
 export const READER_RATE_MIN = 0.5;
 export const READER_RATE_MAX = 2;
+/** 跟读评测过关阈值范围（5 分制）。 */
+export const READER_ASSESS_PASS_MIN = 3;
+export const READER_ASSESS_PASS_MAX = 5;
+/** 跟读评测静音断句设置范围（毫秒）。 */
+export const READER_ASSESS_SILENCE_MIN = 800;
+export const READER_ASSESS_SILENCE_MAX = 3000;
 
 /**
  * 合并全局默认与文章覆盖。只接受文章覆盖里类型合法的字段，
@@ -265,6 +339,9 @@ export function mergeReaderSettings(
   }
   merged.fontPair = oneOf(override.fontPair, ["serif", "sans"]) ?? merged.fontPair;
   merged.voice = str(override.voice) ?? merged.voice;
+  merged.ttsProvider = oneOf(override.ttsProvider, ["local", "xfyun"]) ?? merged.ttsProvider;
+  merged.cloudVoice = str(override.cloudVoice) ?? merged.cloudVoice;
+  merged.cloudVoiceEn = str(override.cloudVoiceEn) ?? merged.cloudVoiceEn;
   const rate = num(override.rate);
   if (rate !== undefined) {
     merged.rate = Math.min(READER_RATE_MAX, Math.max(READER_RATE_MIN, rate));
@@ -274,6 +351,22 @@ export function mergeReaderSettings(
     merged.sentencePauseMs = Math.min(2000, Math.max(0, Math.round(pause)));
   }
   merged.shadowingMode = bool(override.shadowingMode) ?? merged.shadowingMode;
+  merged.shadowingAssess = bool(override.shadowingAssess) ?? merged.shadowingAssess;
+  const assessScore = num(override.shadowingPassScore);
+  if (assessScore !== undefined) {
+    merged.shadowingPassScore = Math.min(
+      READER_ASSESS_PASS_MAX,
+      Math.max(READER_ASSESS_PASS_MIN, assessScore),
+    );
+  }
+  merged.shadowingAutoMic = bool(override.shadowingAutoMic) ?? merged.shadowingAutoMic;
+  const silence = num(override.shadowingSilenceMs);
+  if (silence !== undefined) {
+    merged.shadowingSilenceMs = Math.min(
+      READER_ASSESS_SILENCE_MAX,
+      Math.max(READER_ASSESS_SILENCE_MIN, Math.round(silence)),
+    );
+  }
   merged.chunkHighlight = bool(override.chunkHighlight) ?? merged.chunkHighlight;
   merged.showVocabMarks = bool(override.showVocabMarks) ?? merged.showVocabMarks;
   merged.reviewMode = oneOf(override.reviewMode, ["smart", "recognition", "cloze", "dictation"]) ?? merged.reviewMode;

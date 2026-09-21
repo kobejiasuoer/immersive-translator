@@ -63,4 +63,21 @@ describe("mergeReaderSettings", () => {
     expect(bad.chunkHighlight).toBe(true);
     expect(bad.showVocabMarks).toBe(true);
   });
+
+  it("跟读评测：默认自动开麦 1.5s 断句；覆盖与越界收紧", () => {
+    expect(DEFAULT_READER_SETTINGS.shadowingAutoMic).toBe(true);
+    expect(DEFAULT_READER_SETTINGS.shadowingSilenceMs).toBe(1500);
+    const merged = mergeReaderSettings(DEFAULT_READER_SETTINGS, {
+      shadowingAutoMic: false,
+      shadowingSilenceMs: 2400,
+    });
+    expect(merged.shadowingAutoMic).toBe(false);
+    expect(merged.shadowingSilenceMs).toBe(2400);
+    const clamped = mergeReaderSettings(DEFAULT_READER_SETTINGS, {
+      shadowingSilenceMs: 200,
+      shadowingAutoMic: "yes" as never,
+    });
+    expect(clamped.shadowingSilenceMs).toBe(800); // 收紧到下限
+    expect(clamped.shadowingAutoMic).toBe(true); // 非法类型拒绝回落
+  });
 });

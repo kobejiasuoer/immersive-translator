@@ -1,8 +1,10 @@
 /**
- * 导入弹窗（内容进水口）：三个入口 —— 内置文库（默认）/ 网页链接抓取 / 粘贴文本。
+ * 导入弹窗（内容进水口）：四个入口 —— 内置文库（默认）/ 本地文件 / 网页链接抓取 / 粘贴文本。
  *
  * - 文库：今日一篇 hero + 分级书单，覆盖数随「考试目标」联动（考研/四级/六级），
  *   未掌握数与生词本 SRS 状态同源（intervalDays < 7）。
+ * - 文件：.docx / .pdf / .txt 选择或拖拽导入；docx 抽正文段落、pdf 抽文本层，
+ *   扫描件/无文本层给明确报错引导走粘贴，预览后入库。
  * - 链接：Rust 端抓正文（去导航/广告），前端展示预览（词数/时长/难度/覆盖），
  *   失败态给出原因与「切到粘贴文本」退路。
  * - 粘贴：原有能力原样保留。Ctrl+Enter 直接开始（粘贴页）。
@@ -22,6 +24,13 @@ import {
   EXAM_GOAL_LABELS,
   type ExamGoal,
 } from "../core/examCoverage";
+import {
+  extractTextFromFile,
+  fileTitleOf,
+  importKindSourceType,
+  type ImportFileKind,
+} from "../core/fileImport";
+import { loadPdfjsBrowser } from "../core/pdfjsLoader";
 import { readerFetchUrl } from "../lib/webExtract";
 import type { ArticleSourceType, ArticleSummary, VocabWord } from "../core/readerTypes";
 
@@ -42,7 +51,7 @@ interface Props {
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const GOAL_STORAGE_KEY = "intake-exam-goal";
 
-type TabId = "lib" | "url" | "paste";
+type TabId = "lib" | "file" | "url" | "paste";
 
 interface UrlPreview {
   url: string;
@@ -59,6 +68,28 @@ function estimateLevel(text: string, sentences: number): string {
   if (avgLen <= 17) return "B1";
   if (avgLen <= 22) return "B2";
   return "C1";
+}
+
+/** 考试目标（与文库页共用同一 localStorage 键）。 */
+function useExamGoal(): [ExamGoal, (g: ExamGoal) => void] {
+  const [goal, setGoal] = useState<ExamGoal>(() => {
+    const saved = localStorage.getItem(GOAL_STORAGE_KEY);
+    return saved && (EXAM_GOALS as string[]).includes(saved) ? (saved as ExamGoal) : "kaoyan";
+  });
+  return [goal, setGoal];
+}
+
+function GoalCoverageRow({ goal, onGoalChange }: { goal: ExamGoal; onGoalChange: (g: ExamGoal) => void }) {
+  return (
+    <div className="intake-goal-row" style={{ marginTop: 0 }}>
+      <span className="intake-goal-label">按考试目标看覆盖：</span>
+      {EXAM_GOALS.map((g) => (
+        <button key={g} className={`intake-goal-chip${goal === g ? " on" : ""}`} onClick={() => onGoalChange(g)}>
+          {EXAM_GOAL_LABELS[g]}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 export function ImportDialog({ vocabWords, articles, onImport, onClose }: Props) {
@@ -113,7 +144,7 @@ export function ImportDialog({ vocabWords, articles, onImport, onClose }: Props)
         <div className="reader-import-head">
           <div>
             <h3>添加阅读内容</h3>
-            <p>从文库挑一篇、抓一篇网页文章，或粘贴自己的文本 —— 入库后逐句精读，生词自动进生词本</p>
+            <p>从文库挑一篇、导入 Word / PDF 文件、抓一篇网页文章，或粘贴自己的文本 —— 入库后逐句精读，生词自动进生词本</p>
           </div>
           <button className="reader-tb-btn" onClick={onClose} title="关闭 (Esc)">
             ✕
@@ -123,6 +154,7 @@ export function ImportDialog({ vocabWords, articles, onImport, onClose }: Props)
           {(
             [
               ["lib", "内置文库"],
+              ["file", "本地文件"],
               ["url", "网页链接"],
               ["paste", "粘贴文本"],
             ] as [TabId, string][]
@@ -147,6 +179,9 @@ export function ImportDialog({ vocabWords, articles, onImport, onClose }: Props)
             shelfLibIds={shelfLibIds}
             onImportItem={importLibraryItem}
           />
+        )}
+        {tab === "file" && (
+          <FileTab vocabWords={vocabWords} onImport={onImport} onSwitchToPaste={() => setTab("paste")} />
         )}
         {tab === "url" && <UrlTab onImport={onImport} onSwitchToPaste={() => setTab("paste")} />}
         {tab === "paste" && <PasteTab onImport={onImport} />}
@@ -265,6 +300,196 @@ function LibraryTab({
   );
 }
 
+// ---------------- 本地文件（Word / PDF / txt） ----------------
+
+const FILE_ACCEPT = ".txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+const KIND_LABELS: Record<ImportFileKind, string> = {
+  txt: "文本文件",
+  docx: "Word 文档",
+  pdf: "PDF",
+};
+
+interface FilePreview {
+  kind: ImportFileKind;
+  fileName: string;
+  text: string;
+  pages?: number;
+}
+
+function FileTab({
+  vocabWords,
+  onImport,
+  onSwitchToPaste,
+}: {
+  vocabWords: VocabWord[];
+  onImport: (text: string, title?: string, meta?: ImportMeta) => void;
+  onSwitchToPaste: () => void;
+}) {
+  const [phase, setPhase] = useState<"idle" | "parsing" | "preview" | "error">("idle");
+  const [preview, setPreview] = useState<FilePreview | null>(null);
+  const [error, setError] = useState("");
+  const [dragOver, setDragOver] = useState(false);
+  const [goal, setGoal] = useExamGoal();
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  const parse = useCallback(async (file: File | undefined | null) => {
+    if (!file) return;
+    setPhase("parsing");
+    setError("");
+    try {
+      const res = await extractTextFromFile(file, loadPdfjsBrowser);
+      setPreview({ kind: res.kind, fileName: file.name, text: res.text, pages: res.pages });
+      setPhase("preview");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setPhase("error");
+    }
+  }, []);
+
+  const stats = useMemo(() => {
+    if (!preview) return null;
+    const words = countWords(preview.text);
+    const paras = splitParagraphs(preview.text);
+    const sentenceCount = paras.reduce((n, p) => n + p.sentences.length, 0);
+    return {
+      words,
+      paras: paras.length,
+      minutes: Math.max(1, Math.round(words / 135)),
+      level: estimateLevel(preview.text, Math.max(1, sentenceCount)),
+    };
+  }, [preview]);
+
+  const cov = useMemo(
+    () => (preview ? coverageForText(preview.text, goal, vocabWords) : null),
+    [preview, goal, vocabWords],
+  );
+
+  if (phase === "parsing") {
+    return (
+      <div className="reader-import-body reader-intake-body">
+        <div className="intake-skel">
+          <div className="intake-skel-line w40" />
+          <div className="intake-skel-line w85" />
+          <div className="intake-skel-line w85" />
+          <div className="intake-skel-line w60" />
+          <div className="intake-skel-phase">正在抽取正文（Word 取段落，PDF 提取文字层）…</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "error") {
+    return (
+      <div className="reader-import-body reader-intake-body">
+        <div className="intake-fail">
+          <div className="t">没能读取这个文件</div>
+          <div className="d">{error}</div>
+          <div className="intake-fail-btns">
+            <button className="btn btn-secondary" onClick={() => setPhase("idle")}>
+              返回重选文件
+            </button>
+            <button className="btn btn-secondary" onClick={onSwitchToPaste}>
+              切到粘贴文本
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "preview" && preview && stats && cov) {
+    return (
+      <div className="reader-import-body reader-intake-body">
+        <GoalCoverageRow goal={goal} onGoalChange={setGoal} />
+        <div className="intake-preview">
+          <div className="intake-pv-src">
+            {preview.fileName} · {KIND_LABELS[preview.kind]}
+            {preview.kind === "pdf" && preview.pages ? ` · ${preview.pages} 页` : ""} 抽取完成
+          </div>
+          <div className="intake-pv-title serif">{fileTitleOf(preview.fileName)}</div>
+          <div className="intake-pv-meta">
+            <span className="intake-lvl">{stats.level}</span>
+            <span>
+              {stats.words.toLocaleString()} 词 · {stats.paras} 段 · 约 {stats.minutes} 分钟
+            </span>
+          </div>
+          <div className="intake-pv-cov">
+            覆盖{EXAM_GOAL_LABELS[goal]}大纲词 <b>{cov.total}</b>
+            {cov.unmastered > 0 && (
+              <em>
+                {" "}
+                · {cov.unmastered} 个你还没掌握
+              </em>
+            )}
+          </div>
+          <p className="intake-pv-snippet serif">{preview.text.slice(0, 180)}…</p>
+          <div className="intake-pv-foot intake-fail-btns">
+            <button className="btn btn-secondary" onClick={() => setPhase("idle")}>
+              重新选择文件
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={() =>
+                onImport(preview.text, fileTitleOf(preview.fileName), {
+                  sourceType: importKindSourceType(preview.kind),
+                  level: stats.level,
+                })
+              }
+            >
+              加入书架并开始阅读
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="reader-import-body reader-intake-body">
+      <div
+        className={`intake-drop${dragOver ? " on" : ""}`}
+        role="button"
+        tabIndex={0}
+        aria-label="选择或拖入文件"
+        onClick={() => fileRef.current?.click()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") fileRef.current?.click();
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          void parse(e.dataTransfer.files?.[0]);
+        }}
+      >
+        <div className="intake-drop-icon" aria-hidden>
+          ⬇
+        </div>
+        <div className="intake-drop-title">拖入 .docx / .pdf / .txt 文件，或点击选择</div>
+        <div className="intake-drop-hint">
+          Word 抽正文段落，PDF 提取文字层（扫描件/图片 PDF 不支持，会提示改走粘贴）；
+          .doc 旧格式请先在 Word 里另存为 .docx
+        </div>
+        <input
+          ref={fileRef}
+          type="file"
+          accept={FILE_ACCEPT}
+          style={{ display: "none" }}
+          onChange={(e) => {
+            void parse(e.target.files?.[0]);
+            e.target.value = "";
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 // ---------------- 网页链接 ----------------
 
 function UrlTab({
@@ -279,10 +504,7 @@ function UrlTab({
   const [preview, setPreview] = useState<UrlPreview | null>(null);
   const [error, setError] = useState("");
   const [vocabWords, setVocabWords] = useState<VocabWord[]>([]);
-  const [goal, setGoal] = useState<ExamGoal>(() => {
-    const saved = localStorage.getItem(GOAL_STORAGE_KEY);
-    return saved && (EXAM_GOALS as string[]).includes(saved) ? (saved as ExamGoal) : "kaoyan";
-  });
+  const [goal, setGoal] = useExamGoal();
 
   useEffect(() => {
     // 覆盖数要跟生词本对齐；弹窗生命周期短，直接拉一次即可。
@@ -363,14 +585,7 @@ function UrlTab({
   if (phase === "preview" && preview && stats && cov) {
     return (
       <div className="reader-import-body reader-intake-body">
-        <div className="intake-goal-row" style={{ marginTop: 0 }}>
-          <span className="intake-goal-label">按考试目标看覆盖：</span>
-          {EXAM_GOALS.map((g) => (
-            <button key={g} className={`intake-goal-chip${goal === g ? " on" : ""}`} onClick={() => setGoal(g)}>
-              {EXAM_GOAL_LABELS[g]}
-            </button>
-          ))}
-        </div>
+        <GoalCoverageRow goal={goal} onGoalChange={setGoal} />
         <div className="intake-preview">
           <div className="intake-pv-src">{preview.host} · 正文已按段落清洗</div>
           <div className="intake-pv-title serif">{preview.title}</div>
