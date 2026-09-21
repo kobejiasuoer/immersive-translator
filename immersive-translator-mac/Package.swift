@@ -15,6 +15,10 @@ let package = Package(
         .executableTarget(
             name: "ImmersiveTranslator",
             dependencies: ["ProviderCore", "ReaderCore"],
+            resources: [
+                // 内容进水口数据资产：内置文库（6 篇公版书）+ 考试大纲词表。
+                .process("Resources")
+            ],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("Carbon"),

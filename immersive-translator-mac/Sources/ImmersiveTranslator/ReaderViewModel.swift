@@ -255,8 +255,22 @@ final class ReaderViewModel: ObservableObject {
     // MARK: - 导入
 
     func importPaste(_ text: String, title: String? = nil) {
+        importText(text, title: title, meta: ImportMeta())
+    }
+
+    /// 内容进水口统一导入入口（文库 / 文件 / URL / 粘贴四入口共用）。
+    func importText(_ text: String, title: String? = nil, meta: ImportMeta = ImportMeta()) {
         let now = Int64(Date().timeIntervalSince1970 * 1000)
-        guard let built = buildArticleFromText(text, options: BuildArticleOptions(now: now, title: title)) else {
+        let explicitTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let explicitCn = meta.titleCn?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let built = buildArticleFromText(text, options: BuildArticleOptions(
+            sourceType: meta.sourceType ?? .paste,
+            sourceUrl: meta.sourceUrl,
+            now: now,
+            title: (explicitTitle?.isEmpty ?? true) ? nil : explicitTitle,
+            titleCn: (explicitCn?.isEmpty ?? true) ? nil : explicitCn,
+            level: meta.level
+        )) else {
             showToast("没有识别到正文内容")
             return
         }

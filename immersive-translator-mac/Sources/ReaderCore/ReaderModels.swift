@@ -11,12 +11,13 @@ public let readerSchemaVersion = 1
 
 // MARK: - 枚举
 
-/// 一篇文章的来源。epub / pdf 预留。
+/// 一篇文章的来源。epub 预留。
 public enum ArticleSourceType: String, Codable, Equatable {
     case paste
     case url
     case epub
     case pdf
+    case docx
 }
 
 /// 单句译文的翻译状态。
