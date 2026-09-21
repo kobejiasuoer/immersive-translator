@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import ReaderCore
+import XfyunCore
 
 /// 阅读室播放引擎（usePlayback.ts + tts.rs 的 Mac 对应物）。
 ///
@@ -30,6 +31,10 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
         var voice: String = ""
         var sentencePauseMs: Double = 0
         var shadowingMode: Bool = false
+        /// 朗读引擎：local = 系统语音；xfyun = 讯飞在线合成（凭据缺失自动回落本地）。
+        var ttsProvider: TtsProvider = .local
+        var cloudVoice: String = ""
+        var cloudVoiceEn: String = "catherine"
 
         static let `default` = Settings()
     }
@@ -46,6 +51,14 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
     private var settings: Settings = .default
     private var epoch = 0
     private var currentUtterance: AVSpeechUtterance?
+    /// 云播放（讯飞合成）：AVAudioPlayer 变速播放 mp3。
+    private var cloudPlayer: AVAudioPlayer?
+    private var cloudTask: Task<Void, Never>?
+    /// 句间停顿的延迟推进（云播放用；本地走 postUtteranceDelay）。
+    private var pauseWorkItem: DispatchWorkItem?
+
+    /// 云播放器引用（delegate 回调身份比较用）。
+    var currentCloudPlayer: AVAudioPlayer? { cloudPlayer }
 
     /// 双音轨各自独立 synthesizer。
     private let sentenceSynth = AVSpeechSynthesizer()
@@ -117,6 +130,7 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
         playing = false
         shadowingWait = false
         sentenceSynth.stopSpeaking(at: .immediate)
+        stopCloudPlayback()
     }
 
     /// 跟读确认：读完本句后继续下一句。
@@ -140,6 +154,7 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
         playing = false
         shadowingWait = false
         sentenceSynth.stopSpeaking(at: .immediate)
+        stopCloudPlayback()
         cursor = max(0, startIdx)
     }
 
@@ -162,6 +177,10 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
         cursor = idx
         publish(.activeIdx(idx))
         let text = texts[idx]
+        if settings.ttsProvider == .xfyun, XfyunTtsEngine.shared.isReady {
+            speakCloud(idx, text: text)
+            return
+        }
         let utterance = makeUtterance(
             text,
             chinese: looksMostlyChinese(text),
@@ -170,6 +189,89 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
         )
         currentUtterance = utterance
         sentenceSynth.speak(utterance)
+    }
+
+    /// 云播放（讯飞合成 → AVAudioPlayer 变速播放）。
+    private func speakCloud(_ idx: Int, text: String) {
+        stopCloudPlayback()
+        let myEpoch = epoch
+        cloudTask = Task { [weak self] in
+            do {
+                let data = try await XfyunTtsEngine.shared.audioData(for: text)
+                guard !Task.isCancelled, let self, self.epoch == myEpoch, self.playing else { return }
+                try self.playCloud(data: data)
+                // 预取下一句（命中缓存则无网络请求）
+                if idx + 1 < self.texts.count {
+                    XfyunTtsEngine.shared.prefetch(self.texts[idx + 1])
+                }
+            } catch is CancellationError {
+                // 掐掉即可
+            } catch {
+                guard let self, self.epoch == myEpoch else { return }
+                // 云失败回落本地合成，保证朗读不断流。
+                DiagnosticLogger.log("reader.tts.cloud-fallback: \(error)")
+                let utterance = self.makeUtterance(
+                    text,
+                    chinese: looksMostlyChinese(text),
+                    rate: self.settings.rate,
+                    pauseMs: self.settings.sentencePauseMs
+                )
+                self.currentUtterance = utterance
+                self.sentenceSynth.speak(utterance)
+            }
+        }
+    }
+
+    private func playCloud(data: Data) throws {
+        let player = try AVAudioPlayer(data: data, fileTypeHint: AVFileType.mp3.rawValue)
+        player.enableRate = true
+        player.rate = Float(min(readerRateMax, max(readerRateMin, settings.rate)))
+        player.delegate = self
+        cloudPlayer = player
+        player.play()
+    }
+
+    private func stopCloudPlayback() {
+        cloudTask?.cancel()
+        cloudTask = nil
+        pauseWorkItem?.cancel()
+        pauseWorkItem = nil
+        cloudPlayer?.stop()
+        cloudPlayer = nil
+    }
+
+    /// 云播放完成（AVAudioPlayerDelegate）：停顿后推进。
+    @MainActor
+    private func handleCloudFinished() {
+        guard playing, !shadowingWait else { return }
+        cloudPlayer = nil
+        let pauseMs = settings.sentencePauseMs
+        let work = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.advanceAfterSentenceFinish()
+            }
+        }
+        pauseWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + pauseMs / 1000, execute: work)
+    }
+
+    /// 一句播完后的推进（云/本地共用；shadowingMode 在此拦截）。
+    @MainActor
+    private func advanceAfterSentenceFinish() {
+        guard playing, !shadowingWait else { return }
+        let next = cursor + 1
+        if next >= texts.count {
+            playing = false
+            publish(.finished)
+            return
+        }
+        if settings.shadowingMode {
+            shadowingWait = true
+            return
+        }
+        cursor = next
+        publish(.activeIdx(next))
+        speak(next)
     }
 
     private func makeUtterance(_ text: String, chinese: Bool, rate: Double, pauseMs: Double) -> AVSpeechUtterance {
@@ -241,21 +343,7 @@ extension ReaderPlaybackEngine: AVSpeechSynthesizerDelegate {
         guard synthesizer === sentenceSynth else { return }
         guard playing, !shadowingWait, utterance === currentUtterance else { return }
         currentUtterance = nil
-
-        let next = cursor + 1
-        if next >= texts.count {
-            // §9-6：自然播完停在末句，状态与视图一致。
-            playing = false
-            publish(.finished)
-            return
-        }
-        if settings.shadowingMode {
-            shadowingWait = true
-            return
-        }
-        cursor = next
-        publish(.activeIdx(next))
-        speak(next)
+        advanceAfterSentenceFinish()
     }
 }
 
@@ -273,5 +361,19 @@ enum ReaderVoiceCatalog {
             .filter { !$0.name.isEmpty }
             .map { ReaderVoiceInfo(name: $0.name, language: $0.language, chinese: $0.language.hasPrefix("zh")) }
             .sorted { ($0.chinese == $1.chinese) ? $0.name < $1.name : $0.chinese && !$1.chinese }
+    }
+}
+
+extension ReaderPlaybackEngine: AVAudioPlayerDelegate {
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor [weak self] in
+            guard let self, player === self.currentCloudPlayer else { return }
+            if flag {
+                self.handleCloudFinished()
+            } else {
+                self.stopCloudPlayback()
+                self.publish(.failed("云朗读播放中断"))
+            }
+        }
     }
 }
