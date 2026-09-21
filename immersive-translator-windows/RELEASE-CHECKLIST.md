@@ -4,30 +4,124 @@
 > 签名原理与证书体系见 `UPDATE-SETUP.md`；本文是**按顺序照做即可成功**的操作清单，
 > 包含 2026-09 发布 0.3.0 时实际踩过的坑。
 
-## ⭐ v0.6.0 起的新流程（免 PAT、免本机构建上传）
+## ⭐ v0.6.0 起的标准发布流程（免 PAT、免手动上传）
 
-v0.5.2 之后本机凭据管理器的 PAT 失效，且不想再弹「Connect to GitHub」登录。
-自 v0.6.0 起 Windows 安装包**改由 GitHub Actions 云端构建并上传**，全程只需要
-SSH push 权限：
+> 2026-09-21 发布 v0.6.0 全程实跑验证。适用前提：本机无 GitHub PAT、未装 gh CLI、
+> 不想弹「Connect to GitHub」登录窗，只用 SSH push 完成一切。
+> 涉及文件锚点：`.github/workflows/release.yml`（windows job 云端构建）、
+> `.github/workflows/updater-assets.yml`（签名产物补传）、`release-notes/`（中文发布说明）、
+> `release-updater/`（本地签名产物投放处）。
 
-1. 收尾门禁全绿（vitest / cargo test / pnpm build / `cargo fmt --all` /
-   `npm audit --audit-level=high`，lockfile 与 package.json 同步——CI `npm ci` 会挂）。
-2. 版本号三处 + Cargo.lock 同步升版，提交 `chore(release): bump version to X.Y.Z`。
-3. 推 main，再推 tag `vX.Y.Z`。
-4. `.github/workflows/release.yml` 的 windows job 在 windows-latest 上构建 NSIS
-   安装包并上传到 tag 对应 release（exe 无 Authenticode——签名证书只在本地；
-   minisign updater 校验不受影响）。release 说明取自仓库 `release-notes/vX.Y.Z.md`。
-5. updater 签名补传：下载 release 上的 CI 产物（exe 字节与本机构建不同！），
-   本地 `npx tauri signer sign -k "$(base64 -w0 ~/.tauri/immersive-translator-updater.key)" --password "" <exe>`
-   生成 .sig，按清单 §4 生成 latest.json，两者放入 `release-updater/vX.Y.Z/`
-   提交推送——`updater-assets.yml` 自动把它们附件到 release（资产名恰为
-   `latest.json` 才能命中自动更新端点）。
-6. §6 发布后验证照旧。
+### 为什么改流程
 
-若仓库日后配置了 `TAURI_SIGNING_PRIVATE_KEY` secret（base64 后的私钥全文 +
-空密码），第 4 步会直接产出 .sig 并上传，第 5 步可整段跳过。
+v0.5.2 之后本机凭据管理器的 PAT 失效，`git credential fill` 只会弹出
+「Connect to GitHub」交互登录（**不要用它**）。新流程里：git push 走 SSH（正常）；
+Release 的创建与资产上传全部由 Actions 内置 token 完成；updater 私钥只在本机
+`~/.tauri/`，其签名产物通过「提交进仓库 + 专用 workflow 附件」补传——全程零登录。
 
-以下 §1–§6 为 v0.5.x 及之前的本机构建流程，留作参考（网络畅通且有 PAT 时仍可用）。
+### 第 0 步 · 前置核对
+
+| 项 | 核对方式 |
+|---|---|
+| updater 私钥 | `ls ~/.tauri/immersive-translator-updater.key` 存在 |
+| 无残留进程 | 任务管理器无 immersive-translator-windows.exe；1420 端口空闲 |
+| 工作区 | `git status`：所有改动已归入模块 commit，无计划外文件会被顺带提交 |
+
+### 第 1 步 · 收尾门禁（全绿才许打 tag）
+
+```bash
+cd immersive-translator-windows
+pnpm test                                  # vitest 全绿
+pnpm build                                 # tsc + vite
+cd src-tauri && cargo test && cargo fmt --all -- --check
+#   fmt 不干净就先 cargo fmt --all，格式化改动随功能 commit 入库（CI fmt 是硬门禁）
+cd .. && npm audit --audit-level=high --registry=https://registry.npmjs.org
+pnpm install --frozen-lockfile             # pnpm-lock.yaml 与 package.json 同步校验
+```
+
+⚠️ **本次加过依赖就必须重建 package-lock.json**（CI 前端门禁走 `npm ci`，lockfile
+落后直接红）：`npx -y npm@11 install --registry=https://registry.npmjs.org`，
+重建后本地完整复跑 `npm ci && npm test && npm run build` 一遍最稳。
+
+### 第 2 步 · 分模块提交
+
+按功能模块拆 commit（一个功能一个，如 R1 导入 / R2 笔记 / R3 口语……），共享的
+接线文件（lib.rs、tauriBridge、readerStore、样式等）归最后一个功能 commit。
+信息格式沿用仓库惯例：`feat(scope): 中文标题`+ 空行 + 要点列表。
+
+### 第 3 步 · 版本号（三处 + Cargo.lock）
+
+改 `package.json`、`src-tauri/tauri.conf.json` 的 `"version"` 与 `src-tauri/Cargo.toml`
+的 `version`，再改 Cargo.lock 里本包那行：
+
+```bash
+grep -n -A1 'name = "immersive-translator-windows"' src-tauri/Cargo.lock
+#   ⚠️ 别按固定行号 sed——依赖增减后行号会漂，先 grep 定位再改
+cd src-tauri && cargo test --locked        # --locked 验证 lockfile 一致（CI 同款门禁）
+git add … && git commit -m "chore(release): bump version to X.Y.Z"
+```
+
+### 第 4 步 · 本地烟囱构建（可选但推荐，5 分钟买个放心）
+
+```bash
+export TAURI_SIGNING_PRIVATE_KEY=$(base64 -w0 ~/.tauri/immersive-translator-updater.key)
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
+npm run tauri build    # 验证打包链路可走通；产物仅作验证，正式包以 CI 产物为准
+```
+
+### 第 5 步 · 发布说明 + 推送
+
+- 写仓库根 `release-notes/vX.Y.Z.md`（**不在** windows 子目录）。格式照 v0.5.2/v0.6.0：
+  `## 更新内容` + 加粗版本定调 + 分组要点 + 「老版本用户：检查更新/覆盖安装」尾注。
+- `git push origin main && git tag vX.Y.Z && git push origin vX.Y.Z`
+
+### 第 6 步 · 等 Actions（免凭据监控，公开 API 直接读）
+
+```bash
+curl -s "https://api.github.com/repos/kobejiasuoer/immersive-translator/actions/runs?per_page=5"
+curl -s "https://api.github.com/repos/kobejiasuoer/immersive-translator/releases/tags/vX.Y.Z"
+```
+
+- **Release** 工作流：mac job 先创建 release（mac 三件资产）；windows job 随后
+  （约 10-25 分钟）构建 NSIS 并上传 `ImmersiveTranslator_X.Y.Z_x64-setup.exe`，
+  再用 `release-notes/vX.Y.Z.md` 覆盖自动生成的英文说明。
+- **CI** 工作流：mac swift / 前端 audit+test+build / Rust fmt+test(--locked) 三组门禁。
+
+### 第 7 步 · updater 签名补传（仓库未配 TAURI secret 时必做）
+
+```bash
+# ① 下载 CI 产物 —— ⚠️ 字节与本机构建不同，.sig 必须对 CI 产物签！
+curl -sL -o ci.exe "https://github.com/kobejiasuoer/immersive-translator/releases/download/vX.Y.Z/ImmersiveTranslator_X.Y.Z_x64-setup.exe"
+# ② 签名：-k 传 base64 后的私钥全文（不是文件路径！），密码是空串
+npx tauri signer sign -k "$(base64 -w0 ~/.tauri/immersive-translator-updater.key)" --password "" ci.exe
+# ③ 按 §3 ① 验 keynum == 723b366356af3935
+# ④ 按 §4 生成 latest.json：signature = 新 .sig 全文；url 用
+#    https://gh-proxy.com/https://github.com/kobejiasuoer/immersive-translator/releases/latest/download/ImmersiveTranslator_X.Y.Z_x64-setup.exe（常青链）
+# ⑤ 投放仓库并推送（.sig 文件名必须与 release 资产 exe 同名；latest.json 名字固定）
+mkdir -p release-updater/vX.Y.Z
+cp ci.exe.sig release-updater/vX.Y.Z/ImmersiveTranslator_X.Y.Z_x64-setup.exe.sig
+cp latest.json  release-updater/vX.Y.Z/latest.json
+git add release-updater && git commit -m "chore(release): vX.Y.Z updater 签名与 latest.json" && git push
+#    推送后 updater-assets.yml 自动把两者附件到对应 tag 的 release
+```
+
+若仓库日后配置 `TAURI_SIGNING_PRIVATE_KEY` secret（base64 私钥全文 + 空密码），
+windows job 构建时就会直接产出并上传 .sig，**本步整段跳过**。
+
+### 第 8 步 · 发布后验证 + 归档
+
+- §6 验证照旧：`releases/latest/download/latest.json` 返回新版本号且 signature
+  与本地 .sig 全文一致；`--noproxy '*'` 走 gh-proxy 镜像验一遍；tag 上 CI/Release 全绿。
+- 归档 `release-builds/vX.Y.Z/`：exe **从 release 重新下载**（与本地产物字节不同），
+  连同 .sig、latest-vX.Y.Z.json，保证归档与线上一致。
+
+### 实测节奏（v0.6.0，2026-09-21）
+
+门禁 + 分模块提交约 30 分钟 → 本地烟囱构建 5 分钟 → push tag 后 windows job
+约 12 分钟出包上传 → 签名补传约 3 分钟。全程无人值守、零登录。
+
+以下 §0–§6 为 v0.5.x 及之前的「本机构建 + PAT 上传」流程，留作参考
+（重新存好 PAT 且网络畅通时仍可用）。
 
 ## 0. 前置条件（每次发布前核对）
 
