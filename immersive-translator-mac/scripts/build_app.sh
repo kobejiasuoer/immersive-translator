@@ -95,14 +95,39 @@ swift build -c release
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$ROOT_DIR/.build/release/$APP_NAME" "$MACOS_DIR/$APP_NAME"
-# SPM 资源 bundle（内置文库 / 考试词表）：Bundle.module 按可执行文件同目录查找
+# SPM 资源 bundle（内置文库 / 考试词表）。放 Contents/Resources/：
+# Bundle.module 的候选路径含 Bundle.main.resourceURL；放 MacOS/ 会被 codesign
+# 当作内嵌裸 bundle 子组件拒绝签名。SPM 产物缺 Info.plist，在签名前补一个。
+APP_BUNDLE_ID_ESCAPED="$(xml_escape "$APP_BUNDLE_ID")"
+APP_VERSION_ESCAPED="$(xml_escape "$APP_VERSION")"
+APP_BUILD_ESCAPED="$(xml_escape "$APP_BUILD")"
 RESOURCE_BUNDLE="$ROOT_DIR/.build/release/${APP_NAME}_${APP_NAME}.bundle"
-if [[ -d "$RESOURCE_BUNDLE" ]]; then
-    cp -R "$RESOURCE_BUNDLE" "$MACOS_DIR/"
-else
+if [[ ! -d "$RESOURCE_BUNDLE" ]]; then
     echo "error: SPM resource bundle not found at $RESOURCE_BUNDLE" >&2
     exit 1
 fi
+cp -R "$RESOURCE_BUNDLE" "$RESOURCES_DIR/"
+cat > "$RESOURCES_DIR/${APP_NAME}_${APP_NAME}.bundle/Info.plist" <<BPLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>${APP_BUNDLE_ID_ESCAPED}.resources</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>${APP_NAME}_${APP_NAME}</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${APP_VERSION_ESCAPED}</string>
+    <key>CFBundleVersion</key>
+    <string>${APP_BUILD_ESCAPED}</string>
+</dict>
+</plist>
+BPLIST
+
 APP_BUNDLE_ID_ESCAPED="$(xml_escape "$APP_BUNDLE_ID")"
 APP_VERSION_ESCAPED="$(xml_escape "$APP_VERSION")"
 APP_BUILD_ESCAPED="$(xml_escape "$APP_BUILD")"
@@ -146,6 +171,10 @@ PLIST
 
 SIGN_IDENTITY="$(resolve_codesign_identity)"
 codesign_target "$SIGN_IDENTITY" "$MACOS_DIR/$APP_NAME"
+# SPM 资源 bundle 必须先单独签名，再签整个 app（内嵌未签名 bundle 会被拒）
+if [[ -d "$RESOURCES_DIR/${APP_NAME}_${APP_NAME}.bundle" ]]; then
+    codesign_target "$SIGN_IDENTITY" "$RESOURCES_DIR/${APP_NAME}_${APP_NAME}.bundle"
+fi
 codesign_target "$SIGN_IDENTITY" "$APP_DIR"
 codesign --verify --strict --verbose=2 "$APP_DIR" >/dev/null
 
