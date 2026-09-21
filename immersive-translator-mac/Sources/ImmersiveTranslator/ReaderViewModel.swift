@@ -304,6 +304,7 @@ final class ReaderViewModel: ObservableObject {
             vocabWords = file.words
             reviewLog = file.reviewLog
             loadSourceArticles(ids: file.words.map(\.source.articleId))
+            ReviewTouchpointManager.shared.refreshBadge()
         }
     }
 
@@ -978,6 +979,7 @@ final class ReaderViewModel: ObservableObject {
             let day = dayKey(nowMs: now)
             reviewLog = (try? store.recordReview(day: day)) ?? reviewLog
             refreshVocab()
+            ReviewTouchpointManager.shared.refreshBadge()
         } catch {
             showToast("保存复习记录失败")
         }
