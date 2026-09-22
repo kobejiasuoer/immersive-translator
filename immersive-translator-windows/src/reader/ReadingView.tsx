@@ -19,6 +19,8 @@ interface Props {
   article: Article | null;
   settings: ReaderSettings;
   activeIdx: number;
+  /** 播放引擎是否正在朗读（句旁按钮据此切换「朗读这一句 / 停止朗读」）。 */
+  playing: boolean;
   translating: { done: number; total: number } | null;
   /** 词块标注进度（翻译完成后跑，与 translating 互斥显示）。 */
   chunking: { done: number; total: number } | null;
@@ -37,7 +39,10 @@ interface Props {
   onWordClick: (idx: number, word: string) => void;
   /** 点正文里的词块下划线 → 词典栏即时卡（无 LLM 调用）。 */
   onChunkClick: (idx: number, chunk: SentenceChunk) => void;
+  /** 句旁朗读按钮：只读这一句，读完自动停。 */
   onSpeakSentence: (idx: number) => void;
+  /** 播放中（含连续播放）时点当前句的朗读按钮 = 停止。 */
+  onStopSpeaking: () => void;
   onRetryParagraph: (paragraphIdx: number) => void;
   onEditTranslation: (idx: number, zh: string) => void;
   onJumpTo: (idx: number) => void;
@@ -221,7 +226,13 @@ export function ReadingView(props: Props) {
           </div>
         )}
 
-        <article className={`reader-article${maskOn ? " reader-mask-on" : ""}`}>
+        <article
+          className={`reader-article${maskOn ? " reader-mask-on" : ""}${
+            // 对照模式经 CSS 隐藏另一语种（reader-contrast-en / -zh），
+            // 缺了这个 class 时视图菜单/设置抽屉怎么切都不生效。
+            settings.contrastMode === "en" ? " reader-contrast-en" : ""
+          }${settings.contrastMode === "zh" ? " reader-contrast-zh" : ""}`}
+        >
           <header className="reader-article-head">
             <h1 className="reader-article-title">{article.title}</h1>
             {article.titleCn ? (
@@ -415,8 +426,16 @@ export function ReadingView(props: Props) {
                   <div className="pair-actions">
                     <button
                       className={`icon-btn${isActive ? " active" : ""}`}
-                      onClick={() => props.onSpeakSentence(s.idx)}
-                      title={isActive ? "朗读当前句" : "朗读这一句"}
+                      onClick={() => {
+                        // 正在读这句（或连续播放中）→ 停止；否则只读这一句，读完自动停
+                        if (props.playing && isActive) props.onStopSpeaking();
+                        else props.onSpeakSentence(s.idx);
+                      }}
+                      title={
+                        props.playing && isActive
+                          ? "停止朗读（Space / 播放条的 ⏸ 也可以）"
+                          : "朗读这一句（读完自动停，不会连读下去）"
+                      }
                     >
                       <IconVolume size={13} />
                     </button>

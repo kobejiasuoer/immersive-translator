@@ -27,9 +27,10 @@ export interface PlaybackHandle {
   setActiveIdx: (idx: number) => void;
   toggle: () => void;
   stop: () => void;
-  /** 未播放时移动光标；播放中则跳读。返回是否改变。 */
+  /** 未播放时移动光标（§9-7）；播放中则跳读。 */
   step: (delta: number) => void;
-  jumpTo: (idx: number, opts?: { autoplay?: boolean }) => void;
+  /** 未播放时移动光标；播放中则跳读。once = 只读目标句，读完即停（句旁朗读按钮）。 */
+  jumpTo: (idx: number, opts?: { autoplay?: boolean; once?: boolean }) => void;
   /** 跟读确认：读完本句后继续下一句。 */
   continueAfterShadowing: () => void;
   /** 句子总数变化（文章切换）后由视图调用复位。 */
@@ -62,6 +63,8 @@ export function usePlayback(config: PlaybackConfig): PlaybackHandle {
   const epochRef = useRef(0);
   const pauseTimerRef = useRef<number | null>(null);
   const playingRef = useRef(false);
+  /** 单句模式：句旁「朗读这一句」用——本句 ended 后不推进下一句、不算读完全篇。 */
+  const onceRef = useRef(false);
   const onErrorRef = useRef(config.onError);
   onErrorRef.current = config.onError;
 
@@ -126,6 +129,7 @@ export function usePlayback(config: PlaybackConfig): PlaybackHandle {
     epochRef.current += 1;
     clearPauseTimer();
     playingRef.current = false;
+    onceRef.current = false;
     setPlaying(false);
     setShadowingWait(false);
     genRef.current = null;
@@ -140,6 +144,13 @@ export function usePlayback(config: PlaybackConfig): PlaybackHandle {
       const nextIdx = activeIdxRef.current + 1;
       const texts = config.textsRef.current;
       if (epoch !== epochRef.current || !playingRef.current) {
+        return;
+      }
+      if (onceRef.current) {
+        // 单句朗读完成：就地停下（不算「本篇读完」，也不连读下一句）。
+        onceRef.current = false;
+        playingRef.current = false;
+        setPlaying(false);
         return;
       }
       if (nextIdx >= texts.length) {
@@ -181,6 +192,7 @@ export function usePlayback(config: PlaybackConfig): PlaybackHandle {
     clearPauseTimer();
     const epoch = ++epochRef.current;
     playingRef.current = true;
+    onceRef.current = false; // 播放条▶起播 = 连续播放
     setPlaying(true);
     speakIdx(activeIdxRef.current);
     void epoch;
@@ -199,9 +211,9 @@ export function usePlayback(config: PlaybackConfig): PlaybackHandle {
     speakIdx(nextIdx);
   }, [shadowingWait, speakIdx, config]);
 
-  /** 未播放时只移动光标（§9-7）；播放中直接跳读。 */
+  /** 未播放时只移动光标（§9-7）；播放中直接跳读。once = 只读目标句。 */
   const jumpTo = useCallback(
-    (idx: number, opts?: { autoplay?: boolean }) => {
+    (idx: number, opts?: { autoplay?: boolean; once?: boolean }) => {
       const texts = config.textsRef.current;
       if (texts.length === 0) return;
       const clamped = Math.max(0, Math.min(texts.length - 1, idx));
@@ -213,6 +225,7 @@ export function usePlayback(config: PlaybackConfig): PlaybackHandle {
           playingRef.current = true;
           setPlaying(true);
         }
+        onceRef.current = !!opts?.once;
         speakIdx(clamped);
         void epoch;
       } else {
@@ -234,6 +247,7 @@ export function usePlayback(config: PlaybackConfig): PlaybackHandle {
       epochRef.current += 1;
       clearPauseTimer();
       playingRef.current = false;
+      onceRef.current = false;
       setPlaying(false);
       setShadowingWait(false);
       genRef.current = null;

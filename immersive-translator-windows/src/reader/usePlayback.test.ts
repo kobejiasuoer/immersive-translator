@@ -125,3 +125,55 @@ describe("usePlayback 启动失败", () => {
     expect(s.onError).not.toHaveBeenCalled();
   });
 });
+
+describe("usePlayback 单句朗读（once）", () => {
+  beforeEach(() => {
+    hooks.states.length = 0;
+    hooks.cleanups.length = 0;
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    hooks.cleanups.forEach((cleanup) => cleanup());
+    vi.restoreAllMocks();
+  });
+
+  it("句旁朗读：读完这一句就停，不推进下一句、不算读完全篇", async () => {
+    const s = setup();
+    s.playback.jumpTo(0, { autoplay: true, once: true });
+    expect(hooks.states[0]).toBe(true);
+    await flush();
+    expect(s.speak).toHaveBeenCalledExactlyOnceWith("First sentence.", false, expect.anything());
+    s.ended(100);
+    expect(hooks.states[0]).toBe(false); // playing 复位
+    expect(hooks.states[1]).toBe(0); // 光标停在原句
+    expect(s.speak).toHaveBeenCalledOnce(); // 没有连读第二句
+    expect(s.onFinish).not.toHaveBeenCalled(); // 不弹「本篇读完」
+  });
+
+  it("单句读完后按播放键 = 从当前句开始连续播放", async () => {
+    const s = setup();
+    s.playback.jumpTo(0, { autoplay: true, once: true });
+    await flush();
+    s.ended(100);
+    s.playback.toggle();
+    await flush();
+    expect(s.speak).toHaveBeenCalledTimes(2);
+    s.ended(100); // 连续模式：第一句读完推进第二句
+    expect(hooks.states[1]).toBe(1);
+    expect(s.speak).toHaveBeenCalledTimes(3);
+  });
+
+  it("连续播放中点句旁按钮切到单句：这一句读完即停", async () => {
+    const s = setup();
+    s.playback.toggle();
+    await flush();
+    s.ended(100); // 第一句读完 → 连读第二句
+    expect(hooks.states[1]).toBe(1);
+    s.playback.jumpTo(1, { autoplay: true, once: true });
+    await flush();
+    s.ended(100);
+    expect(hooks.states[0]).toBe(false);
+    expect(hooks.states[1]).toBe(1);
+    expect(s.onFinish).not.toHaveBeenCalled();
+  });
+});
