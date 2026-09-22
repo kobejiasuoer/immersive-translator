@@ -169,6 +169,14 @@ export async function testConnectivity(
   return invoke<ConnectivityResult>("test_connectivity", { endpoint, apiKey, model });
 }
 
+/**
+ * 探测 https URL 的 HTTP 状态（语音凭据自检）：浏览器把 WS 握手失败一律报
+ * 1006，这里经 Rust 发同路径的 GET 拿到真实状态码（401=签名被拒等）。
+ */
+export async function probeHttps(url: string): Promise<ConnectivityResult> {
+  return invoke<ConnectivityResult>("probe_https", { url });
+}
+
 // ---- 取消翻译 ----
 
 /**

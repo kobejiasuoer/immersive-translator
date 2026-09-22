@@ -718,6 +718,77 @@ fn truncate(s: &str, max: usize) -> String {
     out
 }
 
+/// 探测一个 https URL 的 HTTP 状态码（设置页「语音凭据 → 测试」用）。
+///
+/// 浏览器把 WebSocket 握手层错误一律报成 close code 1006，讯飞拒掉签名时
+/// 返回的 401 根本到不了前端。前端用与真实调用同一套签名算法构造 wss 地址，
+/// 这里降级成对同一路径的 https GET：401/403 = 鉴权被拒（凭据抄错/时钟偏差），
+/// 其余任何 HTTP 状态 = 已连上服务器且签名通过，连接错误 = 网络不通。
+/// GET 不带 Upgrade 头，不会触发真正的合成/听写调用，不耗额度。
+#[tauri::command]
+pub async fn probe_https(url: String) -> Result<ConnectivityResult, String> {
+    let start = Instant::now();
+    let parsed = reqwest::Url::parse(&url).map_err(|e| format!("URL 无效: {e}"))?;
+    if parsed.scheme() != "https" {
+        return Ok(ConnectivityResult {
+            ok: false,
+            status: None,
+            message: "只允许 https 地址".into(),
+            elapsed_ms: start.elapsed().as_millis(),
+        });
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = match client.get(parsed).send().await {
+        Ok(r) => r,
+        Err(e) if e.is_timeout() => {
+            return Ok(ConnectivityResult {
+                ok: false,
+                status: None,
+                message: format!(
+                    "连接超时（{:.1}s）：网络不通或被代理/防火墙拦截",
+                    start.elapsed().as_millis() as f64 / 1000.0
+                ),
+                elapsed_ms: start.elapsed().as_millis(),
+            });
+        }
+        Err(e) => {
+            return Ok(ConnectivityResult {
+                ok: false,
+                status: None,
+                message: format!("无法连接：{e}"),
+                elapsed_ms: start.elapsed().as_millis(),
+            });
+        }
+    };
+
+    let status = resp.status().as_u16();
+    let body = truncate(&resp.text().await.unwrap_or_default(), 150);
+    let elapsed = start.elapsed().as_millis();
+
+    let ok = !matches!(status, 401 | 403);
+    let message = match status {
+        401 => format!(
+            "鉴权被拒（HTTP 401）。两种可能：① 三段凭据抄错、或 APPID 与 Key 不属于同一个应用；② 凭据没问题，但该应用未开通此服务——到讯飞控制台 → 我的应用 → 服务列表，领取/开通后重测。{body}"
+        ),
+        403 => format!("被拒（HTTP 403）：IP 白名单限制，或系统时间偏差超 5 分钟。{body}"),
+        // 非 401/403 的任意状态（400/426/…）说明请求到达了服务端且签名通过——
+        // 拒签发生在业务校验之前，一定先报 401。
+        _ => format!("已连上服务器且签名通过（HTTP {status}，非 WebSocket 升级请求被正常回绝）。若语音仍失败，请确认应用已开通对应服务"),
+    };
+
+    Ok(ConnectivityResult {
+        ok,
+        status: Some(status),
+        message,
+        elapsed_ms: elapsed,
+    })
+}
+
 /// 剥离 <think>…</think>（含未闭合的情况）思考噪声。
 /// 对齐 Mac：部分模型即使声明关闭思考，仍可能输出 think 标签。
 fn strip_think_tags(input: &str) -> String {

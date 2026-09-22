@@ -18,7 +18,7 @@
  * 且应用重启后仍命中。WebView 前端直连（与 ISE 同模式，无 Rust 依赖）。
  */
 
-import { buildXfyunAuthUrl } from "./xfyunAuth";
+import { buildXfyunAuthUrl, explainXfyunClose } from "./xfyunAuth";
 import { diskCacheGet, diskCachePut } from "./ttsDiskCache";
 
 export interface XfyunTtsCredentials {
@@ -190,13 +190,7 @@ export async function synthesizeXfyunTts(
     };
     ws.onclose = (ev) => {
       if (!settled) {
-        const hint =
-          ev.code === 401
-            ? "鉴权失败：检查讯飞合成的 API Key / API Secret"
-            : ev.code === 403
-              ? "被拒：IP 白名单或系统时间偏差超 5 分钟"
-              : `连接断开（${ev.code}${ev.reason ? " " + ev.reason : ""}）`;
-        finish(() => reject(new Error(hint)));
+        finish(() => reject(new Error(explainXfyunClose(ev))));
       }
     };
     ws.onmessage = (ev) => {

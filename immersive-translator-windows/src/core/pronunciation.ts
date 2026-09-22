@@ -12,7 +12,7 @@
  * 本模块纯浏览器环境可用（crypto.subtle + WebSocket），不依赖 Tauri。
  */
 
-import { buildXfyunAuthUrl } from "./xfyunAuth";
+import { buildXfyunAuthUrl, explainXfyunClose } from "./xfyunAuth";
 
 export interface IseCredentials {
   appId: string;
@@ -308,13 +308,7 @@ export async function evaluateSentence(
     };
     ws.onclose = (ev) => {
       if (!settled) {
-        const hint =
-          ev.code === 401
-            ? "鉴权失败：检查 API Key/API Secret"
-            : ev.code === 403
-              ? "被拒：IP 白名单或系统时间偏差超 5 分钟"
-              : `连接断开（${ev.code}${ev.reason ? " " + ev.reason : ""}）`;
-        finish(() => reject(new Error(hint)));
+        finish(() => reject(new Error(explainXfyunClose(ev))));
       }
     };
     ws.onmessage = (ev) => {

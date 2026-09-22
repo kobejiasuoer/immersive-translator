@@ -1220,6 +1220,7 @@ pub fn run() {
             translation::translate_stream,
             translation::cancel_translation,
             translation::test_connectivity,
+            translation::probe_https,
             ocr::ocr_models_ready,
             ocr::ocr_recognize,
             ocr::ocr_recognize_from_fullscreen,
