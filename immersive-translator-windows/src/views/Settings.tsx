@@ -635,7 +635,7 @@ export function Settings() {
             <header className="set-pagehead">
               <div className="set-pagehead-text">
                 <h2>语音</h2>
-                <p>讯飞语音凭据集中配置：跟读打分、云端朗读、口语识别。三组各自独立，经 DPAPI 加密存储。</p>
+                <p>填一组讯飞凭据，跟读打分、云端朗读、口语识别三个服务共用（需在讯飞控制台为应用开通对应服务）。经 DPAPI 加密存储。</p>
               </div>
             </header>
             <XfyunVoiceSection />
