@@ -1482,6 +1482,7 @@ export function ReaderApp() {
               article={article}
               settings={effectiveSettings}
               activeIdx={playback.activeIdx}
+              playing={playback.playing}
               translating={translating}
               chunking={chunking}
               peekAll={peekAll}
@@ -1515,7 +1516,8 @@ export function ReaderApp() {
               onSelection={(idx, text) => void lookup(text, idx)}
               onWordClick={(idx, word) => void lookup(word, idx)}
               onChunkClick={openChunkCard}
-              onSpeakSentence={(idx) => playback.jumpTo(idx, { autoplay: true })}
+              onSpeakSentence={(idx) => playback.jumpTo(idx, { autoplay: true, once: true })}
+              onStopSpeaking={() => playback.stop()}
               onRetryParagraph={retryParagraph}
               onEditTranslation={editTranslation}
               onJumpTo={(idx) => playback.jumpTo(idx)}

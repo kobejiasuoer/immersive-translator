@@ -159,21 +159,31 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
               </div>
             </div>
           </div>
+          <div className="drawer-row" title="盖住译文自测：点单句揭开，再点遮住；按住 H 临时全显。开关也出现在播放条的「视图」菜单里">
+            <span className="label">译文遮罩</span>
+            <div className="control">
+              <button
+                className={`reader-switch${settings.maskTranslation ? " on" : ""}`}
+                onClick={() => onPatch({ maskTranslation: !settings.maskTranslation })}
+                role="switch"
+                aria-checked={settings.maskTranslation}
+                aria-label="译文遮罩"
+              />
+          </div>
+          </div>
           <div className="drawer-row">
             <span className="label">遮罩样式</span>
             <div className="control">
-              <div className="seg" title="译文遮罩的隐藏样式（开关在视图菜单；关闭遮罩时不可选）">
+              <div className="seg" title="译文遮罩的隐藏样式；未开启遮罩时选样式会同时把遮罩打开">
                 <button
                   className={settings.maskStyle === "blank" ? "active" : ""}
-                  disabled={!settings.maskTranslation}
-                  onClick={() => onPatch({ maskStyle: "blank" })}
+                  onClick={() => onPatch({ maskStyle: "blank", ...(settings.maskTranslation ? {} : { maskTranslation: true }) })}
                 >
                   留白显影
                 </button>
                 <button
                   className={settings.maskStyle === "frost" ? "active" : ""}
-                  disabled={!settings.maskTranslation}
-                  onClick={() => onPatch({ maskStyle: "frost" })}
+                  onClick={() => onPatch({ maskStyle: "frost", ...(settings.maskTranslation ? {} : { maskTranslation: true }) })}
                 >
                   毛玻璃
                 </button>
