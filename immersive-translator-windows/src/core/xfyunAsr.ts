@@ -13,7 +13,7 @@
  * 凭据与语音评测同构；「说英语」用 en_us，「说中文」用 zh_cn。
  */
 
-import { buildXfyunAuthUrl } from "./xfyunAuth";
+import { buildXfyunAuthUrl, explainXfyunClose } from "./xfyunAuth";
 import { floatToPcm16, type IseCredentials } from "./pronunciation";
 
 export type AsrCredentials = IseCredentials;
@@ -143,13 +143,7 @@ export async function transcribeSpeech(
     };
     ws.onclose = (ev) => {
       if (!settled) {
-        const hint =
-          ev.code === 401
-            ? "鉴权失败：检查 API Key/API Secret"
-            : ev.code === 403
-              ? "被拒：IP 白名单或系统时间偏差超 5 分钟"
-              : `连接断开（${ev.code}${ev.reason ? " " + ev.reason : ""}）`;
-        finish(() => reject(new Error(hint)));
+        finish(() => reject(new Error(explainXfyunClose(ev))));
       }
     };
     ws.onerror = () => {
