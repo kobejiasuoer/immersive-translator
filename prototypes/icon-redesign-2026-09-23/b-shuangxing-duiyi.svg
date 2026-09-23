@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- 方案二 双行对译：原文淡、译文实，字母与汉字穿孔嵌入 -->
+  <defs>
+    <linearGradient id="fb-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4C5FF0"/>
+      <stop offset="1" stop-color="#7A5CF0"/>
+    </linearGradient>
+    <radialGradient id="fb-glow" cx="0.3" cy="0.2" r="0.9">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fb-shade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0.62" stop-color="#1B1464" stop-opacity="0"/>
+      <stop offset="1" stop-color="#1B1464" stop-opacity="0.18"/>
+    </linearGradient>
+    <mask id="fb-mA">
+      <rect x="124" y="176" width="264" height="56" rx="28" fill="#fff"/>
+      <g stroke="#000" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" fill="none">
+        <path d="M170 224 L188 180 L206 224"/>
+        <path d="M178 209 L198 209"/>
+      </g>
+    </mask>
+    <mask id="fb-mW">
+      <rect x="160" y="280" width="264" height="56" rx="28" fill="#fff"/>
+      <g stroke="#000" stroke-width="13" stroke-linecap="round" fill="none">
+        <path d="M232 286 L224 293"/>
+        <path d="M200 300 L246 300"/>
+        <path d="M242 304 L206 334"/>
+        <path d="M204 304 L240 334"/>
+      </g>
+    </mask>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#fb-bg)"/>
+  <rect width="512" height="512" rx="116" fill="url(#fb-glow)"/>
+  <rect width="512" height="512" rx="116" fill="url(#fb-shade)"/>
+  <rect x="124" y="176" width="264" height="56" rx="28" fill="#FFFFFF" opacity="0.5" mask="url(#fb-mA)"/>
+  <rect x="160" y="280" width="264" height="56" rx="28" fill="#FFFFFF" mask="url(#fb-mW)"/>
+</svg>

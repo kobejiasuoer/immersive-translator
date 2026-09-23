@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- 方案一 单字文标：几何化的汉字「文」，点横撇捺圆头粗笔 -->
+  <defs>
+    <linearGradient id="fa-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4C5FF0"/>
+      <stop offset="1" stop-color="#7A5CF0"/>
+    </linearGradient>
+    <radialGradient id="fa-glow" cx="0.3" cy="0.2" r="0.9">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fa-shade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0.62" stop-color="#1B1464" stop-opacity="0"/>
+      <stop offset="1" stop-color="#1B1464" stop-opacity="0.18"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#fa-bg)"/>
+  <rect width="512" height="512" rx="116" fill="url(#fa-glow)"/>
+  <rect width="512" height="512" rx="116" fill="url(#fa-shade)"/>
+  <g stroke="#FFFFFF" stroke-linecap="round" fill="none">
+    <path d="M316 104 L288 136" stroke-width="44"/>
+    <path d="M162 180 L350 180" stroke-width="40"/>
+    <path d="M298 196 L158 402" stroke-width="46"/>
+    <path d="M214 196 L354 402" stroke-width="46"/>
+  </g>
+</svg>
