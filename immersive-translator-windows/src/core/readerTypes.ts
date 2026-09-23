@@ -240,12 +240,16 @@ export interface ReaderSettings {
   fontPair: ReaderFontPair;
   /** 系统音色名；空串 = 引擎默认。 */
   voice: string;
-  /** 朗读引擎：local = 系统 SAPI（离线），xfyun = 讯飞在线合成（云音色，凭据在设置抽屉）。 */
-  ttsProvider: "local" | "xfyun";
+  /** 朗读引擎：edge = 微软 Edge 在线合成（免费无凭据，默认），xfyun = 讯飞在线（云音色，凭据在设置抽屉），local = 系统 SAPI（离线）。 */
+  ttsProvider: "edge" | "local" | "xfyun";
   /** 讯飞合成发音人（vcn），中文句用它；空串 = xiaoyan。 */
   cloudVoice: string;
   /** 讯飞合成英文句发音人（vcn）；空串 = 回退 cloudVoice（再缺省 catherine）。 */
   cloudVoiceEn: string;
+  /** Edge 中文句音色（ShortName）；空串 = zh-CN-XiaoxiaoNeural。 */
+  edgeVoiceZh: string;
+  /** Edge 英文句音色（ShortName）；空串 = en-US-AvaNeural。 */
+  edgeVoiceEn: string;
   /** 0.5–2.0。 */
   rate: number;
   /** 每句停顿 0–2000ms。 */
@@ -278,9 +282,11 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   lineHeight: 1,
   fontPair: "serif",
   voice: "",
-  ttsProvider: "local",
+  ttsProvider: "edge",
   cloudVoice: "",
   cloudVoiceEn: "catherine",
+  edgeVoiceZh: "",
+  edgeVoiceEn: "",
   rate: 1,
   sentencePauseMs: 0,
   shadowingMode: false,
@@ -339,9 +345,11 @@ export function mergeReaderSettings(
   }
   merged.fontPair = oneOf(override.fontPair, ["serif", "sans"]) ?? merged.fontPair;
   merged.voice = str(override.voice) ?? merged.voice;
-  merged.ttsProvider = oneOf(override.ttsProvider, ["local", "xfyun"]) ?? merged.ttsProvider;
+  merged.ttsProvider = oneOf(override.ttsProvider, ["edge", "local", "xfyun"]) ?? merged.ttsProvider;
   merged.cloudVoice = str(override.cloudVoice) ?? merged.cloudVoice;
   merged.cloudVoiceEn = str(override.cloudVoiceEn) ?? merged.cloudVoiceEn;
+  merged.edgeVoiceZh = str(override.edgeVoiceZh) ?? merged.edgeVoiceZh;
+  merged.edgeVoiceEn = str(override.edgeVoiceEn) ?? merged.edgeVoiceEn;
   const rate = num(override.rate);
   if (rate !== undefined) {
     merged.rate = Math.min(READER_RATE_MAX, Math.max(READER_RATE_MIN, rate));

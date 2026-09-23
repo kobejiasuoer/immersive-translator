@@ -1,6 +1,6 @@
 /**
  * 朗读引擎抽象：usePlayback 及各处发音统一走 SpeechEngine，
- * 本地 SAPI（Rust tts.rs）与讯飞在线合成（前端 WS + <audio>）可切换。
+ * 本地 SAPI（Rust tts.rs）与在线合成（讯飞 / Edge，前端 WS + <audio>）可切换。
  *
  * 语义对齐现有 SAPI 行为：
  * - speak 返回 gen（代数）；ended 事件（自然播完或被打断）带同一 gen，
@@ -10,9 +10,9 @@
  *
  * 云引擎的语速/音色策略：
  * - 语速恒由 audio.playbackRate 变速承担——合成只有 1× 一份，
- *   切语速不重新合成、缓存跨语速命中（见 xfyunTts.ts）。
- * - 音色按句子语言二选：中文句 vcnZh（缺省 xiaoyan）、英文句 vcnEn
- *   （缺省 catherine），与本地 SAPI 的中/外文启发式对齐。
+ *   切语速不重新合成、缓存跨语速命中（见 xfyunTts.ts / edgeTts.ts）。
+ * - 音色按句子语言二选：中文句/英文句各配一个，与本地 SAPI 的中/外文启发式对齐。
+ * - 讯飞与 Edge 共用 createCloudEngine 播放层（gen/打断/预取语义一致），差异只在合成函数。
  */
 
 import {
@@ -28,6 +28,11 @@ import {
   synthesizeXfyunTts,
   type XfyunTtsCredentials,
 } from "../core/xfyunTts";
+import {
+  DEFAULT_EDGE_VOICE,
+  DEFAULT_EDGE_VOICE_EN,
+  synthesizeEdgeTts,
+} from "../core/edgeTts";
 
 export type EndedEvent = { gen: number; track: string };
 
@@ -86,8 +91,19 @@ function pickVcn(cfg: XfyunEngineConfig, chinese: boolean): string {
   return cfg.vcnEn || cfg.vcnZh || DEFAULT_TTS_VCN_EN;
 }
 
-/** 讯飞在线合成引擎：WS 合成 1× mp3 → 复用的 <audio> 变速播放，gen 独立大偏移计数。 */
-export function createXfyunEngine(getCfg: () => XfyunEngineConfig): SpeechEngine {
+/** 云引擎对合成器的最小依赖：按句子语言合成 mp3 Blob + 兜底语速。 */
+export interface CloudEngineDeps {
+  /** 合成失败拒绝 Promise（原始错误上抛），不发送 ended。 */
+  synthesize: (text: string, chinese: boolean) => Promise<Blob>;
+  /** speak opts 未带语速时的兜底。 */
+  fallbackRate: () => number;
+}
+
+/**
+ * 云合成引擎通用播放层：合成 1× mp3 → 复用的 <audio> 变速播放，gen 独立大偏移计数。
+ * 讯飞（WS+签名）与 Edge（免费逆向接口）共用；差异只在上面的 synthesize。
+ */
+function createCloudEngine(deps: CloudEngineDeps): SpeechEngine {
   // 大偏移：与 SAPI 的 gen 计数空间隔离，防止切换引擎时旧 gen 意外匹配。
   let genCounter = 1_000_000;
   const handlers: Array<(e: EndedEvent) => void> = [];
@@ -124,15 +140,11 @@ export function createXfyunEngine(getCfg: () => XfyunEngineConfig): SpeechEngine
   async function speak(text: string, chinese: boolean, opts: ReaderSpeakOptions): Promise<number> {
     const track = opts.track ?? "sentence";
     const gen = ++genCounter;
-    const cfg = getCfg();
-    if (!cfg.creds) {
-      throw new Error("未配置讯飞合成凭据，请在设置中检查语音配置");
-    }
-    const rate = Math.min(4, Math.max(0.25, opts.rate ?? cfg.rate ?? 1));
+    const rate = Math.min(4, Math.max(0.25, opts.rate ?? deps.fallbackRate() ?? 1));
     teardownTrack(track); // 新朗读打断旧朗读
     trackGen[track] = gen; // 同步登记：此后只有本代数能在这个音轨落地
     // 启动失败交给调用方 catch；此时调用方尚未登记 gen，不能用 ended 通知失败。
-    const blob = await synthesizeXfyunTts(text, { vcn: pickVcn(cfg, chinese) }, cfg.creds);
+    const blob = await deps.synthesize(text, chinese);
     if (trackGen[track] !== gen) {
       // 合成期间被 stopTrack / 新的朗读顶替：静默丢弃（不播、不发 ended、不报错），
       // 仍 resolve gen——调用方靠自己的纪元/代数守卫消化过期结果。
@@ -164,12 +176,8 @@ export function createXfyunEngine(getCfg: () => XfyunEngineConfig): SpeechEngine
       if (gen !== null) fireEnded({ gen, track });
     },
     prefetch: (text, chinese) => {
-      const cfg = getCfg();
-      if (!cfg.creds) return;
       // 只合成 1× 进双层缓存；语速在播放时刻才决定，预取与任何语速共享。
-      void synthesizeXfyunTts(text, { vcn: pickVcn(cfg, chinese) }, cfg.creds).catch(
-        () => undefined,
-      );
+      void deps.synthesize(text, chinese).catch(() => undefined);
     },
     onEnded(handler) {
       handlers.push(handler);
@@ -179,6 +187,48 @@ export function createXfyunEngine(getCfg: () => XfyunEngineConfig): SpeechEngine
       };
     },
   };
+}
+
+/** 讯飞在线合成引擎（凭据在 getCfg 里，缺失时 speak 拒绝）。 */
+export function createXfyunEngine(getCfg: () => XfyunEngineConfig): SpeechEngine {
+  return createCloudEngine({
+    synthesize: (text, chinese) => {
+      const cfg = getCfg();
+      if (!cfg.creds) {
+        throw new Error("未配置讯飞合成凭据，请在设置中检查语音配置");
+      }
+      return synthesizeXfyunTts(text, { vcn: pickVcn(cfg, chinese) }, cfg.creds);
+    },
+    fallbackRate: () => getCfg().rate,
+  });
+}
+
+/** Edge 引擎读到的实时配置（ReaderApp 渲染期同步 ref）。 */
+export interface EdgeEngineConfig {
+  /** 中文句音色（ShortName）；空串 = zh-CN-XiaoxiaoNeural。 */
+  voiceZh: string;
+  /** 英文句音色；空串 = en-US-AvaNeural。 */
+  voiceEn: string;
+  /** 兜底语速（speak opts 未带时用）。 */
+  rate: number;
+}
+
+/**
+ * 按句子语言选 Edge 音色：与讯飞同语义——中文句不回退英文音色，
+ * 英文句空配置回退中文音色再回退默认（英文音色读英文，缺省体验最优）。
+ */
+function pickEdgeVoice(cfg: EdgeEngineConfig, chinese: boolean): string {
+  if (chinese) return cfg.voiceZh || DEFAULT_EDGE_VOICE;
+  return cfg.voiceEn || cfg.voiceZh || DEFAULT_EDGE_VOICE_EN;
+}
+
+/** Edge 在线合成引擎：免费无凭据，开箱即用（服务可用性靠 SAPI 兜底）。 */
+export function createEdgeEngine(getCfg: () => EdgeEngineConfig): SpeechEngine {
+  return createCloudEngine({
+    synthesize: (text, chinese) =>
+      synthesizeEdgeTts(text, { voice: pickEdgeVoice(getCfg(), chinese) }),
+    fallbackRate: () => getCfg().rate,
+  });
 }
 
 /**

@@ -96,9 +96,11 @@ import { usePlayback } from "./usePlayback";
 import { useShadowAssess } from "./useShadowAssess";
 import { mapWordsToText } from "../core/pronunciation";
 import {
+  createEdgeEngine,
   createSapiEngine,
   createSpeechDispatcher,
   createXfyunEngine,
+  type EdgeEngineConfig,
   type XfyunEngineConfig,
 } from "./speechEngine";
 import { loadXfyunTtsCredentials } from "../lib/iseCredentials";
@@ -198,7 +200,7 @@ export function ReaderApp() {
     showToast(`本篇读完 🎉 共查词 ${lookups} 次 · 生词本新增 ${added} 个`);
   }, [vocabWords, showToast]);
 
-  // ---- 朗读引擎（本地 SAPI / 讯飞在线合成，凭据缺失自动回落本地） ----
+  // ---- 朗读引擎（Edge 在线免费 / 讯飞在线 / 本地 SAPI，凭据缺失自动回落本地） ----
   const [ttsCreds, setTtsCreds] = useState<XfyunTtsCredentials | null>(null);
   const refreshTtsCreds = useCallback(() => {
     void loadXfyunTtsCredentials()
@@ -215,16 +217,25 @@ export function ReaderApp() {
     rate: effectiveSettings.rate,
     creds: ttsCreds,
   };
+  const edgeCfgRef = useRef<EdgeEngineConfig>({ voiceZh: "", voiceEn: "", rate: 1 });
+  edgeCfgRef.current = {
+    voiceZh: effectiveSettings.edgeVoiceZh,
+    voiceEn: effectiveSettings.edgeVoiceEn,
+    rate: effectiveSettings.rate,
+  };
   const ttsProviderRef = useRef(effectiveSettings.ttsProvider);
   ttsProviderRef.current = effectiveSettings.ttsProvider;
   const sapiEngine = useMemo(() => createSapiEngine(), []);
   const xfyunEngine = useMemo(() => createXfyunEngine(() => ttsCfgRef.current), []);
+  const edgeEngine = useMemo(() => createEdgeEngine(() => edgeCfgRef.current), []);
   const speechEngine = useMemo(
     () =>
-      createSpeechDispatcher(() =>
-        ttsProviderRef.current === "xfyun" && ttsCfgRef.current.creds ? xfyunEngine : sapiEngine,
-      ),
-    [sapiEngine, xfyunEngine],
+      createSpeechDispatcher(() => {
+        if (ttsProviderRef.current === "edge") return edgeEngine;
+        if (ttsProviderRef.current === "xfyun" && ttsCfgRef.current.creds) return xfyunEngine;
+        return sapiEngine;
+      }),
+    [sapiEngine, xfyunEngine, edgeEngine],
   );
 
   const playback = usePlayback({
