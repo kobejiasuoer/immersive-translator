@@ -38,15 +38,70 @@ pub enum SpeakDifficulty {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct ShadowPhone {
+    /// ARPAbet 音素码
+    pub content: String,
+    /// 0 正常 / 非 0 异常标记
+    #[serde(default)]
+    pub dp_message: i64,
+    /// GOP 惩罚值（越负问题越大）
+    #[serde(default)]
+    pub gwpp: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ShadowSyll {
+    pub content: String,
+    #[serde(default)]
+    pub syll_score: f64,
+    #[serde(default)]
+    pub serr_msg: i64,
+    #[serde(default)]
+    pub phones: Vec<ShadowPhone>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ShadowWord {
+    pub content: String,
+    #[serde(default)]
+    pub total_score: f64,
+    /// 0 正常 / 16 漏读 / 32 增读 / 64 回读 / 128 替换
+    #[serde(default)]
+    pub dp_message: i64,
+    #[serde(default)]
+    pub sylls: Vec<ShadowSyll>,
+}
+
+/// 一次跟读评测报告（与前端 ShadowAttempt 同构；分数均为 5 分制）。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ShadowAttempt {
+    /// Unix 毫秒
+    pub at: i64,
+    pub total: f64,
+    pub accuracy: f64,
+    pub fluency: f64,
+    pub integrity: f64,
+    #[serde(default)]
+    pub words: Vec<ShadowWord>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct SpeakTurn {
     pub role: SpeakRole,
     pub text: String,
     /// assistant 轮的中文提示
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint_zh: Option<String>,
-    /// assistant 轮的跟读分（5 分制）
+    /// assistant 轮的跟读分（5 分制；兼容字段，取最新一次 attempt 的总分）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow_score: Option<f64>,
+    /// 跟读报告历史（最新在末尾；旧会话无此字段）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow_attempts: Option<Vec<ShadowAttempt>>,
     /// Unix 毫秒
     pub at: i64,
 }
@@ -234,5 +289,46 @@ mod tests {
                 .expect("老轮次可加载");
         assert_eq!(legacy.hint_zh, None);
         assert_eq!(legacy.shadow_score, None);
+        assert!(legacy.shadow_attempts.is_none());
+    }
+
+    #[test]
+    fn shadow_attempts_roundtrip() {
+        let json = r#"{
+            "role": "assistant", "text": "Sure thing.", "at": 3,
+            "shadowAttempts": [
+                {
+                    "at": 4, "total": 4.1, "accuracy": 4.3, "fluency": 3.4, "integrity": 4.6,
+                    "words": [
+                        {
+                            "content": "latte", "totalScore": 2.4, "dpMessage": 0,
+                            "sylls": [
+                                {
+                                    "content": "l aa t ey", "syllScore": 2.1, "serrMsg": 0,
+                                    "phones": [
+                                        { "content": "l", "dpMessage": 0, "gwpp": -0.01 },
+                                        { "content": "aa", "dpMessage": 0, "gwpp": -1.9 }
+                                    ]
+                                }
+                            ]
+                        },
+                        { "content": "else", "totalScore": 0.0, "dpMessage": 16, "sylls": [] }
+                    ]
+                }
+            ]
+        }"#;
+        let turn: SpeakTurn = serde_json::from_str(json).expect("跟读报告轮次反序列化");
+        let attempts = turn.shadow_attempts.as_ref().expect("有报告");
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].fluency, 3.4);
+        assert_eq!(attempts[0].words.len(), 2);
+        assert_eq!(attempts[0].words[1].dp_message, 16);
+        assert_eq!(attempts[0].words[0].sylls[0].phones[1].content, "aa");
+
+        // 序列化回 camelCase，缺省字段（dp/gwpp=0）不丢结构
+        let out = serde_json::to_value(&turn).unwrap();
+        let a = &out["shadowAttempts"][0];
+        assert_eq!(a["total"], 4.1);
+        assert_eq!(a["words"][0]["sylls"][0]["phones"][1]["gwpp"], -1.9);
     }
 }

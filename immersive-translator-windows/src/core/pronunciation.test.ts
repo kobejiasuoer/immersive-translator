@@ -58,8 +58,32 @@ describe("parseIseXml", () => {
     expect(r.accuracy).toBeCloseTo(4.70987, 5);
     expect(r.fluency).toBeCloseTo(4.837811, 5);
     expect(r.standard).toBeCloseTo(4.940472, 5);
+    expect(r.integrity).toBeCloseTo(5.0, 5); // 篇章层 integrity_score
     expect(r.isRejected).toBe(false);
     expect(r.exceptInfo).toBeNull();
+  });
+
+  it("多句整段送评：四项句分按 word_count 加权平均，词序列拼接", () => {
+    const sentence = (attrs: string, words: string) =>
+      `<sentence ${attrs}>${words}</sentence>`;
+    const w = (content: string) =>
+      `<word content="${content}" dp_message="0" total_score="4.000000"/>`;
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+      <xml_result><read_sentence lan="en" type="study" version="7.0.0.1020">
+        <rec_paper>
+          <read_chapter accuracy_score="0" fluency_score="0" integrity_score="4.500000" is_rejected="false" except_info="0" total_score="0" word_count="12">
+            ${sentence('accuracy_score="3.0" fluency_score="4.0" total_score="3.5" word_count="3"', w("a") + w("b") + w("c"))}
+            ${sentence('accuracy_score="5.0" fluency_score="5.0" total_score="5.0" word_count="9"', w("d") + w("e") + w("f") + w("g") + w("h") + w("i") + w("j") + w("k") + w("l"))}
+          </read_chapter>
+        </rec_paper>
+      </read_sentence></xml_result>`;
+    const r = parseIseXml(xml);
+    // (3.0*3 + 5.0*9) / 12 = 4.5
+    expect(r.accuracy).toBeCloseTo(4.5, 5);
+    expect(r.fluency).toBeCloseTo(4.75, 5);
+    expect(r.total).toBeCloseTo(4.625, 5);
+    expect(r.integrity).toBeCloseTo(4.5, 5);
+    expect(r.words.map((x) => x.content)).toEqual(["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]);
   });
 
   it("解析词/音节/音素层级（含自闭合漏读词与增读词）", () => {
@@ -102,6 +126,10 @@ describe("mapWordsToText", () => {
     // 标记按位置升序
     const starts = marks.map((m) => m.start);
     expect([...starts].sort((a, b) => a - b)).toEqual(starts);
+    // 标记附带源词明细（点词弹层看音素用）
+    expect(byStart.get(0)?.word?.content).toBe("the");
+    expect(byStart.get(0)?.word?.sylls[0].phones.map((p) => p.content)).toEqual(["dh", "ax"]);
+    expect(byStart.get(10)?.word?.dpMessage).toBe(16); // 漏读 brown
   });
 
   it("大小写不敏感对齐；对不上的识别词跳过", () => {
@@ -140,7 +168,7 @@ describe("mapWordsToText", () => {
 });
 
 describe("isPass", () => {
-  const base = { total: 4.5, accuracy: 4, fluency: 4, standard: 4, isRejected: false, exceptInfo: null, words: [] };
+  const base = { total: 4.5, accuracy: 4, fluency: 4, standard: 4, integrity: 5, isRejected: false, exceptInfo: null, words: [] };
   it("达到阈值且未乱读 → 过", () => {
     expect(isPass({ ...base }, 4.2)).toBe(true);
     expect(isPass({ ...base, total: 4.2 }, 4.2)).toBe(true);

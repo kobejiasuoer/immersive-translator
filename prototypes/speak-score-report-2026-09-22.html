@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>口语陪练 · 跟读报告 — 交互原型 2026-09-22</title>
+<!-- 口语陪练「跟读打分」重设计原型：分数 → 诊断 → 练习闭环。
+     核心命题：用户拿到 4.1/5，想知道「差的 0.9 分差在哪」。
+     事实：讯飞 ISE 本就返回 准确度/流畅度/完整度 + 逐词逐音素明细，
+     当前 SpeakView 只展示了 total 一个数字（pronunciation.ts 已解析、UI 丢弃）。
+     本原型全部为前端模拟，不发起真实请求；视觉令牌取自 styles.css / reader.css。 -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,wght@0,400;0,600;1,400&family=Noto+Serif+SC:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ================= 原型评审台（页面自身，安静） ================= */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  font-size: 13px; line-height: 1.55; color: #1c2029;
+  background: #eceef3;
+  -webkit-font-smoothing: antialiased;
+}
+.proto-shell { display: flex; min-height: 100vh; }
+
+/* ---- 左侧导览栏 ---- */
+.rail {
+  width: 268px; flex: none;
+  padding: 26px 20px 30px 26px;
+  border-right: 1px solid #dfe2ea;
+}
+.rail h1 {
+  margin: 0; font-family: "Noto Serif SC", serif;
+  font-size: 19px; font-weight: 600; letter-spacing: 0.02em; color: #1c2029;
+}
+.rail .sub { margin: 6px 0 0; font-size: 12px; color: #7c8494; line-height: 1.7; }
+.rail h2 {
+  margin: 24px 0 8px; font-size: 12px; font-weight: 600; color: #4b5261;
+}
+.rail h2::after { content: ""; display: block; width: 18px; height: 2px; background: #4c5ff0; margin-top: 5px; border-radius: 1px; }
+.scene-list { display: flex; flex-direction: column; gap: 4px; }
+.scene-btn {
+  text-align: left; border: 1px solid transparent; background: transparent;
+  font-family: inherit; font-size: 12.5px; color: #4b5261;
+  padding: 7px 10px; border-radius: 8px; cursor: pointer; line-height: 1.45;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.scene-btn:hover { background: #fff; color: #1c2029; }
+.scene-btn.active { background: #eef0fe; border-color: rgba(76,95,240,.28); color: #4c5ff0; font-weight: 600; }
+.scene-btn .no { display: inline-block; width: 16px; color: #a6adbb; font-variant-numeric: tabular-nums; }
+.scene-btn.active .no { color: #4c5ff0; }
+
+.legend { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #4b5261; }
+.legend .lg { display: flex; align-items: center; gap: 8px; }
+.legend .w { font-family: "Source Serif 4", Georgia, serif; font-size: 13.5px; }
+.w.q-good { color: #15803d; }
+.w.q-ok { color: #b45309; }
+.w.q-bad { color: #dc2626; border-bottom: 2px dotted rgba(220,38,38,.55); cursor: pointer; }
+.w.q-missed { color: #dc2626; background: rgba(220,38,38,.12); border-bottom: 2px solid rgba(220,38,38,.55); cursor: pointer; }
+
+.decisions { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 9px; }
+.decisions li { font-size: 12px; color: #4b5261; line-height: 1.65; padding-left: 14px; position: relative; }
+.decisions li::before { content: ""; position: absolute; left: 0; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: #c9cede; }
+.decisions b { color: #1c2029; font-weight: 600; }
+
+/* ---- 中央舞台 ---- */
+.stage { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; padding: 26px 28px 46px; }
+.stage-note {
+  width: min(920px, 100%); margin-bottom: 12px;
+  font-size: 12.5px; color: #4b5261; line-height: 1.65;
+  padding: 9px 13px; border-radius: 10px;
+  background: #f7f8fb; border: 1px solid #e2e5ec;
+}
+.stage-note b { color: #1c2029; }
+.stage-note .try { color: #4c5ff0; font-weight: 600; }
+.replay-row { width: min(920px, 100%); display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.replay-btn {
+  border: 1px solid #d6dae4; background: #fff; border-radius: 8px;
+  font-family: inherit; font-size: 12px; color: #4b5261; padding: 5px 12px; cursor: pointer;
+  transition: border-color .12s, color .12s;
+}
+.replay-btn:hover { border-color: #4c5ff0; color: #4c5ff0; }
+.window {
+  width: min(920px, 100%);
+  border-radius: 14px; overflow: hidden;
+  box-shadow: 0 2px 6px rgba(16,24,40,.06), 0 18px 44px rgba(16,24,40,.13);
+  border: 1px solid rgba(16,24,40,.08);
+  position: relative;
+}
+
+/* ================= 应用窗口复刻（令牌同 styles.css / reader.css） ================= */
+.mock-app {
+  --accent: #4c5ff0; --accent-hover: #3f52e0; --accent-soft: #eef0fe; --accent-softer: #f6f7ff;
+  --accent-hl: #dde2fd;
+  --ok: #15803d; --ok-soft: #e8f7ee; --warn: #b45309; --warn-soft: #fdf3e1; --err: #dc2626; --err-soft: #fdeaea;
+  --bg: #f4f5f9; --surface: #ffffff; --surface-2: #f9fafc;
+  --border: #e4e7ee; --border-strong: #d6dae4;
+  --text-1: #1c2029; --text-2: #4b5261; --text-3: #7c8494; --text-4: #a6adbb;
+  --font-read-serif-en: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --font-read-serif-cn: "Noto Serif SC", "Source Serif 4", Georgia, serif;
+  background: var(--surface); color: var(--text-1);
+  height: 640px; display: flex; flex-direction: column;
+  position: relative;
+}
+.m-topbar { height: 46px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 18px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.m-logo {
+  width: 21px; height: 21px; border-radius: 6px; flex: none;
+  background: linear-gradient(135deg, #4c5ff0, #7a5cf0);
+  display: inline-grid; place-items: center; color: #fff;
+  font-family: var(--font-read-serif-cn); font-size: 12px; font-weight: 600;
+}
+.m-appname { font-size: 14px; font-weight: 600; letter-spacing: .04em; }
+.m-artname { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-win-dots { display: flex; gap: 7px; }
+.m-win-dots i { width: 11px; height: 11px; border-radius: 50%; background: var(--border-strong); }
+
+/* ---- speak-room 复刻（reader.css 同源） ---- */
+.speak-room { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.speak-room-head {
+  display: flex; align-items: center; gap: 12px; padding: 9px 18px;
+  border-bottom: 1px solid var(--border); font-size: 12.5px;
+}
+.btn-ghost-sm {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-2);
+  border-radius: 8px; font-family: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer;
+}
+.speak-room-title { font-size: 13.5px; font-weight: 600; color: var(--text-1); flex: 1; }
+.speak-round-count { font-size: 12px; color: var(--text-4); }
+
+.speak-log {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 18px;
+  display: flex; flex-direction: column; gap: 10px;
+  position: relative; scroll-behavior: smooth;
+}
+.speak-bubble {
+  max-width: 74%; padding: 10px 14px; border-radius: 14px;
+  font-size: 14px; line-height: 1.75;
+}
+.speak-bubble.assistant {
+  align-self: flex-start; background: var(--bg);
+  border: 1px solid var(--border); border-top-left-radius: 4px;
+}
+.speak-bubble.user {
+  align-self: flex-end; background: var(--accent-softer);
+  border: 1px solid var(--accent-soft); border-top-right-radius: 4px;
+}
+.speak-bubble .en { color: var(--text-1); font-family: var(--font-read-serif-en); font-size: 14.5px; }
+.speak-bubble .zh {
+  margin-top: 5px; font-size: 12px; color: var(--text-3);
+  border-top: 1px dashed var(--border); padding-top: 5px;
+}
+.speak-shadow-score { margin-top: 6px; font-size: 11.5px; font-weight: 600; color: var(--ok); }
+
+/* 现状的 toast（场景 1 用） */
+.speak-toast {
+  align-self: center; margin-top: 4px;
+  font-size: 12px; color: var(--text-2);
+  background: var(--warn-soft); border: 1px solid var(--border);
+  padding: 6px 12px; border-radius: 999px;
+}
+
+/* ---- 跟读报告卡（新设计核心） ---- */
+.report-card {
+  align-self: stretch; max-width: 92%;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 12px 14px 11px;
+  box-shadow: 0 1px 3px rgba(16,24,40,.05);
+  display: flex; flex-direction: column; gap: 9px;
+  position: relative;
+  animation: rc-in .38s cubic-bezier(.2,.9,.3,1.2);
+}
+@keyframes rc-in { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+
+.rc-head { display: flex; align-items: center; gap: 12px; }
+.rc-score { display: flex; align-items: baseline; gap: 4px; flex: none; }
+.rc-num {
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 30px; font-weight: 600; line-height: 1; letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums;
+}
+.rc-den { font-size: 12px; color: var(--text-3); font-weight: 600; }
+.rc-status { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.rc-badge {
+  align-self: flex-start; font-size: 11.5px; font-weight: 600;
+  padding: 2.5px 9px; border-radius: 999px;
+}
+.rc-badge.almost { background: var(--warn-soft); color: var(--warn); }
+.rc-badge.pass { background: var(--ok-soft); color: var(--ok); }
+.rc-badge.fail { background: var(--err-soft); color: var(--err); }
+.rc-sub { font-size: 11.5px; color: var(--text-3); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rc-sub .up { color: var(--ok); font-weight: 600; }
+.rc-chips { display: flex; gap: 4px; align-items: center; margin-left: auto; flex: none; }
+.rc-chips .chip {
+  font-size: 10.5px; color: var(--text-3); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 999px; padding: 1.5px 7px;
+  font-variant-numeric: tabular-nums;
+}
+.rc-chips .chip.cur { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-softer); font-weight: 700; }
+.rc-chips .chip.best { color: var(--ok); border-color: rgba(21,128,61,.25); }
+
+.rc-dims { display: flex; flex-direction: column; gap: 5px; }
+.dim { display: grid; grid-template-columns: 42px 1fr 30px; align-items: center; gap: 8px; }
+.dim-name { font-size: 11.5px; color: var(--text-2); }
+.dim-bar { height: 5px; border-radius: 3px; background: var(--bg); overflow: hidden; }
+.dim-bar i { display: block; height: 100%; border-radius: 3px; background: var(--accent); width: 0; transition: width .8s cubic-bezier(.2,.8,.2,1); }
+.dim-val { font-size: 11.5px; font-weight: 600; color: var(--text-2); font-variant-numeric: tabular-nums; text-align: right; }
+.dim.weak .dim-bar i { background: var(--warn); }
+.dim.weak .dim-val { color: var(--warn); }
+.dim.weak .dim-name { color: var(--warn); font-weight: 600; }
+.dim-note { grid-column: 1 / -1; font-size: 11px; color: var(--text-3); margin-top: 3px; }
+
+.rc-diag {
+  font-size: 12.5px; line-height: 1.7; color: var(--text-2);
+  background: var(--bg); border-radius: 9px; padding: 8px 11px;
+}
+.rc-diag b { color: var(--text-1); }
+.rc-diag .hl-warn { color: var(--warn); font-weight: 600; }
+.rc-diag .hl-err { color: var(--err); font-weight: 600; }
+.rc-diag .lead { color: var(--text-3); margin-right: 2px; }
+
+.rc-words {
+  font-family: var(--font-read-serif-en); font-size: 14.5px; line-height: 2;
+}
+.rc-words .wd { border-radius: 3px; padding: 0 1px; }
+.rc-words .wd.good { color: var(--ok); }
+.rc-words .wd.ok { color: var(--warn); }
+.rc-words .wd.bad { color: var(--err); border-bottom: 2px dotted rgba(220,38,38,.55); cursor: pointer; }
+.rc-words .wd.bad:hover, .rc-words .wd.ok:hover, .rc-words .wd.missed:hover { background: var(--accent-softer); }
+.rc-words .wd.missed { color: var(--err); background: rgba(220,38,38,.12); border-bottom: 2px solid rgba(220,38,38,.55); cursor: pointer; }
+.rc-words .wd.ok { cursor: pointer; }
+.rc-words .punct { color: var(--text-3); }
+
+.rc-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rc-btn {
+  border: 1px solid var(--accent-soft); background: var(--accent-softer); color: var(--accent);
+  border-radius: 9px; font-family: inherit; font-size: 12px; font-weight: 600;
+  padding: 6px 13px; cursor: pointer; transition: background .12s;
+}
+.rc-btn:hover { background: var(--accent-hl); }
+.rc-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.rc-btn.primary:hover { background: var(--accent-hover); }
+.rc-link {
+  border: none; background: none; font-family: inherit; font-size: 12px;
+  color: var(--text-3); cursor: pointer; padding: 4px 6px; border-radius: 6px;
+}
+.rc-link:hover { color: var(--accent); background: var(--accent-softer); }
+
+/* 折叠的历史报告 */
+.report-mini {
+  align-self: stretch; max-width: 92%;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11.5px; color: var(--text-3);
+  border: 1px dashed var(--border); border-radius: 9px;
+  padding: 5px 11px; background: var(--surface-2);
+}
+.report-mini b { color: var(--text-2); font-variant-numeric: tabular-nums; }
+.report-mini .arr { margin-left: auto; color: var(--text-4); }
+
+/* 异常态报告卡 */
+.report-err {
+  align-self: stretch; max-width: 92%;
+  border: 1px solid var(--border); border-left: 3px solid var(--warn);
+  border-radius: 10px; background: var(--warn-soft);
+  padding: 9px 12px; display: flex; flex-direction: column; gap: 6px;
+  font-size: 12.5px; color: var(--text-2); line-height: 1.65;
+}
+.report-err.novoice { border-left-color: var(--text-4); background: var(--surface-2); }
+.report-err .re-title { font-weight: 600; color: var(--text-1); display: flex; gap: 6px; align-items: center; }
+.report-err .re-why { font-size: 11px; color: var(--text-4); }
+
+/* ---- 控制条（复刻） ---- */
+.speak-controls { border-top: 1px solid var(--border); padding: 11px 18px 13px; display: flex; flex-direction: column; gap: 8px; background: var(--surface); }
+.speak-level-bar { height: 4px; border-radius: 2px; background: var(--bg); overflow: hidden; }
+.speak-level-bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .09s linear; }
+.speak-controls-row { display: flex; align-items: center; gap: 10px; }
+.speak-hold-btn {
+  flex: 1; height: 42px; border: 1.5px solid var(--accent-soft); border-radius: 12px;
+  background: var(--accent-softer); color: var(--accent);
+  font-family: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer;
+  transition: background .15s, transform .08s;
+}
+.speak-hold-btn.rec { background: var(--accent); color: #fff; border-color: var(--accent); animation: speak-pulse 1.2s ease-in-out infinite; }
+@keyframes speak-pulse { 50% { box-shadow: 0 0 0 6px var(--accent-hl); } }
+.speak-secondary {
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg);
+  padding: 8px 13px; font-family: inherit; font-size: 12.5px; color: var(--text-2); cursor: pointer;
+}
+.speak-secondary:hover { border-color: var(--accent); }
+.speak-secondary.busy { opacity: .6; cursor: default; }
+.speak-secondary.flash { border-color: var(--accent); color: var(--accent); animation: btn-flash 1.6s ease; }
+@keyframes btn-flash { 0%, 60% { box-shadow: 0 0 0 5px var(--accent-hl); } 100% { box-shadow: none; } }
+.speak-hint { font-size: 11.5px; color: var(--text-4); text-align: center; }
+
+/* ---- 音素弹层 ---- */
+.log-dim {
+  position: absolute; inset: 0; z-index: 25;
+  background: rgba(28,32,41,.16);
+  animation: fade-in .18s ease;
+}
+.popover {
+  position: absolute; z-index: 30; width: 264px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 12px; padding: 12px 13px 11px;
+  box-shadow: 0 4px 10px rgba(16,24,40,.08), 0 18px 40px rgba(16,24,40,.16);
+  animation: rc-in .22s ease;
+}
+.popover .po-close {
+  position: absolute; top: 7px; right: 8px; border: none; background: none;
+  font-size: 13px; color: var(--text-4); cursor: pointer; padding: 2px 5px; border-radius: 6px;
+}
+.popover .po-close:hover { color: var(--text-1); background: var(--bg); }
+.po-word { display: flex; align-items: baseline; gap: 8px; }
+.po-word b { font-family: var(--font-read-serif-en); font-size: 19px; font-weight: 600; }
+.po-word .ipa { font-size: 12.5px; color: var(--text-3); font-family: var(--font-read-serif-en); }
+.po-word .wscore { margin-left: auto; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.po-word .wscore.bad { color: var(--err); }
+.po-word .wscore.ok { color: var(--warn); }
+.po-word .wscore.missed { color: var(--err); }
+.ph-row { display: flex; gap: 4px; margin-top: 9px; }
+.ph {
+  flex: 1; min-width: 0; text-align: center; border-radius: 7px; padding: 4px 0 3px;
+  border: 1px solid var(--border); font-family: var(--font-read-serif-en);
+  font-size: 13px; line-height: 1.3; overflow: hidden;
+}
+.ph i { display: block; font-style: normal; font-size: 9px; color: var(--text-4); margin-top: 1px; line-height: 1.25; }
+.ph.ok { color: var(--text-2); background: var(--surface); }
+.ph.err { color: #fff; background: var(--err); border-color: var(--err); }
+.ph.err i { color: rgba(255,255,255,.85); }
+.po-tip { margin-top: 9px; font-size: 11.5px; line-height: 1.65; color: var(--text-2); background: var(--bg); border-radius: 8px; padding: 7px 9px; }
+.po-tip b { color: var(--text-1); }
+.po-actions { display: flex; gap: 8px; margin-top: 9px; }
+.po-actions .rc-btn { flex: 1; text-align: center; padding: 5.5px 8px; }
+
+/* ---- 只练差词 · 底部抽屉 ---- */
+.drill-backdrop {
+  position: absolute; inset: 0; z-index: 40;
+  background: rgba(28,32,41,.32);
+  display: flex; align-items: flex-end;
+  animation: fade-in .2s ease;
+}
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+.drill-sheet {
+  width: 100%; background: var(--surface);
+  border-radius: 16px 16px 0 0; border-top: 1px solid var(--border-strong);
+  padding: 16px 22px 18px;
+  animation: sheet-up .28s cubic-bezier(.2,.9,.3,1);
+}
+@keyframes sheet-up { from { transform: translateY(40px); opacity: .4; } to { transform: none; opacity: 1; } }
+.drill-head { display: flex; align-items: center; gap: 10px; }
+.drill-head .t { font-size: 13.5px; font-weight: 600; }
+.drill-head .sub { font-size: 11.5px; color: var(--text-3); }
+.drill-head .x { margin-left: auto; border: none; background: none; font-size: 15px; color: var(--text-4); cursor: pointer; padding: 2px 7px; border-radius: 6px; }
+.drill-head .x:hover { background: var(--bg); color: var(--text-1); }
+.drill-dots { display: flex; gap: 5px; margin-left: 12px; }
+.drill-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); }
+.drill-dots i.done { background: var(--ok); }
+.drill-dots i.cur { background: var(--accent); }
+.drill-body { display: flex; gap: 26px; margin-top: 13px; align-items: stretch; }
+.drill-card { flex: 1.25; border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px; background: var(--surface-2); }
+.drill-card .dw { font-family: var(--font-read-serif-en); font-size: 24px; font-weight: 600; line-height: 1.15; }
+.drill-card .dipa { font-size: 12.5px; color: var(--text-3); margin-top: 2px; font-family: var(--font-read-serif-en); }
+.drill-card .ph-row { margin-top: 10px; max-width: 300px; }
+.drill-tip { flex: 1; font-size: 12px; line-height: 1.7; color: var(--text-2); align-self: center; }
+.drill-tip b { color: var(--text-1); }
+.drill-actions { display: flex; gap: 10px; margin-top: 13px; align-items: center; }
+.drill-hold {
+  flex: 1; height: 40px; border-radius: 11px;
+  border: 1.5px solid var(--accent-soft); background: var(--accent-softer); color: var(--accent);
+  font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.drill-hold.rec { background: var(--accent); color: #fff; border-color: var(--accent); animation: speak-pulse 1.2s infinite; }
+.drill-result { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.drill-result .sc { font-size: 19px; font-weight: 700; font-family: "Source Serif 4", Georgia, serif; font-variant-numeric: tabular-nums; }
+.drill-result .sc.up { color: var(--ok); }
+.drill-result .note { color: var(--text-3); font-size: 11.5px; line-height: 1.5; }
+.drill-done { text-align: center; padding: 10px 0 4px; }
+.drill-done .big { font-size: 14px; font-weight: 600; color: var(--ok); }
+.drill-done .sub { font-size: 12px; color: var(--text-3); margin: 5px 0 12px; }
+
+/* 演示提示浮条 */
+.demo-hint {
+  position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%);
+  z-index: 60; font-size: 12px; color: var(--text-2);
+  background: var(--surface); border: 1px solid var(--border-strong);
+  padding: 6px 14px; border-radius: 999px; box-shadow: 0 4px 14px rgba(16,24,40,.12);
+  animation: rc-in .2s ease; pointer-events: none; white-space: nowrap;
+}
+</style>
+</head>
+<body>
+<div class="proto-shell">
+  <!-- ================= 左栏：评审导览 ================= -->
+  <aside class="rail">
+    <h1>口语陪练 · 跟读报告</h1>
+    <p class="sub">把「跟读 4.1 分」变成「差的 0.9 差在哪、怎么补」——分数 → 诊断 → 练习的闭环。纯前端模拟。</p>
+
+    <h2>评审场景</h2>
+    <div class="scene-list" id="sceneList"></div>
+
+    <h2>图例 · 词着色</h2>
+    <div class="legend">
+      <div class="lg"><span class="w q-good">good ≥4</span><span>发音到位</span></div>
+      <div class="lg"><span class="w q-ok">ok 3–4</span><span>小毛病，可点开看</span></div>
+      <div class="lg"><span class="w q-bad">bad &lt;3</span><span>发音不准，点开看音素</span></div>
+      <div class="lg"><span class="w q-missed">missed</span><span>漏读，没读到</span></div>
+    </div>
+
+    <h2>设计决策</h2>
+    <ul class="decisions">
+      <li><b>数据早就有，是展示丢了</b>：ISE 返回准确度 / 流畅度 / 完整度（篇章层，需补一行解析）+ 逐词逐音素明细；现在 SpeakView 只取了 total 一个数。</li>
+      <li><b>先说人话，再给数字</b>：分数旁一句诊断「差的 0.9 大头在流畅度」，由规则拼装（短板维度 + 差词/漏词列表），零额外成本；后续可换 LLM 润色。</li>
+      <li><b>诊断必有落点</b>：点词看音素错在哪、听领读 / 听自己的录音对照、只练差词再回整句——每条反馈都连着一个动作。</li>
+      <li><b>过关轻、差分清</b>：≥4.2 过关绿色轻庆祝；差一点的明确「还差 0.1」；乱读 / 无声音给可行动文案，不甩错误码。</li>
+      <li><b>进步可见</b>：同句多次跟读存 attempts（维度分 + 词明细），趋势 chips + 回看历史，鼓励重试而不是重复挫败。</li>
+      <li><b>视觉复用阅读室语言</b>：词着色四档、mapWordsToText 对齐直接复用，两处跟读体验一致。</li>
+    </ul>
+  </aside>
+
+  <!-- ================= 中央：应用窗口 ================= -->
+  <main class="stage">
+    <div class="stage-note" id="stageNote"></div>
+    <div class="replay-row"><button class="replay-btn" id="replayBtn">▶ 重播打分过程</button></div>
+    <div class="window">
+      <div class="m-topbar">
+        <span class="m-logo">沉</span>
+        <span class="m-appname">沉浸阅读室</span>
+        <span class="m-artname">口语陪练 · ☕ 咖啡店点单（中等）</span>
+        <span class="m-win-dots"><i></i><i></i><i></i></span>
+      </div>
+      <div class="mock-app" id="mockApp">
+        <div class="speak-room">
+          <div class="speak-room-head">
+            <button class="btn-ghost-sm">← 换场景</button>
+            <span class="speak-room-title">☕ 咖啡店点单 · 中等</span>
+            <span class="speak-round-count">第 2 轮</span>
+          </div>
+          <div class="speak-log" id="log"></div>
+          <div class="speak-controls">
+            <div class="speak-level-bar" aria-hidden><i id="levelBar"></i></div>
+            <div class="speak-controls-row">
+              <button class="speak-hold-btn" id="holdBtn">按住说话</button>
+              <button class="speak-secondary" id="shadowBtn">跟读打分</button>
+              <button class="speak-secondary" id="replayTtsBtn">🔊 重听</button>
+            </div>
+            <div class="speak-hint">按住说话（英语）→ AI 回复带中文提示；「跟读打分」照 AI 最新一句读，5 分制</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+/* ============================================================
+   数据（模拟一次 ISE 返回的结构化结果，字段与 pronunciation.ts 一致）
+   ============================================================ */
+
+/** 目标句：AI 最新回复。words 含每个词的分数 / dp（16=漏读）与音素明细（差词才有）。 */
+const TARGET =
+  "Sure! One large oat milk latte coming up — that'll be four fifty. Would you like anything else today?";
+
+const WORDS = {
+  "Sure":    { s: 4.8 },
+  "One":     { s: 4.6 },
+  "large":   { s: 4.7 },
+  "oat":     { s: 4.9 },
+  "milk":    { s: 4.4 },
+  "latte":   { s: 2.4, ipa: "/ˈlɑː.teɪ/", drill: { score: 3.9 },
+    phones: [
+      { p: "l",  st: "ok" },
+      { p: "ɑː", st: "err", note: "读成了『哎』æ" },
+      { p: "t",  st: "ok" },
+      { p: "eɪ", st: "ok" },
+    ],
+    tip: "第一音节是<b>长『啊』</b>：嘴张大、舌位压低。你读成了『哎』——嘴咧开了。" },
+  "coming":  { s: 4.3 },
+  "up":      { s: 4.5 },
+  "that'll": { s: 4.2 },
+  "be":      { s: 4.8 },
+  "four":    { s: 4.0 },
+  "fifty":   { s: 2.8, ipa: "/ˈfɪf.ti/", drill: { score: 4.4 },
+    phones: [
+      { p: "f",  st: "ok" },
+      { p: "ɪ",  st: "err", note: "短音拖长了" },
+      { p: "f",  st: "ok" },
+      { p: "t",  st: "ok" },
+      { p: "i",  st: "ok" },
+    ],
+    tip: "<b>ɪ 是松短音</b>，快快带过；拖长就成了 fee。对照 fifty / fifteen 练两遍。" },
+  "Would":   { s: 4.4 },
+  "you":     { s: 4.9 },
+  "like":    { s: 4.6 },
+  "anything":{ s: 3.6, ipa: "/ˈɛn.i.θɪŋ/",
+    phones: [
+      { p: "ɛ",  st: "ok" },
+      { p: "n",  st: "ok" },
+      { p: "i",  st: "ok" },
+      { p: "θ",  st: "ok" },
+      { p: "ɪ",  st: "err", note: "略拖" },
+      { p: "ŋ",  st: "ok" },
+    ],
+    tip: "整体不错。<b>θ 轻咬齿</b>、倒数第二音节短一点就更好了。" },
+  "else":    { s: 0, dp: 16 },
+  "today":   { s: 4.7 },
+};
+
+/** 三次跟读尝试（trend 用；词明细取 WORDS 覆盖）。 */
+const ATTEMPT1 = { total: 3.6, accuracy: 3.9, fluency: 2.9, integrity: 4.6 };
+const ATTEMPT2 = { total: 4.1, accuracy: 4.3, fluency: 3.4, integrity: 4.6 };
+const ATTEMPT3 = { total: 4.7, accuracy: 4.8, fluency: 4.6, integrity: 5.0 };
+
+/** 第 3 次（过关）的词分覆盖：差词都上来了，漏词补上了。 */
+const PASS_WORDS = { latte: 4.5, fifty: 4.6, anything: 4.4, else: { s: 4.4 } };
+
+/* ============================================================
+   场景与渲染
+   ============================================================ */
+
+const $log = document.getElementById("log");
+const $shadowBtn = document.getElementById("shadowBtn");
+const $holdBtn = document.getElementById("holdBtn");
+const $levelBar = document.getElementById("levelBar");
+const $note = document.getElementById("stageNote");
+
+const SCENES = [
+  { id: 1, name: "现状对照：冷冰冰的 4.1",
+    note: "<b>现状</b>：打完分只有气泡里一行小字和按钮上的数字，差的 0.9 分丢在哪无从知晓，用户只能盲目重试。<span class='try'>对照右侧新设计看场景 ②。</span>",
+    render: () => { renderBubbles(); renderCurrentUi(); } },
+  { id: 2, name: "报告卡 · 4.1 分诊断（主案例）",
+    note: "核心答案场景：<b>差的 0.9 分差在哪</b>——维度条指出短板是<span class='try'>流畅度 3.4</span>，诊断句点名差词与漏词。试着<b>点句中红色 / 棕色的词</b>看音素；右上角是同句趋势。左上角「重播打分过程」可看完整动线。",
+    render: () => { renderBubbles(); mountReport(ATTEMPT2, 2); } },
+  { id: 3, name: "点词看音素（弹层）",
+    note: "点差词弹出<b>音素分解</b>：哪个音错了、错成什么、怎么纠——这才是「这个词为什么被扣分」的答案。漏读词（底纹）则提示「没读到」。",
+    render: () => { renderBubbles(); mountReport(ATTEMPT2, 2); openPopoverFor("latte"); } },
+  { id: 4, name: "只练差的词（词练模式）",
+    note: "报告卡上「只练 2 个词」拉起底部抽屉：<b>逐词领读 → 跟读 → 出分</b>，练完引导回整句。比整句重复更省时间，挫败感更低。<span class='try'>试试按住「跟读这个词」。</span>",
+    render: () => { renderBubbles(); mountReport(ATTEMPT2, 2); openDrill(); } },
+  { id: 5, name: "过关 · 进步趋势",
+    note: "第 3 次跟读 4.7 过关：<b>轻量绿色庆祝</b> + 一句「涨在哪」（流畅度 +1.2、latte +2.1），历史报告折叠成一行不再打扰对话流。",
+    render: () => { renderBubbles(); mountReportMini(ATTEMPT2, 2); mountReport(ATTEMPT3, 3); } },
+  { id: 6, name: "异常态：乱读 / 没声音",
+    note: "乱读（is_rejected）与无语音（except_info 28673）不再只有失败感：给<b>可行动的下一步</b>——先听领读、检查离麦距离。",
+    render: () => { renderBubbles(); mountErrorCards(); } },
+];
+
+let currentScene = 2;
+let simTimer = null;
+let levelTimer = null;
+
+function activateScene(id) {
+  currentScene = id;
+  teardown();
+  const sc = SCENES.find((s) => s.id === id);
+  $note.innerHTML = sc.note;
+  document.querySelectorAll(".scene-btn").forEach((b) => b.classList.toggle("active", Number(b.dataset.id) === id));
+  sc.render();
+  $log.scrollTop = $log.scrollHeight;
+}
+
+function teardown() {
+  clearTimeout(simTimer); clearInterval(levelTimer);
+  closePopover(); closeDrill();
+  $shadowBtn.textContent = "跟读打分";
+  $shadowBtn.classList.remove("busy", "flash");
+  $holdBtn.classList.remove("rec");
+  $holdBtn.textContent = "按住说话";
+  $levelBar.style.width = "0";
+}
+
+/* ---- 左栏场景按钮 ---- */
+const $sceneList = document.getElementById("sceneList");
+SCENES.forEach((s) => {
+  const b = document.createElement("button");
+  b.className = "scene-btn";
+  b.dataset.id = s.id;
+  b.innerHTML = `<span class="no">${s.id}</span>${s.name}`;
+  b.addEventListener("click", () => activateScene(s.id));
+  $sceneList.appendChild(b);
+});
+
+/* ============================================================
+   气泡（对话流）
+   ============================================================ */
+
+function renderBubbles() {
+  $log.innerHTML = "";
+  addBubble("assistant",
+    "Good afternoon, welcome to Dusty Bean! What can I get started for you today?",
+    "下午好，欢迎光临 Dusty Bean～想先来点什么？");
+  addBubble("user",
+    "Hi, I'd like a large latte with oat milk, please.");
+  addBubble("assistant",
+    TARGET,
+    "好嘞，一杯大杯燕麦拿铁——一共四块五。还需要点别的吗？");
+}
+
+function addBubble(role, en, zh) {
+  const div = document.createElement("div");
+  div.className = `speak-bubble ${role}`;
+  div.innerHTML = `<div class="en">${en}</div>${zh ? `<div class="zh">${zh}</div>` : ""}`;
+  $log.appendChild(div);
+  return div;
+}
+
+/* ---- 场景 1：现状 UI ---- */
+function renderCurrentUi() {
+  const b = $log.lastElementChild;
+  const s = document.createElement("div");
+  s.className = "speak-shadow-score";
+  s.textContent = "跟读 4.1 / 5";
+  b.appendChild(s);
+  const toast = document.createElement("div");
+  toast.className = "speak-toast";
+  toast.textContent = "跟读 4.1 分：对照高亮再试一次会更好";
+  $log.appendChild(toast);
+  $shadowBtn.textContent = "跟读 4.1 分 · 再跟读";
+}
+
+/* ============================================================
+   报告卡
+   ============================================================ */
+
+function fmt(n) { return n.toFixed(1); }
+
+/** 维度行数据：名称 / 分 / 说明（hover 提示）。weak 由调用方标注。 */
+function dimRow(name, val, tip, weak, weakNote) {
+  return `<div class="dim${weak ? " weak" : ""}" title="${tip}">
+    <span class="dim-name">${name}</span>
+    <span class="dim-bar"><i data-w="${(val / 5) * 100}"></i></span>
+    <span class="dim-val">${fmt(val)}</span>
+    ${weak && weakNote ? `<div class="dim-note">${weakNote}</div>` : ""}
+  </div>`;
+}
+
+function wordClass(w) {
+  if (w.dp === 16) return "missed";
+  if (w.s >= 4) return "good";
+  if (w.s >= 3) return "ok";
+  return "bad";
+}
+
+/** 渲染着色句：词 + 标点，差/漏/ok 词可点。pass 覆盖分用 overrides。 */
+function renderWords(overrides) {
+  const parts = TARGET.split(/(\s+)/);
+  return parts.map((part) => {
+    if (/^\s+$/.test(part)) return " ";
+    const m = part.match(/^([A-Za-z'’-]+)([^\sA-Za-z]*)$/);
+    if (!m) return `<span class="punct">${part}</span>`;
+    const core = m[1], punct = m[2];
+    const base = WORDS[core];
+    if (!base) return `<span class="punct">${part}</span>`;
+    const data = overrides && overrides[core] !== undefined
+      ? (typeof overrides[core] === "number" ? { ...base, s: overrides[core] } : { ...base, ...overrides[core] })
+      : base;
+    const q = wordClass(data);
+    const clickable = q !== "good";
+    return `<span class="wd ${q}"${clickable ? ` data-word="${core}" title="${q === "missed" ? "漏读了" : fmt(data.s) + " 分 · 点击看细节"}"` : ""}>${core}</span>` +
+      (punct ? `<span class="punct">${punct}</span>` : "");
+  }).join("");
+}
+
+/** 诊断句（规则拼装演示）。 */
+function diagFor(attempt, pass) {
+  if (pass) {
+    return `<span class="lead">涨在哪：</span><b>流畅度 3.4 → 4.6</b>，节奏顺了；<b>latte 2.4 → 4.5</b>，长『啊』立住了；漏读的 <b>else</b> 也补上了。保持这个节奏 ☕`;
+  }
+  return `<span class="lead">差的 0.9 分：</span>大头在<span class="hl-warn">流畅度 3.4</span>——句中 2 处停顿偏久、1 次起头重复；<span class="hl-err">latte</span>、<span class="hl-err">fifty</span> 发音不准；漏读了 <span class="hl-err">else</span>。`;
+}
+
+function chipsFor(attempts, curIdx) {
+  return attempts.map((a, i) =>
+    `<span class="chip${i === curIdx ? " cur" : i === attempts.length - 1 && i !== curIdx ? " best" : ""}">${fmt(a.total)}</span>`
+  ).join('<span style="color:var(--text-4);font-size:10px">→</span>');
+}
+
+function mountReport(attempt, attemptNo) {
+  const pass = attempt === ATTEMPT3;
+  const history = attemptNo === 2 ? [ATTEMPT1, ATTEMPT2] : [ATTEMPT1, ATTEMPT2, ATTEMPT3];
+  const curIdx = attemptNo - 1;
+  const card = document.createElement("div");
+  card.className = "report-card";
+  card.innerHTML = `
+    <div class="rc-head">
+      <div class="rc-score"><b class="rc-num" data-target="${attempt.total}">0.0</b><span class="rc-den">/ 5</span></div>
+      <div class="rc-status">
+        <span class="rc-badge ${pass ? "pass" : "almost"}">${pass ? "✓ 过关" : "差 0.1 过关"}</span>
+        <span class="rc-sub">第 ${attemptNo} 次跟读${attemptNo === 2 ? ' · 上次 3.6 <span class="up">↑0.5</span>' : attemptNo === 3 ? ' · 上次 4.1 <span class="up">↑0.6</span>' : ""}</span>
+      </div>
+      <div class="rc-chips">${chipsFor(history, curIdx)}</div>
+    </div>
+    <div class="rc-dims">
+      ${dimRow("准确度", attempt.accuracy, "每个音发得准不准", !pass && attempt.accuracy < 4.2 ? true : false, "")}
+      ${dimRow("流畅度", attempt.fluency, "语速与停顿", !pass, "停顿偏久 ×2 · 起头重复 ×1")}
+      ${dimRow("完整度", attempt.integrity, "有没有漏词、添词", false, "")}
+    </div>
+    <div class="rc-diag">${diagFor(attempt, pass)}</div>
+    <div class="rc-words">${renderWords(pass ? PASS_WORDS : null)}</div>
+    <div class="rc-actions">
+      <button class="rc-btn primary" data-act="again">🎤 再跟读整句</button>
+      ${pass ? "" : `<button class="rc-btn" data-act="drill">🎯 只练 2 个词</button>`}
+      <button class="rc-link" data-act="tts">🔊 听领读</button>
+      <button class="rc-link" data-act="mine">▶ 听我的录音</button>
+    </div>`;
+  $log.appendChild(card);
+  wireCard(card, attemptNo);
+  animateCard(card);
+  $log.scrollTop = $log.scrollHeight;
+}
+
+function mountReportMini(attempt, attemptNo) {
+  const div = document.createElement("div");
+  div.className = "report-mini";
+  div.innerHTML = `<span>第 ${attemptNo} 次跟读</span><b>${fmt(attempt.total)}</b>
+    <span>· 流畅度 ${fmt(attempt.fluency)}</span>
+    <span class="arr">展开 ▾</span>`;
+  $log.appendChild(div);
+}
+
+function animateCard(card) {
+  const numEl = card.querySelector(".rc-num");
+  const target = Number(numEl.dataset.target);
+  // setInterval 驱动：后台窗格 rAF 会被节流，导致数字停在 0.0
+  const t0 = performance.now();
+  const dur = 750;
+  const timer = setInterval(() => {
+    const k = Math.min(1, (performance.now() - t0) / dur);
+    const eased = 1 - Math.pow(1 - k, 2.2);
+    numEl.textContent = (target * eased).toFixed(1);
+    if (k >= 1) {
+      numEl.textContent = target.toFixed(1);
+      clearInterval(timer);
+    }
+  }, 30);
+  setTimeout(() => {
+    card.querySelectorAll(".dim-bar i").forEach((i) => { i.style.width = i.dataset.w + "%"; });
+  }, 60);
+}
+
+function wireCard(card, attemptNo) {
+  card.querySelectorAll(".rc-btn, .rc-link").forEach((b) => {
+    b.addEventListener("click", () => {
+      const act = b.dataset.act;
+      if (act === "drill") openDrill();
+      else if (act === "again") startSim(attemptNo === 3 ? ATTEMPT3 : ATTEMPT2, attemptNo + 1);
+      else if (act === "tts") demoHint("🔊 播放 AI 领读（演示）");
+      else if (act === "mine") demoHint("▶ 回放你刚才的录音（音频保留在内存，下次跟读覆盖）");
+    });
+  });
+  card.querySelectorAll(".wd[data-word]").forEach((w) => {
+    w.addEventListener("click", () => openPopoverFor(w.dataset.word, w));
+  });
+}
+
+/* ---- 异常态（场景 6） ---- */
+function mountErrorCards() {
+  const c1 = document.createElement("div");
+  c1.className = "report-err";
+  c1.innerHTML = `
+    <div class="re-title">✗ 读的好像不是这句话</div>
+    <div>不用灰心——可能是句子太长跟丢了。<b>🔊 先听一遍领读</b>，照着文字再试一次；也可以只练几个词。</div>
+    <div class="rc-actions">
+      <button class="rc-btn primary" data-act="tts">🔊 听领读</button>
+      <button class="rc-btn" data-act="again">🎤 再跟读</button>
+    </div>
+    <div class="re-why">（服务返回：内容与评测文本不匹配 is_rejected）</div>`;
+  const c2 = document.createElement("div");
+  c2.className = "report-err novoice";
+  c2.innerHTML = `
+    <div class="re-title">· 没听到你的声音</div>
+    <div>离麦克风近一点，按住按钮<b>读完这一句再松开</b>。刚才只录到 0.3 秒。</div>
+    <div class="rc-actions"><button class="rc-btn primary" data-act="again">🎤 重新跟读</button></div>
+    <div class="re-why">（服务返回：未检测到有效语音 28673）</div>`;
+  $log.append(c1, c2);
+  [c1, c2].forEach((c) => c.querySelectorAll(".rc-btn").forEach((b) => {
+    b.addEventListener("click", () => {
+      if (b.dataset.act === "tts") demoHint("🔊 播放 AI 领读（演示）");
+      else startSim(ATTEMPT2, 2);
+    });
+  }));
+}
+
+/* ============================================================
+   音素弹层
+   ============================================================ */
+
+let $pop = null;
+let $logDim = null;
+function closePopover() {
+  if ($pop) { $pop.remove(); $pop = null; }
+  if ($logDim) { $logDim.remove(); $logDim = null; }
+  document.removeEventListener("mousedown", onDocDown, true);
+}
+function onDocDown(e) {
+  if ($pop && !$pop.contains(e.target)) closePopover();
+}
+
+function openPopoverFor(wordKey, anchorEl) {
+  closePopover();
+  const w = WORDS[wordKey];
+  if (!w) return;
+  const q = w.dp === 16 ? "missed" : w.s >= 3 ? "ok" : "bad";
+  const $pop2 = document.createElement("div");
+  $pop2.className = "popover";
+  let inner;
+  if (w.dp === 16) {
+    inner = `
+      <div class="po-word"><b>${wordKey}</b><span class="ipa">${w.ipa ?? ""}</span><span class="wscore missed">漏读</span></div>
+      <div class="po-tip">整句里<b>没有读到这个词</b>——不算你读错，下轮把它带上就好。</div>
+      <div class="po-actions">
+        <button class="rc-btn" data-p="tts">🔊 听这个词</button>
+        <button class="rc-btn primary" data-p="again">🎤 再试整句</button>
+      </div>`;
+  } else {
+    inner = `
+      <div class="po-word"><b>${wordKey}</b><span class="ipa">${w.ipa}</span><span class="wscore ${q}">${fmt(w.s)}</span></div>
+      <div class="ph-row">${w.phones.map((p) =>
+        `<span class="ph ${p.st}">${p.p}${p.st === "err" ? `<i>${p.note}</i>` : ""}</span>`).join("")}</div>
+      <div class="po-tip">${w.tip}</div>
+      <div class="po-actions">
+        <button class="rc-btn" data-p="tts">🔊 听这个词</button>
+        <button class="rc-btn primary" data-p="drill">🎯 练这个词</button>
+      </div>`;
+  }
+  $pop2.innerHTML = `<button class="po-close">✕</button>${inner}`;
+  // 半透明遮罩：词详情是浮层，压暗对话流，避免误读成报告卡的一部分
+  $logDim = document.createElement("div");
+  $logDim.className = "log-dim";
+  $log.append($logDim, $pop2);
+  $pop = $pop2;
+
+  // 定位：锚词下方优先，整体约束在日志可视区内（不遮维度条/诊断）
+  const anchor = anchorEl || document.querySelector(`.wd[data-word="${wordKey}"]`);
+  const logRect = $log.getBoundingClientRect();
+  const r = anchor.getBoundingClientRect();
+  const popH = $pop2.offsetHeight || 208;
+  let left = r.left - logRect.left + $log.scrollLeft - 8;
+  left = Math.max(8, Math.min(left, $log.clientWidth - 272 - 8));
+  let top = r.bottom - logRect.top + $log.scrollTop + 7;
+  const maxTop = $log.scrollTop + $log.clientHeight - popH - 10;
+  if (top > maxTop) top = Math.max(r.top - logRect.top + $log.scrollTop - popH - 7, $log.scrollTop + 6);
+  top = Math.max($log.scrollTop + 6, Math.min(top, maxTop));
+  $pop2.style.left = left + "px";
+  $pop2.style.top = top + "px";
+
+  $logDim.addEventListener("mousedown", (e) => { e.stopPropagation(); closePopover(); });
+
+  $pop2.querySelector(".po-close").addEventListener("click", closePopover);
+  $pop2.querySelectorAll("[data-p]").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const p = b.dataset.p;
+      if (p === "tts") demoHint(`🔊 播放单词 ${wordKey}（演示）`);
+      else if (p === "drill") { closePopover(); openDrill(); }
+      else if (p === "again") { closePopover(); startSim(ATTEMPT2, 2); }
+    });
+  });
+  setTimeout(() => document.addEventListener("mousedown", onDocDown, true), 0);
+}
+
+/* ============================================================
+   只练差词（底部抽屉）
+   ============================================================ */
+
+let $drill = null;
+function closeDrill() {
+  if ($drill) { $drill.remove(); $drill = null; }
+}
+
+function openDrill() {
+  closeDrill();
+  const steps = ["latte", "fifty"];
+  const wrap = document.createElement("div");
+  wrap.className = "drill-backdrop";
+  wrap.innerHTML = `
+    <div class="drill-sheet">
+      <div class="drill-head">
+        <span class="t">只练差的词</span>
+        <span class="drill-dots" id="drillDots">${steps.map(() => "<i></i>").join("")}</span>
+        <span class="sub">练完回整句，省时间</span>
+        <button class="x" id="drillX">✕</button>
+      </div>
+      <div id="drillBody"></div>
+    </div>`;
+  document.getElementById("mockApp").appendChild(wrap);
+  $drill = wrap;
+  wrap.querySelector("#drillX").addEventListener("click", closeDrill);
+  let idx = 0;
+  const renderStep = () => {
+    const key = steps[idx];
+    const w = WORDS[key];
+    const dots = wrap.querySelector("#drillDots");
+    dots.innerHTML = steps.map((_, i) => `<i class="${i < idx ? "done" : i === idx ? "cur" : ""}"></i>`).join("");
+    const body = wrap.querySelector("#drillBody");
+    body.innerHTML = `
+      <div class="drill-body">
+        <div class="drill-card">
+          <div class="dw">${key}</div>
+          <div class="dipa">${w.ipa} · 上次 ${fmt(w.s)}</div>
+          <div class="ph-row">${w.phones.map((p) =>
+            `<span class="ph ${p.st}">${p.p}${p.st === "err" ? `<i>${p.note}</i>` : ""}</span>`).join("")}</div>
+        </div>
+        <div class="drill-tip">${w.tip}</div>
+      </div>
+      <div class="drill-actions" id="drillActs">
+        <button class="rc-btn" data-p="tts">🔊 领读</button>
+        <button class="drill-hold" id="drillHold">🎤 按住跟读这个词</button>
+      </div>`;
+    body.querySelector('[data-p="tts"]').addEventListener("click", () => demoHint(`🔊 播放单词 ${key}（演示）`));
+    const hold = body.querySelector("#drillHold");
+    hold.addEventListener("click", () => {
+      if (hold.classList.contains("rec")) return;
+      hold.classList.add("rec");
+      hold.textContent = "跟读中…松开结束";
+      let lv = 0;
+      const lvT = setInterval(() => { lv = Math.min(1, lv + 0.12 + Math.random() * 0.18); $levelBar.style.width = (lv * 100) + "%"; }, 90);
+      simTimer = setTimeout(() => {
+        clearInterval(lvT);
+        $levelBar.style.width = "0";
+        hold.classList.remove("rec");
+        const sc = w.drill.score;
+        const acts = body.querySelector("#drillActs");
+        acts.innerHTML = `
+          <div class="drill-result">
+            <span class="sc up">${fmt(sc)}</span>
+            <span class="note">比整句里的 ${fmt(w.s)} 高多了${sc >= 4.2 ? "，这个词过关 ✓" : "，注意红色高亮的那个音"}。</span>
+          </div>
+          <button class="rc-btn primary" id="drillNext">${idx + 1 < steps.length ? "下一个词 →" : "回整句再跟读 🎤"}</button>`;
+        acts.querySelector("#drillNext").addEventListener("click", () => {
+          idx += 1;
+          if (idx < steps.length) renderStep();
+          else {
+            body.innerHTML = `
+              <div class="drill-done">
+                <div class="big">✓ 两个词都练完了</div>
+                <div class="sub">latte 3.9 · fifty 4.4 —— 带着感觉回整句，这轮应该能过 4.2</div>
+                <button class="rc-btn primary" id="backFull">🎤 再跟读整句</button>
+              </div>`;
+            body.querySelector("#backFull").addEventListener("click", () => { closeDrill(); startSim(ATTEMPT3, 3); });
+          }
+        });
+      }, 1600);
+    });
+  };
+  renderStep();
+}
+
+/* ============================================================
+   打分过程模拟（按住跟读 → 评分 → 报告卡）
+   ============================================================ */
+
+function startSim(result, attemptNo) {
+  teardown();
+  // 清掉已有报告卡/异常卡，保留气泡
+  $log.querySelectorAll(".report-card, .report-err, .report-mini, .speak-toast").forEach((e) => e.remove());
+  $shadowBtn.classList.add("busy");
+  $shadowBtn.textContent = "松开结束跟读";
+  let lv = 0;
+  levelTimer = setInterval(() => {
+    lv = Math.min(1, lv + 0.1 + Math.random() * 0.25 - (Math.random() < 0.25 ? 0.18 : 0));
+    $levelBar.style.width = (lv * 100) + "%";
+  }, 90);
+  simTimer = setTimeout(() => {
+    clearInterval(levelTimer);
+    $levelBar.style.width = "0";
+    $shadowBtn.textContent = "评分中…";
+    simTimer = setTimeout(() => {
+      $shadowBtn.classList.remove("busy");
+      mountReport(result, attemptNo);
+      if (result === ATTEMPT3) { $shadowBtn.textContent = "跟读 4.7 · 看诊断"; }
+      else { $shadowBtn.textContent = "跟读 4.1 · 看诊断"; }
+      setTimeout(() => {
+        const mini = document.querySelector(".report-mini");
+        if (!mini) return;
+      }, 0);
+    }, 1100);
+  }, 2000);
+}
+
+/* ---- 演示提示浮条 ---- */
+let hintTimer = null;
+function demoHint(text) {
+  document.querySelectorAll(".demo-hint").forEach((e) => e.remove());
+  const d = document.createElement("div");
+  d.className = "demo-hint";
+  d.textContent = text;
+  document.getElementById("mockApp").appendChild(d);
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => d.remove(), 2200);
+}
+
+/* ---- 顶部按钮 ---- */
+$shadowBtn.addEventListener("click", () => {
+  if ($shadowBtn.classList.contains("busy")) return;
+  startSim(currentScene === 5 ? ATTEMPT3 : ATTEMPT2, currentScene === 5 ? 3 : 2);
+});
+$holdBtn.addEventListener("click", () => demoHint("（演示：按住说话走对话环，与本原型无关）"));
+document.getElementById("replayTtsBtn").addEventListener("click", () => demoHint("🔊 播放 AI 这句话（演示）"));
+document.getElementById("replayBtn").addEventListener("click", () => {
+  activateScene(2);
+  startSim(ATTEMPT2, 2);
+});
+
+/* ---- 启动 ---- */
+activateScene(2);
+</script>
+</body>
+</html>
