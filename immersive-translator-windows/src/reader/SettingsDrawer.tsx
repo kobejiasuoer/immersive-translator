@@ -30,6 +30,11 @@ import {
   XFUYUN_TTS_VOICE_SUGGESTIONS,
 } from "../core/xfyunTts";
 import {
+  DEFAULT_EDGE_VOICE,
+  DEFAULT_EDGE_VOICE_EN,
+  EDGE_TTS_VOICE_SUGGESTIONS,
+} from "../core/edgeTts";
+import {
   reminderGetConfig,
   reminderSetConfig,
   type ReminderConfig,
@@ -384,15 +389,15 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
           </div>
 
           <div className="drawer-group-title">朗读</div>
-          <div className="drawer-row" title="本地 = Windows 系统 SAPI（离线可用）；讯飞在线 = 云端多音色，每日 500 次免费（凭据在 设置 → 语音）">
+          <div className="drawer-row" title="Edge 在线 = 微软神经音色（免费、无需凭据，默认）；讯飞在线 = 云音色需凭据；本地 = Windows 系统 SAPI（离线可用）">
             <span className="label">朗读引擎</span>
             <div className="control">
               <div className="seg">
                 <button
-                  className={settings.ttsProvider !== "xfyun" ? "active" : ""}
-                  onClick={() => onPatch({ ttsProvider: "local" })}
+                  className={settings.ttsProvider === "edge" ? "active" : ""}
+                  onClick={() => onPatch({ ttsProvider: "edge" })}
                 >
-                  本地系统
+                  Edge 在线
                 </button>
                 <button
                   className={settings.ttsProvider === "xfyun" ? "active" : ""}
@@ -400,9 +405,64 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
                 >
                   讯飞在线
                 </button>
+                <button
+                  className={settings.ttsProvider === "local" ? "active" : ""}
+                  onClick={() => onPatch({ ttsProvider: "local" })}
+                >
+                  本地系统
+                </button>
               </div>
             </div>
           </div>
+          {settings.ttsProvider === "edge" && (
+            <>
+              <div className="drawer-row" title="Edge 中文句音色（微软神经音色 ShortName）；留空 = 晓晓。已播句子进缓存（内存+磁盘），重听不再请求网络">
+                <span className="label">Edge音色·中文</span>
+                <div className="control" style={{ flex: 1 }}>
+                  <input
+                    className="reader-cred-input"
+                    style={{ flex: 1, width: "auto" }}
+                    list="edge-voice-list"
+                    placeholder={DEFAULT_EDGE_VOICE}
+                    value={settings.edgeVoiceZh}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(e) => onPatch({ edgeVoiceZh: e.target.value.trim() })}
+                    aria-label="Edge 云音色（中文）"
+                  />
+                </div>
+              </div>
+              <div className="drawer-row" title="Edge 英文句音色；留空 = Ava（女声，自然）。男声推荐 AndrewNeural">
+                <span className="label">Edge音色·英文</span>
+                <div className="control" style={{ flex: 1 }}>
+                  <input
+                    className="reader-cred-input"
+                    style={{ flex: 1, width: "auto" }}
+                    list="edge-voice-list"
+                    placeholder={DEFAULT_EDGE_VOICE_EN}
+                    value={settings.edgeVoiceEn}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(e) => onPatch({ edgeVoiceEn: e.target.value.trim() })}
+                    aria-label="Edge 云音色（英文）"
+                  />
+                  <datalist id="edge-voice-list">
+                    {EDGE_TTS_VOICE_SUGGESTIONS.map((v) => (
+                      <option key={v.voice} value={v.voice}>
+                        {v.label}
+                      </option>
+                    ))}
+                  </datalist>
+                </div>
+              </div>
+              <div className="drawer-row" title="Edge 在线合成为微软「大声朗读」同源服务，免费且无需账号；属非官方接口，偶发不可用时切回本地系统或讯飞">
+                <span className="label">服务说明</span>
+                <div className="control drawer-static" style={{ flex: 1, justifyContent: "flex-end" }}>
+                  免费 · 无需凭据 · 需联网
+                </div>
+              </div>
+            </>
+          )}
           {settings.ttsProvider === "xfyun" && (
             <>
               <div className="drawer-row" title="讯飞中文发音人（vcn）：中文句用它读；完整列表在讯飞控制台「语音合成」可试听，未授权音色会提示 11200。已播句子进缓存（内存+磁盘），重听不耗每日次数">
@@ -467,7 +527,7 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
               <select
                 className="reader-select"
                 value={settings.voice}
-                disabled={settings.ttsProvider === "xfyun"}
+                disabled={settings.ttsProvider !== "local"}
                 onChange={(e) => onPatch({ voice: e.target.value })}
                 aria-label="本地朗读音色"
               >
