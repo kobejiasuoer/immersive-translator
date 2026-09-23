@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Immersive Translator 图标重设计方案</title>
+<style>
+  :root {
+    --bg: #0F1016;
+    --ink: #E9EAF2;
+    --ink-2: #A7ABBE;
+    --ink-3: #6E7386;
+    --tile-dark: #191B24;
+    --tile-light: #F4F5FA;
+    --line: rgba(255,255,255,.07);
+    --brand: #6E7BFF;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+    padding: 64px 48px 80px;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+
+  header h1 { font-size: 34px; font-weight: 600; letter-spacing: .5px; }
+  header .sub { color: var(--ink-2); margin-top: 10px; max-width: 62ch; }
+  header .sub b { color: var(--ink); font-weight: 600; }
+
+  /* 现状 */
+  .baseline {
+    display: flex; gap: 28px; align-items: center;
+    margin-top: 44px; padding: 24px 28px;
+    background: rgba(255,255,255,.03);
+    border-radius: 16px;
+  }
+  .baseline img { width: 88px; height: 88px; border-radius: 20px; flex: none; }
+  .baseline h2 { font-size: 16px; font-weight: 600; color: var(--ink-2); }
+  .baseline p { color: var(--ink-2); font-size: 14px; max-width: 78ch; }
+
+  section { margin-top: 72px; }
+  .sec-label { font-size: 13px; color: var(--ink-3); letter-spacing: 2px; }
+
+  /* 方案一 hero */
+  .hero { display: grid; grid-template-columns: 340px 1fr; gap: 48px; margin-top: 20px; align-items: start; }
+  .hero h3 { font-size: 26px; font-weight: 600; margin-top: 6px; }
+  .hero .tagline { color: var(--brand); font-size: 15px; margin-top: 2px; }
+  .hero .desc { color: var(--ink-2); margin-top: 18px; font-size: 14.5px; }
+  .hero .note { color: var(--ink-3); font-size: 13px; margin-top: 14px; border-left: 2px solid var(--brand); padding-left: 12px; }
+  .pick { display: inline-block; margin-top: 20px; font-size: 13px; color: #0F1016; background: var(--ink); border-radius: 999px; padding: 4px 14px; font-weight: 600; }
+
+  .stage { display: flex; gap: 20px; align-items: flex-start; }
+  .tile { border-radius: 24px; display: flex; align-items: center; justify-content: center; }
+  .tile.dark { background: var(--tile-dark); border: 1px solid var(--line); }
+  .tile.light { background: var(--tile-light); }
+  .stage .tile { width: 256px; height: 256px; flex: none; }
+  .stage img { width: 160px; height: 160px; display: block; }
+
+  .ramp { display: flex; flex-wrap: wrap; gap: 14px 12px; margin-top: 18px; align-content: flex-start; }
+  .ramp-col { text-align: center; }
+  .ramp-col .cell { border-radius: 14px; display: flex; align-items: center; justify-content: center; }
+  .ramp-col .cell.dark { background: var(--tile-dark); border: 1px solid var(--line); }
+  .ramp-col .cell.light { background: var(--tile-light); }
+  .ramp-col .cap { font-size: 11px; color: var(--ink-3); margin-top: 6px; font-variant-numeric: tabular-nums; }
+
+  /* 方案二三四 */
+  .trio { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 44px; margin-top: 20px; }
+  .trio h3 { font-size: 19px; font-weight: 600; margin-top: 6px; }
+  .trio .tagline { color: var(--brand); font-size: 13.5px; margin-top: 2px; }
+  .trio .desc { color: var(--ink-2); font-size: 13.5px; margin-top: 12px; min-height: 118px; }
+  .trio .tile { width: 160px; height: 160px; border-radius: 20px; }
+  .trio .stage { gap: 14px; }
+  .trio .stage img { width: 100px; height: 100px; }
+
+  /* 任务栏实测 */
+  .taskbars { margin-top: 20px; border-radius: 16px; overflow: hidden; border: 1px solid var(--line); }
+  .taskbar {
+    height: 60px; display: flex; align-items: center; gap: 10px; padding: 0 20px;
+  }
+  .taskbar.on-dark { background: #20222C; }
+  .taskbar.on-light { background: #EDEEF4; border-top: 1px solid var(--line); }
+  .tb-start { width: 30px; height: 30px; border-radius: 8px; background: #4A5568; display:flex; align-items:center; justify-content:center; color:#fff; font-size:15px; }
+  .taskbar.on-light .tb-start { background: #fff; color:#5F6368; box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+  .tb-app { width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+  .tb-app img { width: 26px; height: 26px; border-radius: 6px; display:block; }
+  .tb-app.active { background: rgba(255,255,255,.10); }
+  .taskbar.on-light .tb-app.active { background: rgba(0,0,0,.07); }
+  .tb-divider { width: 1px; height: 26px; background: rgba(255,255,255,.10); margin: 0 6px; }
+  .taskbar.on-light .tb-divider { background: rgba(0,0,0,.10); }
+  .tb-clock { margin-left: auto; text-align: right; font-size: 12px; line-height: 1.35; }
+  .taskbar.on-dark .tb-clock { color: #C9CCDA; }
+  .taskbar.on-light .tb-clock { color: #4A4D57; }
+  .tb-cap { font-size: 12.5px; color: var(--ink-3); margin: 14px 4px 0; }
+
+  /* 色板与落地 */
+  .palette { display: flex; gap: 14px; margin-top: 20px; flex-wrap: wrap; }
+  .swatch { width: 150px; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); }
+  .swatch .chip { height: 64px; }
+  .swatch .meta { padding: 10px 12px; font-size: 12px; color: var(--ink-2); background: rgba(255,255,255,.03); }
+  .swatch .meta b { display: block; color: var(--ink); font-size: 12.5px; font-weight: 600; }
+  footer { margin-top: 64px; color: var(--ink-3); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Immersive Translator 图标重设计方案</h1>
+    <p class="sub">2026-09-23，共四个方向。所有方案统一回归应用内品牌渐变 <b>靛蓝 #4C5FF0 → 紫 #7A5CF0</b>（styles.css 中的 --accent-grad），让图标与界面是同一套语言；差异只在图形本身，便于聚焦比较。</p>
+  </header>
+
+  <div class="baseline">
+    <img src="current.png" alt="现有图标">
+    <div>
+      <h2>现状：品红紫渐变 + 双笔尖</h2>
+      <p>三个问题：颜色偏离应用内的靛蓝主色，图标与界面脱节；两个笔尖在小尺寸下读作“等号”或“编辑”，翻译的含义传不出来；笔尖造型细节多，缩小到 16px 时糊成一团。</p>
+    </div>
+  </div>
+
+  <section>
+    <div class="sec-label">推荐方向</div>
+    <div class="hero">
+      <div>
+        <h3>方案一 · 单字文标</h3>
+        <p class="tagline">几何化的汉字「文」：点、横、撇、捺，圆头粗笔</p>
+        <p class="desc">翻译的落点是文字，一个“文”字同时说出文字、译文、文化三层意思。方案一不做双语并排——那是 Google 翻译走了十年的路——而是把“文”重写成一枚几何字标：笔画全部换成圆头粗笔，撇捺交叉成稳定的 X 骨架，远看像一个交换的结。对中文用户它是可读的字，对国际用户它是一枚带东方身份的抽象记号。</p>
+        <p class="note">四个方案里唯一“只此一家”的图形；24px 以下点画并入横画，整体仍保持“上有横、下交叉”的轮廓记忆。</p>
+        <span class="pick">推荐</span>
+      </div>
+      <div>
+        <div class="stage">
+          <div class="tile dark"><img src="a-wen.svg" alt=""></div>
+          <div class="tile light"><img src="a-wen.svg" alt=""></div>
+        </div>
+        <div class="ramp" id="ramp-a"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">其余方向</div>
+    <div class="trio">
+      <div>
+        <div class="stage">
+          <div class="tile dark"><img src="b-shuangxing-duiyi.svg" alt=""></div>
+          <div class="tile light"><img src="b-shuangxing-duiyi.svg" alt=""></div>
+        </div>
+        <h3>方案二 · 双行对译</h3>
+        <p class="tagline">原文淡、译文实，字穿孔嵌入行首</p>
+        <p class="desc">直接抽象产品的核心画面：原句上浮现译文。上行半透明是原文，行首穿孔 A；下行实白是译文，行首穿孔文，整体右移一步表示“译出一层”。缩到 16px 退化为两行文字，依然干净。</p>
+        <div class="ramp" id="ramp-b"></div>
+      </div>
+      <div>
+        <div class="stage">
+          <div class="tile dark"><img src="c-chenjin-toujing.svg" alt=""></div>
+          <div class="tile light"><img src="c-chenjin-toujing.svg" alt=""></div>
+        </div>
+        <h3>方案三 · 沉浸透镜</h3>
+        <p class="tagline">玻璃透镜之下，文字由模糊变清晰</p>
+        <p class="desc">“沉浸”的具象化：隔着透镜看文字，镜外模糊的是原文，镜内聚焦的是译文。气质偏精致、工具感强；风险是圆环 + 内容的构图在远看时容易和搜索类产品混淆。</p>
+        <div class="ramp" id="ramp-c"></div>
+      </div>
+      <div>
+        <div class="stage">
+          <div class="tile dark"><img src="d-shuangbi-duiyi.svg" alt=""></div>
+          <div class="tile light"><img src="d-shuangbi-duiyi.svg" alt=""></div>
+        </div>
+        <h3>方案四 · 双笔对译</h3>
+        <p class="tagline">现版笔尖基因的整理与延续</p>
+        <p class="desc">保留老用户认知：两只钢笔尖一上一下、指向相反，如两种语言在互换。相比现版，笔尖有了明确的结构（笔缝、气孔），配色回归品牌靛蓝。是四个方向里最保守、迁移成本最低的一个。</p>
+        <div class="ramp" id="ramp-d"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">任务栏实测 · 26px 实际显示尺寸</div>
+    <div class="taskbars">
+      <div class="taskbar on-dark">
+        <div class="tb-start">⊞</div>
+        <div class="tb-divider"></div>
+        <div class="tb-app" title="现状"><img src="current.png" alt=""></div>
+        <div class="tb-app active"><img src="a-wen.svg" alt=""></div>
+        <div class="tb-app"><img src="b-shuangxing-duiyi.svg" alt=""></div>
+        <div class="tb-app"><img src="c-chenjin-toujing.svg" alt=""></div>
+        <div class="tb-app"><img src="d-shuangbi-duiyi.svg" alt=""></div>
+        <div class="tb-clock">23:09<br>2026/9/23</div>
+      </div>
+      <div class="taskbar on-light">
+        <div class="tb-start">⊞</div>
+        <div class="tb-divider"></div>
+        <div class="tb-app" title="现状"><img src="current.png" alt=""></div>
+        <div class="tb-app active"><img src="a-wen.svg" alt=""></div>
+        <div class="tb-app"><img src="b-shuangxing-duiyi.svg" alt=""></div>
+        <div class="tb-app"><img src="c-chenjin-toujing.svg" alt=""></div>
+        <div class="tb-app"><img src="d-shuangbi-duiyi.svg" alt=""></div>
+        <div class="tb-clock">23:09<br>2026/9/23</div>
+      </div>
+    </div>
+    <p class="tb-cap">每条任务栏从左到右：现状、方案一（高亮为选中态）、方案二、方案三、方案四。深浅两种系统主题下，四个新方案的品牌色一致性与现版品红形成明显对比。</p>
+  </section>
+
+  <section>
+    <div class="sec-label">统一色板</div>
+    <div class="palette">
+      <div class="swatch"><div class="chip" style="background:#4C5FF0"></div><div class="meta"><b>靛蓝 · 起点色</b>#4C5FF0，应用内 --accent</div></div>
+      <div class="swatch"><div class="chip" style="background:#7A5CF0"></div><div class="meta"><b>紫 · 终点色</b>#7A5CF0，135° 对角渐变</div></div>
+      <div class="swatch"><div class="chip" style="background:linear-gradient(135deg,#4C5FF0,#7A5CF0)"></div><div class="meta"><b>品牌渐变</b>四案共用的底色</div></div>
+      <div class="swatch"><div class="chip" style="background:#FFFFFF"></div><div class="meta"><b>图形白</b>前景一律纯白</div></div>
+    </div>
+  </section>
+
+  <footer>
+    选定方向后：以 SVG 为源生成全套 Windows 资产（icon.ico 内含 16/24/32/48/256，PNG 32/128/256，托盘图标），并同步更新 tauri.conf.json 与安装包快捷方式。
+  </footer>
+</div>
+
+<script>
+  // 尺寸阶梯：64/48/32/24/16，深浅两种底
+  const sizes = [64, 48, 32, 24, 16];
+  const ramps = {
+    "ramp-a": "a-wen.svg",
+    "ramp-b": "b-shuangxing-duiyi.svg",
+    "ramp-c": "c-chenjin-toujing.svg",
+    "ramp-d": "d-shuangbi-duiyi.svg",
+  };
+  for (const [id, src] of Object.entries(ramps)) {
+    const el = document.getElementById(id);
+    for (const theme of ["dark", "light"]) {
+      for (const s of sizes) {
+        const col = document.createElement("div");
+        col.className = "ramp-col";
+        const cell = document.createElement("div");
+        cell.className = `cell ${theme}`;
+        cell.style.cssText = `width:${s + 24}px;height:${s + 24}px;`;
+        const img = document.createElement("img");
+        img.src = src;
+        img.style.width = s + "px";
+        img.style.height = s + "px";
+        img.style.display = "block";
+        img.style.borderRadius = Math.max(3, Math.round(s * 0.226)) + "px";
+        cell.appendChild(img);
+        col.appendChild(cell);
+        const cap = document.createElement("div");
+        cap.className = "cap";
+        cap.textContent = s + (theme === "light" ? " 浅" : "");
+        col.appendChild(cap);
+        el.appendChild(col);
+      }
+    }
+  }
+</script>
+</body>
+</html>

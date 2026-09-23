@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- 方案四 双笔对译：延续现版笔尖基因，两笔相对如语言互换 -->
+  <defs>
+    <linearGradient id="fd-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4C5FF0"/>
+      <stop offset="1" stop-color="#7A5CF0"/>
+    </linearGradient>
+    <radialGradient id="fd-glow" cx="0.3" cy="0.2" r="0.9">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fd-shade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0.62" stop-color="#1B1464" stop-opacity="0"/>
+      <stop offset="1" stop-color="#1B1464" stop-opacity="0.18"/>
+    </linearGradient>
+    <mask id="fd-nib">
+      <path d="M158 148 H328 L396 196 L328 244 H160 Q128 244 128 212 V180 Q128 148 160 148 Z" fill="#fff"/>
+      <path d="M354 196 H300" stroke="#000" stroke-width="12" stroke-linecap="round"/>
+      <circle cx="274" cy="196" r="13" fill="#000"/>
+    </mask>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#fd-bg)"/>
+  <rect width="512" height="512" rx="116" fill="url(#fd-glow)"/>
+  <rect width="512" height="512" rx="116" fill="url(#fd-shade)"/>
+  <rect width="512" height="512" fill="#FFFFFF" mask="url(#fd-nib)"/>
+  <g transform="matrix(-1 0 0 1 512 172)">
+    <rect width="512" height="512" fill="#FFFFFF" mask="url(#fd-nib)"/>
+  </g>
+</svg>

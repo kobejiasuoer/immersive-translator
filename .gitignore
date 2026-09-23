@@ -24,6 +24,12 @@ diagnostic.log
 # Local installer output (built by tauri, not committed)
 release-builds/
 
+# 根目录发布产物归档（本地留档，正式分发走 GitHub Release）
+release-v*/
+
+# [SPIKE] Edge TTS 探针：音频样本绝不入库（探针脚本随仓库）
+.spike/*.mp3
+
 # WorkBuddy workspace memory (local only)
 .workbuddy/
 
