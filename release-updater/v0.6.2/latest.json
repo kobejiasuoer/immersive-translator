@@ -1,0 +1,11 @@
+{
+  "version": "0.6.2",
+  "notes": " v0.6.2：朗读接入 Edge 免费云音色（默认引擎、无需凭据），跟读报告全新升级（准确度/流畅度/完整度三维报告、音素明细、差词专练、报告历史），修复口语陪练识别 10163",
+  "pub_date": "2026-09-23T07:26:10Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSeU96WmpWcTg1Tlk0b1VUdFZsVWZnczYvd1ZDdjZUU2tna0pNY3UvNkJTcjZLR2R4ZFY4YjdZUGpCVGtDZ3NLZTJTYzlWRlFHRHo3NUV3L0R6clZPQlNmc1l2M1dMZ0E0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwMTQ4MzUwCWZpbGU6Y2ktdjA2Mi5leGUKZ0lDak5DeGRJaU12Kzg1aUVOVS9HajBsSy9rWDhTTC9jbHlLUzg0WktJbWJYdEhQb0RqTE4xZmxhbXFWUG5XQXBWUXl1RjBwcmJKbkVNemZXUmEzQWc9PQo=",
+      "url": "https://gh-proxy.com/https://github.com/kobejiasuoer/immersive-translator/releases/latest/download/ImmersiveTranslator_0.6.2_x64-setup.exe"
+    }
+  }
+}
