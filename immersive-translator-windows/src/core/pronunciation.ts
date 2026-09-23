@@ -49,6 +49,8 @@ export interface PronunciationResult {
   accuracy: number;
   fluency: number;
   standard: number;
+  /** 完整度（漏读/增读会拉低；篇章层字段，单句评测恒接近 5）。 */
+  integrity: number;
   isRejected: boolean;
   /** 异常码字符串（"28673" 无语音/音量小、"28676" 乱说、"28680" 信噪比低…）；正常为 null。 */
   exceptInfo: string | null;
@@ -63,6 +65,8 @@ export interface WordMark {
   end: number;
   quality: WordQuality;
   score: number;
+  /** 源自评测返回的词明细（音节/音素，点词看细节用）；对不上时缺省。 */
+  word?: WordScore;
 }
 
 const ISE_HOST = "ise-api.xfyun.cn";
@@ -142,13 +146,14 @@ function parseSylls(inner: string): SyllScore[] {
 
 export function parseIseXml(xml: string): PronunciationResult {
   // 英文题型层级：read_chapter（篇章分）> sentence（句分）> word > syll > phone。
-  // is_rejected / except_info 挂在篇章层，句层兜底。
-  const sentenceAttrs = xml.match(/<sentence\b([^>]*)>/)
-    ? attrMap(xml.match(/<sentence\b([^>]*)>/)![1])
-    : {};
+  // is_rejected / except_info / integrity_score 挂在篇章层，句层兜底。
+  // 整段回复（1-3 句）一次送评时会有多个 sentence：四项句分按 word_count
+  // 加权平均成整段分（单句时退化为该句分，与旧版行为一致）。
   const chapterAttrs = xml.match(/<read_chapter\b([^>]*)>/)
     ? attrMap(xml.match(/<read_chapter\b([^>]*)>/)![1])
-    : sentenceAttrs;
+    : {};
+  const sentenceAttrsList = [...xml.matchAll(/<sentence\b([^>]*)>/g)].map((m) => attrMap(m[1]));
+  const first = sentenceAttrsList[0] ?? chapterAttrs;
 
   const words: WordScore[] = [];
   // 成对与自闭合两种 word 标签合并按文档序匹配（漏读词常是自闭合）。
@@ -164,12 +169,28 @@ export function parseIseXml(xml: string): PronunciationResult {
     });
   }
 
+  const weightOf = (a: Record<string, string>) => {
+    const n = Number(a.word_count);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  };
+  const wavg = (key: string): number => {
+    if (sentenceAttrsList.length <= 1) return num(first, key);
+    let sum = 0;
+    let w = 0;
+    for (const a of sentenceAttrsList) {
+      sum += num(a, key) * weightOf(a);
+      w += weightOf(a);
+    }
+    return w > 0 ? sum / w : 0;
+  };
+
   const exceptInfo = chapterAttrs.except_info && chapterAttrs.except_info !== "0" ? chapterAttrs.except_info : null;
   return {
-    total: num(sentenceAttrs, "total_score"),
-    accuracy: num(sentenceAttrs, "accuracy_score"),
-    fluency: num(sentenceAttrs, "fluency_score"),
-    standard: num(sentenceAttrs, "standard_score"),
+    total: wavg("total_score"),
+    accuracy: wavg("accuracy_score"),
+    fluency: wavg("fluency_score"),
+    standard: wavg("standard_score"),
+    integrity: chapterAttrs.integrity_score !== undefined ? num(chapterAttrs, "integrity_score") : 5,
     isRejected: chapterAttrs.is_rejected === "true",
     exceptInfo,
     words,
@@ -249,7 +270,7 @@ export function mapWordsToText(text: string, words: WordScore[]): WordMark[] {
           : w.totalScore >= 3
             ? "ok"
             : "bad";
-    marks.push({ start: token.start, end: token.end, quality, score: w.totalScore });
+    marks.push({ start: token.start, end: token.end, quality, score: w.totalScore, word: w });
     p = choice.match + 1;
   }
   return marks;

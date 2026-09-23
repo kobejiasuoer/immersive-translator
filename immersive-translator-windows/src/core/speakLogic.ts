@@ -5,8 +5,10 @@
  * 会话类型同时是 Rust speak_store.rs 的存储格式（camelCase）与
  * contracts/reading-room.schema.json 的 speakSession 定义，改动需三处同步。
  * 对话轮：用户说（ASR 英文转写）→ AI 回复（1-3 句口语英文 + 一行中文提示）
- * → 可选跟读（ISE 打分挂在 assistant 轮上）。SRS/生词数据不经过这里。
+ * → 可选跟读（ISE 报告挂 assistant 轮）。SRS/生词数据不经过这里。
  */
+
+import type { WordScore } from "./pronunciation";
 
 export const SPEAK_SCHEMA_VERSION = 1;
 
@@ -73,14 +75,27 @@ export function difficultyOf(id: SpeakDifficulty): { id: SpeakDifficulty; label:
   return SPEAK_DIFFICULTIES.find((d) => d.id === id) ?? SPEAK_DIFFICULTIES[1];
 }
 
+/** 一次跟读评测的完整结果（5 分制；words 是讯飞识别词序列，含音节/音素）。 */
+export interface ShadowAttempt {
+  at: number;
+  total: number;
+  accuracy: number;
+  fluency: number;
+  /** 完整度（篇章层；漏读/增读拉低）。 */
+  integrity: number;
+  words: WordScore[];
+}
+
 /** 一轮对话。user.text 是 ASR 转写；assistant.text 是英文回复。 */
 export interface SpeakTurn {
   role: "user" | "assistant";
   text: string;
   /** assistant 轮的中文提示（这句意思 + 怎么接话）。 */
   hintZh?: string;
-  /** assistant 轮的跟读得分（5 分制 ISE；null/缺省 = 没测）。 */
+  /** 兼容字段：最新一次跟读总分（旧版客户端/列表预览用）。 */
   shadowScore?: number;
+  /** 跟读报告历史（最新在末尾）；旧会话无此字段。 */
+  shadowAttempts?: ShadowAttempt[];
   at: number;
 }
 

@@ -560,6 +560,128 @@
         "hard"
       ]
     },
+    "speakShadowPhone": {
+      "type": "object",
+      "description": "音素级评测明细（ARPAbet 码 + GOP 惩罚）。",
+      "required": [
+        "content"
+      ],
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "ARPAbet 音素码（dh / ih / ey …）"
+        },
+        "dpMessage": {
+          "type": "integer",
+          "description": "0 正常，非 0 异常标记"
+        },
+        "gwpp": {
+          "type": "number",
+          "description": "GOP 惩罚值，越负问题越大"
+        }
+      }
+    },
+    "speakShadowSyll": {
+      "type": "object",
+      "description": "音节级评测明细。",
+      "required": [
+        "content"
+      ],
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "syllScore": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "serrMsg": {
+          "type": "integer"
+        },
+        "phones": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/speakShadowPhone"
+          }
+        }
+      }
+    },
+    "speakShadowWord": {
+      "type": "object",
+      "description": "词级评测明细（content 为识别词，位置是音频帧）。",
+      "required": [
+        "content"
+      ],
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "totalScore": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 5,
+          "description": "5 分制词分"
+        },
+        "dpMessage": {
+          "type": "integer",
+          "description": "0 正常 / 16 漏读 / 32 增读 / 64 回读 / 128 替换"
+        },
+        "sylls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/speakShadowSyll"
+          }
+        }
+      }
+    },
+    "speakShadowAttempt": {
+      "type": "object",
+      "description": "一次跟读评测报告（分数均为 5 分制）。",
+      "required": [
+        "at",
+        "total",
+        "accuracy",
+        "fluency",
+        "integrity",
+        "words"
+      ],
+      "properties": {
+        "at": {
+          "type": "integer",
+          "description": "Unix 毫秒"
+        },
+        "total": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "accuracy": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 5,
+          "description": "准确度：每个音发得准不准"
+        },
+        "fluency": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 5,
+          "description": "流畅度：语速与停顿"
+        },
+        "integrity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 5,
+          "description": "完整度：有没有漏词、添词"
+        },
+        "words": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/speakShadowWord"
+          }
+        }
+      }
+    },
     "speakTurn": {
       "type": "object",
       "required": [
@@ -583,7 +705,14 @@
           "type": "number",
           "minimum": 0,
           "maximum": 5,
-          "description": "assistant 轮的跟读评测分（5 分制）；缺省 = 没测"
+          "description": "兼容字段：最新一次跟读总分（5 分制）；缺省 = 没测"
+        },
+        "shadowAttempts": {
+          "type": "array",
+          "description": "跟读报告历史（最新在末尾）；旧会话无此字段。",
+          "items": {
+            "$ref": "#/$defs/speakShadowAttempt"
+          }
         },
         "at": {
           "type": "integer",
