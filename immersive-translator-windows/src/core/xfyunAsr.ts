@@ -2,7 +2,9 @@
  * 讯飞流式听写（IAT）客户端：16k PCM → 文本。
  *
  * 协议要点（与语音评测同族，HMAC 鉴权走 xfyunAuth）：
- * - wss://iat-api.xfyun.cn/v2/iat，business.sub="iat"、domain="iat"。
+ * - wss://iat-api.xfyun.cn/v2/iat，business 需要 domain/language/accent。
+ *   注意：不能带 sub 字段——评测(ISE)要求 business.sub，但听写接口不认，
+ *   多传会报 10163「请求数据非法」（spike/iat_spike.mjs 实调验证，2026-09-22）。
  * - 首帧带 common/business + data(status=0)；音频帧 1280B/帧 base64(raw)；
  *   结束帧 data.status=2。
  * - 结果 JSON：data.result.ws[].cw[].w 逐词拼接；sn 是段序号（last-write-wins，
@@ -154,7 +156,6 @@ export async function transcribeSpeech(
         JSON.stringify({
           common: { app_id: creds.appId },
           business: {
-            sub: "iat",
             domain: "iat",
             language,
             accent: "mandarin",
