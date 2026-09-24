@@ -7,6 +7,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Article,
   ArticleSummary,
+  BookMeta,
+  LastBookProgress,
   NoteContent,
   NoteMeta,
   NoteReplay,
@@ -18,6 +20,8 @@ import type { ReviewLogFile, ReviewStats } from "../core/readerSrs";
 export type {
   Article,
   ArticleSummary,
+  BookMeta,
+  LastBookProgress,
   NoteContent,
   NoteMeta,
   NoteReplay,
@@ -49,6 +53,13 @@ export function readerGetVocab(): Promise<{ words: VocabWord[]; reviewLog: Revie
 
 export function readerSaveVocabWord(word: VocabWord): Promise<void> {
   return invoke<void>("reader_save_vocab_word", { word });
+}
+
+/** 批量合并生词（口语复盘用）：新词追加，已有词保留 SRS 进度仅补例句。 */
+export function readerMergeVocabWords(
+  words: VocabWord[],
+): Promise<{ added: string[]; merged: string[] }> {
+  return invoke<{ added: string[]; merged: string[] }>("reader_merge_vocab_words", { words });
 }
 
 export function readerDeleteVocabWord(id: string): Promise<boolean> {
@@ -102,4 +113,41 @@ export function noteWriteReplay(
 
 export function noteDelete(file: string): Promise<boolean> {
   return invoke<boolean>("note_delete", { file });
+}
+
+// ---------- 整本书阅读室（书级载体） ----------
+
+/** 书架的书（按最近阅读倒序；索引与元信息，不含章正文）。 */
+export function readerListBooks(): Promise<BookMeta[]> {
+  return invoke<BookMeta[]>("reader_list_books");
+}
+
+/** 整本入库（导入向导确认时一次性调用），返回最新书列表。 */
+export function readerSaveBook(meta: BookMeta, articles: Article[]): Promise<BookMeta[]> {
+  return invoke<BookMeta[]>("reader_save_book", { meta, articles });
+}
+
+/** 只更新书元信息（进度/时长/最近阅读写回；不碰章正文）。 */
+export function readerSaveBookMeta(meta: BookMeta): Promise<void> {
+  return invoke<void>("reader_save_book_meta", { meta });
+}
+
+/** 删除一本书：删书卡与全部章文章（进度不可恢复），生词一律保留。 */
+export function readerDeleteBook(bookId: string): Promise<boolean> {
+  return invoke<boolean>("reader_delete_book", { bookId });
+}
+
+/** 最近在读的书（提醒卡「继续阅读」目标）。 */
+export function readerLastBookProgress(): Promise<LastBookProgress | null> {
+  return invoke<LastBookProgress | null>("reader_last_book_progress");
+}
+
+/** 累计今日阅读秒数（每 ~15s 批量上报），返回今日累计值。 */
+export function readerRecordReading(day: string, seconds: number): Promise<number> {
+  return invoke<number>("reader_record_reading", { day, seconds });
+}
+
+/** 今日累计阅读秒数。 */
+export function readerReadSecondsToday(day: string): Promise<number> {
+  return invoke<number>("reader_read_seconds_today", { day });
 }

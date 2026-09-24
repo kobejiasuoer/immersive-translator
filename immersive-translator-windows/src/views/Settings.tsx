@@ -24,7 +24,12 @@ import {
   normalizeHotkey,
   RECOMMENDED_HOTKEYS,
 } from "../core/hotkeyValidator";
-import { reregisterHotkeys, testConnectivity } from "../lib/tauriBridge";
+import { reregisterHotkeys, testConnectivity, openOnboarding } from "../lib/tauriBridge";
+import {
+  enable as enableAutostart,
+  disable as disableAutostart,
+  isEnabled as isAutostartEnabled,
+} from "@tauri-apps/plugin-autostart";
 import {
   ocrModelsReady,
   ocrDownloadModels,
@@ -109,6 +114,26 @@ export function Settings() {
       active = false;
     };
   }, []);
+
+  // ---- 开机自启（tauri-plugin-autostart，Windows 写 HKCU Run 键）----
+  // null = 还在查询；开关失败时回滚并提示。
+  const [autoStart, setAutoStart] = useState<boolean | null>(null);
+  const [autoStartErr, setAutoStartErr] = useState<string | null>(null);
+  useEffect(() => {
+    void isAutostartEnabled()
+      .then(setAutoStart)
+      .catch(() => setAutoStart(null));
+  }, []);
+
+  function toggleAutostart() {
+    const next = !(autoStart ?? false);
+    setAutoStart(next);
+    setAutoStartErr(null);
+    void (next ? enableAutostart() : disableAutostart()).catch((e) => {
+      setAutoStart(!next);
+      setAutoStartErr(String(e));
+    });
+  }
 
   function update<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
     setSettings((prev) => ({ ...prev, [key]: value }));
@@ -815,6 +840,40 @@ export function Settings() {
                 </div>
               )}
               {updateMsg && <StatusBar msg={{ text: updateMsg, ok: updateStage !== "error" }} />}
+
+              <div className="field-row">
+                <div className="field-text">
+                  <span className="field-label-v2">开机自启</span>
+                  <span className="field-hint">
+                    开机后自动驻留托盘，复习提醒与托盘角标才不会因为没启动而漏掉
+                  </span>
+                </div>
+                <div className="field-ctrl">
+                  {autoStart === null ? (
+                    <span className="field-hint">查询中…</span>
+                  ) : (
+                    <Switch checked={autoStart} onChange={toggleAutostart} label="开机自启" />
+                  )}
+                </div>
+              </div>
+              {autoStartErr && (
+                <StatusBar msg={{ text: `设置开机自启失败：${autoStartErr}`, ok: false }} />
+              )}
+
+              <div className="field-row">
+                <div className="field-text">
+                  <span className="field-label-v2">功能引导</span>
+                  <span className="field-hint">再看一次三大能力与快捷键介绍</span>
+                </div>
+                <div className="field-ctrl">
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => void openOnboarding().catch((e) => console.error("[onboarding] open failed", e))}
+                  >
+                    查看引导
+                  </button>
+                </div>
+              </div>
 
               <div className="field-row">
                 <div className="field-text">

@@ -128,6 +128,7 @@ cat > "$RESOURCES_DIR/${APP_NAME}_${APP_NAME}.bundle/Info.plist" <<BPLIST
 </plist>
 BPLIST
 
+cp "$ROOT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 APP_BUNDLE_ID_ESCAPED="$(xml_escape "$APP_BUNDLE_ID")"
 APP_VERSION_ESCAPED="$(xml_escape "$APP_VERSION")"
 APP_BUILD_ESCAPED="$(xml_escape "$APP_BUILD")"
@@ -145,6 +146,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
     <string>ImmersiveTranslator</string>
     <key>CFBundleIdentifier</key>
     <string>$APP_BUNDLE_ID_ESCAPED</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

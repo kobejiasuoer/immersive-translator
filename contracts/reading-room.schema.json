@@ -2,8 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://immersive-translator.local/contracts/reading-room.schema.json",
   "title": "沉浸阅读室数据契约（Mac / Windows 共享）",
-  "description": "阅读室的文章、句对、生词（SRS）与阅读设置。Windows 落盘为 reader_articles.json / reader_vocab.json（顶层各带 schemaVersion），Mac 端按同一 schema 实现。",
-  "version": "1.0.0",
+  "description": "阅读室的文章、句对、生词（SRS）与阅读设置。Windows 落盘为 reader_articles.json / reader_vocab.json（顶层各带 schemaVersion），Mac 端按同一 schema 实现。1.1.0 起新增书级载体：书章文章带可选 bookId/chapterIdx，整本书落 books/<bookId>.json，索引与元信息落 reader_books.json；可选字段对老数据零破坏，schemaVersion 维持 1。",
+  "version": "1.1.0",
   "$defs": {
     "schemaVersion": {
       "type": "integer",
@@ -334,6 +334,15 @@
         },
         "settings": {
           "$ref": "#/$defs/readerSettings"
+        },
+        "bookId": {
+          "type": "string",
+          "description": "所属书 id；非空时该文章是书章，存储路由到 books/<bookId>.json"
+        },
+        "chapterIdx": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "书内章序号，从 0（与 bookMeta.chapters 下标一致）"
         }
       }
     },
@@ -915,6 +924,131 @@
         "wordIds",
         "updatedAt"
       ]
+    },
+    "bookChapterMeta": {
+      "type": "object",
+      "description": "书目录里的一章（索引信息，不含正文）。",
+      "required": [
+        "id",
+        "title",
+        "wordCount",
+        "sentenceCount"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "章文章 id（= article.id，生词 source.articleId 即它）"
+        },
+        "title": {
+          "type": "string"
+        },
+        "wordCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sentenceCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "bookProgress": {
+      "type": "object",
+      "description": "书级断点：进书直达。",
+      "required": [
+        "chapterId",
+        "sentenceIdx",
+        "percent"
+      ],
+      "properties": {
+        "chapterId": {
+          "type": "string"
+        },
+        "sentenceIdx": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "章内句序百分比"
+        }
+      }
+    },
+    "bookRadar": {
+      "type": "object",
+      "description": "选书雷达缓存：导入时按全书文本实算的大纲词命中数（去重），禁止写死。键 = ExamGoal。",
+      "required": [
+        "kaoyan",
+        "cet4",
+        "cet6"
+      ],
+      "properties": {
+        "kaoyan": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cet4": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cet6": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "bookMeta": {
+      "type": "object",
+      "description": "一本书的索引与元信息（不含章正文；章正文整体落 books/<bookId>.json）。",
+      "required": [
+        "id",
+        "title",
+        "createdAt",
+        "lastReadAt",
+        "chapters",
+        "progress",
+        "secondsListened",
+        "radar"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "author": {
+          "type": "string"
+        },
+        "cover": {
+          "type": "string",
+          "description": "缩小后的封面 dataURL（JPEG，≤160px 宽；无封面缺省）"
+        },
+        "createdAt": {
+          "type": "integer"
+        },
+        "lastReadAt": {
+          "type": "integer"
+        },
+        "chapters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/bookChapterMeta"
+          }
+        },
+        "progress": {
+          "$ref": "#/$defs/bookProgress"
+        },
+        "secondsListened": {
+          "type": "number",
+          "description": "全书累计阅读秒数"
+        },
+        "radar": {
+          "$ref": "#/$defs/bookRadar"
+        }
+      }
     }
   },
   "oneOf": [
@@ -991,6 +1125,44 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/speakSession"
+          }
+        }
+      }
+    },
+    {
+      "title": "reader_books.json（书索引与元信息，不含章正文）",
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "books"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "$ref": "#/$defs/schemaVersion"
+        },
+        "books": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/bookMeta"
+          }
+        }
+      }
+    },
+    {
+      "title": "books/<bookId>.json（单本书的全部章文章）",
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "articles"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "$ref": "#/$defs/schemaVersion"
+        },
+        "articles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/article"
           }
         }
       }

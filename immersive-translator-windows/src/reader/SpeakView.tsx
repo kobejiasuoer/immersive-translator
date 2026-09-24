@@ -35,9 +35,11 @@ import { startMicRecorder, type MicRecorderHandle } from "../core/micRecorder";
 import { loadAsrCredentials, loadIseCredentials } from "../lib/iseCredentials";
 import { speakListSessions, speakSaveSession } from "../lib/speakStore";
 import { cancelTranslation, openSettings } from "../lib/tauriBridge";
+import type { VocabWord } from "../core/readerTypes";
 import type { NoteTranslateFn } from "./VocabNoteDialog";
 import { ShadowReport, type DrillEntry } from "./ShadowReport";
 import { ShadowDrill } from "./ShadowDrill";
+import { SpeakReviewDialog } from "./SpeakReviewDialog";
 
 /** 一轮里的阶段（主对话环）。 */
 type RoundPhase =
@@ -79,6 +81,14 @@ interface Props {
   onToast: (msg: string) => void;
   /** 回书架（口语页没有左栏，给一个明确的返回位）。 */
   onBack?: () => void;
+  /** 当前生词本（复盘弹层判重/唤醒标注用）。 */
+  vocabWords: VocabWord[];
+  /** 复盘合并成功后刷新生词本。 */
+  onVocabSaved: (addedIds: string[]) => void | Promise<void>;
+  /** 复盘成功视图「生成复习笔记」（带新词 ids 打开笔记生成）。 */
+  onGenerateNote: (ids: string[]) => void;
+  /** 复盘成功视图「去复习」。 */
+  onGoReview: () => void;
 }
 
 export function SpeakView({
@@ -89,6 +99,10 @@ export function SpeakView({
   micDeviceId,
   onToast,
   onBack,
+  vocabWords,
+  onVocabSaved,
+  onGenerateNote,
+  onGoReview,
 }: Props) {
   const [session, setSession] = useState<SpeakSession | null>(null);
   const [difficulty, setDifficulty] = useState<SpeakDifficulty>("medium");
@@ -99,6 +113,8 @@ export function SpeakView({
   const [shadow, setShadow] = useState<ShadowState>(SHADOW_IDLE);
   /** 只练差词抽屉（打开时遮罩挡住主控制条，与主跟读互斥）。 */
   const [drill, setDrill] = useState<{ entries: DrillEntry[] } | null>(null);
+  /** 结束复盘弹层（跟读弱词 → 生词本）。 */
+  const [reviewOpen, setReviewOpen] = useState(false);
   /** 有没有可回放的「我的录音」。 */
   const [mineReady, setMineReady] = useState(false);
   const [level, setLevel] = useState(0);
@@ -675,6 +691,10 @@ export function SpeakView({
     }
   }
   const lastTotal = lastReport ? lastReport.totals[lastReport.totals.length - 1] : null;
+  // 有没有可复盘的跟读数据（一次都没跟读过时复盘入口禁用）
+  const hasAssessments = session.turns.some(
+    (t) => t.role === "assistant" && (t.shadowAttempts?.length ?? 0) > 0,
+  );
 
   // ---- 对话页 ----
   return (
@@ -695,6 +715,23 @@ export function SpeakView({
           {sc.emoji} {sc.label} · {difficultyOf(session.difficulty).label}
         </span>
         <span className="speak-round-count">第 {Math.ceil(session.turns.length / 2)} 轮</span>
+        <button
+          className="speak-review-entry"
+          disabled={!hasAssessments}
+          title={
+            hasAssessments
+              ? "复盘本轮跟读中没掌握的词，确认后加入生词本"
+              : "还没有跟读记录——先「跟读打分」一次再来复盘"
+          }
+          onClick={() => {
+            stopSpeak();
+            setDrill(null);
+            setReviewOpen(true);
+          }}
+        >
+          <span className="dot" aria-hidden />
+          ✦ 结束本轮并复盘
+        </button>
       </div>
 
       <div className="speak-log" ref={scrollRef}>
@@ -846,6 +883,20 @@ export function SpeakView({
           onSpeakWord={speakWord}
           onClose={closeDrill}
           onDone={drillDone}
+        />
+      )}
+
+      {reviewOpen && (
+        <SpeakReviewDialog
+          session={session}
+          vocabWords={vocabWords}
+          requestTranslate={requestTranslate}
+          onSpeakWord={speakWord}
+          onToast={onToast}
+          onSaved={onVocabSaved}
+          onGenerateNote={onGenerateNote}
+          onGoReview={onGoReview}
+          onClose={() => setReviewOpen(false)}
         />
       )}
     </div>

@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>方案二 调整对比</title>
+<style>
+  :root { --bg:#0F1016; --ink:#E9EAF2; --ink-2:#A7ABBE; --ink-3:#6E7386; --tile-dark:#191B24; --tile-light:#F4F5FA; --line:rgba(255,255,255,.07); --brand:#6E7BFF; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--ink); font-family:"Segoe UI","Microsoft YaHei",sans-serif; font-size:15px; line-height:1.7; padding:48px; }
+  .wrap { max-width:1180px; margin:0 auto; }
+  h1 { font-size:28px; font-weight:600; }
+  .sub { color:var(--ink-2); margin-top:8px; max-width:70ch; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:40px 56px; margin-top:44px; }
+  .variant h3 { font-size:19px; font-weight:600; margin-top:16px; }
+  .variant .tag { color:var(--brand); font-size:13.5px; margin-top:2px; }
+  .variant .desc { color:var(--ink-2); font-size:13.5px; margin-top:10px; }
+  .stage { display:flex; gap:16px; }
+  .tile { border-radius:22px; display:flex; align-items:center; justify-content:center; }
+  .tile.dark { background:var(--tile-dark); border:1px solid var(--line); }
+  .tile.light { background:var(--tile-light); }
+  .stage .tile { width:220px; height:220px; }
+  .stage img { width:140px; height:140px; }
+  .ramp { display:flex; flex-wrap:wrap; gap:12px; margin-top:16px; align-items:flex-end; }
+  .rcell { border-radius:12px; display:flex; align-items:center; justify-content:center; }
+  .rcell.dark { background:var(--tile-dark); border:1px solid var(--line); }
+  .rcell.light { background:var(--tile-light); }
+  .ramp .cap { font-size:11px; color:var(--ink-3); text-align:center; margin-top:5px; }
+  .rampcol { text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>方案二调整 · 三个思路</h1>
+  <p class="sub">方案二的故事最好——「原文之上浮现译文」——但现版穿孔字太小、小尺寸退化为普通两行字。三个调整都围绕同一个目标：让 A 与文在 16px 也留得住。左上角是现版作对照。</p>
+  <div class="grid">
+    <div class="variant">
+      <div class="stage">
+        <div class="tile dark"><img src="b-shuangxing-duiyi.svg"></div>
+        <div class="tile light"><img src="b-shuangxing-duiyi.svg"></div>
+      </div>
+      <h3>现版 · 双行对译</h3>
+      <p class="tag">对照基准</p>
+      <div class="ramp" id="ramp-0"></div>
+    </div>
+    <div class="variant">
+      <div class="stage">
+        <div class="tile dark"><img src="b1-zihang-jiaoti.svg"></div>
+        <div class="tile light"><img src="b1-zihang-jiaoti.svg"></div>
+      </div>
+      <h3>调整 A · 字行交替</h3>
+      <p class="tag">字母与汉字升为行首锚点，文字条退为衬底</p>
+      <p class="desc">不再把字藏进条里打孔，而是让半透明的 A 和实白的文直接站在行首，各自拖一条文字条。字形大了三倍，16px 下「A 在上、文在下」的关系仍在，读音从“两行字”变成“两种字”。</p>
+      <div class="ramp" id="ramp-1"></div>
+    </div>
+    <div class="variant">
+      <div class="stage">
+        <div class="tile dark"><img src="b2-cuxing-dakong.svg"></div>
+        <div class="tile light"><img src="b2-cuxing-dakong.svg"></div>
+      </div>
+      <h3>调整 B · 粗行大孔</h3>
+      <p class="tag">行条加粗、穿孔放大，保留现版骨架</p>
+      <p class="desc">维持现版“条内藏字”的构图，只把行高从 56 加到 80、穿孔字放大到 52px。改动最小、气质最接近现版，但小尺寸下仍是“两行字”，改善幅度有限。</p>
+      <div class="ramp" id="ramp-2"></div>
+    </div>
+    <div class="variant">
+      <div class="stage">
+        <div class="tile dark"><img src="b3-shuangceng-zikuai.svg"></div>
+        <div class="tile light"><img src="b3-shuangceng-zikuai.svg"></div>
+      </div>
+      <h3>调整 C · 双层字块</h3>
+      <p class="tag">原文块浮于后，译文块叠于前，斜向错落</p>
+      <p class="desc">把“浮现”做实：半透明的原文块在左上，实白译文块右下叠上来，字块本身大到 44px 圆角、穿孔字 80px 高。层次感和体积感最强，缩到 16px 是「一明一暗两块」，识别度好。</p>
+      <div class="ramp" id="ramp-3"></div>
+    </div>
+  </div>
+</div>
+<script>
+  const ramps = {
+    "ramp-0": "b-shuangxing-duiyi.svg",
+    "ramp-1": "b1-zihang-jiaoti.svg",
+    "ramp-2": "b2-cuxing-dakong.svg",
+    "ramp-3": "b3-shuangceng-zikuai.svg",
+  };
+  for (const [id, src] of Object.entries(ramps)) {
+    const el = document.getElementById(id);
+    for (const theme of ["dark", "light"]) {
+      for (const s of [64, 48, 32, 24, 16]) {
+        const col = document.createElement("div");
+        col.className = "rampcol";
+        const cell = document.createElement("div");
+        cell.className = `rcell ${theme}`;
+        cell.style.cssText = `width:${s + 20}px;height:${s + 20}px;`;
+        const img = document.createElement("img");
+        img.src = src;
+        img.style.cssText = `width:${s}px;height:${s}px;display:block;border-radius:${Math.max(3, Math.round(s * 0.226))}px;`;
+        cell.appendChild(img);
+        col.appendChild(cell);
+        const cap = document.createElement("div");
+        cap.className = "cap";
+        cap.textContent = s;
+        col.appendChild(cap);
+        el.appendChild(col);
+      }
+    }
+  }
+</script>
+</body>
+</html>

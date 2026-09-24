@@ -32,9 +32,28 @@ export function reminderDueNow(): Promise<number> {
   return invoke<number>("reminder_due_now");
 }
 
-/** 提醒窗口挂载时取走到期数（与 takePendingPanelPayload 同模式）。 */
-export function takePendingReminder(): Promise<number | null> {
-  return invoke<number | null>("take_pending_reminder");
+/** 提醒卡负载：双态数据一次带齐（到期词态 / 阅读目标态）。 */
+export interface ReminderPayload {
+  due: number;
+  readGoalMin: number;
+  readSecondsToday: number;
+  book: {
+    bookId: string;
+    bookTitle: string;
+    chapterIdx: number;
+    chapterTitle: string;
+    chapterCount: number;
+  } | null;
+}
+
+/** 提醒窗口挂载时取走负载（与 takePendingPanelPayload 同模式）。 */
+export function takePendingReminder(): Promise<ReminderPayload | null> {
+  return invoke<ReminderPayload | null>("take_pending_reminder");
+}
+
+/** 提醒卡「继续阅读」：打开阅读室窗口并直达书级断点章。 */
+export function openReaderBook(bookId: string): Promise<void> {
+  return invoke<void>("open_reader_book", { bookId });
 }
 
 /** 生词变化后调用：立即刷新托盘角标与「快速复习（N 到期）」菜单文案。 */

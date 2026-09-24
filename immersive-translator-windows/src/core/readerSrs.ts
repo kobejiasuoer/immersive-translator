@@ -89,6 +89,8 @@ export interface ReviewStats {
   totalChunks: number;
   dueWords: number;
   dueChunks: number;
+  /** 今日累计阅读秒数（Rust compute_stats 从 reading_log 汇总；仅 readerStats 命令返回）。 */
+  readSecondsToday?: number;
 }
 
 /** 复习时间线：每次评分的 { 天键, 次数 }。由存储层持久化。 */

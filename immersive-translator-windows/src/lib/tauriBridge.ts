@@ -106,6 +106,11 @@ export async function takePendingOpenReview(): Promise<boolean> {
   return invoke<boolean>("take_pending_open_review");
 }
 
+/** 阅读室窗口挂载时取走「打开书断点」请求（提醒卡「继续阅读」入口，窗口重建路径）。 */
+export async function takePendingOpenBook(): Promise<string | null> {
+  return invoke<string | null>("take_pending_open_book");
+}
+
 // ---- OCR 模型管理 ----
 
 /** 检查 OCR 模型是否就绪（det + rec 存在）。 */
@@ -399,4 +404,16 @@ export interface TtsVoiceInfo {
 /** 枚举系统 SAPI 音色（设置面板音色下拉）。 */
 export async function ttsVoices(): Promise<TtsVoiceInfo[]> {
   return invoke<TtsVoiceInfo[]>("tts_voices");
+}
+
+// ---- 首启引导（onboarding）----
+
+/** 完成（或跳过）首启引导：后端写标记并关闭引导窗口。 */
+export function finishOnboarding(): Promise<void> {
+  return invoke("finish_onboarding");
+}
+
+/** 重新打开引导窗口（设置 → 关于「查看引导」）。 */
+export function openOnboarding(): Promise<void> {
+  return invoke("open_onboarding");
 }
