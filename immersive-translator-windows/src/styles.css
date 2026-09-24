@@ -1317,6 +1317,10 @@ input[type="radio"] {
 .history-card:focus-within .meta .actions {
   opacity: 1;
 }
+/* 处理中的按钮（spinner）不随 hover 消失，让用户看得到进行中状态 */
+.history-card .meta .actions:has(.spinner) {
+  opacity: 1;
+}
 .history-card .orig {
   font-size: 12px;
   color: var(--text-3);
