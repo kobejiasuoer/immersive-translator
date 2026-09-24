@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- 方案二 · 调整B 粗行大孔：行条加粗加大，穿孔字母随之放大 -->
+  <defs>
+    <linearGradient id="b2-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4C5FF0"/>
+      <stop offset="1" stop-color="#7A5CF0"/>
+    </linearGradient>
+    <radialGradient id="b2-glow" cx="0.3" cy="0.2" r="0.9">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="b2-shade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0.62" stop-color="#1B1464" stop-opacity="0"/>
+      <stop offset="1" stop-color="#1B1464" stop-opacity="0.18"/>
+    </linearGradient>
+    <mask id="b2-mA">
+      <rect x="110" y="150" width="292" height="80" rx="40" fill="#fff"/>
+      <g stroke="#000" stroke-width="15" stroke-linecap="round" stroke-linejoin="round" fill="none">
+        <path d="M140 222 L176 158 L212 222"/>
+        <path d="M154 200 L198 200"/>
+      </g>
+    </mask>
+    <mask id="b2-mW">
+      <rect x="154" y="282" width="292" height="80" rx="40" fill="#fff"/>
+      <g stroke="#000" stroke-width="14" stroke-linecap="round" fill="none">
+        <path d="M240 296 L230 306"/>
+        <path d="M192 314 L252 314"/>
+        <path d="M248 320 L204 352"/>
+        <path d="M206 320 L250 352"/>
+      </g>
+    </mask>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#b2-bg)"/>
+  <rect width="512" height="512" rx="116" fill="url(#b2-glow)"/>
+  <rect width="512" height="512" rx="116" fill="url(#b2-shade)"/>
+  <rect x="110" y="150" width="292" height="80" rx="40" fill="#FFFFFF" opacity="0.5" mask="url(#b2-mA)"/>
+  <rect x="154" y="282" width="292" height="80" rx="40" fill="#FFFFFF" mask="url(#b2-mW)"/>
+</svg>

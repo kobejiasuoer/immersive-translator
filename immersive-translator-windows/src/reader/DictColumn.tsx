@@ -24,6 +24,8 @@ interface Props {
   inVocab: boolean;
   /** 生词本归一化 id 集（搭配行收藏态判定）。 */
   knownIds: ReadonlySet<string>;
+  /** 当前文章的书级来源（「《书名》·第 N 章」；短文缺省不显示）。 */
+  bookSource?: string | null;
   onSpeak: (text: string) => void;
   onAddVocab: () => void;
   /** 常用搭配行一键收藏为词块。 */
@@ -38,6 +40,7 @@ export function DictColumn({
   state,
   inVocab,
   knownIds,
+  bookSource,
   onSpeak,
   onAddVocab,
   onAddCollVocab,
@@ -132,7 +135,7 @@ export function DictColumn({
               {state.sourceSentence}
               <span className="loc">
                 <IconLocate size={10} style={{ verticalAlign: -1, marginRight: 3 }} />
-                第 {state.sentenceIdx + 1} 句 · 点击定位
+                {bookSource ? `${bookSource} · ` : ""}第 {state.sentenceIdx + 1} 句 · 点击定位
               </span>
             </div>
           </div>
@@ -177,7 +180,7 @@ export function DictColumn({
               {state.sourceSentence}
               <span className="loc">
                 <IconLocate size={10} style={{ verticalAlign: -1, marginRight: 3 }} />
-                第 {state.sentenceIdx + 1} 句 · 点击定位
+                {bookSource ? `${bookSource} · ` : ""}第 {state.sentenceIdx + 1} 句 · 点击定位
               </span>
             </div>
           </div>

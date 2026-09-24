@@ -1,0 +1,212 @@
+/* 首启引导窗口（onboarding）专用样式。设计令牌与全局 styles.css 一致，
+   但类名全部独立（ob- 前缀），不与其他窗口互相牵连。 */
+
+.ob-root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #fbfbfd 0%, #f4f5f9 100%);
+  border: 1px solid #e4e7ee;
+  border-radius: 16px;
+  overflow: hidden;
+  color: #1c2029;
+  font-family: "Inter", "Noto Sans SC", system-ui, sans-serif;
+  user-select: none;
+}
+
+.ob-drag {
+  height: 34px;
+  flex: none;
+  cursor: grab;
+}
+
+.ob-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 40px 22px;
+  overflow-y: auto;
+}
+
+/* ---- Hero ---- */
+
+.ob-hero {
+  text-align: center;
+  margin-bottom: 22px;
+}
+
+.ob-logo {
+  width: 58px;
+  height: 58px;
+  margin: 2px auto 14px;
+  border-radius: 16px;
+  background: var(--accent, #4c5ff0);
+  color: #fff;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 58px;
+  box-shadow: 0 8px 22px rgba(76, 95, 240, 0.32);
+}
+
+.ob-hero h1 {
+  margin: 0 0 6px;
+  font-size: 21px;
+  font-weight: 700;
+}
+
+.ob-tagline {
+  margin: 0;
+  font-size: 13px;
+  color: #7c8494;
+  letter-spacing: 0.06em;
+}
+
+/* ---- 能力卡 ---- */
+
+.ob-cards {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ob-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 16px;
+  background: #fff;
+  border: 1px solid #e4e7ee;
+  border-radius: 12px;
+}
+
+.ob-icon {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: #eef0fd;
+  color: var(--accent, #4c5ff0);
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ob-card-text h3 {
+  margin: 0 0 3px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ob-card-text p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: #4b5261;
+}
+
+.ob-card kbd {
+  display: inline-block;
+  padding: 1px 7px;
+  margin: 0 2px;
+  border: 1px solid #dfe3ec;
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: #f8f9fc;
+  color: #1c2029;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+/* ---- 托盘提示 ---- */
+
+.ob-tray {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #eef0fd;
+  margin-bottom: 4px;
+}
+
+.ob-tray-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--accent, #4c5ff0);
+}
+
+.ob-tray p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: #4b5261;
+}
+
+.ob-tray b {
+  color: #1c2029;
+  font-weight: 600;
+}
+
+/* ---- 底部动作 ---- */
+
+.ob-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 14px 0 10px;
+}
+
+.ob-start {
+  flex: 1;
+  padding: 11px 0;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent, #4c5ff0);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+
+.ob-start:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.ob-start:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ob-skip {
+  border: none;
+  background: none;
+  color: #7c8494;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.ob-skip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ob-foot {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: #a6adbb;
+  text-align: center;
+}

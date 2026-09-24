@@ -43,6 +43,9 @@ interface Props {
   /** 把仍错词滚进新笔记（打开生成弹窗并预选）。 */
   onRollIntoNote: (replay: NoteReplay) => void;
   onSpeakWord: (text: string) => void;
+  /** 今日已读分钟数（每日阅读目标，goalMin>0 时显示）。 */
+  readMinutesToday?: number;
+  readGoalMin?: number;
 }
 
 // ---------- 展示工具 ----------
@@ -155,6 +158,8 @@ export function NotesView({
   onOpenReview,
   onStartFocusReview,
   onGenerate,
+  readMinutesToday,
+  readGoalMin,
   onGenerateReplay,
   onRollIntoNote,
   onSpeakWord,
@@ -247,6 +252,8 @@ export function NotesView({
           dueNow={dueNow}
           streak={streak}
           emptyText="今日没有到期生词了。"
+          readMinutesToday={readMinutesToday}
+          readGoalMin={readGoalMin}
         />
       </div>
     </aside>

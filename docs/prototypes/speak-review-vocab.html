@@ -1,0 +1,985 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>口语复盘 → 生词本 · 交互原型 v0.1</title>
+<style>
+  /* ================= 原型页外框（非应用部分） ================= */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    background: #eceef3;
+    display: flex; flex-direction: column;
+    color: #1c2029;
+    overflow: hidden;
+  }
+  [data-theme="dark"] body { background: #14161c; }
+
+  .proto-bar {
+    flex: none;
+    display: flex; align-items: center; gap: 14px;
+    padding: 9px 18px;
+    background: #1c2029;
+    color: #edeef4;
+    font-size: 12.5px;
+  }
+  [data-theme="dark"] .proto-bar { background: #0c0d11; }
+  .proto-title b { font-size: 13px; }
+  .proto-title span { opacity: .55; margin-left: 8px; }
+  .proto-steps { display: flex; gap: 6px; margin-left: 10px; }
+  .proto-steps button {
+    border: 1px solid #3a4050; background: transparent; color: #c4c9d6;
+    font-family: inherit; font-size: 12px; padding: 4px 11px; border-radius: 999px; cursor: pointer;
+  }
+  .proto-steps button:hover { border-color: #7d8cff; color: #fff; }
+  .proto-steps button.on { background: #4c5ff0; border-color: #4c5ff0; color: #fff; }
+  .proto-opts { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .proto-opts select {
+    font-family: inherit; font-size: 12px; padding: 4px 8px; border-radius: 7px;
+    border: 1px solid #3a4050; background: #262933; color: #edeef4; cursor: pointer;
+  }
+  .proto-opts button {
+    border: 1px solid #3a4050; background: transparent; color: #c4c9d6;
+    font-family: inherit; font-size: 12px; padding: 4px 10px; border-radius: 7px; cursor: pointer;
+  }
+  .proto-opts button.on { background: #3a4050; color: #fff; }
+
+  .stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 18px; }
+
+  /* ================= 应用窗口 ================= */
+  .appwin {
+    width: min(1000px, 100%); height: 100%;
+    max-height: 720px;
+    background: var(--bg);
+    border-radius: 12px;
+    box-shadow: 0 18px 48px rgba(16,24,40,.22), 0 4px 12px rgba(16,24,40,.12);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .appwin-bar {
+    flex: none; height: 36px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 14px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px; color: var(--text-3);
+  }
+  .appwin-bar .dots { display: flex; gap: 6px; }
+  .appwin-bar .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); }
+  .app-body { flex: 1; min-height: 0; position: relative; display: flex; }
+
+  /* ================= 应用设计令牌（与 reader 一致） ================= */
+  .app-body {
+    --accent: #4c5ff0;
+    --accent-hover: #3f52e0;
+    --accent-soft: #eef0fe;
+    --accent-softer: #f6f7ff;
+    --ok: #15803d;  --ok-soft: #e8f7ee;
+    --warn: #b45309; --warn-soft: #fdf3e1;
+    --err: #dc2626; --err-soft: #fdeaea;
+    --bg: #f4f5f9; --surface: #ffffff; --surface-2: #f9fafc;
+    --border: #e4e7ee; --border-strong: #d6dae4;
+    --text-1: #1c2029; --text-2: #4b5261; --text-3: #7c8494; --text-4: #a6adbb;
+    --radius: 12px;
+    --font-serif-en: Georgia, "Times New Roman", serif;
+    color: var(--text-1);
+  }
+  [data-theme="dark"] .app-body {
+    --accent: #7d8cff; --accent-hover: #93a0ff;
+    --accent-soft: rgba(125,140,255,.16); --accent-softer: rgba(125,140,255,.09);
+    --ok: #5cc48a;  --ok-soft: rgba(60,190,120,.16);
+    --warn: #e2a75a; --warn-soft: rgba(226,167,90,.16);
+    --err: #f17474; --err-soft: rgba(240,90,90,.16);
+    --bg: #1d1f26; --surface: #262933; --surface-2: #2e313c;
+    --border: #373b47; --border-strong: #474c5a;
+    --text-1: #edeef4; --text-2: #c4c9d6; --text-3: #9aa2b1; --text-4: #737b8c;
+  }
+
+  /* ================= 口语陪练 · 对话页 ================= */
+  .speak-room { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100%; }
+  .speak-room-head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 16px; border-bottom: 1px solid var(--border); background: var(--surface);
+  }
+  .ghost-btn {
+    border: none; background: none; font-family: inherit; font-size: 12.5px;
+    color: var(--text-2); cursor: pointer; padding: 4px 8px; border-radius: 7px;
+  }
+  .ghost-btn:hover { background: var(--surface-2); color: var(--text-1); }
+  .speak-room-title { font-size: 13.5px; font-weight: 600; flex: 1; }
+  .round-count { font-size: 12px; color: var(--text-4); margin-right: 4px; }
+  .review-entry-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: inherit; font-size: 12.5px; font-weight: 600;
+    color: var(--accent); background: var(--accent-softer);
+    border: 1px solid var(--accent-soft); border-radius: 9px;
+    padding: 6px 12px; cursor: pointer; position: relative;
+    transition: background .15s;
+  }
+  .review-entry-btn:hover { background: var(--accent-soft); }
+  .review-entry-btn .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--err); }
+  .review-entry-btn.hint-pulse { animation: entry-pulse 1.6s ease-out 2; }
+  @keyframes entry-pulse {
+    0% { box-shadow: 0 0 0 0 rgba(76,95,240,.45); }
+    100% { box-shadow: 0 0 0 12px rgba(76,95,240,0); }
+  }
+
+  .speak-log {
+    flex: 1; min-height: 0; overflow-y: auto;
+    padding: 18px 18px 14px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .speak-bubble {
+    max-width: 74%; padding: 10px 14px; border-radius: 14px;
+    font-size: 14px; line-height: 1.75;
+  }
+  .speak-bubble.assistant {
+    align-self: flex-start; background: var(--bg);
+    border: 1px solid var(--border); border-top-left-radius: 4px;
+  }
+  .speak-bubble.user {
+    align-self: flex-end; background: var(--accent-softer);
+    border: 1px solid var(--accent-soft); border-top-right-radius: 4px;
+  }
+  .speak-bubble .en { color: var(--text-1); }
+  .speak-bubble .serif { font-family: var(--font-serif-en); }
+  .speak-bubble .zh {
+    margin-top: 5px; font-size: 12px; color: var(--text-3);
+    border-top: 1px dashed var(--border); padding-top: 5px;
+  }
+
+  /* 跟读报告卡（简化复刻） */
+  .report-card {
+    align-self: stretch; max-width: 94%;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 14px 11px; box-shadow: 0 1px 3px rgba(16,24,40,.05);
+    display: flex; flex-direction: column; gap: 9px; position: relative;
+  }
+  .rc-head { display: flex; align-items: center; gap: 12px; }
+  .rc-score { display: flex; align-items: baseline; gap: 4px; }
+  .rc-num { font-family: var(--font-serif-en); font-size: 28px; font-weight: 600; line-height: 1; }
+  .rc-den { font-size: 12px; color: var(--text-3); font-weight: 600; }
+  .rc-status { display: flex; flex-direction: column; gap: 3px; flex: 1; }
+  .rc-badge { align-self: flex-start; font-size: 11.5px; font-weight: 600; padding: 2.5px 9px; border-radius: 999px; }
+  .rc-badge.almost { background: var(--warn-soft); color: var(--warn); }
+  .rc-sub { font-size: 11.5px; color: var(--text-3); }
+  .rc-chips { display: flex; gap: 4px; }
+  .rc-chips .chip {
+    font-size: 10.5px; font-weight: 600; padding: 2px 6px; border-radius: 6px;
+    background: var(--surface-2); color: var(--text-3); border: 1px solid var(--border);
+  }
+  .rc-chips .chip.cur { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .rc-dims { display: flex; gap: 14px; }
+  .rc-dims .dim { flex: 1; display: flex; flex-direction: column; gap: 4px; position: relative; }
+  .dim-name { font-size: 11px; color: var(--text-3); display: flex; justify-content: space-between; }
+  .dim-val { font-weight: 600; color: var(--text-2); }
+  .dim.weak .dim-val { color: var(--warn); }
+  .dim-bar { height: 5px; border-radius: 3px; background: var(--surface-2); border: 1px solid var(--border); overflow: hidden; }
+  .dim-bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+  .dim.weak .dim-bar i { background: var(--warn); }
+  .rc-diag { font-size: 12px; line-height: 1.7; color: var(--text-2); }
+  .rc-diag b.hl-miss { color: var(--err); }
+  .rc-diag b.hl-weak { color: var(--warn); }
+  .rc-words { font-family: var(--font-serif-en); font-size: 14.5px; line-height: 2; color: var(--text-1); }
+  .wd.good { color: var(--text-2); }
+  .wd.ok { color: var(--warn); }
+  .wd.bad { color: var(--err); border-bottom: 2px dotted rgba(220,38,38,.55); }
+  .wd.missed { color: var(--err); background: rgba(220,38,38,.12); border-bottom: 2px solid rgba(220,38,38,.55); border-radius: 3px; padding: 0 1px; }
+  .rc-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .rc-btn {
+    font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-2);
+    padding: 6px 11px; border-radius: 8px;
+  }
+  .rc-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .rc-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .rc-btn.primary:hover { background: var(--accent-hover); color: #fff; }
+  .rc-link { border: none; background: none; font-family: inherit; font-size: 12px; color: var(--text-3); cursor: pointer; padding: 4px 6px; }
+  .rc-link:hover { color: var(--text-1); }
+
+  /* 底部控制条 */
+  .speak-controls { border-top: 1px solid var(--border); padding: 10px 16px 12px; background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
+  .speak-level-bar { height: 4px; border-radius: 2px; background: var(--bg); overflow: hidden; }
+  .speak-level-bar i { display: block; height: 100%; width: 18%; background: var(--accent); }
+  .speak-controls-row { display: flex; align-items: center; gap: 10px; }
+  .hold-btn {
+    flex: 1; height: 44px; border: 1.5px solid var(--accent-soft); border-radius: 12px;
+    background: var(--accent-softer); color: var(--accent);
+    font-family: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  .sec-btn {
+    height: 38px; padding: 0 14px; border-radius: 10px; cursor: pointer;
+    border: 1px solid var(--border-strong); background: var(--surface);
+    font-family: inherit; font-size: 12.5px; color: var(--text-2); font-weight: 600;
+  }
+  .sec-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .speak-hint { font-size: 11.5px; color: var(--text-4); text-align: center; }
+
+  /* ================= 复盘弹层 ================= */
+  .modal-mask {
+    position: absolute; inset: 0; z-index: 40;
+    background: rgba(28,32,41,.36);
+    display: flex; align-items: center; justify-content: center;
+    animation: fade .18s ease;
+  }
+  @keyframes fade { from { opacity: 0; } }
+  .review-dialog {
+    width: 640px; max-width: calc(100% - 48px);
+    max-height: calc(100% - 56px);
+    background: var(--surface); border: 1px solid var(--border-strong); border-radius: 16px;
+    box-shadow: 0 12px 32px rgba(16,24,40,.16), 0 3px 10px rgba(16,24,40,.1);
+    display: flex; flex-direction: column; overflow: hidden;
+    animation: pop .26s cubic-bezier(.2,.9,.3,1.12);
+  }
+  @keyframes pop { from { opacity: 0; transform: translateY(10px) scale(.98); } }
+
+  .rv-head { padding: 15px 18px 11px; border-bottom: 1px solid var(--border); display: flex; align-items: flex-start; gap: 10px; }
+  .rv-head .t { font-size: 15.5px; font-weight: 700; }
+  .rv-head .sub { margin-top: 3px; font-size: 12px; color: var(--text-3); }
+  .rv-head .sub b { color: var(--warn); }
+  .rv-close {
+    margin-left: auto; border: none; background: none; cursor: pointer;
+    font-size: 14px; color: var(--text-4); padding: 3px 8px; border-radius: 7px;
+  }
+  .rv-close:hover { background: var(--surface-2); color: var(--text-1); }
+  .rv-rule {
+    margin: 10px 18px 0; padding: 7px 11px; font-size: 11.5px; line-height: 1.6; color: var(--text-3);
+    background: var(--surface-2); border: 1px dashed var(--border-strong); border-radius: 8px;
+  }
+  .rv-rule b { color: var(--text-2); font-weight: 600; }
+
+  .rv-list { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 10px 4px; display: flex; flex-direction: column; gap: 4px; }
+  .rv-row {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 9px 10px; border-radius: 10px; cursor: pointer;
+    transition: background .12s;
+  }
+  .rv-row:hover { background: var(--surface-2); }
+  .rv-row.is-dup { cursor: default; opacity: .82; }
+  .rv-row.is-dup:hover { background: transparent; }
+
+  /* 自绘复选框 */
+  .rv-check { flex: none; margin-top: 3px; }
+  .rv-check input { display: none; }
+  .rv-check i {
+    display: block; width: 18px; height: 18px; border-radius: 5px;
+    border: 1.5px solid var(--border-strong); background: var(--surface);
+    position: relative; transition: all .12s;
+  }
+  .rv-check input:checked + i { background: var(--accent); border-color: var(--accent); }
+  .rv-check input:checked + i::after {
+    content: ""; position: absolute; left: 5px; top: 1.5px;
+    width: 5px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(43deg);
+  }
+  .rv-check input:disabled + i { border-style: dashed; background: var(--surface-2); cursor: not-allowed; }
+
+  .rv-main { flex: 1; min-width: 0; }
+  .rv-line1 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .rv-word { font-family: var(--font-serif-en); font-size: 15.5px; font-weight: 600; }
+  .rv-ipa { font-size: 11.5px; color: var(--text-4); }
+  .tag { font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
+  .tag.bad { background: var(--err-soft); color: var(--err); }
+  .tag.warn { background: var(--warn-soft); color: var(--warn); }
+  .dup-badge {
+    font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+    background: var(--surface-2); color: var(--text-3); border: 1px solid var(--border-strong);
+  }
+  .wake-badge {
+    font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+    background: var(--warn-soft); color: var(--warn); white-space: nowrap;
+  }
+  .rv-fold { padding: 2px 10px 4px; }
+  .rv-fold-btn {
+    width: 100%; border: 1px dashed var(--border-strong); background: var(--surface-2);
+    border-radius: 9px; font-family: inherit; font-size: 11.5px; color: var(--text-3);
+    padding: 7px 10px; cursor: pointer; text-align: center;
+  }
+  .rv-fold-btn:hover { color: var(--text-2); border-color: var(--accent); }
+  .rv-fold-body { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+  .rv-gloss { margin-top: 2px; font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rv-detail { display: none; margin-top: 8px; padding: 9px 11px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; }
+  .rv-row.open .rv-detail { display: block; }
+  .rv-detail .lab { display: inline-block; font-size: 10.5px; font-weight: 600; color: var(--accent); background: var(--accent-softer); border-radius: 5px; padding: 1px 7px; margin-bottom: 5px; }
+  .rv-detail .ex-en { font-family: var(--font-serif-en); font-size: 13px; line-height: 1.65; color: var(--text-1); }
+  .rv-detail .ex-zh { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+  .rv-detail .sense-line { margin-top: 7px; font-size: 12px; color: var(--text-2); line-height: 1.7; }
+  .rv-detail .sense-line b { color: var(--text-1); }
+  .rv-detail .dup-note { margin-top: 7px; font-size: 11.5px; color: var(--text-3); line-height: 1.6; }
+  .rv-detail .dup-note b { color: var(--ok); font-weight: 600; }
+  .rv-side { flex: none; display: flex; align-items: center; gap: 4px; margin-top: 2px; }
+  .rv-spk { border: none; background: none; cursor: pointer; font-size: 13px; padding: 4px 6px; border-radius: 6px; opacity: .6; }
+  .rv-spk:hover { opacity: 1; background: var(--accent-softer); }
+  .rv-chev { font-size: 10px; color: var(--text-4); transition: transform .15s; }
+  .rv-row.open .rv-chev { transform: rotate(180deg); }
+
+  /* 空状态 */
+  .rv-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 30px 20px; text-align: center; }
+  .rv-empty .emoji { font-size: 38px; }
+  .rv-empty .h { font-size: 15px; font-weight: 700; }
+  .rv-empty .p { font-size: 12.5px; color: var(--text-3); line-height: 1.7; max-width: 360px; }
+
+  .rv-foot {
+    flex: none; display: flex; align-items: center; gap: 10px;
+    padding: 12px 18px 14px; border-top: 1px solid var(--border); background: var(--surface);
+  }
+  .rv-foot .note { flex: 1; font-size: 11.5px; color: var(--text-4); }
+  .pri-btn {
+    display: inline-flex; align-items: center; gap: 7px; position: relative;
+    height: 38px; padding: 0 18px; border-radius: 10px; cursor: pointer;
+    background: var(--accent); border: 1px solid var(--accent); color: #fff;
+    font-family: inherit; font-size: 13px; font-weight: 600;
+    box-shadow: 0 1px 2px rgba(76,95,240,.3);
+  }
+  .pri-btn:hover:not(:disabled) { background: var(--accent-hover); }
+  .pri-btn:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+  .sec-btn.sm { height: 38px; }
+
+  /* 加入成功视图 */
+  .rv-done { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 26px 20px; }
+  .rv-done .ok-circle {
+    width: 52px; height: 52px; border-radius: 50%;
+    background: var(--ok-soft); color: var(--ok);
+    display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 700;
+    animation: pop .3s cubic-bezier(.2,.9,.3,1.2);
+  }
+  .rv-done .h { font-size: 16px; font-weight: 700; }
+  .rv-done .p { font-size: 12.5px; color: var(--text-3); }
+  .rv-done .chips { display: flex; gap: 8px; margin: 4px 0 2px; flex-wrap: wrap; justify-content: center; }
+  .rv-done .wchip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--font-serif-en); font-size: 13px; font-weight: 600; color: var(--text-1);
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px;
+  }
+  .rv-done .wchip .srs { font-family: inherit; font-size: 10px; font-weight: 600; color: var(--accent); background: var(--accent-softer); border-radius: 5px; padding: 1px 6px; }
+  .rv-done .dup-line { font-size: 11.5px; color: var(--text-4); }
+  .rv-done .actions { display: flex; gap: 9px; margin-top: 10px; }
+  .ok-btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    height: 38px; padding: 0 16px; border-radius: 10px; cursor: pointer;
+    background: var(--ok-soft); border: 1px solid transparent; color: var(--ok);
+    font-family: inherit; font-size: 12.5px; font-weight: 600;
+  }
+
+  /* ================= 复习卡（去复习目标态） ================= */
+  .srs-screen { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100%; }
+  .srs-head { display: flex; align-items: center; gap: 12px; padding: 9px 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .srs-head .t { font-size: 13.5px; font-weight: 600; flex: 1; }
+  .srs-prog { font-size: 12px; color: var(--text-4); }
+  .srs-body { flex: 1; overflow-y: auto; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .srs-card {
+    width: 460px; max-width: 100%;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    box-shadow: 0 6px 16px rgba(16,24,40,.08), 0 2px 6px rgba(16,24,40,.06);
+    padding: 26px 28px 22px; display: flex; flex-direction: column; gap: 14px;
+    animation: pop .26s cubic-bezier(.2,.9,.3,1.1);
+  }
+  .srs-word { font-family: var(--font-serif-en); font-size: 32px; font-weight: 600; letter-spacing: -.01em; display: flex; align-items: baseline; gap: 12px; position: relative; align-self: flex-start; }
+  .srs-word .ipa { font-size: 13px; color: var(--text-4); font-weight: 400; font-family: inherit; }
+  .srs-kind { font-size: 12px; color: var(--text-3); }
+  .srs-kind b { color: var(--text-2); font-weight: 600; margin-right: 8px; }
+  .srs-src {
+    border: 1px dashed var(--border-strong); border-radius: 10px; background: var(--surface-2);
+    padding: 11px 13px; display: flex; flex-direction: column; gap: 5px;
+  }
+  .srs-src .src-lab { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--text-3); }
+  .srs-src .src-chip {
+    font-size: 10.5px; font-weight: 600; color: var(--accent); background: var(--accent-softer);
+    border-radius: 999px; padding: 1.5px 9px;
+  }
+  .srs-src .ex-en { font-family: var(--font-serif-en); font-size: 14px; line-height: 1.65; color: var(--text-1); }
+  .srs-src .ex-zh { font-size: 12px; color: var(--text-3); }
+  .srs-actions { display: flex; gap: 10px; }
+  .srs-actions .no { flex: 1; height: 42px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-2); font-family: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+  .srs-actions .no:hover { border-color: var(--err); color: var(--err); background: var(--err-soft); }
+  .srs-actions .yes { flex: 1.2; height: 42px; border-radius: 10px; border: 1px solid var(--ok); background: var(--ok-soft); color: var(--ok); font-family: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+  .srs-actions .yes:hover { filter: brightness(.97); }
+  .srs-tip { font-size: 11.5px; color: var(--text-4); text-align: center; }
+
+  /* ================= Toast ================= */
+  .toast {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    z-index: 60; background: rgba(28,32,41,.92); color: #fff;
+    font-size: 12.5px; padding: 8px 16px; border-radius: 10px;
+    box-shadow: 0 6px 16px rgba(16,24,40,.2);
+    animation: toast-in .2s ease; pointer-events: none; white-space: nowrap;
+  }
+  @keyframes toast-in { from { opacity: 0; transform: translate(-50%, -6px); } }
+
+  /* ================= 标注点 ================= */
+  .mk {
+    position: absolute; z-index: 50;
+    width: 17px; height: 17px; border-radius: 50%;
+    background: #f59e0b; color: #fff;
+    font-size: 11px; font-weight: 700; font-style: normal;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 0 2.5px rgba(255,255,255,.9);
+    pointer-events: none;
+  }
+  body.no-marks .mk { display: none; }
+
+  /* ================= 底部说明 ================= */
+  .proto-notes {
+    flex: none; max-height: 148px; overflow-y: auto;
+    background: var(--surface, #fff); border-top: 1px solid #e4e7ee;
+    padding: 10px 18px 12px; font-size: 11.5px; line-height: 1.75; color: #4b5261;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 26px;
+  }
+  [data-theme="dark"] .proto-notes { background: #1d1f26; border-color: #373b47; color: #c4c9d6; }
+  .proto-notes .col b { display: block; font-size: 11px; color: #7c8494; margin-bottom: 2px; letter-spacing: .04em; }
+  [data-theme="dark"] .proto-notes .col b { color: #9aa2b1; }
+  .proto-notes code { font-size: 10.5px; background: rgba(76,95,240,.08); color: #4c5ff0; border-radius: 4px; padding: 0 4px; }
+  [data-theme="dark"] .proto-notes code { background: rgba(125,140,255,.14); color: #a5b0ff; }
+
+  .hidden { display: none !important; }
+
+  /* 滚动条 */
+  .speak-log::-webkit-scrollbar, .rv-list::-webkit-scrollbar, .proto-notes::-webkit-scrollbar { width: 8px; }
+  .speak-log::-webkit-scrollbar-thumb, .rv-list::-webkit-scrollbar-thumb, .proto-notes::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<!-- ============ 原型工具栏 ============ -->
+<header class="proto-bar">
+  <div class="proto-title"><b>口语复盘 → 生词本</b><span>半保真交互原型 v0.1 · 2026-09</span></div>
+  <nav class="proto-steps">
+    <button data-step="chat" class="on">① 对话页</button>
+    <button data-step="review">② 复盘弹层</button>
+    <button data-step="done">③ 加入成功</button>
+    <button data-step="srs">④ 复习卡</button>
+  </nav>
+  <div class="proto-opts">
+    <select id="scenarioSel" title="切换数据场景">
+      <option value="normal">场景：5 个候选词（含 1 个已收藏）</option>
+      <option value="clean">场景：本轮无弱词</option>
+    </select>
+    <button id="markToggle" class="on" title="显示/隐藏设计标注">标注</button>
+    <button id="darkToggle" title="深色模式">🌙</button>
+  </div>
+</header>
+
+<main class="stage">
+  <div class="appwin">
+    <div class="appwin-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span>沉浸式翻译 · 阅读室 — 口语陪练</span>
+    </div>
+
+    <div class="app-body">
+
+      <!-- ================= 屏 1 · 口语陪练对话页 ================= -->
+      <section class="speak-room" id="screenChat">
+        <div class="speak-room-head">
+          <button class="ghost-btn">← 换场景</button>
+          <span class="speak-room-title">🍽️ 餐厅点餐 · 中等</span>
+          <span class="round-count">第 3 轮</span>
+          <button class="review-entry-btn hint-pulse" id="entryBtn" title="复盘本轮跟读中没掌握的词">
+            <span class="dot"></span>✦ 结束本轮并复盘
+            <i class="mk" style="top:-9px; right:-9px;">1</i>
+          </button>
+        </div>
+
+        <div class="speak-log">
+          <div class="speak-bubble assistant">
+            <div class="en serif">Good evening! Welcome to Trattoria Roma. Do you have a reservation with us tonight?</div>
+            <div class="zh">晚上好！欢迎光临罗马小馆。请问今晚有预订吗？</div>
+          </div>
+
+          <div class="speak-bubble user">
+            <div class="en">No, do you have a table for two available tonight?</div>
+          </div>
+
+          <div class="speak-bubble assistant">
+            <div class="en serif">Let me check… yes, we still have a table available at 7:30. I'd recommend our chef's special — it's very popular with vegetarians. Would you like to see the dessert menu as well?</div>
+            <div class="zh">我看一下……有的，7:30 还有空位。我推荐主厨特色菜，素食者也很喜欢。要不要顺便看看甜点单？</div>
+          </div>
+
+          <!-- 跟读报告卡（候选词的来源） -->
+          <div class="report-card">
+            <div class="rc-head">
+              <div class="rc-score"><b class="rc-num">3.6</b><span class="rc-den">/ 5</span></div>
+              <div class="rc-status">
+                <span class="rc-badge almost">还需加强</span>
+                <span class="rc-sub">第 3 次跟读 · 上次 3.9 <span style="color:var(--err);font-weight:600">↓0.3</span></span>
+              </div>
+              <div class="rc-chips"><span class="chip">3.4</span><span class="chip">3.9</span><span class="chip cur">3.6</span></div>
+              <i class="mk" style="top:-8px; left:-8px;">2</i>
+            </div>
+            <div class="rc-dims">
+              <div class="dim"><span class="dim-name">准确度 <span class="dim-val">3.3</span></span><span class="dim-bar"><i style="width:66%"></i></span></div>
+              <div class="dim"><span class="dim-name">流畅度 <span class="dim-val">4.3</span></span><span class="dim-bar"><i style="width:86%"></i></span></div>
+              <div class="dim weak"><span class="dim-name">完整度 <span class="dim-val">3.1</span></span><span class="dim-bar"><i style="width:62%"></i></span></div>
+            </div>
+            <div class="rc-diag"><b class="hl-miss">available</b>、<b class="hl-miss">dessert</b> 整句里没读到；<b class="hl-weak">reservation</b>、<b class="hl-weak">recommend</b> 发音准度偏低，重点练这两个。</div>
+            <div class="rc-words">
+              Let me check… yes, we still have a table <span class="wd missed">available</span> at 7:30. I'd <span class="wd bad">recommend</span> our chef's special — it's very popular with <span class="wd ok">vegetarians</span>. Would you like to see the <span class="wd missed">dessert</span> menu as well?
+            </div>
+            <div class="rc-words" style="display:none"><!-- reservation 出现在第一句，报告以最新句为准 --></div>
+            <div class="rc-actions">
+              <button class="rc-btn primary">🎤 再跟读整句</button>
+              <button class="rc-btn">🎯 只练 4 个词</button>
+              <button class="rc-link">🔊 听领读</button>
+              <button class="rc-link">▶ 听我的录音</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="speak-controls">
+          <div class="speak-level-bar"><i></i></div>
+          <div class="speak-controls-row">
+            <button class="hold-btn">按住说话</button>
+            <button class="sec-btn">跟读 3.6 分 · 再跟读</button>
+            <button class="sec-btn">🔊 重听</button>
+          </div>
+          <div class="speak-hint">按住说话（英语）→ AI 回复带中文提示；「跟读打分」照 AI 最新一句读</div>
+        </div>
+      </section>
+
+      <!-- ================= 屏 4 · 复习卡（SRS 预览） ================= -->
+      <section class="srs-screen hidden" id="screenSrs">
+        <div class="srs-head">
+          <button class="ghost-btn" id="srsBack">‹ 返回口语</button>
+          <span class="t">今日复习</span>
+          <span class="srs-prog" id="srsProg">卡片 1 / 3</span>
+        </div>
+        <div class="srs-body">
+          <div class="srs-card" id="srsCard">
+            <div class="srs-word" id="srsWord">reservation<span class="ipa">/ˌrezərˈveɪʃn/</span><i class="mk" style="top:-9px; right:-9px;">5</i></div>
+            <div class="srs-kind"><b>n.</b><span id="srsSense">① 预订，预约（座位、房间）　② （意见的）保留；存疑</span></div>
+            <div class="srs-src">
+              <span class="src-lab">例句来源 <span class="src-chip" id="srsSrcChip">口语陪练 · 餐厅点餐</span></span>
+              <span class="ex-en" id="srsExEn">"I'd like to make a reservation for two, at 7:30."</span>
+              <span class="ex-zh" id="srsExZh">我想预订两个人的位子，7 点半的。</span>
+            </div>
+            <div class="srs-actions">
+              <button class="no" id="srsNo">😵 想不起来</button>
+              <button class="yes" id="srsYes">😄 认识，下一张</button>
+            </div>
+            <div class="srs-tip">判分后按 SRS 间隔排下次复习 · 例句来自你当时的口语语境</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 屏 2/3 · 复盘弹层 ================= -->
+      <div class="modal-mask hidden" id="reviewMask">
+        <div class="review-dialog">
+
+          <!-- 2a · 勾选弱词 -->
+          <div id="rvPick" style="display:flex; flex-direction:column; min-height:0; flex:1;">
+            <div class="rv-head">
+              <div>
+                <div class="t">本轮复盘</div>
+                <div class="sub">练了 6 轮 · 跟读了 3 句 · 发现 <b>7</b> 个需要加强的词（已折叠 2 个）</div>
+              </div>
+              <button class="rv-close" id="rvClose" title="关闭 (Esc)">✕</button>
+            </div>
+            <div class="rv-rule"><b>候选规则</b>：最新一次词分 &lt; 3.5，或有漏读 / 替换（功能词 a / the / of… 漏读不收）· 最新 ≥ 4.0 视为已攻克，不再打扰<br/>临界（3.5～4.0）与纯漏读 1 次的实词<b>默认不勾</b>，由你决定 · 候选超过 8 个时按证据强度只展示前 8</div>
+
+            <div class="rv-list" id="rvList">
+
+              <div class="rv-row open" data-w="reservation">
+                <label class="rv-check" onclick="event.stopPropagation()"><input type="checkbox" checked><i></i></label>
+                <div class="rv-main">
+                  <div class="rv-line1">
+                    <span class="rv-word">reservation</span>
+                    <span class="rv-ipa">/ˌrezərˈveɪʃn/</span>
+                    <span class="tag bad">最新 2.4 / 5</span>
+                    <span class="tag bad">替换</span>
+                  </div>
+                  <div class="rv-gloss">n. 预订，预约；（意见的）保留</div>
+                  <div class="rv-detail">
+                    <span class="lab">本轮原句</span>
+                    <div class="ex-en">"I'd like to make a reservation for two, at 7:30."</div>
+                    <div class="ex-zh">我想预订两个人的位子，7 点半的。</div>
+                    <div class="sense-line"><b>n.</b> ① 预订，预约　② 保留意见；存疑　·　常搭配：make a reservation</div>
+                  </div>
+                </div>
+                <div class="rv-side"><button class="rv-spk" title="听发音">🔊</button><span class="rv-chev">▼</span></div>
+              </div>
+
+              <div class="rv-row" data-w="available">
+                <label class="rv-check" onclick="event.stopPropagation()"><input type="checkbox" checked><i></i></label>
+                <div class="rv-main">
+                  <div class="rv-line1">
+                    <span class="rv-word">available</span>
+                    <span class="rv-ipa">/əˈveɪləbl/</span>
+                    <span class="tag bad">漏读（最新）</span>
+                    <span class="tag bad">上次 2.9 / 5</span>
+                  </div>
+                  <div class="rv-gloss">adj. 可获得的；有空的</div>
+                  <div class="rv-detail">
+                    <span class="lab">本轮原句</span>
+                    <div class="ex-en">"We still have a table available at 7:30."</div>
+                    <div class="ex-zh">我们 7 点半还有空位。</div>
+                    <div class="sense-line"><b>adj.</b> ① 可获得的，可用的　② 有空的　·　常搭配：be available for</div>
+                  </div>
+                </div>
+                <div class="rv-side"><button class="rv-spk" title="听发音">🔊</button><span class="rv-chev">▼</span></div>
+              </div>
+
+              <div class="rv-row" data-w="recommend">
+                <label class="rv-check" onclick="event.stopPropagation()"><input type="checkbox" checked><i></i></label>
+                <div class="rv-main">
+                  <div class="rv-line1">
+                    <span class="rv-word">recommend</span>
+                    <span class="rv-ipa">/ˌrekəˈmend/</span>
+                    <span class="tag bad">最新 3.1 / 5</span>
+                    <span class="tag warn">准确度低</span>
+                  </div>
+                  <div class="rv-gloss">v. 推荐，建议</div>
+                  <div class="rv-detail">
+                    <span class="lab">本轮原句</span>
+                    <div class="ex-en">"I'd recommend our chef's special."</div>
+                    <div class="ex-zh">我推荐主厨特色菜。</div>
+                    <div class="sense-line"><b>v.</b> ① 推荐　② 建议　·　易错点：重音在末音节 -mend</div>
+                  </div>
+                </div>
+                <div class="rv-side"><button class="rv-spk" title="听发音">🔊</button><span class="rv-chev">▼</span></div>
+              </div>
+
+              <div class="rv-row" data-w="vegetarian">
+                <label class="rv-check" onclick="event.stopPropagation()"><input type="checkbox"><i></i></label>
+                <div class="rv-main">
+                  <div class="rv-line1">
+                    <span class="rv-word">vegetarian</span>
+                    <span class="rv-ipa">/ˌvedʒəˈteriən/</span>
+                    <span class="tag warn">最新 3.8 / 5</span>
+                    <span class="tag warn">临界</span>
+                  </div>
+                  <div class="rv-gloss">n. 素食者　adj. 素食的</div>
+                  <div class="rv-detail">
+                    <span class="lab">本轮原句</span>
+                    <div class="ex-en">"It's very popular with vegetarians."</div>
+                    <div class="ex-zh">素食者也很喜欢。</div>
+                    <div class="sense-line"><b>n.</b> 素食者　·　对比：vegetable（蔬菜）→ vegetarian（素食者）→ vegan（纯素）</div>
+                  </div>
+                </div>
+                <div class="rv-side"><button class="rv-spk" title="听发音">🔊</button><span class="rv-chev">▼</span></div>
+              </div>
+
+              <div class="rv-row is-dup" data-w="dessert">
+                <label class="rv-check" onclick="event.stopPropagation()"><input type="checkbox" disabled title="已在生词本"><i></i></label>
+                <div class="rv-main">
+                  <div class="rv-line1">
+                    <span class="rv-word">dessert</span>
+                    <span class="rv-ipa">/dɪˈzɜːrt/</span>
+                    <span class="tag bad">漏读</span>
+                    <span class="wake-badge">已收藏 12 天 · 复习 2 次未过</span>
+                  </div>
+                  <div class="rv-gloss">n. 甜点，餐后甜食</div>
+                  <div class="rv-detail">
+                    <span class="lab">本轮原句</span>
+                    <div class="ex-en">"Would you like to see the dessert menu as well?"</div>
+                    <div class="ex-zh">要不要顺便看看甜点单？</div>
+                    <div class="dup-note"><b>✓ 不重复添加</b> · 保留你已有的 SRS 进度，这句口语原句仅作补充例句并入；因连续 2 次复习未过，<b>已把它提到今天的复习队列最前</b>。</div>
+                  </div>
+                </div>
+                <div class="rv-side"><button class="rv-spk" title="听发音">🔊</button><span class="rv-chev">▼</span></div>
+              </div>
+
+              <div class="rv-fold">
+                <button class="rv-fold-btn" id="rvFoldBtn">另有 2 个较弱的词 · appetizer（临界）、beverage（纯漏读 1 次） <span id="rvFoldChev">▾</span></button>
+                <div class="rv-fold-body hidden" id="rvFoldBody">
+
+                  <div class="rv-row" data-w="appetizer">
+                    <label class="rv-check" onclick="event.stopPropagation()"><input type="checkbox"><i></i></label>
+                    <div class="rv-main">
+                      <div class="rv-line1">
+                        <span class="rv-word">appetizer</span>
+                        <span class="rv-ipa">/ˈæpɪtaɪzər/</span>
+                        <span class="tag warn">最新 3.6 / 5</span>
+                        <span class="tag warn">临界</span>
+                      </div>
+                      <div class="rv-gloss">n. 开胃菜，餐前小吃</div>
+                      <div class="rv-detail">
+                        <span class="lab">本轮原句</span>
+                        <div class="ex-en">"Would you like to start with an appetizer?"</div>
+                        <div class="ex-zh">要不要先来份开胃菜？</div>
+                        <div class="sense-line"><b>n.</b> 开胃菜　·　近义：starter（英式）</div>
+                      </div>
+                    </div>
+                    <div class="rv-side"><button class="rv-spk" title="听发音">🔊</button><span class="rv-chev">▼</span></div>
+                  </div>
+
+                  <div class="rv-row" data-w="beverage">
+                    <label class="rv-check" onclick="event.stopPropagation()"><input type="checkbox"><i></i></label>
+                    <div class="rv-main">
+                      <div class="rv-line1">
+                        <span class="rv-word">beverage</span>
+                        <span class="rv-ipa">/ˈbevərɪdʒ/</span>
+                        <span class="tag bad">纯漏读 1 次</span>
+                      </div>
+                      <div class="rv-gloss">n. 饮料（正式用词）</div>
+                      <div class="rv-detail">
+                        <span class="lab">本轮原句</span>
+                        <div class="ex-en">"Can I get you a beverage while you look at the menu?"</div>
+                        <div class="ex-zh">看菜单时要先来杯喝的吗？</div>
+                        <div class="sense-line"><b>n.</b> 饮料　·　日常口语更常用 drink，beverage 偏正式 / 菜单用语</div>
+                      </div>
+                    </div>
+                    <div class="rv-side"><button class="rv-spk" title="听发音">🔊</button><span class="rv-chev">▼</span></div>
+                  </div>
+
+                </div>
+              </div>
+
+            </div>
+
+            <div class="rv-foot">
+              <span class="note">已选 <b id="selCount" style="color:var(--accent)">3</b> 个 · 保存时自动查词典补齐词性 / 释义 / 音标</span>
+              <button class="sec-btn sm" id="rvLater">稍后处理</button>
+              <button class="pri-btn" id="rvAdd"><i class="mk" style="top:-9px; right:-9px;">3</i>✓ 加入生词本（<span id="addCount">3</span>）</button>
+            </div>
+          </div>
+
+          <!-- 2b · 空状态 -->
+          <div id="rvEmpty" class="hidden" style="display:flex; flex-direction:column; min-height:0; flex:1;">
+            <div class="rv-head">
+              <div>
+                <div class="t">本轮复盘</div>
+                <div class="sub">练了 6 轮 · 跟读了 3 句</div>
+              </div>
+              <button class="rv-close" id="rvClose2" title="关闭 (Esc)">✕</button>
+            </div>
+            <div class="rv-empty">
+              <span class="emoji">🎉</span>
+              <span class="h">这轮没有明显拖后腿的词</span>
+              <span class="p">所有跟读词得分 ≥ 4.0，也没有漏读。保持这个状态，去下一轮吧！<br/>复盘入口只在你有弱词时才值得点，不打扰。</span>
+            </div>
+            <div class="rv-foot">
+              <span class="note"></span>
+              <button class="pri-btn" id="rvEmptyOk">继续练习</button>
+            </div>
+          </div>
+
+          <!-- 2c · 加入成功 -->
+          <div id="rvDone" class="hidden" style="display:flex; flex-direction:column; min-height:0; flex:1;">
+            <div class="rv-done">
+              <span class="ok-circle">✓</span>
+              <span class="h">已加入 <span id="doneCount">3</span> 个词</span>
+              <span class="p">已排入复习计划 · 明天第 1 次复习（SRS）</span>
+              <div class="chips" id="doneChips">
+                <span class="wchip">reservation<span class="srs">D+1</span></span>
+                <span class="wchip">available<span class="srs">D+1</span></span>
+                <span class="wchip">recommend<span class="srs">D+1</span></span>
+              </div>
+              <span class="dup-line">dessert 已在生词本 · 保留 SRS 进度仅补例句 · 已提到今天复习队列最前</span>
+              <div class="actions">
+                <button class="sec-btn sm" id="genNote">📄 生成复习笔记</button>
+                <button class="pri-btn" id="goReview">▶ 去复习<i class="mk" style="top:-9px; right:-9px;">4</i></button>
+                <button class="sec-btn sm" id="keepPractice">继续练习</button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="toast hidden" id="toast"></div>
+    </div>
+  </div>
+</main>
+
+<!-- ============ 设计说明 ============ -->
+<footer class="proto-notes">
+  <div class="col"><b>交互流程</b>
+    对话页 <code>结束本轮并复盘</code> → 勾选弱词（最新 &lt;3.5 / 漏读+低分默认勾选；临界 / 纯漏读 1 次默认不勾）→ 查词典补释义 → 批量合并入生词本 → 生成复习笔记 / 去复习。
+  </div>
+  <div class="col"><b>① 入口 · ② 候选来源</b>
+    入口固定在标题栏右侧，不自动收藏。候选 = <b>最新一次</b>词分 &lt;3.5 或漏读 / 替换；功能词（a / the / of…）漏读不收；最新 ≥4.0 已攻克剔除；超 8 个按证据强度折叠。全部来自 <code>shadowAttempts → words</code>，无模型参与。
+  </div>
+  <div class="col"><b>③ 批量保存 · ④ 成功态</b>
+    一次提交走 <code>reader_merge_vocab_words</code>：加锁 → 逐个判重 → 新词追加、已有词保留 SRS → 单次原子写入。例句直接复用本轮 AI 原句（EN+ZH），无需模型再编。
+  </div>
+  <div class="col"><b>⑤ 复习卡 · 来源表示</b>
+    <code>source.articleId</code> 留空即可，不新增 sourceType；例句随卡保存，复习卡显示「来源：口语陪练 · 场景」+ 原句，无文章不丢语境。
+  </div>
+  <div class="col"><b>重复词与唤醒（dessert 行）</b>
+    已收藏的不重复建卡、不动 SRS 进度，口语例句仅补充并入；若复习 2 次未过 → 显示唤醒标签，并把该词提到今日复习队列最前。
+  </div>
+  <div class="col"><b>第一版不做</b>
+    AI 纠错词、口头禅、语法、全对话入库；音素级诊断、drill 复查升级、词频表为 v2。完整方案见 <code>docs/speak-review-vocab-proposal.md</code>。
+  </div>
+</footer>
+
+<script>
+(function () {
+  var $ = function (s) { return document.querySelector(s); };
+  var $$ = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+
+  var state = { screen: "chat", scenario: "normal", added: [], srsIdx: 0 };
+
+  var SRS_CARDS = [
+    { w: "reservation", ipa: "/ˌrezərˈveɪʃn/", sense: "① 预订，预约（座位、房间）　② （意见的）保留；存疑",
+      en: "\u201cI'd like to make a reservation for two, at 7:30.\u201d", zh: "我想预订两个人的位子，7 点半的。" },
+    { w: "available", ipa: "/əˈveɪləbl/", sense: "① 可获得的，可用的　② 有空的",
+      en: "\u201cWe still have a table available at 7:30.\u201d", zh: "我们 7 点半还有空位。" },
+    { w: "recommend", ipa: "/ˌrekəˈmend/", sense: "① 推荐　② 建议；劝告",
+      en: "\u201cI'd recommend our chef's special.\u201d", zh: "我推荐主厨特色菜。" }
+  ];
+
+  var toastTimer = null;
+  function toast(msg) {
+    var t = $("#toast");
+    t.textContent = msg;
+    t.classList.remove("hidden");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.add("hidden"); }, 2200);
+  }
+
+  function showScreen(name) {
+    state.screen = name;
+    $("#screenChat").classList.toggle("hidden", name === "srs");
+    $("#screenSrs").classList.toggle("hidden", name !== "srs");
+    var openReview = name === "review" || name === "done";
+    $("#reviewMask").classList.toggle("hidden", !openReview);
+    $("#rvPick").classList.toggle("hidden", name !== "review" || isClean());
+    $("#rvEmpty").classList.toggle("hidden", !(name === "review" && isClean()));
+    $("#rvDone").classList.toggle("hidden", name !== "done");
+    $$(".proto-steps button").forEach(function (b) {
+      b.classList.toggle("on", b.dataset.step === name);
+    });
+    if (name !== "chat") $("#entryBtn").classList.remove("hint-pulse");
+  }
+  function isClean() { return state.scenario === "clean"; }
+
+  /* 工具栏：步骤直达 */
+  $$(".proto-steps button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var step = b.dataset.step;
+      if (step === "review") { showScreen("review"); return; }
+      if (step === "done") {
+        state.added = ["reservation", "available", "recommend"];
+        $("#doneCount").textContent = "3";
+        showScreen("done"); return;
+      }
+      showScreen(step);
+    });
+  });
+
+  $("#scenarioSel").addEventListener("change", function (e) {
+    state.scenario = e.target.value;
+    if (state.screen === "review" || state.screen === "done") showScreen("review");
+    toast(isClean() ? "已切换：本轮无弱词场景" : "已切换：5 个候选词场景（含 1 个已收藏）");
+  });
+
+  $("#markToggle").addEventListener("click", function () {
+    document.body.classList.toggle("no-marks");
+    this.classList.toggle("on");
+  });
+  $("#darkToggle").addEventListener("click", function () {
+    var root = document.documentElement;
+    var dark = root.getAttribute("data-theme") === "dark";
+    if (dark) { root.removeAttribute("data-theme"); this.textContent = "🌙"; }
+    else { root.setAttribute("data-theme", "dark"); this.textContent = "☀️"; }
+  });
+
+  /* 对话页入口 */
+  $("#entryBtn").addEventListener("click", function () { showScreen("review"); });
+
+  /* 复盘弹层：行点击展开/收起 */
+  $$("#rvList .rv-row").forEach(function (row) {
+    row.addEventListener("click", function () { row.classList.toggle("open"); });
+  });
+
+  /* 折叠的较弱词：展开/收起 */
+  $("#rvFoldBtn").addEventListener("click", function () {
+    var body = $("#rvFoldBody");
+    var opening = body.classList.contains("hidden");
+    body.classList.toggle("hidden", !opening);
+    $("#rvFoldChev").textContent = opening ? "▴" : "▾";
+  });
+
+  /* 勾选 → 计数 */
+  function refreshCounts() {
+    var boxes = $$("#rvList .rv-check input:not(:disabled)");
+    var n = boxes.filter(function (c) { return c.checked; }).length;
+    $("#selCount").textContent = n;
+    $("#addCount").textContent = n;
+    $("#rvAdd").disabled = n === 0;
+  }
+  $$("#rvList .rv-check input:not(:disabled)").forEach(function (c) {
+    c.addEventListener("change", refreshCounts);
+  });
+  refreshCounts();
+
+  function closeReview() {
+    showScreen("chat");
+    $("#entryBtn").classList.remove("hint-pulse");
+  }
+  $("#rvClose").addEventListener("click", closeReview);
+  $("#rvClose2").addEventListener("click", closeReview);
+  $("#rvLater").addEventListener("click", function () {
+    closeReview();
+    toast("已跳过本轮复盘（未加入生词）");
+  });
+  $("#rvEmptyOk").addEventListener("click", function () {
+    closeReview();
+    toast("这轮全部达标，继续下一轮！");
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !$("#reviewMask").classList.contains("hidden")) closeReview();
+  });
+
+  /* 加入生词本：批量合并（原型模拟 600ms 写盘） */
+  $("#rvAdd").addEventListener("click", function () {
+    var btn = $("#rvAdd");
+    if (btn.disabled || btn.dataset.busy) return;
+    btn.dataset.busy = "1";
+    var old = btn.innerHTML;
+    btn.innerHTML = "⟳ 正在合并保存…";
+    var words = $$("#rvList .rv-check input:not(:disabled)")
+      .filter(function (c) { return c.checked; })
+      .map(function (c) { return c.closest(".rv-row").dataset.w; });
+    setTimeout(function () {
+      btn.dataset.busy = "";
+      btn.innerHTML = old;
+      state.added = words;
+      $("#doneCount").textContent = String(words.length);
+      $("#doneChips").innerHTML = words.map(function (w) {
+        return '<span class="wchip">' + w + '<span class="srs">D+1</span></span>';
+      }).join("");
+      showScreen("done");
+      toast("reader_merge_vocab_words ✓ " + words.length + " 个新词已追加，已有词未覆盖");
+    }, 600);
+  });
+
+  /* 成功态动作 */
+  $("#genNote").addEventListener("click", function () {
+    var b = this;
+    if (b.dataset.done) return;
+    b.dataset.done = "1";
+    b.textContent = "✓ 已生成《口语复盘 · 餐厅点餐》";
+    b.style.color = "var(--ok)"; b.style.borderColor = "var(--ok)";
+    toast("复习笔记已生成：3 词 + 本轮原句语境，已排入复习队列");
+  });
+  $("#goReview").addEventListener("click", function () { showScreen("srs"); });
+  $("#keepPractice").addEventListener("click", closeReview);
+
+  /* 复习卡 */
+  function renderSrs() {
+    var c = SRS_CARDS[state.srsIdx % SRS_CARDS.length];
+    $("#srsWord").innerHTML = c.w + '<span class="ipa">' + c.ipa + "</span>" +
+      '<i class="mk" style="top:-9px; right:-9px;">5</i>';
+    $("#srsSense").textContent = c.sense;
+    $("#srsExEn").textContent = c.en;
+    $("#srsExZh").textContent = c.zh;
+    $("#srsProg").textContent = "卡片 " + (state.srsIdx % SRS_CARDS.length + 1) + " / " + SRS_CARDS.length;
+    var card = $("#srsCard");
+    card.style.animation = "none"; void card.offsetWidth; card.style.animation = "";
+  }
+  $("#srsYes").addEventListener("click", function () {
+    toast("已记录 ✓ " + SRS_CARDS[state.srsIdx % SRS_CARDS.length].w + " · 下次复习 3 天后");
+    state.srsIdx += 1; renderSrs();
+  });
+  $("#srsNo").addEventListener("click", function () {
+    toast("已记录：明天再来一次");
+    state.srsIdx += 1; renderSrs();
+  });
+  $("#srsBack").addEventListener("click", function () { showScreen("chat"); });
+})();
+</script>
+</body>
+</html>

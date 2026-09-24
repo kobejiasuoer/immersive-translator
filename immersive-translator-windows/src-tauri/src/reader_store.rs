@@ -1,10 +1,12 @@
 //! 沉浸阅读室本地存储。
 //!
 //! - 文章（含句对、进度、按文章的设置覆盖）：app_data_dir/reader_articles.json
-//! - 生词（SRS 状态）+ 复习打卡日志：app_data_dir/reader_vocab.json
+//! - 生词（SRS 状态）+ 复习打卡日志 + 每日阅读时长：app_data_dir/reader_vocab.json
+//! - 书索引与元信息：app_data_dir/reader_books.json；章正文：app_data_dir/books/<bookId>.json
 //!
-//! 数据结构与前端 src/core/readerTypes.ts（contracts/reading-room.schema.json v1）
-//! 同构，camelCase 序列化。到期判定与计数都从同一份 srs.dueAt 推导。
+//! 数据结构与前端 src/core/readerTypes.ts（contracts/reading-room.schema.json，
+//! 1.1.0：书级载体为可选字段的增量）同构，camelCase 序列化。
+//! 到期判定与计数都从同一份 srs.dueAt 推导。
 //!
 //! 日期键（打卡/今日计数）由前端按本地时区传入 YYYY-MM-DD；后端只做
 //! 字符串日历算术（前一天 = civil(days - 1)），不引入时区依赖。
@@ -171,6 +173,12 @@ pub struct Article {
     pub chunk_state: Option<ArticleChunkState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<ReaderSettingsOverride>,
+    /// 所属书 id（书章文章才有；存储据此路由到 books/<bookId>.json）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_id: Option<String>,
+    /// 书内章序号，从 0（与 BookMeta.chapters 下标一致）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapter_idx: Option<u32>,
 }
 
 /// 书架条目：文章去掉句对正文，加句数。
@@ -188,6 +196,92 @@ pub struct ArticlesFile {
     pub schema_version: u32,
     #[serde(default)]
     pub articles: Vec<Article>,
+}
+
+// ---------- 整本书阅读室（书级载体） ----------
+//
+// 存储布局（存储改造方案 a）：短文照旧落 reader_articles.json；每本书的全部
+// 章文章整体落 books/<bookId>.json（BookFile），reader_books.json 只存索引与
+// 书元信息（BookMeta，不含章正文）。流式翻译期间 700ms 防抖的整文件重写只落
+// 在单本书自己的文件（0.5–1MB 量级），不再随书架膨胀；reader_list_articles
+// 永不返回书章。
+
+/// 书目录里的一章（索引信息，不含正文）。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BookChapterMeta {
+    /// 章文章 id（= Article.id，生词 source.articleId 即它）。
+    pub id: String,
+    pub title: String,
+    pub word_count: u32,
+    pub sentence_count: u32,
+}
+
+/// 书级断点：进书直达。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BookProgress {
+    pub chapter_id: String,
+    pub sentence_idx: u32,
+    /// 0–100，章内句序百分比。
+    pub percent: f64,
+}
+
+/// 选书雷达缓存：导入时按全书文本实算的大纲词命中数（去重）。键 = ExamGoal。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BookRadar {
+    pub kaoyan: u32,
+    pub cet4: u32,
+    pub cet6: u32,
+}
+
+/// 一本书的索引与元信息（不含章正文）。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BookMeta {
+    pub id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// 缩小后的封面 dataURL（JPEG，≤160px 宽；无封面缺省）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover: Option<String>,
+    pub created_at: i64,
+    pub last_read_at: i64,
+    /// 章的有序表；下标即 chapterIdx。
+    pub chapters: Vec<BookChapterMeta>,
+    pub progress: BookProgress,
+    /// 全书累计阅读秒数（章 Article.progress.secondsListened 的冗余汇总）。
+    pub seconds_listened: f64,
+    pub radar: BookRadar,
+}
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct BooksFile {
+    pub schema_version: u32,
+    #[serde(default)]
+    pub books: Vec<BookMeta>,
+}
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct BookFile {
+    pub schema_version: u32,
+    #[serde(default)]
+    pub articles: Vec<Article>,
+}
+
+/// 提醒卡「继续阅读」用的书级断点快照。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct LastBookProgress {
+    pub book_id: String,
+    pub book_title: String,
+    pub chapter_idx: u32,
+    pub chapter_title: String,
+    pub chapter_count: u32,
 }
 
 // ---------- 生词 ----------
@@ -314,6 +408,15 @@ pub struct ReviewLogFile {
     pub days: Vec<ReviewLogDay>,
 }
 
+/// 一天的累计阅读秒数（辅助增强二：每日阅读目标追踪的数据源）。
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingLogDay {
+    /// 本地日期 YYYY-MM-DD
+    pub day: String,
+    pub seconds: f64,
+}
+
 #[derive(Serialize, Deserialize, Default, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct VocabFile {
@@ -322,6 +425,9 @@ pub struct VocabFile {
     pub words: Vec<VocabWord>,
     #[serde(default)]
     pub review_log: ReviewLogFile,
+    /// 每日阅读时长（serde default：老数据/老应用双向兼容）。
+    #[serde(default)]
+    pub reading_log: Vec<ReadingLogDay>,
 }
 
 /// 屏 D 左栏统计（与前端 readerSrs.reviewStats 同口径、同结构）。
@@ -337,6 +443,8 @@ pub struct ReviewStats {
     pub total_chunks: u32,
     pub due_words: u32,
     pub due_chunks: u32,
+    /// 今日累计阅读秒数（每日阅读目标追踪）。
+    pub read_seconds_today: f64,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -365,6 +473,33 @@ fn vocab_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("无法获取应用数据目录: {e}"))?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建数据目录: {e}"))?;
     Ok(dir.join("reader_vocab.json"))
+}
+
+fn books_index_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法获取应用数据目录: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建数据目录: {e}"))?;
+    Ok(dir.join("reader_books.json"))
+}
+
+fn books_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法获取应用数据目录: {e}"))?
+        .join("books");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建书籍目录: {e}"))?;
+    Ok(dir)
+}
+
+/// 单本书文件路径。book_id 只允许纯文件名（防路径穿越），与 notes 同判法。
+fn book_file_path(app: &AppHandle, book_id: &str) -> Result<PathBuf, String> {
+    if !is_pure_file_name(book_id) {
+        return Err("无效的书籍 id".into());
+    }
+    Ok(books_dir(app)?.join(format!("{book_id}.json")))
 }
 
 /// 串行化读写，避免两个窗口并发保存互相覆盖。
@@ -416,6 +551,68 @@ fn load_vocab_from_path(path: &std::path::Path) -> Result<VocabFile, String> {
     Ok(file)
 }
 
+fn load_books_from_path(path: &std::path::Path) -> Result<BooksFile, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(empty_books_file()),
+        Err(e) => return Err(format!("读取书籍索引 {path:?} 失败: {e}")),
+    };
+    if text.trim().is_empty() {
+        return Ok(empty_books_file());
+    }
+    let file: BooksFile = serde_json::from_str(&text).map_err(|e| format!("书籍索引损坏: {e}"))?;
+    check_schema(file.schema_version)?;
+    Ok(file)
+}
+
+fn load_book_file_from_path(path: &std::path::Path) -> Result<BookFile, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(empty_book_file()),
+        Err(e) => return Err(format!("读取书籍 {path:?} 失败: {e}")),
+    };
+    if text.trim().is_empty() {
+        return Ok(empty_book_file());
+    }
+    let file: BookFile = serde_json::from_str(&text).map_err(|e| format!("书籍数据损坏: {e}"))?;
+    check_schema(file.schema_version)?;
+    Ok(file)
+}
+
+/// 索引 upsert 一本书（按 id 替换/追加）。
+fn upsert_book_index(file: &mut BooksFile, meta: BookMeta) {
+    file.schema_version = READER_SCHEMA_VERSION;
+    match file.books.iter_mut().find(|b| b.id == meta.id) {
+        Some(existing) => *existing = meta,
+        None => file.books.push(meta),
+    }
+}
+
+/// 章文章写入单本书文件（按 id 替换/追加，整体原子重写）。
+fn save_article_into_book_file(
+    path: &std::path::Path,
+    article: Article,
+) -> Result<ArticleSummary, String> {
+    let mut file = load_book_file_from_path(path)?;
+    file.schema_version = READER_SCHEMA_VERSION;
+    let id = article.id.clone();
+    match file.articles.iter_mut().find(|a| a.id == id) {
+        Some(existing) => *existing = article,
+        None => file.articles.push(article),
+    }
+    let saved = file
+        .articles
+        .iter()
+        .find(|a| a.id == id)
+        .cloned()
+        .ok_or("保存后找不到章文章")?;
+    write_atomic(
+        &path.to_path_buf(),
+        &serde_json::to_string(&file).map_err(|e| format!("序列化书籍失败: {e}"))?,
+    )?;
+    Ok(summary(saved))
+}
+
 /// 缺文件/空文件返回的默认结构必须带当前版本号，
 /// 否则首次保存会把 schemaVersion=0 写进盘，下次读取触发版本不兼容。
 fn empty_articles_file() -> ArticlesFile {
@@ -430,6 +627,21 @@ fn empty_vocab_file() -> VocabFile {
         schema_version: READER_SCHEMA_VERSION,
         words: Vec::new(),
         review_log: ReviewLogFile::default(),
+        reading_log: Vec::new(),
+    }
+}
+
+fn empty_books_file() -> BooksFile {
+    BooksFile {
+        schema_version: READER_SCHEMA_VERSION,
+        books: Vec::new(),
+    }
+}
+
+fn empty_book_file() -> BookFile {
+    BookFile {
+        schema_version: READER_SCHEMA_VERSION,
+        articles: Vec::new(),
     }
 }
 
@@ -456,6 +668,8 @@ fn summary(article: Article) -> ArticleSummary {
 pub fn reader_list_articles(app: AppHandle) -> Result<Vec<ArticleSummary>, String> {
     let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
     let mut file = load_articles(&app)?;
+    // 书章不属于这里（防御：老版本误写进来的也过滤，书架只列短文）。
+    file.articles.retain(|a| a.book_id.is_none());
     file.articles
         .sort_by(|a, b| b.last_read_at.cmp(&a.last_read_at));
     Ok(file.articles.into_iter().map(summary).collect())
@@ -465,13 +679,30 @@ pub fn reader_list_articles(app: AppHandle) -> Result<Vec<ArticleSummary>, Strin
 pub fn reader_get_article(app: AppHandle, id: String) -> Result<Option<Article>, String> {
     let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
     let file = load_articles(&app)?;
-    Ok(file.articles.into_iter().find(|a| a.id == id))
+    if let Some(a) = file.articles.into_iter().find(|a| a.id == id) {
+        return Ok(Some(a));
+    }
+    // 短文库里没有 → 查书索引定位到书文件再取章。
+    let index = load_books_from_path(&books_index_path(&app)?)?;
+    let Some(meta) = index
+        .books
+        .iter()
+        .find(|b| b.chapters.iter().any(|c| c.id == id))
+    else {
+        return Ok(None);
+    };
+    let book = load_book_file_from_path(&book_file_path(&app, &meta.id)?)?;
+    Ok(book.articles.into_iter().find(|a| a.id == id))
 }
 
 /// 新建或整体更新一篇文章（进度/译文/设置覆盖都通过它落盘）。
+/// 书章（bookId 非空）路由到 books/<bookId>.json，短文照旧走 reader_articles.json。
 #[tauri::command]
 pub fn reader_save_article(app: AppHandle, article: Article) -> Result<ArticleSummary, String> {
     let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
+    if let Some(book_id) = article.book_id.clone() {
+        return save_article_into_book_file(&book_file_path(&app, &book_id)?, article);
+    }
     let id = article.id.clone();
     let mut file = load_articles(&app)?;
     file.schema_version = READER_SCHEMA_VERSION;
@@ -490,6 +721,164 @@ pub fn reader_save_article(app: AppHandle, article: Article) -> Result<ArticleSu
         &serde_json::to_string(&file).map_err(|e| format!("序列化文章失败: {e}"))?,
     )?;
     Ok(summary(saved))
+}
+
+// ---------- 书（书级载体）命令 ----------
+
+/// 书架的书（按最近阅读倒序）。只含索引与元信息，不含章正文。
+#[tauri::command]
+pub fn reader_list_books(app: AppHandle) -> Result<Vec<BookMeta>, String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
+    let mut file = load_books_from_path(&books_index_path(&app)?)?;
+    file.books
+        .sort_by(|a, b| b.last_read_at.cmp(&a.last_read_at));
+    Ok(file.books)
+}
+
+/// 整本入库（导入向导确认时一次性调用）：写书文件 + upsert 索引，返回最新书列表。
+#[tauri::command]
+pub fn reader_save_book(
+    app: AppHandle,
+    meta: BookMeta,
+    articles: Vec<Article>,
+) -> Result<Vec<BookMeta>, String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
+    if meta.chapters.is_empty() {
+        return Err("书至少要有一章".into());
+    }
+    if articles.is_empty() {
+        return Err("书至少要有一章正文".into());
+    }
+    // 章文章的归属字段以 BookMeta 为准回填（前端已填，这里兜底）。
+    let mut articles = articles;
+    for article in articles.iter_mut() {
+        article.book_id = Some(meta.id.clone());
+    }
+    let path = book_file_path(&app, &meta.id)?;
+    let mut file = load_book_file_from_path(&path)?;
+    file.schema_version = READER_SCHEMA_VERSION;
+    file.articles = articles;
+    write_atomic(
+        &path,
+        &serde_json::to_string(&file).map_err(|e| format!("序列化书籍失败: {e}"))?,
+    )?;
+    let mut index = load_books_from_path(&books_index_path(&app)?)?;
+    upsert_book_index(&mut index, meta);
+    write_atomic(
+        &books_index_path(&app)?,
+        &serde_json::to_string(&index).map_err(|e| format!("序列化书籍索引失败: {e}"))?,
+    )?;
+    let mut books = index.books;
+    books.sort_by(|a, b| b.last_read_at.cmp(&a.last_read_at));
+    Ok(books)
+}
+
+/// 只更新书元信息（进度/时长/最近阅读写回；不碰章正文）。
+#[tauri::command]
+pub fn reader_save_book_meta(app: AppHandle, meta: BookMeta) -> Result<(), String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
+    let mut index = load_books_from_path(&books_index_path(&app)?)?;
+    let exists = index.books.iter().any(|b| b.id == meta.id);
+    if !exists {
+        return Err(format!("书不存在: {}", meta.id));
+    }
+    upsert_book_index(&mut index, meta);
+    write_atomic(
+        &books_index_path(&app)?,
+        &serde_json::to_string(&index).map_err(|e| format!("序列化书籍索引失败: {e}"))?,
+    )?;
+    Ok(())
+}
+
+/// 删除一本书：删书卡与全部章文章（进度不可恢复），生词一律保留。
+#[tauri::command]
+pub fn reader_delete_book(app: AppHandle, book_id: String) -> Result<bool, String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
+    let mut index = load_books_from_path(&books_index_path(&app)?)?;
+    let before = index.books.len();
+    index.books.retain(|b| b.id != book_id);
+    let removed = index.books.len() != before;
+    if removed {
+        write_atomic(
+            &books_index_path(&app)?,
+            &serde_json::to_string(&index).map_err(|e| format!("序列化书籍索引失败: {e}"))?,
+        )?;
+        let path = book_file_path(&app, &book_id)?;
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| format!("删除书籍文件失败: {e}"))?;
+        }
+    }
+    Ok(removed)
+}
+
+/// 最近在读的书（提醒卡「继续阅读」用）：lastReadAt 最大且有章的书，返回其断点章。
+pub fn last_book_progress_from_index(index: &BooksFile) -> Option<LastBookProgress> {
+    let mut books: Vec<&BookMeta> = index.books.iter().collect();
+    books.sort_by(|a, b| b.last_read_at.cmp(&a.last_read_at));
+    let meta = books.into_iter().find(|b| !b.chapters.is_empty())?;
+    let chapter_idx = meta
+        .chapters
+        .iter()
+        .position(|c| c.id == meta.progress.chapter_id)
+        .unwrap_or(0) as u32;
+    let chapter = meta.chapters.get(chapter_idx as usize)?;
+    Some(LastBookProgress {
+        book_id: meta.id.clone(),
+        book_title: meta.title.clone(),
+        chapter_idx,
+        chapter_title: chapter.title.clone(),
+        chapter_count: meta.chapters.len() as u32,
+    })
+}
+
+#[tauri::command]
+pub fn reader_last_book_progress(app: AppHandle) -> Result<Option<LastBookProgress>, String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
+    let index = load_books_from_path(&books_index_path(&app)?)?;
+    Ok(last_book_progress_from_index(&index))
+}
+
+// ---------- 每日阅读时长 ----------
+
+/// 累计今日阅读秒数，返回今日累计值（每 ~15s 由阅读页批量上报）。
+#[tauri::command]
+pub fn reader_record_reading(app: AppHandle, day: String, seconds: f64) -> Result<f64, String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
+    let mut file = load_vocab(&app)?;
+    file.schema_version = READER_SCHEMA_VERSION;
+    let entry = file
+        .reading_log
+        .iter_mut()
+        .find(|d| d.day == day)
+        .map(|d| {
+            d.seconds += seconds;
+            d.seconds
+        })
+        .unwrap_or_else(|| {
+            file.reading_log.push(ReadingLogDay {
+                day: day.clone(),
+                seconds,
+            });
+            seconds
+        });
+    write_atomic(
+        &vocab_path(&app)?,
+        &serde_json::to_string(&file).map_err(|e| format!("序列化生词失败: {e}"))?,
+    )?;
+    Ok(entry)
+}
+
+/// 今日累计阅读秒数（提醒卡/TodayCard 展示用）。
+#[tauri::command]
+pub fn reader_read_seconds_today(app: AppHandle, day: String) -> Result<f64, String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
+    let file = load_vocab(&app)?;
+    Ok(file
+        .reading_log
+        .iter()
+        .find(|d| d.day == day)
+        .map(|d| d.seconds)
+        .unwrap_or(0.0))
 }
 
 #[tauri::command]
@@ -530,6 +919,58 @@ pub fn reader_save_vocab_word(app: AppHandle, word: VocabWord) -> Result<(), Str
         &serde_json::to_string(&file).map_err(|e| format!("序列化生词失败: {e}"))?,
     )?;
     Ok(())
+}
+
+/// 批量合并结果：added = 新追加的词 id；merged = 已存在、仅补例句的词 id。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeVocabResult {
+    pub added: Vec<String>,
+    pub merged: Vec<String>,
+}
+
+/// 批量合并生词（口语复盘用）：一次加锁、逐个判重、一次原子写入。
+/// 已有的词保留 SRS/recall 进度，仅在原本没有例句时补充口语例句。
+#[tauri::command]
+pub fn reader_merge_vocab_words(
+    app: AppHandle,
+    words: Vec<VocabWord>,
+) -> Result<MergeVocabResult, String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
+    let mut file = load_vocab(&app)?;
+    file.schema_version = READER_SCHEMA_VERSION;
+    let result = merge_vocab_into_file(&mut file, words);
+    if !result.added.is_empty() || !result.merged.is_empty() {
+        write_atomic(
+            &vocab_path(&app)?,
+            &serde_json::to_string(&file).map_err(|e| format!("序列化生词失败: {e}"))?,
+        )?;
+    }
+    Ok(result)
+}
+
+/// 合并核心（纯函数，便于单测）：新词追加；已有词不动 SRS/recall，
+/// 仅在原本没有例句时补入口语例句。
+fn merge_vocab_into_file(file: &mut VocabFile, words: Vec<VocabWord>) -> MergeVocabResult {
+    let mut result = MergeVocabResult {
+        added: Vec::new(),
+        merged: Vec::new(),
+    };
+    for word in words {
+        match file.words.iter_mut().find(|w| w.id == word.id) {
+            Some(existing) => {
+                if existing.example.is_none() {
+                    existing.example = word.example;
+                }
+                result.merged.push(existing.id.clone());
+            }
+            None => {
+                result.added.push(word.id.clone());
+                file.words.push(word);
+            }
+        }
+    }
+    result
 }
 
 #[tauri::command]
@@ -629,6 +1070,47 @@ pub fn reader_record_recall(
     Ok(updated)
 }
 
+/// 今日累计阅读秒数（Rust 内部用：提醒调度判定阅读目标态）。
+pub fn read_seconds_today(app: &AppHandle, day: &str) -> f64 {
+    let _guard = match STORE_LOCK.lock() {
+        Ok(g) => g,
+        Err(_) => return 0.0,
+    };
+    let file = match load_vocab(app) {
+        Ok(f) => f,
+        Err(_) => return 0.0,
+    };
+    file.reading_log
+        .iter()
+        .find(|d| d.day == day)
+        .map(|d| d.seconds)
+        .unwrap_or(0.0)
+}
+
+/// 书架上是否有书（提醒调度：阅读目标态只在有书可回时出现）。
+pub fn has_books(app: &AppHandle) -> bool {
+    let _guard = match STORE_LOCK.lock() {
+        Ok(g) => g,
+        Err(_) => return false,
+    };
+    load_books_from_path(&match books_index_path(app) {
+        Ok(p) => p,
+        Err(_) => return false,
+    })
+    .map(|i| !i.books.is_empty())
+    .unwrap_or(false)
+}
+
+/// 最近在读的书（内部用，与 reader_last_book_progress 命令同实现）。
+pub fn last_book_progress(app: &AppHandle) -> Option<LastBookProgress> {
+    let _guard = match STORE_LOCK.lock() {
+        Ok(g) => g,
+        Err(_) => return None,
+    };
+    let index = load_books_from_path(&books_index_path(app).ok()?).ok()?;
+    last_book_progress_from_index(&index)
+}
+
 /// 到期生词数（托盘角标/提醒调度用；与 compute_stats 的 dueNow 同口径）。
 pub fn due_count(app: &AppHandle) -> u32 {
     let _guard = match STORE_LOCK.lock() {
@@ -703,6 +1185,12 @@ fn compute_stats(file: &VocabFile, today: &str, now_ms: i64) -> ReviewStats {
         .find(|d| d.day == today)
         .map(|d| d.count)
         .unwrap_or(0);
+    let read_seconds_today = file
+        .reading_log
+        .iter()
+        .find(|d| d.day == today)
+        .map(|d| d.seconds)
+        .unwrap_or(0.0);
     ReviewStats {
         due_now,
         reviewed_today,
@@ -717,6 +1205,7 @@ fn compute_stats(file: &VocabFile, today: &str, now_ms: i64) -> ReviewStats {
         total_chunks,
         due_words,
         due_chunks,
+        read_seconds_today,
     }
 }
 
@@ -819,6 +1308,104 @@ mod tests {
         assert!(check_schema(READER_SCHEMA_VERSION).is_ok());
     }
 
+    /// 口语复盘批量合并的核心约定：新词追加；已有词的 SRS 进度原样保留，
+    /// 只在原本没有例句时补入口语例句。
+    fn vocab_word_fixture(id: &str, due_at: i64, example: Option<VocabExample>) -> VocabWord {
+        VocabWord {
+            id: id.to_string(),
+            word: id.to_string(),
+            kind: None,
+            phonetic: None,
+            senses: Vec::new(),
+            forms: None,
+            collocations: None,
+            chunk_type: None,
+            pattern: None,
+            trap: None,
+            source: VocabSource {
+                article_id: String::new(),
+                sentence_idx: 0,
+            },
+            srs: VocabSrsState {
+                ease: 2.5,
+                interval_days: 0.0,
+                reps: 0,
+                due_at,
+                lapses: 0,
+            },
+            added_at: 1000,
+            example,
+            recall: None,
+        }
+    }
+
+    #[test]
+    fn merge_vocab_appends_new_and_preserves_existing_srs() {
+        let mut file = empty_vocab_file();
+        // 已有词：有复习进度、没有例句
+        let mut existing = vocab_word_fixture("old", 111, None);
+        existing.srs.reps = 4;
+        existing.srs.interval_days = 10.0;
+        file.words.push(existing);
+
+        let spoken_example = VocabExample {
+            en: "I'd like to make a reservation.".to_string(),
+            zh: Some("我想预订。".to_string()),
+        };
+        let result = merge_vocab_into_file(
+            &mut file,
+            vec![
+                // 已有词的新版本：SRS 不同、带口语例句 → 保留旧 SRS，例句补入
+                vocab_word_fixture("old", 999, Some(spoken_example.clone())),
+                // 新词 → 追加
+                vocab_word_fixture("new", 42, None),
+            ],
+        );
+
+        assert_eq!(result.added, vec!["new".to_string()]);
+        assert_eq!(result.merged, vec!["old".to_string()]);
+        assert_eq!(file.words.len(), 2);
+
+        let old = file.words.iter().find(|w| w.id == "old").unwrap();
+        assert_eq!(old.srs.due_at, 111);
+        assert_eq!(old.srs.reps, 4);
+        assert_eq!(old.srs.interval_days, 10.0);
+        assert_eq!(old.example.as_ref().unwrap().en, spoken_example.en);
+
+        let new = file.words.iter().find(|w| w.id == "new").unwrap();
+        assert_eq!(new.srs.due_at, 42);
+        assert!(new.example.is_none());
+    }
+
+    #[test]
+    fn merge_vocab_keeps_existing_example_and_noop_writes_nothing() {
+        let mut file = empty_vocab_file();
+        let kept = VocabExample {
+            en: "kept".to_string(),
+            zh: None,
+        };
+        let mut existing = vocab_word_fixture("old", 111, Some(kept));
+        existing.recall = Some(RecallStat::default());
+        file.words.push(existing);
+
+        let result = merge_vocab_into_file(
+            &mut file,
+            vec![vocab_word_fixture(
+                "old",
+                111,
+                Some(VocabExample {
+                    en: "spoken".to_string(),
+                    zh: None,
+                }),
+            )],
+        );
+
+        assert!(result.added.is_empty());
+        let old = file.words.iter().find(|w| w.id == "old").unwrap();
+        assert_eq!(old.example.as_ref().unwrap().en, "kept"); // 已有例句不被覆盖
+        assert!(old.recall.is_some());
+    }
+
     #[test]
     fn stats_are_derived_from_due_at() {
         let now: i64 = 1_800_000_000_000;
@@ -843,15 +1430,134 @@ mod tests {
                     },
                 ],
             },
+            reading_log: vec![
+                ReadingLogDay {
+                    day: "2026-09-10".into(),
+                    seconds: 600.0,
+                },
+                ReadingLogDay {
+                    day: "2026-09-08".into(),
+                    seconds: 120.0,
+                },
+            ],
         };
         let stats = compute_stats(&file, "2026-09-10", now);
         assert_eq!(stats.due_now, 1); // 只有 alpha 到期
         assert_eq!(stats.total, 4);
         assert_eq!(stats.reviewed_today, 2);
+        assert_eq!(stats.read_seconds_today, 600.0); // 今日已读 10 分钟
         assert_eq!(stats.distribution.learning, 2); // alpha, beta
         assert_eq!(stats.distribution.familiar, 1); // gamma (3 天)
         assert_eq!(stats.distribution.mastered, 1); // delta (8 天)
         assert_eq!(stats.streak, 2); // 今天 + 昨天
+    }
+
+    #[test]
+    fn book_index_upsert_and_last_progress() {
+        let chapter = |id: &str| BookChapterMeta {
+            id: id.into(),
+            title: format!("Chapter {id}"),
+            word_count: 100,
+            sentence_count: 10,
+        };
+        let mut index = empty_books_file();
+        let meta = BookMeta {
+            id: "b1".into(),
+            title: "The Call of the Wild".into(),
+            author: Some("Jack London".into()),
+            cover: None,
+            created_at: 1,
+            last_read_at: 100,
+            chapters: vec![chapter("c1"), chapter("c2")],
+            progress: BookProgress {
+                chapter_id: "c2".into(),
+                sentence_idx: 3,
+                percent: 30.0,
+            },
+            seconds_listened: 60.0,
+            radar: BookRadar {
+                kaoyan: 12,
+                cet4: 20,
+                cet6: 25,
+            },
+        };
+        upsert_book_index(&mut index, meta.clone());
+        upsert_book_index(&mut index, meta); // 同 id 再次入库 = 替换不重复
+        assert_eq!(index.books.len(), 1);
+
+        let last = last_book_progress_from_index(&index).unwrap();
+        assert_eq!(last.book_id, "b1");
+        assert_eq!(last.chapter_idx, 1); // 断点在第二章
+        assert_eq!(last.chapter_count, 2);
+    }
+
+    #[test]
+    fn book_file_roundtrip_and_legacy_articles_without_book_fields() {
+        // 章文章（带 bookId/chapterIdx）完整往返。
+        let json = r#"{
+            "id": "c1", "title": "Into the Primitive", "titleCnState": "pending",
+            "sourceType": "epub", "wordCount": 100, "createdAt": 0, "lastReadAt": 0,
+            "bookId": "b1", "chapterIdx": 0,
+            "progress": { "sentenceIdx": 0, "percent": 0, "secondsListened": 0 },
+            "sentences": [{ "idx": 0, "paragraphIdx": 0, "en": "Hi.", "zh": null, "zhState": "pending" }]
+        }"#;
+        let article: Article = serde_json::from_str(json).expect("书章反序列化");
+        assert_eq!(article.book_id.as_deref(), Some("b1"));
+        assert_eq!(article.chapter_idx, Some(0));
+        let out = serde_json::to_value(&article).unwrap();
+        assert_eq!(out["bookId"], "b1");
+        assert_eq!(out["chapterIdx"], 0);
+
+        // 短文序列化不携带空字段。
+        let legacy: Article = serde_json::from_str(
+            r#"{
+                "id": "a2", "title": "T", "titleCnState": "done", "sourceType": "paste",
+                "wordCount": 1, "createdAt": 0, "lastReadAt": 0,
+                "progress": { "sentenceIdx": 0, "percent": 0, "secondsListened": 0 },
+                "sentences": []
+            }"#,
+        )
+        .expect("老文章可加载");
+        let out = serde_json::to_value(&legacy).unwrap();
+        assert!(out.get("bookId").is_none());
+        assert!(out.get("chapterIdx").is_none());
+    }
+
+    #[test]
+    fn save_article_into_book_file_replaces_and_persists() {
+        let path = temporary_path("book-b1.json");
+        let _ = std::fs::remove_file(&path);
+        let chapter = |idx: u32| Article {
+            id: format!("c{idx}"),
+            title: format!("Chapter {idx}"),
+            title_cn: None,
+            title_cn_state: SentenceZhState::Pending,
+            source_url: None,
+            source_type: ArticleSourceType::Epub,
+            level: None,
+            word_count: 10,
+            created_at: 1,
+            last_read_at: 1,
+            progress: ArticleProgress {
+                sentence_idx: 0,
+                percent: 0.0,
+                seconds_listened: 0.0,
+            },
+            sentences: vec![],
+            chunk_state: None,
+            settings: None,
+            book_id: Some("b1".into()),
+            chapter_idx: Some(idx),
+        };
+        let saved = save_article_into_book_file(&path, chapter(0)).unwrap();
+        assert_eq!(saved.sentence_count, 0);
+        save_article_into_book_file(&path, chapter(1)).unwrap();
+        // 同 id 重存 = 替换。
+        save_article_into_book_file(&path, chapter(0)).unwrap();
+        let file = load_book_file_from_path(&path).unwrap();
+        assert_eq!(file.articles.len(), 2);
+        assert_eq!(file.articles[0].id, "c0");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -15,12 +15,32 @@ interface Props {
   onGoReview?: () => void;
   /** 今日无到期词时的占位文案。 */
   emptyText?: string;
+  /** 今日已读分钟数（辅助增强二：每日阅读目标，goalMin>0 时显示）。 */
+  readMinutesToday?: number;
+  readGoalMin?: number;
 }
 
-export function TodayCard({ reviewedToday, dueNow, streak, onGoReview, emptyText }: Props) {
+export function TodayCard({ reviewedToday, dueNow, streak, onGoReview, emptyText, readMinutesToday, readGoalMin }: Props) {
   const todayTotal = reviewedToday + dueNow;
+  const goalOn = (readGoalMin ?? 0) > 0;
+  const readMin = Math.max(0, Math.round(readMinutesToday ?? 0));
+  const goalPct = goalOn ? Math.min(100, (readMin / (readGoalMin as number)) * 100) : 0;
   if (todayTotal === 0) {
-    return <div className="reader-review-card">{emptyText ?? "今日没有到期生词，去阅读里攒几个吧。"}</div>;
+    return (
+      <div className="reader-review-card">
+        <div>{emptyText ?? "今日没有到期生词，去阅读里攒几个吧。"}</div>
+        {goalOn && (
+          <div className="today-read" title="阅读时长：朗读播放与停留阅读均计入">
+            <span className="today-read-label">
+              今日已读 <strong>{readMin}</strong>/{readGoalMin} 分钟
+            </span>
+            <span className="today-read-bar" aria-hidden>
+              <i style={{ width: `${goalPct}%` }} />
+            </span>
+          </div>
+        )}
+      </div>
+    );
   }
   const offset = RING_LEN * (1 - reviewedToday / todayTotal);
   return (
@@ -52,6 +72,16 @@ export function TodayCard({ reviewedToday, dueNow, streak, onGoReview, emptyText
         <div className="today-sub">
           {dueNow > 0 ? `还差 ${dueNow} 个清空今天到期` : "今天的到期已清空 ✓"}
         </div>
+        {goalOn && (
+          <div className="today-read" title="阅读时长：朗读播放与停留阅读均计入">
+            <span className="today-read-label">
+              今日已读 <strong>{readMin}</strong>/{readGoalMin} 分钟
+            </span>
+            <span className="today-read-bar" aria-hidden>
+              <i style={{ width: `${goalPct}%` }} />
+            </span>
+          </div>
+        )}
         {dueNow > 0 && onGoReview && (
           <button className="btn btn-primary btn-sm today-go" onClick={onGoReview}>
             继续复习

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- 方案二 · 调整A 字行交替：字母与汉字做行首锚点，文字条退为衬底 -->
+  <defs>
+    <linearGradient id="b1-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4C5FF0"/>
+      <stop offset="1" stop-color="#7A5CF0"/>
+    </linearGradient>
+    <radialGradient id="b1-glow" cx="0.3" cy="0.2" r="0.9">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="b1-shade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0.62" stop-color="#1B1464" stop-opacity="0"/>
+      <stop offset="1" stop-color="#1B1464" stop-opacity="0.18"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#b1-bg)"/>
+  <rect width="512" height="512" rx="116" fill="url(#b1-glow)"/>
+  <rect width="512" height="512" rx="116" fill="url(#b1-shade)"/>
+  <!-- 第一行：原文 A（半透明） -->
+  <g opacity="0.62">
+    <g stroke="#FFFFFF" stroke-linecap="round" fill="none">
+      <path d="M155 129 L105 229" stroke-width="32"/>
+      <path d="M155 129 L205 229" stroke-width="32"/>
+      <path d="M131 196 L179 196" stroke-width="27"/>
+    </g>
+    <rect x="236" y="186" width="166" height="34" rx="17" fill="#FFFFFF" opacity="0.7"/>
+  </g>
+  <!-- 第二行：译文 文（实），整体右移一步 -->
+  <g stroke="#FFFFFF" stroke-linecap="round" fill="none">
+    <path d="M252 265 L230 287" stroke-width="30"/>
+    <path d="M168 303 L260 303" stroke-width="28"/>
+    <path d="M254 315 L178 383" stroke-width="30"/>
+    <path d="M186 315 L262 383" stroke-width="30"/>
+  </g>
+  <rect x="296" y="286" width="166" height="34" rx="17" fill="#FFFFFF"/>
+</svg>
