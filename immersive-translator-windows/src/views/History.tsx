@@ -9,6 +9,10 @@ import {
   type HistoryRecord,
   type ExportFormat,
 } from "../lib/tauriBridge";
+import { createTranslateClient } from "../lib/translateClient";
+import { addTextToVocab, sendTextToReader, type VocabRequestDeps } from "../lib/collectActions";
+import { isLookupText } from "../core/dictDetect";
+import { looksMostlyChinese } from "../core/languageDetect";
 import {
   IconSearch,
   IconStar,
@@ -20,6 +24,7 @@ import {
   IconCrop,
   IconChevronDown,
   IconAlert,
+  IconSendToReader,
 } from "../ui/icons";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 
@@ -37,6 +42,7 @@ type ConfirmAction =
  * - 收藏 / 取消收藏
  * - 删除单条 / 清空非收藏
  * - 导出 CSV / JSON / Markdown / 纯文本
+ * - 串联 S3：英文词条 → 加入生词本；英文原文 → 送到阅读室精读
  */
 export function History() {
   const [records, setRecords] = useState<HistoryRecord[]>([]);
@@ -48,6 +54,34 @@ export function History() {
   const [selection, setSelection] = useState<ReadonlySet<string>>(new Set());
   /** 待确认的危险操作。 */
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
+
+  // ---- 串联 S3：历史 → 生词本 / 阅读室 ----
+  /** 一次性 LLM 请求客户端（窗口生命周期一个；本窗口 hide 不销毁，无需重建）。 */
+  const translateClientRef = useRef<ReturnType<typeof createTranslateClient> | null>(null);
+  const tagSeqRef = useRef(0);
+  useEffect(() => {
+    const client = createTranslateClient("history");
+    translateClientRef.current = client;
+    return () => {
+      client.dispose();
+      translateClientRef.current = null;
+    };
+  }, []);
+  /** 传给卡片的请求依赖：tag 用 hv 前缀，不与浮窗（t/d/v）、字幕（lc）相撞。 */
+  const vocabDeps = useMemo<VocabRequestDeps>(
+    () => ({
+      requestOnce: (text, systemPrompt, tag) => {
+        const client = translateClientRef.current;
+        if (!client) return Promise.reject(new Error("翻译客户端未就绪，请重试"));
+        return client.request(text, systemPrompt, tag).then((r) => {
+          if (r.status !== "done") throw new Error(r.text || "请求失败");
+          return r.text;
+        });
+      },
+      makeTag: () => `hv${++tagSeqRef.current}`,
+    }),
+    [],
+  );
 
   useEffect(() => {
     const win = getCurrentWindow();
@@ -317,7 +351,8 @@ export function History() {
               onToggleSelect={() => toggleSelect(r.id)}
               onToggleFav={() => handleToggleFav(r.id)}
               onDelete={() => handleDelete(r.id)}
-              onCopied={(msg) => showToast(msg)}
+              onToast={showToast}
+              vocabDeps={vocabDeps}
             />
           ))}
       </div>
@@ -361,26 +396,80 @@ function HistoryCard({
   onToggleSelect,
   onToggleFav,
   onDelete,
-  onCopied,
+  onToast,
+  vocabDeps,
 }: {
   record: HistoryRecord;
   selected: boolean;
   onToggleSelect: () => void;
   onToggleFav: () => void;
   onDelete: () => void;
-  onCopied: (msg: string) => void;
+  onToast: (msg: string, ok: boolean) => void;
+  vocabDeps: VocabRequestDeps;
 }) {
   const time = useMemo(() => formatTime(record.createdAt), [record.createdAt]);
   const [expanded, setExpanded] = useState(false);
   const isOcr = record.source === "ocr";
 
+  // ---- 串联入口：加入生词本 / 送到阅读室 ----
+  // 阅读室面向英文精读：中文原文一律不显示入口；生词入口再叠加
+  // isLookupText（整句/段落不像词条，不误收为一个生词）。
+  const englishSource = !looksMostlyChinese(record.original);
+  const isVocabCandidate = englishSource && isLookupText(record.original);
+  const [vocabState, setVocabState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [sendState, setSendState] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  // in-flight 守卫：setState 是异步的，连点第二下时 state 还没变，用 ref 拦截，
+  // 防止连点重复创建文章/重复请求。
+  const vocabBusyRef = useRef(false);
+  const sendBusyRef = useRef(false);
+
+  async function addToVocab() {
+    if (vocabBusyRef.current || vocabState === "saved") return;
+    vocabBusyRef.current = true;
+    setVocabState("saving");
+    try {
+      const outcome = await addTextToVocab(vocabDeps, record.original, {
+        // 历史译文可能是整句翻译，只能当参考：公共层只在「短释义形状」时采用
+        fallbackCn: record.translation,
+      });
+      setVocabState("saved");
+      onToast(
+        outcome.status === "merged"
+          ? `「${outcome.word.word}」已在生词本，复习进度保持不变`
+          : `已加入生词本：${outcome.word.word}${outcome.withExample ? "（含例句）" : ""}`,
+        true,
+      );
+    } catch (error) {
+      setVocabState("error");
+      onToast(`加入生词本失败：${error instanceof Error ? error.message : String(error)}`, false);
+    } finally {
+      vocabBusyRef.current = false;
+    }
+  }
+
+  async function sendToReader() {
+    if (sendBusyRef.current) return;
+    sendBusyRef.current = true;
+    setSendState("sending");
+    try {
+      await sendTextToReader(record.original);
+      setSendState("sent");
+      onToast("已送到阅读室", true);
+    } catch (error) {
+      setSendState("error");
+      onToast(`送到阅读室失败：${error instanceof Error ? error.message : String(error)}`, false);
+    } finally {
+      sendBusyRef.current = false;
+    }
+  }
+
   async function copyTrans() {
     await navigator.clipboard.writeText(record.translation);
-    onCopied("已复制译文");
+    onToast("已复制译文", true);
   }
   async function copyBoth() {
     await navigator.clipboard.writeText(`${record.original}\n\n${record.translation}`);
-    onCopied("已复制原文+译文");
+    onToast("已复制原文+译文", true);
   }
 
   return (
@@ -409,6 +498,54 @@ function HistoryCard({
           <button className="icon-btn" title="复制原文+译文" onClick={() => void copyBoth()}>
             <IconCopyAll size={14} />
           </button>
+          {isVocabCandidate && (
+            <button
+              className={`icon-btn${vocabState === "saved" ? " active" : ""}`}
+              style={vocabState === "error" ? { color: "var(--err)" } : undefined}
+              title={
+                vocabState === "saved"
+                  ? "已在生词本"
+                  : vocabState === "saving"
+                    ? "正在查询词条并生成例句…"
+                    : vocabState === "error"
+                      ? "加入失败，点击重试"
+                      : "加入生词本"
+              }
+              disabled={vocabState === "saving" || vocabState === "saved"}
+              onClick={() => void addToVocab()}
+            >
+              {vocabState === "saving" ? (
+                <span className="spinner" style={{ width: 12, height: 12 }} />
+              ) : (
+                <span className="vocab-glyph" aria-hidden>
+                  生
+                </span>
+              )}
+            </button>
+          )}
+          {englishSource && (
+            <button
+              className={`icon-btn${sendState === "sent" ? " active" : ""}`}
+              style={sendState === "error" ? { color: "var(--err)" } : undefined}
+              title={
+                sendState === "sent"
+                  ? "已送到阅读室"
+                  : sendState === "sending"
+                    ? "正在创建文章…"
+                    : sendState === "error"
+                      ? "发送失败，点击重试"
+                      : "送到阅读室精读"
+              }
+              disabled={sendState === "sending"}
+              onClick={() => void sendToReader()}
+            >
+              {sendState === "sending" ? (
+                <span className="spinner" style={{ width: 12, height: 12 }} />
+              ) : (
+                <IconSendToReader size={14} />
+              )}
+            </button>
+          )}
           <button
             className={`icon-btn${record.isFavorite ? " active" : ""}`}
             title={record.isFavorite ? "取消收藏" : "收藏"}

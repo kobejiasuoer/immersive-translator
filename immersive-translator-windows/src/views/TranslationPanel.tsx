@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { listen, emit } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   cursorPosition,
   getCurrentWindow,
@@ -33,16 +32,7 @@ import {
 } from "../lib/tauriBridge";
 import { classifyTtsError } from "../lib/ttsError";
 import { loadSettingsAsync, hasValidSettings } from "../lib/settingsStore";
-import { readerSaveArticle, readerSaveVocabWord } from "../lib/readerStore";
-import { buildArticleFromText } from "../core/articleBuilder";
-import {
-  buildReaderDictPrompt,
-  parseReaderDictResponse,
-  entryToVocab,
-  buildExamplePrompt,
-  parseExampleResponse,
-  type ReaderDictEntry,
-} from "../core/readerDict";
+import { addTextToVocab, sendTextToReader } from "../lib/collectActions";
 import {
   classifyTranslationError,
   sanitizeDiagnosticText,
@@ -616,48 +606,28 @@ export function TranslationPanel() {
   }
 
   /**
-   * 加入生词本（划词收藏）：词典查词条信息 + LLM 造一个例句（两者并行），
-   * 落库后广播给阅读室刷新。无文章语境，复习卡用例句作出语境。
+   * 加入生词本（划词收藏）：公共 addTextToVocab（词典查词条 + 例句生成并行，
+   * readerMergeVocabWords 落库，已有同名词保留 SRS 进度）。
+   * 无文章语境，复习卡用例句作出语境。
    */
   async function addToVocab() {
     const text = (lastOriginalRef.current || original).trim();
     if (!text || vocabState === "saving") return;
     setVocabState("saving");
     try {
-      const s = await loadSettingsAsync();
-      if (!hasValidSettings(s)) throw new Error("先在设置里配置翻译接口");
-      const target = resolveTargetLanguage(text, { mode: s.translationMode, fixed: s.fixedTarget });
-      const dictTag = `v${++requestSeqRef.current}`;
-      const exTag = `v${++requestSeqRef.current}`;
-      const [dictRes, exRes] = await Promise.allSettled([
-        requestOnce(
-          text,
-          buildReaderDictPrompt({ targetLanguage: target, customStyle: "", glossaryText: s.glossaryText }),
-          dictTag,
-        ),
-        // 例句按「规整后的查询词」生成，与词条查询并行
-        requestOnce(text.replace(/^\s+|\s+$/g, ""), buildExamplePrompt(text, target), exTag),
-      ]);
-      // 词条信息：词典成功用词条；失败/非词条时用当前译文兜底（保证能收藏）
-      let entry: ReaderDictEntry | null = null;
-      if (dictRes.status === "fulfilled") {
-        const parsed = parseReaderDictResponse(dictRes.value);
-        if (parsed.kind === "entry") entry = parsed.entry;
-      }
-      if (!entry) {
-        const cn = translated.trim();
-        if (!cn) throw new Error("词典查询失败，请稍后重试");
-        entry = { word: text, senses: [{ pos: "", cn }] };
-      }
-      const word = entryToVocab(entry, { articleId: "", sentenceIdx: 0 });
-      if (exRes.status === "fulfilled") {
-        const example = parseExampleResponse(exRes.value, entry.word);
-        if (example) word.example = example;
-      }
-      await readerSaveVocabWord(word);
-      await emit("reader:vocab-added", word.id);
+      const outcome = await addTextToVocab(
+        { requestOnce, makeTag: () => `v${++requestSeqRef.current}` },
+        text,
+        // 词条信息：词典成功用词条；失败/非词条时用当前译文兜底
+        // （公共层校验「短释义形状」，整句翻译不会被当作释义）
+        { fallbackCn: translated },
+      );
       setVocabState("saved");
-      flashCopied(`已加入生词本：${word.word}${word.example ? "（含例句）" : ""}`);
+      flashCopied(
+        outcome.status === "merged"
+          ? `已在生词本：${outcome.word.word}（复习进度保持不变${outcome.withExample ? "，已补例句" : ""}）`
+          : `已加入生词本：${outcome.word.word}${outcome.withExample ? "（含例句）" : ""}`,
+      );
     } catch (error) {
       setVocabState("error");
       const message = error instanceof Error ? error.message : String(error);
@@ -1076,7 +1046,7 @@ export function TranslationPanel() {
   }
 
   /**
-   * 发送到阅读室（§8.2）：把浮窗当前文本建成文章，送进沉浸阅读室精读。
+   * 发送到阅读室（§8.2）：公共 sendTextToReader（建文章→落库→广播→开窗）。
    * 抓取范围决策（decisions #2）：不做前台正文抓取，只送当前文本；
    * 长文本直接成篇，短句也能成篇（单句阅读），提示语区分两种情况。
    */
@@ -1084,18 +1054,12 @@ export function TranslationPanel() {
     const text = (lastOriginalRef.current || original).trim();
     if (!text) return;
     try {
-      const article = buildArticleFromText(text, { sourceType: "paste" });
-      if (!article) {
-        flashCopied("没有可发送的内容");
-        return;
-      }
-      await readerSaveArticle(article);
-      await emit("reader:article-added", article.id);
-      await invoke("open_reader");
+      await sendTextToReader(text);
       flashCopied(text.length > 200 ? "已送入阅读室" : "已发送所选内容");
     } catch (error) {
       console.error("[reader] send to reader failed", error);
-      flashCopied("发送到阅读室失败");
+      const message = error instanceof Error ? error.message : String(error);
+      flashCopied(message === "没有可发送的内容" ? message : "发送到阅读室失败");
     }
   }
 
