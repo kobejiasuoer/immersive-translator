@@ -221,6 +221,9 @@ pub fn open_quick_review_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("quick-review") {
         let _ = win.show();
         let _ = win.set_focus();
+        // 常驻隐藏窗口：每次重开都重新拉最新生词与复习状态，
+        // 否则展示的是上次会话的旧卡片（到期集合早已变化）。
+        let _ = app.emit_to("quick-review", "quickreview:refresh", ());
         return;
     }
     let built = tauri::WebviewWindowBuilder::new(

@@ -457,3 +457,32 @@ body {
     transform: none;
   }
 }
+
+/* 发音失败提示行：分类归因 + 重试 / 打开设置（P1：TTS 失败要给明确原因与出路） */
+.qr-speak-err {
+  margin: 8px auto 0;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #fdf3f2;
+  border: 1px solid #f2d7d4;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #a8423a;
+  text-align: left;
+}
+
+.qr-speak-err-actions {
+  display: flex;
+  gap: 14px;
+}
+
+.qr-speak-err-actions a {
+  color: #a8423a;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}

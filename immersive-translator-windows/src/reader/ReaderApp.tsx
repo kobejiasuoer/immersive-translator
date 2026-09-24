@@ -18,6 +18,7 @@ import {
   translateStream,
 } from "../lib/tauriBridge";
 import { loadSettingsAsync, hasValidSettings } from "../lib/settingsStore";
+import { classifyTtsError } from "../lib/ttsError";
 import {
   noteDelete,
   noteList,
@@ -244,7 +245,13 @@ export function ReaderApp() {
     settingsRef: playbackSettingsRef,
     engine: speechEngine,
     onFinish: handleFinish,
-    onError: (error) => showToast(`朗读失败，已停止：${error instanceof Error ? error.message : String(error)}。请检查网络或语音设置后重新播放。`),
+    // P1：TTS 失败给明确归因（缺凭据/网络/系统），并指出出路（重试 / 去设置）。
+    onError: (error) => {
+      const info = classifyTtsError(error);
+      showToast(
+        `朗读失败，已停止：${info.message}（点播放键重试${info.allowSettings ? "，或到 设置 → 语音 检查" : ""}）`,
+      );
+    },
   });
 
   // ---- 跟读评测（shadowingMode + shadowingAssess）----

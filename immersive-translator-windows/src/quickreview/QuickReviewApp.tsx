@@ -13,10 +13,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readerGetArticle, readerGetVocab, readerRecordReview, readerSaveVocabWord } from "../lib/readerStore";
 import { ttsSpeakAdvanced } from "../lib/tauriBridge";
 import { trayRefreshBadge } from "../lib/reminder";
+import { classifyTtsError, type TtsErrorInfo } from "../lib/ttsError";
 import { loadGlobalReaderSettings } from "../reader/readerSettingsStore";
 import { judgeCloze, routeRecallMode, verdictToSuggestedGrade, type RecallVerdict } from "../core/recallJudge";
 import { dayKey, gradeSrs, GRADE_INTERVALS, type ReviewGrade } from "../core/readerSrs";
@@ -65,8 +67,14 @@ export function QuickReviewApp() {
     }
   }, []);
 
-  useEffect(() => {
+  /**
+   * 拉取最新到期生词并重建卡片。窗口是常驻隐藏的：挂载时加载一次，
+   * 之后每次被重新打开（后端 emit quickreview:refresh）都重新加载，
+   * 否则展示的是上次会话的旧卡片（到期集合早已变化）。
+   */
+  const reload = useCallback(() => {
     let active = true;
+    setStatus("loading");
     (async () => {
       try {
         const file = await readerGetVocab();
@@ -76,6 +84,10 @@ export function QuickReviewApp() {
           .filter((w) => w.srs.dueAt <= now)
           .sort((a, b) => a.srs.dueAt - b.srs.dueAt);
         if (due.length === 0) {
+          setCards([]);
+          setUis([]);
+          setGrades([]);
+          setPos(0);
           setStatus("empty");
           return;
         }
@@ -84,6 +96,7 @@ export function QuickReviewApp() {
         setCards(prepared);
         setUis(prepared.map(() => ({ ...DEFAULT_UI })));
         setGrades(prepared.map(() => null));
+        setPos(0);
         setStatus("ready");
       } catch (error) {
         console.error("[quick-review] load failed", error);
@@ -94,6 +107,21 @@ export function QuickReviewApp() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    let cancel = reload();
+    let disposed = false;
+    const unlisten = listen("quickreview:refresh", () => {
+      // 作废上一次 in-flight 加载，重新拉（新会话覆盖旧会话状态）。
+      cancel();
+      if (!disposed) cancel = reload();
+    });
+    return () => {
+      disposed = true;
+      cancel();
+      void unlisten.then((fn) => fn());
+    };
+  }, [reload]);
 
   useEffect(() => {
     // 每张完形卡渲染后聚焦输入框
@@ -482,10 +510,11 @@ function RecognitionCard({
   setUi: SetUi;
 }) {
   const word = card.word;
-  const [speakError, setSpeakError] = useState("");
+  const [speakError, setSpeakError] = useState<TtsErrorInfo | null>(null);
   function speak() {
+    setSpeakError(null);
     void ttsSpeakAdvanced(word.word, false, { track: "word", target: "quick-review", rate: 1 }).catch(
-      () => setSpeakError("发音不可用"),
+      (err) => setSpeakError(classifyTtsError(err)),
     );
   }
   return (
@@ -495,8 +524,42 @@ function RecognitionCard({
         <div className="qr-word serif">{word.word}</div>
         {word.phonetic && <div className="qr-phon">{word.phonetic}</div>}
         <button className="qr-say" onClick={speak} title="发音">
-          ♪ {speakError && <small>{speakError}</small>}
+          ♪
         </button>
+        {speakError && (
+          <div className="qr-speak-err" role="alert">
+            <span>{speakError.message}</span>
+            <span className="qr-speak-err-actions">
+              <a
+                role="button"
+                tabIndex={0}
+                onClick={speak}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") speak();
+                }}
+              >
+                重试
+              </a>
+              {speakError.allowSettings && (
+                <a
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    // 设置窗口独立弹出，不收起本迷你窗
+                    void invoke("open_settings").catch((e) =>
+                      console.error("[quick-review] open settings failed", e),
+                    );
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void invoke("open_settings");
+                  }}
+                >
+                  打开设置
+                </a>
+              )}
+            </span>
+          </div>
+        )}
         <div className="qr-hint-row">
           <a
             onClick={() => setUi((s) => ({ ...s, revealed: !s.revealed }))}

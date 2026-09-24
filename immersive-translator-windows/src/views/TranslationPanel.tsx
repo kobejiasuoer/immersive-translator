@@ -31,6 +31,7 @@ import {
   type PanelSource,
   type TranslationPhase,
 } from "../lib/tauriBridge";
+import { classifyTtsError } from "../lib/ttsError";
 import { loadSettingsAsync, hasValidSettings } from "../lib/settingsStore";
 import { readerSaveArticle, readerSaveVocabWord } from "../lib/readerStore";
 import { buildArticleFromText } from "../core/articleBuilder";
@@ -765,8 +766,8 @@ export function TranslationPanel() {
       console.error("[tts] speak failed", error);
       ttsGenRef.current = null;
       setSpeaking(null);
-      const message = typeof error === "string" ? error : String(error);
-      flashCopied(`朗读失败：${message}`);
+      // P1：TTS 失败给明确归因（缺凭据/网络/系统组件），不再是原始错误串。
+      flashCopied(`朗读失败：${classifyTtsError(error).message}`);
     }
   }
 

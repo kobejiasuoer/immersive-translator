@@ -124,6 +124,19 @@
         "skipTaskbar": true,
         "visible": false,
         "center": true
+      },
+      {
+        "label": "onboarding",
+        "title": "欢迎使用 ImmersiveTranslator",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --auto-accept-camera-and-microphone-capture",
+        "width": 620,
+        "height": 560,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "skipTaskbar": false,
+        "visible": false,
+        "center": true
       }
     ],
     "security": {
