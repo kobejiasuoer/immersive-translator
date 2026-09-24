@@ -95,6 +95,7 @@ swift build -c release
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$ROOT_DIR/.build/release/$APP_NAME" "$MACOS_DIR/$APP_NAME"
+cp "$ROOT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 APP_BUNDLE_ID_ESCAPED="$(xml_escape "$APP_BUNDLE_ID")"
 APP_VERSION_ESCAPED="$(xml_escape "$APP_VERSION")"
 APP_BUILD_ESCAPED="$(xml_escape "$APP_BUILD")"
@@ -112,6 +113,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
     <string>ImmersiveTranslator</string>
     <key>CFBundleIdentifier</key>
     <string>$APP_BUNDLE_ID_ESCAPED</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
