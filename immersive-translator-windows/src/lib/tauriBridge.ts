@@ -400,3 +400,15 @@ export interface TtsVoiceInfo {
 export async function ttsVoices(): Promise<TtsVoiceInfo[]> {
   return invoke<TtsVoiceInfo[]>("tts_voices");
 }
+
+// ---- 首启引导（onboarding）----
+
+/** 完成（或跳过）首启引导：后端写标记并关闭引导窗口。 */
+export function finishOnboarding(): Promise<void> {
+  return invoke("finish_onboarding");
+}
+
+/** 重新打开引导窗口（设置 → 关于「查看引导」）。 */
+export function openOnboarding(): Promise<void> {
+  return invoke("open_onboarding");
+}

@@ -512,6 +512,80 @@ fn take_pending_reader_import(
     state.0.lock().unwrap().take()
 }
 
+/// 首启引导完成标记文件名（在 app_data_dir）。存在 = 用户已看过（或跳过）引导。
+const ONBOARDING_FLAG: &str = "onboarding_done";
+
+/// 首次启动检测：标记文件不存在则弹出引导窗口。
+/// setup 上下文里窗口是预建的（tauri.conf.json，隐藏），直接 show；
+/// 万一创建失败（WebView2 数据目录被占用），走现场重建兜底。
+fn maybe_show_onboarding(app: &AppHandle) {
+    let done = app
+        .path()
+        .app_data_dir()
+        .map(|dir| dir.join(ONBOARDING_FLAG).exists())
+        .unwrap_or(false);
+    if done {
+        return;
+    }
+    show_onboarding_window(app);
+}
+
+/// 打开（或重建）首启引导窗口。规格与 tauri.conf.json 的 onboarding 窗口一致：
+/// 无系统边框 + 透明 + 620x560，重建少了这些参数样式会走样。
+fn show_onboarding_window(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("onboarding") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    // build() 挪独立线程：Windows 在同步命令/事件处理器里建 WebView 窗口有死锁
+    // 风险（与 show_window / show_reader_window 同一铁律）。
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let built = tauri::WebviewWindowBuilder::new(
+            &app,
+            "onboarding",
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title("欢迎使用 ImmersiveTranslator")
+        .inner_size(620.0, 560.0)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .center()
+        .additional_browser_args(REBUILD_BROWSER_ARGS)
+        .build();
+        if let Err(e) = built {
+            eprintln!("[onboarding] rebuild failed: {e}");
+            return;
+        }
+    });
+}
+
+/// 打开引导窗口（设置 → 关于「重新查看功能引导」）。
+#[tauri::command]
+fn open_onboarding(app: tauri::AppHandle) {
+    show_onboarding_window(&app);
+}
+
+/// 完成（或跳过）首启引导：写标记 + 关窗。标记一落盘，之后启动不再弹。
+#[tauri::command]
+fn finish_onboarding(app: tauri::AppHandle) -> Result<(), String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("获取数据目录失败: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建数据目录失败: {e}"))?;
+    std::fs::write(dir.join(ONBOARDING_FLAG), "done")
+        .map_err(|e| format!("写入引导标记失败: {e}"))?;
+    if let Some(win) = app.get_webview_window("onboarding") {
+        // 引导是一次性窗口：关闭即销毁（不同于常驻窗口的 hide 策略），
+        // 重看走 open_onboarding 的 show/重建路径。
+        let _ = win.close();
+    }
+    Ok(())
+}
+
 /// 阅读室窗口挂载时取走「打开复习页」请求（托盘「生词本」入口）。
 #[tauri::command]
 fn take_pending_open_review(state: tauri::State<'_, PendingOpenReview>) -> bool {
@@ -1204,6 +1278,12 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // 开机自启（设置 → 关于 里开关）：保证重启电脑后复习提醒与托盘角标可达。
+        // Windows 走 HKCU\...\Run 注册表键，无管理员权限要求。
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(translation::CancelFlag::default())
         .manage(ocr::OcrEngine::default())
         .manage(tts::TtsState::default())
@@ -1247,6 +1327,8 @@ pub fn run() {
             reregister_hotkeys,
             take_pending_reader_import,
             take_pending_open_review,
+            finish_onboarding,
+            open_onboarding,
             file_export::save_text_file,
             speak_store::speak_list_sessions,
             speak_store::speak_save_session,
@@ -1303,7 +1385,10 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("ImmersiveTranslator")
                 .menu(&menu)
-                .show_menu_on_left_click(false)
+                // 左键单击同样弹出菜单（此前为 false：左键点击托盘毫无反应，
+                // 新用户找不到入口；Windows 下左/右键都弹菜单是托盘常驻类
+                // 应用的常见形态，动作与窗口入口在菜单里一目了然）。
+                .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => app.exit(0),
                     "settings" => show_window(app, "settings"),
@@ -1339,6 +1424,9 @@ pub fn run() {
             // 启动即按当前到期数刷角标，并拉起 30s 周期的提醒调度。
             review_reminder::update_tray(app.handle());
             review_reminder::spawn_scheduler(app.handle().clone());
+
+            // 首次启动弹出引导窗口（展示三大能力 + 当前快捷键；完成/跳过写标记）。
+            maybe_show_onboarding(app.handle());
 
             // 注册默认全局热键（启动占位；用户改键后由 reregister_hotkeys 覆盖）：
             //   Ctrl+Shift+Q —— 选中文字翻译
