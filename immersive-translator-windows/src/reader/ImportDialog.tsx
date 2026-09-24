@@ -20,6 +20,7 @@ import {
 } from "../core/library";
 import {
   coverageForText,
+  coveredWords,
   EXAM_GOALS,
   EXAM_GOAL_LABELS,
   type ExamGoal,
@@ -32,6 +33,13 @@ import {
 } from "../core/fileImport";
 import { loadPdfjsBrowser } from "../core/pdfjsLoader";
 import { readerFetchUrl } from "../lib/webExtract";
+import {
+  downscaleCoverDataUrl,
+  parseEpub,
+  type BookImportDraft,
+  type EpubBook,
+} from "../core/bookImport";
+import { trackEvent } from "../lib/telemetry";
 import type { ArticleSourceType, ArticleSummary, VocabWord } from "../core/readerTypes";
 
 export interface ImportMeta {
@@ -45,13 +53,15 @@ interface Props {
   vocabWords: VocabWord[];
   articles: ArticleSummary[];
   onImport: (text: string, title?: string, meta?: ImportMeta) => void;
+  /** 整本入库（EPUB/长书 tab 确认导入时）。 */
+  onImportBook: (draft: BookImportDraft) => void;
   onClose: () => void;
 }
 
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const GOAL_STORAGE_KEY = "intake-exam-goal";
 
-type TabId = "lib" | "file" | "url" | "paste";
+type TabId = "lib" | "epub" | "file" | "url" | "paste";
 
 interface UrlPreview {
   url: string;
@@ -92,7 +102,7 @@ function GoalCoverageRow({ goal, onGoalChange }: { goal: ExamGoal; onGoalChange:
   );
 }
 
-export function ImportDialog({ vocabWords, articles, onImport, onClose }: Props) {
+export function ImportDialog({ vocabWords, articles, onImport, onImportBook, onClose }: Props) {
   const [tab, setTab] = useState<TabId>("lib");
   const [goal, setGoal] = useState<ExamGoal>(() => {
     const saved = localStorage.getItem(GOAL_STORAGE_KEY);
@@ -144,7 +154,7 @@ export function ImportDialog({ vocabWords, articles, onImport, onClose }: Props)
         <div className="reader-import-head">
           <div>
             <h3>添加阅读内容</h3>
-            <p>从文库挑一篇、导入 Word / PDF 文件、抓一篇网页文章，或粘贴自己的文本 —— 入库后逐句精读，生词自动进生词本</p>
+            <p>从文库挑一篇、导入整本 EPUB、导入 Word / PDF 文件、抓一篇网页文章，或粘贴自己的文本 —— 入库后逐句精读，生词自动进生词本</p>
           </div>
           <button className="reader-tb-btn" onClick={onClose} title="关闭 (Esc)">
             ✕
@@ -154,6 +164,7 @@ export function ImportDialog({ vocabWords, articles, onImport, onClose }: Props)
           {(
             [
               ["lib", "内置文库"],
+              ["epub", "EPUB / 长书"],
               ["file", "本地文件"],
               ["url", "网页链接"],
               ["paste", "粘贴文本"],
@@ -164,7 +175,10 @@ export function ImportDialog({ vocabWords, articles, onImport, onClose }: Props)
               role="tab"
               aria-selected={tab === id}
               className={tab === id ? "on" : ""}
-              onClick={() => setTab(id)}
+              onClick={() => {
+                setTab(id);
+                if (id === "epub") trackEvent("epub_import_intent", { entry: "tab" });
+              }}
             >
               {label}
             </button>
@@ -179,6 +193,9 @@ export function ImportDialog({ vocabWords, articles, onImport, onClose }: Props)
             shelfLibIds={shelfLibIds}
             onImportItem={importLibraryItem}
           />
+        )}
+        {tab === "epub" && (
+          <EpubTab vocabWords={vocabWords} onImportBook={onImportBook} onSwitchToPaste={() => setTab("paste")} />
         )}
         {tab === "file" && (
           <FileTab vocabWords={vocabWords} onImport={onImport} onSwitchToPaste={() => setTab("paste")} />
@@ -765,6 +782,295 @@ function PasteTab({ onImport }: { onImport: (text: string, title?: string, meta?
             开始阅读
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------- EPUB / 长书（整本书阅读室入口） ----------------
+
+const EPUB_ACCEPT = ".epub,application/epub+zip";
+
+interface EpubPreviewState {
+  book: EpubBook;
+  fileName: string;
+  /** 勾选的章下标（默认全选；确认导入时只导所选）。 */
+  selected: Set<number>;
+  cover?: string;
+}
+
+/** 选书雷达的人话判定（口径：未掌握词占命中大纲词的比例）。 */
+export function radarVerdict(unmastered: number, covered: number): string {
+  if (unmastered <= 0) return "偏易 · 适合泛读冲刺";
+  const ratio = unmastered / Math.max(1, covered);
+  if (ratio <= 0.15) return "略高于你的水平 · 适合精读";
+  if (ratio <= 0.4) return "偏难 · 挑战阅读，多用遮罩自测";
+  return "远超当前水平 · 建议先从分级文库起步";
+}
+
+function minutesLabel(minutes: number): string {
+  if (minutes >= 60) return `约 ${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
+  return `约 ${minutes} 分钟`;
+}
+
+function EpubTab({
+  vocabWords,
+  onImportBook,
+  onSwitchToPaste,
+}: {
+  vocabWords: VocabWord[];
+  onImportBook: (draft: BookImportDraft) => void;
+  onSwitchToPaste: () => void;
+}) {
+  const [phase, setPhase] = useState<"idle" | "parsing" | "preview" | "error">("idle");
+  const [preview, setPreview] = useState<EpubPreviewState | null>(null);
+  const [error, setError] = useState("");
+  const [dragOver, setDragOver] = useState(false);
+  const [goal, setGoal] = useExamGoal();
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  const parse = useCallback(async (file: File | undefined | null) => {
+    if (!file) return;
+    setPhase("parsing");
+    setError("");
+    trackEvent("book_import_attempt", { fileSizeBytes: file.size });
+    try {
+      const book = await parseEpub(file);
+      const cover = book.coverDataUrl
+        ? (await downscaleCoverDataUrl(book.coverDataUrl)) ?? book.coverDataUrl
+        : undefined;
+      setPreview({
+        book,
+        fileName: file.name,
+        selected: new Set(book.chapters.map((_, i) => i)),
+        cover,
+      });
+      setPhase("preview");
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message);
+      trackEvent("book_import_result", { ok: false, failReason: message.slice(0, 60) });
+      setPhase("error");
+    }
+  }, []);
+
+  const fullText = useMemo(
+    () => (preview ? preview.book.chapters.map((c) => c.text).join("\n\n") : ""),
+    [preview],
+  );
+  const cov = useMemo(
+    () => (fullText ? coverageForText(fullText, goal, vocabWords) : null),
+    [fullText, goal, vocabWords],
+  );
+
+  const toggleChapter = (idx: number) => {
+    setPreview((p) => {
+      if (!p) return p;
+      const selected = new Set(p.selected);
+      if (selected.has(idx)) selected.delete(idx);
+      else selected.add(idx);
+      return { ...p, selected };
+    });
+  };
+
+  const confirmImport = () => {
+    if (!preview) return;
+    const chapters = preview.book.chapters
+      .map((c, i) => (preview.selected.has(i) ? { title: c.title, text: c.text } : null))
+      .filter((c): c is { title: string; text: string } => c !== null && c.text.trim().length > 0);
+    if (chapters.length === 0) return;
+    const text = chapters.map((c) => c.text).join("\n\n");
+    const totalWords = chapters.reduce((n, c) => n + countWords(c.text), 0);
+    const draft: BookImportDraft = {
+      title: preview.book.title,
+      ...(preview.book.author ? { author: preview.book.author } : {}),
+      ...(preview.cover ? { cover: preview.cover } : {}),
+      chapters,
+      radar: {
+        kaoyan: coveredWords(text, "kaoyan").size,
+        cet4: coveredWords(text, "cet4").size,
+        cet6: coveredWords(text, "cet6").size,
+      },
+      totalWords,
+      minutes: Math.max(1, Math.round(totalWords / 135)),
+    };
+    trackEvent("book_import_result", {
+      ok: true,
+      chapterCount: chapters.length,
+      wordCount: totalWords,
+      tocUsed: preview.book.tocUsed,
+    });
+    onImportBook(draft);
+  };
+
+  if (phase === "parsing") {
+    return (
+      <div className="reader-import-body reader-intake-body">
+        <div className="intake-skel">
+          <div className="intake-skel-line w40" />
+          <div className="intake-skel-line w85" />
+          <div className="intake-skel-line w85" />
+          <div className="intake-skel-line w60" />
+          <div className="intake-skel-phase">正在解析电子书（目录 / 章节正文 / 封面）…</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "error") {
+    return (
+      <div className="reader-import-body reader-intake-body">
+        <div className="intake-fail">
+          <div className="t">没能读取这本电子书</div>
+          <div className="d">{error}</div>
+          <div className="intake-fail-btns">
+            <button className="btn btn-secondary" onClick={() => setPhase("idle")}>
+              返回重选文件
+            </button>
+            <button className="btn btn-secondary" onClick={onSwitchToPaste}>
+              切到粘贴文本
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "preview" && preview && cov) {
+    const { book } = preview;
+    const selectedCount = preview.selected.size;
+    return (
+      <div className="reader-import-body reader-intake-body">
+        <GoalCoverageRow goal={goal} onGoalChange={setGoal} />
+        <div className="intake-preview">
+          <div className="epub-pv">
+            <div className="epub-pv-cover" aria-hidden>
+              {preview.cover ? (
+                <img src={preview.cover} alt="" />
+              ) : (
+                <span>{book.title.charAt(0).toUpperCase()}</span>
+              )}
+            </div>
+            <div className="epub-pv-head">
+              <div className="intake-pv-src">{preview.fileName} · 解析完成</div>
+              <div className="intake-pv-title serif">{book.title}</div>
+              <div className="intake-pv-meta">
+                {book.author && <span>{book.author}</span>}
+                <span>
+                  {book.chapters.length} 章 · {book.totalWords.toLocaleString()} 词 ·{" "}
+                  {minutesLabel(book.minutes)}
+                </span>
+              </div>
+              {!book.tocUsed && book.fallbackNotice && (
+                <div className="epub-pv-note">{book.fallbackNotice}</div>
+              )}
+            </div>
+          </div>
+
+          <div className="intake-pv-cov">
+            覆盖{EXAM_GOAL_LABELS[goal]}大纲词 <b>{cov.total}</b>
+            {cov.unmastered > 0 && (
+              <em>
+                {" "}
+                · 其中 {cov.unmastered} 个你还没掌握
+              </em>
+            )}
+            <span className="epub-pv-verdict">{radarVerdict(cov.unmastered, cov.total)}</span>
+          </div>
+
+          <div className="epub-chapters-head">
+            <span className="section-label">选择要导入的章（默认全选）</span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() =>
+                  setPreview((p) =>
+                    p ? { ...p, selected: new Set(p.book.chapters.map((_, i) => i)) } : p,
+                  )
+                }
+              >
+                全选
+              </button>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setPreview((p) => (p ? { ...p, selected: new Set<number>() } : p))}
+              >
+                清空
+              </button>
+            </div>
+          </div>
+          <div className="epub-chapter-list" role="listbox" aria-multiselectable="true">
+            {book.chapters.map((c, i) => {
+              const on = preview.selected.has(i);
+              return (
+                <label key={i} className={`epub-chapter-row${on ? " on" : ""}`}>
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={() => toggleChapter(i)}
+                  />
+                  <span className="epub-chapter-title serif">{c.title}</span>
+                  <span className="epub-chapter-meta">
+                    {c.wordCount.toLocaleString()} 词 · 约 {Math.max(1, Math.round(c.wordCount / 135))} 分钟
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+
+          <div className="intake-pv-foot intake-fail-btns">
+            <button className="btn btn-secondary" onClick={() => setPhase("idle")}>
+              重新选择文件
+            </button>
+            <button className="btn btn-primary" disabled={selectedCount === 0} onClick={confirmImport}>
+              导入所选 {selectedCount} 章
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="reader-import-body reader-intake-body">
+      <div
+        className={`intake-drop${dragOver ? " on" : ""}`}
+        role="button"
+        tabIndex={0}
+        aria-label="选择或拖入 EPUB 文件"
+        onClick={() => fileRef.current?.click()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") fileRef.current?.click();
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          void parse(e.dataTransfer.files?.[0]);
+        }}
+      >
+        <div className="intake-drop-icon" aria-hidden>
+          📖
+        </div>
+        <div className="intake-drop-title">拖入整本 .epub 电子书，或点击选择</div>
+        <div className="intake-drop-hint">
+          本地解析目录与章节正文，导入后按章精读：自动分章、断点续读、全书生词进复习闭环。
+          受 DRM 保护的书无法解析（不会产出空书）；.mobi / .azw3 请先用 Calibre 转成 .epub。
+        </div>
+        <input
+          ref={fileRef}
+          type="file"
+          accept={EPUB_ACCEPT}
+          style={{ display: "none" }}
+          onChange={(e) => {
+            void parse(e.target.files?.[0]);
+            e.target.value = "";
+          }}
+        />
       </div>
     </div>
   );

@@ -86,7 +86,7 @@
         "title": "",
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --auto-accept-camera-and-microphone-capture",
         "width": 384,
-        "height": 200,
+        "height": 232,
         "resizable": false,
         "decorations": false,
         "alwaysOnTop": true,

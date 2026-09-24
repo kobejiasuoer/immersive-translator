@@ -13,6 +13,7 @@ import {
   onTranslationDelta,
   onTranslationDone,
   onTranslationError,
+  takePendingOpenBook,
   takePendingReaderImport,
   takePendingOpenReview,
   translateStream,
@@ -25,14 +26,22 @@ import {
   noteRead,
   noteWriteReplay,
   readerDeleteArticle,
+  readerDeleteBook,
   readerGetArticle,
   readerGetVocab,
   readerListArticles,
+  readerListBooks,
+  readerRecordReading,
   readerRecordRecall,
   readerRecordReview,
+  readerReadSecondsToday,
   readerSaveArticle,
+  readerSaveBook,
+  readerSaveBookMeta,
   readerSaveVocabWord,
 } from "../lib/readerStore";
+import { trackEvent } from "../lib/telemetry";
+import { reminderGetConfig } from "../lib/reminder";
 import {
   buildReplayInput,
   buildReplaySystemPrompt,
@@ -44,6 +53,8 @@ import {
 } from "../core/noteBuilder";
 import { parseNoteMarkdown } from "../core/noteParser";
 import type { NoteMeta, NoteReplay } from "../core/readerTypes";
+import { bookChapterIndexOf } from "../core/readerTypes";
+import type { BookImportDraft } from "../core/bookImport";
 import { loadGlobalReaderSettings, loadMicDeviceId, saveGlobalReaderSettings, saveMicDeviceId } from "./readerSettingsStore";
 import { trayRefreshBadge } from "../lib/reminder";
 import { buildArticleFromText, normalizeWordKey } from "../core/articleBuilder";
@@ -53,6 +64,8 @@ import {
   mergeReaderSettings,
   type Article,
   type ArticleSummary,
+  type BookChapterMeta,
+  type BookMeta,
   type ReaderSettings,
   type RecallMode,
   type SentenceChunk,
@@ -69,7 +82,7 @@ import {
   parseParagraphResponse,
   parsePartialNumbered,
 } from "../core/paragraphTranslate";
-import { dueVocab, gradeSrs, recordReview, reviewStats, type ReviewGrade } from "../core/readerSrs";
+import { dueVocab, gradeSrs, isDue, recordReview, reviewStats, type ReviewGrade } from "../core/readerSrs";
 import {
   buildReaderDictPrompt,
   entryToVocab,
@@ -108,9 +121,43 @@ import { loadXfyunTtsCredentials } from "../lib/iseCredentials";
 import type { XfyunTtsCredentials } from "../core/xfyunTts";
 import { AssessStrip, PlayBar } from "./PlayBar";
 import { SpeakView } from "./SpeakView";
+import { BookTocModal } from "./BookTocModal";
 import { IconNext, IconPause, IconPlay, IconPrev } from "../ui/icons";
 
 type ViewRoute = "reading" | "review" | "speak" | "notes";
+
+/**
+ * 章末小结卡数据（本章查词/收录生词/到期词/用时 + 下一章）。
+ * collected/dueIds 口径 = 归属本章的全部生词（不区分本次阅读是否新增）。
+ */
+interface ChapterEndState {
+  bookId: string;
+  bookTitle: string;
+  chapterIdx: number;
+  chapterCount: number;
+  lookups: number;
+  collected: number;
+  minutes: number;
+  nextChapterId: string | null;
+  nextChapterTitle: string | null;
+  lastChapter: boolean;
+  /** 本章生词 id（「整理本章笔记」预选用）。 */
+  wordIds: string[];
+  /** 本章已到期的生词 id（「复习本章」只送这批进加练，不碰其他词的计划）。 */
+  dueIds: string[];
+}
+
+/** 短文结课条数据：自然播完末句或手动确认「读完本篇」时的本篇收获快照。 */
+interface ArticleFinishCard {
+  articleId: string;
+  lookups: number;
+  /** 本篇收录的词块和生词数。 */
+  collected: number;
+  /** 其中已到期、可立即复习的数量。 */
+  dueCount: number;
+  wordIds: string[];
+  dueIds: string[];
+}
 
 interface PendingTranslate {
   onDelta?: (text: string) => void;
@@ -145,9 +192,26 @@ export function ReaderApp() {
   const [peekAll, setPeekAll] = useState(false);
   const [searchMatchIdx, setSearchMatchIdx] = useState<number | null>(null);
   const [sourceCache, setSourceCache] = useState<Map<string, Article>>(new Map());
+  // ---- 整本书阅读室（书级载体） ----
+  const [bookList, setBookList] = useState<BookMeta[]>([]);
+  const [tocOpen, setTocOpen] = useState(false);
+  /** 今日已读秒数 / 每日阅读目标分钟（辅助增强二）。 */
+  const [readSecondsToday, setReadSecondsToday] = useState(0);
+  const [readGoalMin, setReadGoalMin] = useState(0);
+  /** 章末小结卡（书章读完弹出）。 */
+  const [chapterEnd, setChapterEnd] = useState<ChapterEndState | null>(null);
+  /** 短文结课条（自然播完或手动确认后常驻显示，可关闭）。 */
+  const [finishCard, setFinishCard] = useState<ArticleFinishCard | null>(null);
 
   const articleRef = useRef<Article | null>(null);
   const saveTimerRef = useRef<number | null>(null);
+  /** 书元信息写回（防抖；与章文章保存分开，避免索引重写放大）。 */
+  const booksRef = useRef<BookMeta[]>([]);
+  const bookSaveTimerRef = useRef<number | null>(null);
+  /** 未落盘的阅读秒数缓冲（每 15s 批量上报）。 */
+  const secondsBufferRef = useRef(0);
+  /** 打开本章时的累计秒基线（章末小结「本章用时」用）。 */
+  const openSecondsRef = useRef(0);
   const dictCountRef = useRef<Map<string, number>>(new Map());
   const pendingTranslateRef = useRef(new Map<string, PendingTranslate>());
   const translateSeqRef = useRef(0);
@@ -193,13 +257,26 @@ export function ReaderApp() {
     };
   }, [effectiveSettings]);
 
+  const vocabWordsRef = useRef(vocabWords);
+  vocabWordsRef.current = vocabWords;
+  /** 章末小结（定义在下方，播放引擎回调先持引用，避免声明顺序问题）。 */
+  const showChapterEndRef = useRef<(a: Article) => void>(() => {});
+  /**
+   * 「读完」事件（usePlayback onFinish：仅连续朗读自然播完末句触发；
+   * 单句朗读、跳到末句都不会走到这里）。书章 → 章末小结卡；短文 → 结课条。
+   */
   const handleFinish = useCallback(() => {
-    if (!articleRef.current) return;
-    const id = articleRef.current.id;
-    const lookups = dictCountRef.current.get(id) ?? 0;
-    const added = vocabWords.filter((w) => w.source.articleId === id).length;
-    showToast(`本篇读完 🎉 共查词 ${lookups} 次 · 生词本新增 ${added} 个`);
-  }, [vocabWords, showToast]);
+    const a = articleRef.current;
+    if (!a) return;
+    if (a.bookId) {
+      showChapterEndRef.current(a);
+      return;
+    }
+    showFinishCardRef.current(a);
+  }, []);
+
+  /** 短文结课条（定义在下方，同上持引用）。 */
+  const showFinishCardRef = useRef<(a: Article) => void>(() => {});
 
   // ---- 朗读引擎（Edge 在线免费 / 讯飞在线 / 本地 SAPI，凭据缺失自动回落本地） ----
   const [ttsCreds, setTtsCreds] = useState<XfyunTtsCredentials | null>(null);
@@ -415,6 +492,31 @@ export function ReaderApp() {
     },
     [scheduleSave],
   );
+
+  // ---- 书元信息写回（书级断点/时长/最近阅读；防抖，只写 reader_books.json 索引） ----
+  useEffect(() => {
+    booksRef.current = bookList;
+  }, [bookList]);
+
+  const scheduleBookMetaSave = useCallback((updater: (b: BookMeta) => BookMeta) => {
+    const bookId = articleRef.current?.bookId;
+    if (!bookId) return;
+    const current = booksRef.current.find((b) => b.id === bookId);
+    if (!current) return;
+    const next = updater(current);
+    booksRef.current = booksRef.current.map((b) => (b.id === next.id ? next : b));
+    setBookList((list) => list.map((b) => (b.id === next.id ? next : b)));
+    if (bookSaveTimerRef.current !== null) window.clearTimeout(bookSaveTimerRef.current);
+    bookSaveTimerRef.current = window.setTimeout(() => {
+      bookSaveTimerRef.current = null;
+      const meta = booksRef.current.find((b) => b.id === next.id);
+      if (meta) {
+        void readerSaveBookMeta(meta).catch((error) =>
+          console.error("[reader] save book meta failed", error),
+        );
+      }
+    }, 1200);
+  }, []);
 
   // ---- 词块标注（文章翻译完成后按批跑；切走文章即停） ----
   const ensureAnnotated = useCallback(async () => {
@@ -669,7 +771,7 @@ export function ReaderApp() {
     [patchArticle],
   );
 
-  // ---- 进度（P0-2 断点续读） ----
+  // ---- 进度（P0-2 断点续读；书级断点随之写回 BookMeta） ----
   useEffect(() => {
     if (!article) return;
     const idx = playback.activeIdx;
@@ -683,8 +785,46 @@ export function ReaderApp() {
         progress: { ...a.progress, sentenceIdx: maxIdx, percent },
       }));
     }
+    if (article.bookId) {
+      scheduleBookMetaSave((b) =>
+        b.id === article.bookId
+          ? {
+              ...b,
+              lastReadAt: Date.now(),
+              progress: { chapterId: article.id, sentenceIdx: maxIdx, percent },
+            }
+          : b,
+      );
+      // 章末小结只在「自然播完末句」或「手动点读完本章」时弹（showChapterEnd）；
+      // 光标进入最后一句不算读完——跳读/滚动经过都会误触发。
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playback.activeIdx, article?.id]);
+
+  // ---- 每日阅读时长（辅助增强二）：朗读播放与停留阅读均计入，15s 批量落盘 ----
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const a = articleRef.current;
+      if (view !== "reading" || !a || document.hidden) return;
+      secondsBufferRef.current += 1;
+      if (secondsBufferRef.current < 15) return;
+      const chunk = secondsBufferRef.current;
+      secondsBufferRef.current = 0;
+      patchArticle((cur) => ({
+        ...cur,
+        progress: { ...cur.progress, secondsListened: cur.progress.secondsListened + chunk },
+      }));
+      if (a.bookId) {
+        scheduleBookMetaSave((b) =>
+          b.id === a.bookId ? { ...b, secondsListened: b.secondsListened + chunk } : b,
+        );
+      }
+      void readerRecordReading(localDayKey(), chunk)
+        .then(setReadSecondsToday)
+        .catch(() => undefined);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [view, patchArticle, scheduleBookMetaSave]);
 
   // ---- 打开/切换文章 ----
   const loadSourceArticles = useCallback(async (ids: string[]) => {
@@ -702,6 +842,84 @@ export function ReaderApp() {
     }
   }, []);
 
+  /** 「归属本篇」的生词与其中已到期部分（结课条/章末小结共用同一口径）。 */
+  const collectArticleWords = useCallback((a: Article) => {
+    const words = vocabWordsRef.current.filter((w) => w.source.articleId === a.id);
+    const now = Date.now();
+    return {
+      wordIds: words.map((w) => w.id),
+      dueIds: words.filter((w) => isDue(w, now)).map((w) => w.id),
+    };
+  }, []);
+
+  /**
+   * 章末小结卡：本章查词/收录生词/到期词/用时 + 下一章入口。
+   * 触发来源只有两个——连续朗读自然播完末句（onFinish）、手动点「读完本章」；
+   * 光标滚进最后一句不再弹（那时用户未必读完）。
+   */
+  const showChapterEnd = useCallback((a: Article) => {
+    const book = booksRef.current.find((b) => b.id === a.bookId);
+    if (!book) return;
+    const chapterIdx = a.chapterIdx ?? bookChapterIndexOf(book, a.id);
+    const next = book.chapters[chapterIdx + 1] ?? null;
+    const secondsRead = Math.max(0, Math.round(a.progress.secondsListened - openSecondsRef.current));
+    const { wordIds, dueIds } = collectArticleWords(a);
+    setChapterEnd({
+      bookId: book.id,
+      bookTitle: book.title,
+      chapterIdx,
+      chapterCount: book.chapters.length,
+      lookups: dictCountRef.current.get(a.id) ?? 0,
+      collected: wordIds.length,
+      minutes: Math.round(secondsRead / 60),
+      nextChapterId: next?.id ?? null,
+      nextChapterTitle: next?.title ?? null,
+      lastChapter: !next,
+      wordIds,
+      dueIds,
+    });
+    trackEvent("chapter_complete", {
+      bookId: book.id,
+      chapterIdx,
+      lookedUpCount: dictCountRef.current.get(a.id) ?? 0,
+      collectedCount: wordIds.length,
+      dueCount: dueIds.length,
+      secondsRead,
+    });
+  }, [collectArticleWords]);
+  showChapterEndRef.current = showChapterEnd;
+
+  /** 短文结课条：本篇收获快照 + 笔记/复习入口（替代原先一闪而过的 toast）。 */
+  const showFinishCard = useCallback(
+    (a: Article) => {
+      const { wordIds, dueIds } = collectArticleWords(a);
+      setFinishCard({
+        articleId: a.id,
+        lookups: dictCountRef.current.get(a.id) ?? 0,
+        collected: wordIds.length,
+        dueCount: dueIds.length,
+        wordIds,
+        dueIds,
+      });
+      trackEvent("article_finish", {
+        articleId: a.id,
+        lookedUpCount: dictCountRef.current.get(a.id) ?? 0,
+        collectedCount: wordIds.length,
+        dueCount: dueIds.length,
+      });
+    },
+    [collectArticleWords],
+  );
+  showFinishCardRef.current = showFinishCard;
+
+  /** 正文末「读完本篇/读完本章」按钮（纯手动阅读路径）：与自然播完走同一落点。 */
+  const confirmFinish = useCallback(() => {
+    const a = articleRef.current;
+    if (!a) return;
+    if (a.bookId) showChapterEnd(a);
+    else showFinishCard(a);
+  }, [showChapterEnd, showFinishCard]);
+
   const openArticle = useCallback(
     async (id: string) => {
       try {
@@ -710,10 +928,22 @@ export function ReaderApp() {
         setView("reading");
         setDict({ status: "closed" });
         setSearchMatchIdx(null);
+        setTocOpen(false);
+        setChapterEnd(null);
+        setFinishCard(null);
         setArticle(full);
         articleRef.current = full;
+        openSecondsRef.current = full.progress.secondsListened;
         playback.reset(full.progress.sentenceIdx);
         scheduleSave({ ...full, lastReadAt: Date.now() });
+        if (full.bookId) {
+          trackEvent("book_open", {
+            bookId: full.bookId,
+            chapterIdx: full.chapterIdx ?? 0,
+            sentenceIdx: full.progress.sentenceIdx,
+          });
+          scheduleBookMetaSave((b) => (b.id === full.bookId ? { ...b, lastReadAt: Date.now() } : b));
+        }
         void ensureTranslated(full);
         void loadSourceArticles([full.id]);
       } catch (error) {
@@ -721,7 +951,20 @@ export function ReaderApp() {
         showToast("打开文章失败");
       }
     },
-    [ensureTranslated, scheduleSave, showToast, playback, loadSourceArticles],
+    [ensureTranslated, scheduleSave, showToast, playback, loadSourceArticles, scheduleBookMetaSave],
+  );
+
+  /** 书卡/提醒卡进书：直达书级断点章。 */
+  const openBookAtBreakpoint = useCallback(
+    async (bookId: string) => {
+      const book = booksRef.current.find((b) => b.id === bookId);
+      if (!book || book.chapters.length === 0) return;
+      const target = book.chapters.some((c) => c.id === book.progress.chapterId)
+        ? book.progress.chapterId
+        : book.chapters[0].id;
+      await openArticle(target);
+    },
+    [openArticle],
   );
 
   const refreshArticleList = useCallback(async (): Promise<ArticleSummary[]> => {
@@ -731,6 +974,18 @@ export function ReaderApp() {
       return list;
     } catch (error) {
       console.error("[reader] list articles failed", error);
+      return [];
+    }
+  }, []);
+
+  const refreshBooks = useCallback(async (): Promise<BookMeta[]> => {
+    try {
+      const books = await readerListBooks();
+      setBookList(books);
+      booksRef.current = books;
+      return books;
+    } catch (error) {
+      console.error("[reader] list books failed", error);
       return [];
     }
   }, []);
@@ -752,10 +1007,18 @@ export function ReaderApp() {
     (async () => {
       setGlobalSettings(loadGlobalReaderSettings());
       const list = await refreshArticleList();
+      const books = await refreshBooks();
       await refreshVocab();
       // 笔记列表随启动加载（而不只进笔记库时）：书架/生词本的「未整理进笔记」
       // 角标首屏就要用，懒加载会让它在首次进笔记库前虚高成全部生词数。
       void refreshNotes();
+      // 每日阅读目标（只读配置）与今日已读秒数。
+      void reminderGetConfig()
+        .then((c) => setReadGoalMin(c.readGoalMin))
+        .catch(() => undefined);
+      void readerReadSecondsToday(localDayKey())
+        .then(setReadSecondsToday)
+        .catch(() => undefined);
       if (!active) return;
       // 阅读室热键路径：窗口首次挂载时取走待导入文本（nonce 防与事件路径重复）。
       try {
@@ -778,8 +1041,21 @@ export function ReaderApp() {
       } catch (error) {
         console.error("[reader] take pending open review failed", error);
       }
+      // 提醒卡「继续阅读」路径：窗口重建时取走书级断点直达请求。
+      try {
+        const bookId = await takePendingOpenBook();
+        if (bookId) {
+          await openBookAtBreakpoint(bookId);
+          return;
+        }
+      } catch (error) {
+        console.error("[reader] take pending open book failed", error);
+      }
       if (list.length > 0) {
         void openArticle(list[0].id);
+      } else if (books.length > 0) {
+        // 只有书没有短文：打开最近读的那本（断点章）。
+        void openBookAtBreakpoint(books[0].id);
       }
     })();
 
@@ -834,6 +1110,15 @@ export function ReaderApp() {
       else u();
     });
 
+    // 提醒卡「继续阅读」（窗口已存在时）：事件路径直达书级断点。
+    let unlistenOpenBook: (() => void) | undefined;
+    listen<string>("reader:open-book", (event) => {
+      void openBookAtBreakpoint(event.payload);
+    }).then((u) => {
+      if (active) unlistenOpenBook = u;
+      else u();
+    });
+
     return () => {
       active = false;
       unlistenArticle?.();
@@ -841,6 +1126,7 @@ export function ReaderApp() {
       unlistenOpenReview?.();
       unlistenVocab?.();
       unlistenCreds?.();
+      unlistenOpenBook?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -923,6 +1209,86 @@ export function ReaderApp() {
         });
     },
     [refreshArticleList, openArticle, playback, showToast],
+  );
+
+  /** 整本入库（EPUB/长书 tab 确认导入）：章文本 → 章 Article（sourceType="epub"）。 */
+  const importBook = useCallback(
+    (draft: BookImportDraft) => {
+      const now = Date.now();
+      const bookId = `b${now.toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      const chapters: Article[] = [];
+      const metas: BookChapterMeta[] = [];
+      draft.chapters.forEach((ch, idx) => {
+        const built = buildArticleFromText(ch.text, {
+          sourceType: "epub",
+          title: ch.title,
+          now: now + idx,
+        });
+        if (!built) return;
+        const chapter: Article = { ...built, bookId, chapterIdx: metas.length };
+        chapters.push(chapter);
+        metas.push({
+          id: chapter.id,
+          title: chapter.title,
+          wordCount: chapter.wordCount,
+          sentenceCount: chapter.sentences.length,
+        });
+      });
+      if (metas.length === 0) {
+        showToast("没有可导入的章节内容");
+        return;
+      }
+      const meta: BookMeta = {
+        id: bookId,
+        title: draft.title,
+        ...(draft.author ? { author: draft.author } : {}),
+        ...(draft.cover ? { cover: draft.cover } : {}),
+        createdAt: now,
+        lastReadAt: now,
+        chapters: metas,
+        progress: { chapterId: metas[0].id, sentenceIdx: 0, percent: 0 },
+        secondsListened: 0,
+        radar: draft.radar,
+      };
+      setImportOpen(false);
+      void readerSaveBook(meta, chapters)
+        .then(async (books) => {
+          setBookList(books);
+          booksRef.current = books;
+          showToast(`已导入《${draft.title}》· ${metas.length} 章`);
+          await openArticle(metas[0].id);
+        })
+        .catch((error) => {
+          console.error("[reader] import book failed", error);
+          showToast("导入书籍失败");
+        });
+    },
+    [openArticle, showToast],
+  );
+
+  /** 删除书 = 删书卡与全部章文章（进度不可恢复），生词一律保留。 */
+  const deleteBook = useCallback(
+    (bookId: string) => {
+      void readerDeleteBook(bookId)
+        .then(async (removed) => {
+          if (!removed) return;
+          const books = await refreshBooks();
+          if (articleRef.current?.bookId === bookId) {
+            setArticle(null);
+            articleRef.current = null;
+            playback.reset(0);
+            const list = await refreshArticleList();
+            if (list.length > 0) void openArticle(list[0].id);
+            else if (books.length > 0) void openBookAtBreakpoint(books[0].id);
+          }
+          showToast("这本书已删除（生词保留）");
+        })
+        .catch((error) => {
+          console.error("[reader] delete book failed", error);
+          showToast("删除书籍失败");
+        });
+    },
+    [refreshBooks, refreshArticleList, openArticle, openBookAtBreakpoint, playback, showToast],
   );
 
   // ---- 词典（屏 C） ----
@@ -1189,6 +1555,12 @@ export function ReaderApp() {
     setNoteDialogOpen(true);
   }, []);
 
+  /** 口语复盘「生成复习笔记」：预选刚加入的词。 */
+  const openNoteGeneratorWith = useCallback((ids: string[]) => {
+    setNotePreselect(ids);
+    setNoteDialogOpen(true);
+  }, []);
+
   /** 复盘后又产生了新的复习记录 → 允许（重新）生成复盘。 */
   const generateReplay = useCallback(
     async (meta: NoteMeta) => {
@@ -1352,9 +1724,47 @@ export function ReaderApp() {
 
   // ---- 渲染 ----
   const showChrome = !effectiveSettings.zenMode;
+  /** 光标已停在末句（自然播完/跳读/滚动到底都会到这）且还没确认读完。 */
+  const atArticleEnd =
+    !!article && article.sentences.length > 0 && playback.activeIdx >= article.sentences.length - 1;
+  /** 正文末「读完本篇/本章」按钮：到位即出，读完确认后撤下。 */
+  const showFinishAction =
+    view === "reading" && atArticleEnd && !finishCard && !chapterEnd && !playback.playing;
+  /** 当前打开文章所属的书（书章模式）。 */
+  const currentBook = useMemo(
+    () => (article?.bookId ? bookList.find((b) => b.id === article.bookId) ?? null : null),
+    [article?.bookId, bookList],
+  );
+  /** 词典栏/生词词条的书级来源：「《书名》·第 N 章」。 */
+  const bookSource = useMemo(() => {
+    if (!article?.bookId || !currentBook) return null;
+    const idx = article.chapterIdx ?? bookChapterIndexOf(currentBook, article.id);
+    return `《${currentBook.title}》·第 ${idx + 1} 章`;
+  }, [article, currentBook]);
+  /** 章文章 id → 「《书名》·第 N 章」（复习卡/生词来源展示；短文回落标题）。 */
+  const chapterLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const b of bookList) {
+      b.chapters.forEach((c, i) => map.set(c.id, `《${b.title}》·第 ${i + 1} 章`));
+    }
+    return map;
+  }, [bookList]);
+  /** 每章已收藏生词数（目录面板）。 */
+  const vocabCountByChapter = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const w of vocabWords) {
+      counts[w.source.articleId] = (counts[w.source.articleId] ?? 0) + 1;
+    }
+    return counts;
+  }, [vocabWords]);
+
   const articleTitle = useCallback(
-    (id: string) => sourceCache.get(id)?.title ?? articleList.find((a) => a.id === id)?.title ?? null,
-    [sourceCache, articleList],
+    (id: string) =>
+      chapterLabelById.get(id) ??
+      sourceCache.get(id)?.title ??
+      articleList.find((a) => a.id === id)?.title ??
+      null,
+    [chapterLabelById, sourceCache, articleList],
   );
   const sourcePreview = useCallback(
     (id: string, sentenceIdx: number) => sourceCache.get(id)?.sentences[sentenceIdx]?.en ?? null,
@@ -1440,16 +1850,22 @@ export function ReaderApp() {
         {showChrome && view === "reading" && (
           <ReaderShelf
             articles={articleList}
+            books={bookList}
             activeId={article?.id ?? null}
+            activeBookId={currentBook?.id ?? null}
             dueNow={dueNow}
             reviewedToday={stats.reviewedToday}
             streak={stats.streak}
             newToNote={unnotedCount}
+            readMinutesToday={Math.round(readSecondsToday / 60)}
+            readGoalMin={readGoalMin}
             onSelect={(id) => void openArticle(id)}
+            onContinueBook={(b) => void openBookAtBreakpoint(b.id)}
             onOpenReview={goReview}
             onOpenSpeak={goSpeak}
             onOpenNotes={goNotes}
             onDelete={deleteArticle}
+            onDeleteBook={deleteBook}
             onOpenImport={() => setImportOpen(true)}
           />
         )}
@@ -1469,6 +1885,8 @@ export function ReaderApp() {
             onOpenNotes={goNotes}
             requestTranslate={requestTranslate}
             onNoteSaved={(meta) => void openSavedNote(meta)}
+            readMinutesToday={Math.round(readSecondsToday / 60)}
+            readGoalMin={readGoalMin}
           />
         )}
         {view === "notes" && (
@@ -1491,6 +1909,8 @@ export function ReaderApp() {
             onGenerateReplay={(meta) => void generateReplay(meta)}
             onRollIntoNote={rollIntoNote}
             onSpeakWord={speakWord}
+            readMinutesToday={Math.round(readSecondsToday / 60)}
+            readGoalMin={readGoalMin}
           />
         )}
 
@@ -1546,11 +1966,25 @@ export function ReaderApp() {
               }}
               onOpenImport={() => setImportOpen(true)}
               onRetryTitle={retryTitle}
+              showFinishAction={showFinishAction}
+              finishLabel={article?.bookId ? "读完本章" : "读完本篇"}
+              onFinishRead={confirmFinish}
+              book={
+                article?.bookId && currentBook
+                  ? {
+                      title: currentBook.title,
+                      chapterIdx: article.chapterIdx ?? bookChapterIndexOf(currentBook, article.id),
+                      chapterCount: currentBook.chapters.length,
+                    }
+                  : null
+              }
+              onOpenToc={currentBook ? () => setTocOpen(true) : undefined}
             />
             <DictColumn
               state={dict}
               inVocab={inVocab}
               knownIds={knownIds}
+              bookSource={bookSource}
               onSpeak={speakWord}
               onAddVocab={addVocab}
               onAddCollVocab={addCollVocab}
@@ -1568,6 +2002,10 @@ export function ReaderApp() {
             micDeviceId={micDeviceId}
             onToast={showToast}
             onBack={goReading}
+            vocabWords={vocabWords}
+            onVocabSaved={() => refreshVocab()}
+            onGenerateNote={openNoteGeneratorWith}
+            onGoReview={goReview}
           />
         ) : view === "notes" ? null : (
           <ReviewView
@@ -1592,6 +2030,50 @@ export function ReaderApp() {
           />
         )}
       </div>
+
+      {view === "reading" && finishCard && article?.id === finishCard.articleId && !article.bookId && (
+        <div className="reader-finish-bar" role="status" style={effectiveSettings.zenMode ? { marginBottom: 64 } : undefined}>
+          <span className="fb-text">
+            本篇读完 🎉 收录 <b>{finishCard.collected}</b> 个词块和生词
+            {finishCard.dueCount > 0 && (
+              <>
+                ，其中 <b>{finishCard.dueCount}</b> 个待复习
+              </>
+            )}
+          </span>
+          <div className="fb-actions">
+            {finishCard.collected > 0 && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => {
+                  const ids = finishCard.wordIds;
+                  setFinishCard(null);
+                  openNoteGeneratorWith(ids);
+                }}
+                title="把这批词预选进复习笔记生成弹窗"
+              >
+                整理本篇复习笔记
+              </button>
+            )}
+            {finishCard.dueCount > 0 && (
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => {
+                  const ids = finishCard.dueIds;
+                  setFinishCard(null);
+                  startFocusReview(ids);
+                }}
+                title="只复习本篇已到期的词，不打乱其他词的复习计划"
+              >
+                复习本篇 {finishCard.dueCount} 词
+              </button>
+            )}
+            <button className="btn btn-ghost btn-sm" onClick={() => setFinishCard(null)}>
+              继续阅读
+            </button>
+          </div>
+        </div>
+      )}
 
       {view === "reading" && (
         <PlayBar
@@ -1657,7 +2139,102 @@ export function ReaderApp() {
             setImportOpen(false);
             importPaste(text, title, meta);
           }}
+          onImportBook={importBook}
         />
+      )}
+
+      {tocOpen && currentBook && (
+        <BookTocModal
+          book={currentBook}
+          currentChapterId={article?.id ?? null}
+          vocabCountByChapter={vocabCountByChapter}
+          onSelect={(chapterId) => void openArticle(chapterId)}
+          onClose={() => setTocOpen(false)}
+        />
+      )}
+
+      {chapterEnd && (
+        <div
+          className="modal-overlay"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setChapterEnd(null);
+          }}
+        >
+          <div className="chapter-end-modal" role="dialog" aria-modal="true" aria-label="章末小结">
+            <div className="ce-badge" aria-hidden>
+              🎉
+            </div>
+            <h3 className="serif">
+              第 {chapterEnd.chapterIdx + 1} 章读完
+            </h3>
+            <p className="ce-book">
+              《{chapterEnd.bookTitle}》 · {chapterEnd.chapterIdx + 1}/{chapterEnd.chapterCount} 章
+            </p>
+            <div className="ce-stats">
+              <span>
+                查词 <b>{chapterEnd.lookups}</b> 次
+              </span>
+              <span>
+                本章收录 <b>{chapterEnd.collected}</b> 词
+              </span>
+              <span>
+                本章用时 <b>{chapterEnd.minutes}</b> 分钟
+              </span>
+            </div>
+            {chapterEnd.lastChapter ? (
+              <p className="ce-next">全书读完，恭喜！这些生词都已在复习闭环里了。</p>
+            ) : (
+              <p className="ce-next">下一章：{chapterEnd.nextChapterTitle}</p>
+            )}
+            {(chapterEnd.collected > 0 || chapterEnd.dueIds.length > 0) && (
+              <div className="ce-more">
+                {chapterEnd.collected > 0 && (
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      const ids = chapterEnd.wordIds;
+                      setChapterEnd(null);
+                      openNoteGeneratorWith(ids);
+                    }}
+                    title="把本章这批词预选进复习笔记生成弹窗"
+                  >
+                    整理本章笔记
+                  </button>
+                )}
+                {chapterEnd.dueIds.length > 0 && (
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => {
+                      const ids = chapterEnd.dueIds;
+                      setChapterEnd(null);
+                      startFocusReview(ids);
+                    }}
+                    title="只复习本章已到期的词，不打乱其他词的复习计划"
+                  >
+                    复习本章 {chapterEnd.dueIds.length} 词
+                  </button>
+                )}
+              </div>
+            )}
+            <div className="ce-actions">
+              <button className="btn btn-secondary" onClick={() => setChapterEnd(null)}>
+                留在本章
+              </button>
+              {chapterEnd.nextChapterId && (
+                <button
+                  className="btn btn-primary"
+                  onClick={() => {
+                    const next = chapterEnd.nextChapterId;
+                    setChapterEnd(null);
+                    if (next) void openArticle(next);
+                  }}
+                >
+                  开始下一章
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {noteDialogOpen && (

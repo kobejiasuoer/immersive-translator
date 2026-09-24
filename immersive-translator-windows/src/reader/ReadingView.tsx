@@ -50,6 +50,13 @@ interface Props {
   onViewportIdx: (idx: number) => void;
   onOpenImport: () => void;
   onRetryTitle: () => void;
+  /** 光标已到末句且未确认读完：正文末尾显示「读完本篇/本章」按钮（纯手动阅读路径）。 */
+  showFinishAction: boolean;
+  finishLabel: string;
+  onFinishRead: () => void;
+  /** 书章模式：章节栏数据（短文缺省不渲染）。 */
+  book?: { title: string; chapterIdx: number; chapterCount: number } | null;
+  onOpenToc?: () => void;
 }
 
 const WORD_CHARS = /[A-Za-z0-9'’-]/;
@@ -233,6 +240,24 @@ export function ReadingView(props: Props) {
             settings.contrastMode === "en" ? " reader-contrast-en" : ""
           }${settings.contrastMode === "zh" ? " reader-contrast-zh" : ""}`}
         >
+          {props.book && (
+            <div className="reader-chapter-bar">
+              <span className="cb-book serif" title={props.book.title}>
+                《{props.book.title}》
+              </span>
+              <span className="cb-dot" aria-hidden>
+                ·
+              </span>
+              <span className="cb-ch">
+                第 {props.book.chapterIdx + 1}/{props.book.chapterCount} 章
+              </span>
+              {props.onOpenToc && (
+                <button className="btn btn-secondary btn-sm" onClick={props.onOpenToc} title="章节目录">
+                  目录
+                </button>
+              )}
+            </div>
+          )}
           <header className="reader-article-head">
             <h1 className="reader-article-title">{article.title}</h1>
             {article.titleCn ? (
@@ -454,6 +479,15 @@ export function ReadingView(props: Props) {
               );
             })}
           </div>
+
+          {props.showFinishAction && (
+            <div className="reader-finish-action">
+              <button className="btn btn-primary" onClick={props.onFinishRead}>
+                {props.finishLabel}
+              </button>
+              <span className="hint">已到文章末尾：确认读完，整理本篇收获或稍后复习。</span>
+            </div>
+          )}
         </article>
       </div>
     </div>

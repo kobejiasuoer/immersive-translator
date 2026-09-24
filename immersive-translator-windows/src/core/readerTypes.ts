@@ -95,6 +95,10 @@ export interface Article {
   chunkState?: ArticleChunkState;
   /** 按文章覆盖的阅读设置；缺字段回落全局默认。 */
   settings?: Partial<ReaderSettings>;
+  /** 所属书 id（书章文章才有；存储据此路由到 books/<bookId>.json）。 */
+  bookId?: string;
+  /** 书内章序号，从 0（与 BookMeta.chapters 下标一致）。 */
+  chapterIdx?: number;
 }
 
 /** 遮罩/复习等场景的生词来源定位。 */
@@ -383,3 +387,92 @@ export function mergeReaderSettings(
 
 /** 文章列表条目（不含句对正文，书架用）。 */
 export type ArticleSummary = Omit<Article, "sentences"> & { sentenceCount: number };
+
+// ---------- 整本书阅读室（书级载体） ----------
+//
+// 书 = 章文章的有序集合：每章一个 Article（sourceType="epub"，带 bookId/chapterIdx），
+// 章正文整体落 books/<bookId>.json；reader_books.json 只存索引与书元信息（BookMeta，
+// 不含章正文），与 reader_store.rs 的 BooksFile / BookFile 同构。
+// 新增可选字段对老数据零破坏，schemaVersion 维持 1（契约 1.1.0）。
+
+/** 书目录里的一章（索引信息，不含正文）。 */
+export interface BookChapterMeta {
+  /** 章文章 id（= Article.id，生词 source.articleId 即它）。 */
+  id: string;
+  title: string;
+  wordCount: number;
+  sentenceCount: number;
+}
+
+/** 书级断点：进书直达。 */
+export interface BookProgress {
+  chapterId: string;
+  sentenceIdx: number;
+  /** 0–100，章内句序百分比。 */
+  percent: number;
+}
+
+/** 选书雷达缓存（导入时按全书文本实算，禁止写死数字）。键 = ExamGoal。 */
+export interface BookRadar {
+  kaoyan: number;
+  cet4: number;
+  cet6: number;
+}
+
+/** 一本书的索引与元信息（不含章正文）。 */
+export interface BookMeta {
+  id: string;
+  title: string;
+  author?: string;
+  /** 缩小后的封面 dataURL（JPEG，≤160px 宽；无封面缺省）。 */
+  cover?: string;
+  createdAt: number;
+  lastReadAt: number;
+  /** 章的有序表；下标即 chapterIdx。 */
+  chapters: BookChapterMeta[];
+  progress: BookProgress;
+  /** 全书累计阅读秒数（章 Article.progress.secondsListened 之和的冗余缓存）。 */
+  secondsListened: number;
+  radar: BookRadar;
+}
+
+/** 书索引文件（reader_books.json）。 */
+export interface BooksFile {
+  schemaVersion: number;
+  books: BookMeta[];
+}
+
+/** 单本书文件（books/<bookId>.json），结构与 ReaderArticlesFile 同构。 */
+export interface BookFile {
+  schemaVersion: number;
+  articles: Article[];
+}
+
+export function emptyBooksFile(): BooksFile {
+  return { schemaVersion: READER_SCHEMA_VERSION, books: [] };
+}
+
+/** 提醒卡「继续阅读」用的书级断点快照。 */
+export interface LastBookProgress {
+  bookId: string;
+  bookTitle: string;
+  chapterIdx: number;
+  chapterTitle: string;
+  chapterCount: number;
+}
+
+/** 断点章的下标（找不到时回落第 0 章）。 */
+export function bookChapterIndexOf(book: BookMeta, chapterId?: string): number {
+  if (!chapterId) return 0;
+  const idx = book.chapters.findIndex((c) => c.id === chapterId);
+  return idx >= 0 ? idx : 0;
+}
+
+/** 书级总进度 =（读完的章 + 当前章内百分比）/ 总章数，0–100。 */
+export function bookOverallPercent(book: BookMeta): number {
+  const total = book.chapters.length;
+  if (total === 0) return 0;
+  const idx = bookChapterIndexOf(book, book.progress.chapterId);
+  const pct = ((idx + Math.min(100, Math.max(0, book.progress.percent)) / 100) / total) * 100;
+  return Math.min(100, Math.max(0, pct));
+}

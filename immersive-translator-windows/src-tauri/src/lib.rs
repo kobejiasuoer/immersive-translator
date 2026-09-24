@@ -7,6 +7,7 @@ mod review_reminder;
 mod screenshot;
 mod secret_store;
 mod speak_store;
+mod telemetry;
 mod translation;
 mod tray_badge;
 mod tts;
@@ -72,6 +73,11 @@ struct PendingReaderImport(Mutex<Option<ReaderImportPayload>>);
 /// 窗口不存在时先记下标记，等窗口挂载后取走（同 PendingReaderImport 模式）。
 #[derive(Default)]
 struct PendingOpenReview(Mutex<Option<()>>);
+
+/// 提醒卡「继续阅读」要求阅读室直达书级断点：窗口已存在时走事件即时跳转；
+/// 窗口不存在时先记下 bookId，等窗口挂载后取走（同 PendingOpenReview 模式）。
+#[derive(Default)]
+struct PendingOpenBook(Mutex<Option<String>>);
 
 // 自动读取和手动复制等待共用一次会话，避免热键连按启动多个剪贴板监听。
 static SELECTION_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -590,6 +596,26 @@ fn finish_onboarding(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn take_pending_open_review(state: tauri::State<'_, PendingOpenReview>) -> bool {
     state.0.lock().unwrap().take().is_some()
+}
+
+/// 提醒卡「继续阅读」：打开/聚焦阅读室窗口并直达书级断点章。
+/// 窗口已存在时走事件即时跳转；不存在时先记 pending，等挂载后取走
+/// （与托盘「生词本」同一模式：窗口存在时不写 pending，避免陈旧请求）。
+#[tauri::command]
+fn open_reader_book(app: tauri::AppHandle, book_id: String) {
+    if app.get_webview_window("reader").is_some() {
+        show_reader_window(&app);
+        let _ = app.emit_to("reader", "reader:open-book", book_id);
+    } else {
+        *app.state::<PendingOpenBook>().0.lock().unwrap() = Some(book_id);
+        show_reader_window(&app);
+    }
+}
+
+/// 阅读室窗口挂载时取走「打开书断点」请求（提醒卡「继续阅读」入口）。
+#[tauri::command]
+fn take_pending_open_book(state: tauri::State<'_, PendingOpenBook>) -> Option<String> {
+    state.0.lock().unwrap().take()
 }
 
 fn persist_hotkeys(
@@ -1290,6 +1316,7 @@ pub fn run() {
         .manage(PendingPanelPayload::default())
         .manage(PendingReaderImport::default())
         .manage(PendingOpenReview::default())
+        .manage(PendingOpenBook::default())
         .manage(review_reminder::TrayHandles::default())
         .manage(review_reminder::PendingReminder::default())
         .manage(ActiveHotkeys::default())
@@ -1327,6 +1354,8 @@ pub fn run() {
             reregister_hotkeys,
             take_pending_reader_import,
             take_pending_open_review,
+            open_reader_book,
+            take_pending_open_book,
             finish_onboarding,
             open_onboarding,
             file_export::save_text_file,
@@ -1340,9 +1369,18 @@ pub fn run() {
             reader_store::reader_get_vocab,
             reader_store::reader_save_vocab_word,
             reader_store::reader_delete_vocab_word,
+            reader_store::reader_merge_vocab_words,
             reader_store::reader_record_review,
             reader_store::reader_stats,
             reader_store::reader_record_recall,
+            reader_store::reader_list_books,
+            reader_store::reader_save_book,
+            reader_store::reader_save_book_meta,
+            reader_store::reader_delete_book,
+            reader_store::reader_last_book_progress,
+            reader_store::reader_record_reading,
+            reader_store::reader_read_seconds_today,
+            telemetry::telemetry_log_event,
             reader_store::note_save,
             reader_store::note_list,
             reader_store::note_read,

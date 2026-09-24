@@ -39,6 +39,9 @@ interface Props {
   requestTranslate?: NoteTranslateFn;
   /** 笔记入库成功 →「在笔记库打开」（ReaderApp 切视图）。 */
   onNoteSaved?: (meta: NoteMeta) => void;
+  /** 今日已读分钟数（每日阅读目标，goalMin>0 时显示）。 */
+  readMinutesToday?: number;
+  readGoalMin?: number;
 }
 
 /** 下次见面时间：10分钟后 / 5小时后 / 3天后 / 超过一个月给日期。 */
@@ -66,6 +69,8 @@ export function VocabListPanel({
   onOpenNotes,
   requestTranslate,
   onNoteSaved,
+  readMinutesToday,
+  readGoalMin,
 }: Props) {
   const [noteOpen, setNoteOpen] = useState(false);
   const focusing = (focusCount ?? 0) > 0;
@@ -176,6 +181,8 @@ export function VocabListPanel({
           dueNow={due.length}
           streak={streak}
           emptyText="今日没有到期生词了。"
+          readMinutesToday={readMinutesToday}
+          readGoalMin={readGoalMin}
         />
       </div>
       {noteOpen && requestTranslate && (

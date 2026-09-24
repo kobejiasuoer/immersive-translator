@@ -17,6 +17,34 @@ use windows_sys::Win32::System::SystemInformation::GetLocalTime;
 use super::reader_store;
 use super::tray_badge;
 
+/// 到点是否应弹提醒（纯函数，可测）。双态：
+/// - 到期词态：due > 0（原有行为）。
+/// - 阅读目标态（辅助增强二）：无到期词，但设了每日阅读目标、今天没读够、
+///   且书架上有书可回 —— 「还差 M 分钟，继续读《书名》第 N 章」。
+///   没书 / 没设目标的用户维持「无到期不弹」，不被打扰。
+pub fn should_show_now(
+    cfg: &ReminderConfig,
+    now_min: u32,
+    due: u32,
+    today: &str,
+    read_seconds_today: f64,
+    has_books: bool,
+) -> bool {
+    if !cfg.enabled || cfg.last_shown_day == today {
+        return false;
+    }
+    if due == 0 {
+        let goal_met = read_seconds_today >= f64::from(cfg.read_goal_min) * 60.0;
+        if cfg.read_goal_min == 0 || !has_books || goal_met {
+            return false;
+        }
+    }
+    if cfg.dnd_enabled && in_dnd_window(now_min, cfg.dnd_start_min, cfg.dnd_end_min) {
+        return false;
+    }
+    within_remind_window(now_min, cfg.minute_of_day)
+}
+
 /// 提醒配置（camelCase 与前端一致），存 app_data_dir/review_reminder.json。
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -47,17 +75,6 @@ impl Default for ReminderConfig {
             last_shown_day: String::new(),
         }
     }
-}
-
-/// 到点是否应弹提醒（纯函数，可测）。
-pub fn should_show_now(cfg: &ReminderConfig, now_min: u32, due: u32, today: &str) -> bool {
-    if !cfg.enabled || due == 0 || cfg.last_shown_day == today {
-        return false;
-    }
-    if cfg.dnd_enabled && in_dnd_window(now_min, cfg.dnd_start_min, cfg.dnd_end_min) {
-        return false;
-    }
-    within_remind_window(now_min, cfg.minute_of_day)
 }
 
 fn within_remind_window(now_min: u32, target_min: u32) -> bool {
@@ -139,8 +156,19 @@ pub fn update_tray(app: &AppHandle) {
 // ---------- 提醒卡 ----------
 
 /// 待展示的提醒负载（窗口挂载时取走，与 PendingPanelPayload 同模式）。
+/// 双态数据一次带齐：到期词数（态一）与阅读目标 + 书级断点（态二）。
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReminderPayload {
+    pub due: u32,
+    pub read_goal_min: u32,
+    pub read_seconds_today: f64,
+    pub book: Option<reader_store::LastBookProgress>,
+}
+
+/// 待展示的提醒负载（窗口挂载时取走）。
 #[derive(Default)]
-pub struct PendingReminder(Mutex<Option<u32>>);
+pub struct PendingReminder(Mutex<Option<ReminderPayload>>);
 
 fn config_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = app
@@ -174,7 +202,7 @@ fn write_atomic(path: &std::path::Path, content: &str) -> Result<(), String> {
 }
 
 /// 弹提醒卡：右下角、置顶、不抢焦点。负载经 PendingReminder 送达前端。
-fn show_reminder(app: &AppHandle, due: u32) {
+fn show_reminder(app: &AppHandle, due: u32, cfg: &ReminderConfig) {
     let win = match app.get_webview_window("reminder") {
         Some(w) => w,
         None => {
@@ -184,7 +212,7 @@ fn show_reminder(app: &AppHandle, due: u32) {
                 tauri::WebviewUrl::App("index.html".into()),
             )
             .title("")
-            .inner_size(384.0, 200.0)
+            .inner_size(384.0, 232.0)
             .resizable(false)
             .decorations(false)
             .always_on_top(true)
@@ -207,10 +235,16 @@ fn show_reminder(app: &AppHandle, due: u32) {
         let size = monitor.size();
         let pos = monitor.position();
         let x = pos.x + size.width as i32 - 384 - 24;
-        let y = pos.y + size.height as i32 - 200 - 76;
+        let y = pos.y + size.height as i32 - 232 - 76;
         let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
     }
-    *app.state::<PendingReminder>().0.lock().unwrap() = Some(due);
+    let payload = ReminderPayload {
+        due,
+        read_goal_min: cfg.read_goal_min,
+        read_seconds_today: reader_store::read_seconds_today(app, &local_now_parts().1),
+        book: reader_store::last_book_progress(app),
+    };
+    *app.state::<PendingReminder>().0.lock().unwrap() = Some(payload);
     // show 可能激活窗口，但提醒卡允许获得焦点后自然失焦；不主动 set_focus。
     let _ = win.show();
     let _ = win.emit("reminder:show", due);
@@ -269,11 +303,19 @@ fn tick(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let due = reader_store::due_count(app);
-    if should_show_now(&cfg, now_min, due, &today) {
+    let show = should_show_now(
+        &cfg,
+        now_min,
+        due,
+        &today,
+        reader_store::read_seconds_today(app, &today),
+        reader_store::has_books(app),
+    );
+    if show {
         let mut next = cfg.clone();
         next.last_shown_day = today;
         save_config(app, &next)?;
-        show_reminder(app, due);
+        show_reminder(app, due, &cfg);
     }
     Ok(())
 }
@@ -298,9 +340,9 @@ pub fn reminder_due_now(app: AppHandle) -> u32 {
     reader_store::due_count(&app)
 }
 
-/// 提醒卡挂载时取走到期数（与 take_pending_panel_payload 同模式）。
+/// 提醒卡挂载时取走负载（与 take_pending_panel_payload 同模式）。
 #[tauri::command]
-pub fn take_pending_reminder(state: tauri::State<'_, PendingReminder>) -> Option<u32> {
+pub fn take_pending_reminder(state: tauri::State<'_, PendingReminder>) -> Option<ReminderPayload> {
     state.0.lock().unwrap().take()
 }
 
@@ -335,32 +377,83 @@ mod tests {
     #[test]
     fn fires_once_in_window_with_due() {
         let c = cfg();
-        assert!(should_show_now(&c, 20 * 60, 6, "2026-09-13"));
-        assert!(should_show_now(&c, 20 * 60 + 29, 1, "2026-09-13"));
-        assert!(!should_show_now(&c, 20 * 60 + 30, 6, "2026-09-13"));
+        assert!(should_show_now(&c, 20 * 60, 6, "2026-09-13", 0.0, true));
+        assert!(should_show_now(
+            &c,
+            20 * 60 + 29,
+            1,
+            "2026-09-13",
+            0.0,
+            true
+        ));
+        assert!(!should_show_now(
+            &c,
+            20 * 60 + 30,
+            6,
+            "2026-09-13",
+            0.0,
+            true
+        ));
     }
 
     #[test]
     fn no_due_or_disabled_or_already_shown_never_fires() {
         let c = cfg();
-        assert!(!should_show_now(&c, 20 * 60, 0, "2026-09-13"));
+        // 无到期但有书 + 目标未达成 = 阅读目标态，应当弹（见下一个测试）。
+        assert!(should_show_now(&c, 20 * 60, 0, "2026-09-13", 0.0, true));
+        // 无书 / 没设目标 / 目标已达成：维持「无到期不弹」。
+        assert!(!should_show_now(&c, 20 * 60, 0, "2026-09-13", 0.0, false));
+        let mut no_goal = cfg();
+        no_goal.read_goal_min = 0;
+        assert!(!should_show_now(
+            &no_goal,
+            20 * 60,
+            0,
+            "2026-09-13",
+            0.0,
+            true
+        ));
+        assert!(!should_show_now(&c, 20 * 60, 0, "2026-09-13", 600.0, true));
         let mut off = cfg();
         off.enabled = false;
-        assert!(!should_show_now(&off, 20 * 60, 6, "2026-09-13"));
+        assert!(!should_show_now(&off, 20 * 60, 6, "2026-09-13", 0.0, true));
         let mut shown = cfg();
         shown.last_shown_day = "2026-09-13".into();
-        assert!(!should_show_now(&shown, 20 * 60, 6, "2026-09-13"));
+        assert!(!should_show_now(
+            &shown,
+            20 * 60,
+            6,
+            "2026-09-13",
+            0.0,
+            true
+        ));
+    }
+
+    #[test]
+    fn reading_goal_state_fires_when_unmet_with_books() {
+        // 阅读目标态：无到期词 + 有书 + 目标 10 分钟没读够（3 分钟）→ 弹。
+        let c = cfg();
+        assert!(should_show_now(&c, 20 * 60, 0, "2026-09-13", 180.0, true));
+        // 读够了（10 分钟）→ 不弹。
+        assert!(!should_show_now(&c, 20 * 60, 0, "2026-09-13", 600.0, true));
     }
 
     #[test]
     fn dnd_window_crosses_midnight() {
         let c = cfg();
         // 免打扰 23:00–08:00：23:30 / 02:00 不弹，08:00 之后正常
-        assert!(!should_show_now(&c, 23 * 60 + 30, 6, "2026-09-13"));
-        assert!(!should_show_now(&c, 2 * 60, 6, "2026-09-13"));
+        assert!(!should_show_now(
+            &c,
+            23 * 60 + 30,
+            6,
+            "2026-09-13",
+            0.0,
+            true
+        ));
+        assert!(!should_show_now(&c, 2 * 60, 6, "2026-09-13", 0.0, true));
         let mut noon = cfg();
         noon.minute_of_day = 12 * 60;
-        assert!(should_show_now(&noon, 12 * 60, 6, "2026-09-13"));
+        assert!(should_show_now(&noon, 12 * 60, 6, "2026-09-13", 0.0, true));
     }
 
     #[test]
@@ -368,7 +461,14 @@ mod tests {
         let mut c = cfg();
         c.dnd_enabled = false;
         c.minute_of_day = 23 * 60 + 30;
-        assert!(should_show_now(&c, 23 * 60 + 30, 6, "2026-09-13"));
+        assert!(should_show_now(
+            &c,
+            23 * 60 + 30,
+            6,
+            "2026-09-13",
+            0.0,
+            true
+        ));
     }
 
     #[test]

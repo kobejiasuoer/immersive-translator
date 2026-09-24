@@ -4803,3 +4803,986 @@ button.notes-word:hover { color: var(--accent); }
   border-radius: 6px;
 }
 .speak-back:hover { color: var(--accent); background: var(--surface-2); }
+
+/* ============================================================
+   口语复盘 → 生词本（结束本轮并复盘）：
+   标题栏入口 + 复盘弹层（勾选弱词 → 查词典 → 批量合并）。
+   候选规则纯前端确定（speakVocab.ts），样式语言与跟读报告卡一致。
+   ============================================================ */
+
+.speak-review-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--accent-soft);
+  border-radius: 9px;
+  background: var(--accent-softer);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background .15s;
+}
+
+.speak-review-entry .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--err);
+  flex: none;
+}
+
+.speak-review-entry:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.speak-review-entry:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+.sv-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  background: rgba(28,32,41,.36);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: sv-fade .18s ease;
+}
+
+@keyframes sv-fade {
+  from { opacity: 0; }
+}
+
+.sv-dialog {
+  width: min(640px, calc(100% - 48px));
+  max-height: calc(100% - 56px);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: sv-pop .26s cubic-bezier(.2,.9,.3,1.12);
+}
+
+@keyframes sv-pop {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(.98);
+  }
+}
+
+.sv-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 15px 18px 11px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sv-head .t {
+  font-size: 15.5px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+
+.sv-head .sub {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.sv-head .sub b {
+  color: var(--warn);
+}
+
+.sv-close {
+  margin-left: auto;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-4);
+  padding: 3px 8px;
+  border-radius: 7px;
+}
+
+.sv-close:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+
+.sv-rule {
+  margin: 10px 18px 0;
+  padding: 7px 11px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+}
+
+.sv-rule b {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.sv-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sv-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background .12s;
+}
+
+.sv-row:hover {
+  background: var(--surface-2);
+}
+
+.sv-row.is-dup {
+  cursor: default;
+  opacity: .82;
+}
+
+.sv-row.is-dup:hover {
+  background: transparent;
+}
+
+/* 自绘复选框 */
+.sv-check {
+  flex: none;
+  margin-top: 3px;
+}
+
+.sv-check input {
+  display: none;
+}
+
+.sv-check i {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1.5px solid var(--border-strong);
+  background: var(--surface);
+  position: relative;
+  transition: all .12s;
+}
+
+.sv-check input:checked + i {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.sv-check input:checked + i::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 1.5px;
+  width: 5px;
+  height: 9px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(43deg);
+}
+
+.sv-check input:disabled + i {
+  border-style: dashed;
+  background: var(--surface-2);
+}
+
+.sv-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.sv-row .line1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sv-row .w {
+  font-family: var(--font-read-serif-en, Georgia, serif);
+  font-size: 15.5px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.sv-row .ipa {
+  font-size: 11.5px;
+  color: var(--text-4);
+}
+
+.sv-tag {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.sv-tag.low {
+  background: var(--err-soft);
+  color: var(--err);
+}
+
+.sv-tag.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.sv-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.sv-badge.dup {
+  background: var(--surface-2);
+  color: var(--text-3);
+  border: 1px solid var(--border-strong);
+}
+
+.sv-badge.wake {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.sv-row .gloss {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sv-detail {
+  margin-top: 8px;
+  padding: 9px 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.sv-detail .lab {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-softer);
+  border-radius: 5px;
+  padding: 1px 7px;
+  margin-bottom: 5px;
+}
+
+.sv-detail .ex-en {
+  font-family: var(--font-read-serif-en, Georgia, serif);
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-1);
+}
+
+.sv-detail .ex-zh {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+
+.sv-detail .sense-line {
+  margin-top: 7px;
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.7;
+}
+
+.sv-detail .dup-note {
+  margin-top: 7px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.6;
+}
+
+.sv-detail .dup-note b {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.sv-row .side {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.sv-spk {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  opacity: .6;
+}
+
+.sv-spk:hover {
+  opacity: 1;
+  background: var(--accent-softer);
+}
+
+.sv-row .chev {
+  font-size: 10px;
+  color: var(--text-4);
+  transition: transform .15s;
+}
+
+.sv-row.open .chev {
+  transform: rotate(180deg);
+}
+
+.sv-fold {
+  padding: 2px 10px 4px;
+}
+
+.sv-fold-btn {
+  width: 100%;
+  border: 1px dashed var(--border-strong);
+  background: var(--surface-2);
+  border-radius: 9px;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--text-3);
+  padding: 7px 10px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.sv-fold-btn:hover {
+  color: var(--text-2);
+  border-color: var(--accent);
+}
+
+.sv-fold-btn .chev {
+  font-size: 10px;
+}
+
+.sv-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.sv-foot .note {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--text-4);
+  min-width: 0;
+}
+
+.sv-foot .note b {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sv-foot .note .sv-err {
+  color: var(--err);
+}
+
+.sv-empty {
+  flex: 1;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 30px 20px;
+  text-align: center;
+}
+
+.sv-empty .emoji {
+  font-size: 38px;
+}
+
+.sv-empty .h {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+
+.sv-empty .p {
+  font-size: 12.5px;
+  color: var(--text-3);
+  line-height: 1.7;
+  max-width: 360px;
+}
+
+.sv-done {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 30px 20px;
+  text-align: center;
+}
+
+.sv-done .ok-circle {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--ok-soft);
+  color: var(--ok);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  font-weight: 700;
+  animation: sv-pop .3s cubic-bezier(.2,.9,.3,1.2);
+}
+
+.sv-done .h {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+
+.sv-done .p {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.sv-done .chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.sv-done .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-read-serif-en, Georgia, serif);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 12px;
+}
+
+.sv-done .chip .srs {
+  font-family: var(--font-ui, "Segoe UI", sans-serif);
+  font-size: 10px;
+  font-weight: 600;
+  font-style: normal;
+  color: var(--accent);
+  background: var(--accent-softer);
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+
+.sv-done .dup-line {
+  font-size: 11.5px;
+  color: var(--text-4);
+}
+
+.sv-done .actions {
+  display: flex;
+  gap: 9px;
+  margin-top: 10px;
+}
+
+/* ============================================================
+   整本书阅读室（书级载体）：书架书卡 / 导入预览 / 章节栏 /
+   目录面板 / 章末小结卡 / 今日已读。
+   ============================================================ */
+
+/* ---------- 书架 · 书卡 ---------- */
+.reader-shelf-divider {
+  margin: 10px 0 4px;
+  padding: 0 2px;
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  color: var(--text-3);
+}
+
+.reader-books {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reader-book-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 9px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s, border-color 0.15s;
+}
+.reader-book-card:hover {
+  background: var(--surface-2);
+}
+.reader-book-card.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.reader-book-cover {
+  flex: none;
+  width: 34px;
+  height: 48px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--accent-grad);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-card);
+}
+.reader-book-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.reader-book-cover span {
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  font-family: var(--font-serif, serif);
+}
+
+.reader-book-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.reader-book-main .t {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.reader-book-meta {
+  font-size: 10.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.reader-book-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.reader-book-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+.reader-book-card .pct {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.reader-book-card .del {
+  flex: none;
+}
+
+/* ---------- 导入向导 · EPUB 预览 ---------- */
+.epub-pv {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.epub-pv-cover {
+  flex: none;
+  width: 72px;
+  height: 102px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--accent-grad);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-card);
+}
+.epub-pv-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.epub-pv-cover span {
+  font-size: 30px;
+  font-weight: 600;
+  color: #fff;
+}
+.epub-pv-head {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.epub-pv-note {
+  font-size: 12px;
+  color: var(--warn, #b45309);
+  background: var(--surface-2);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+.epub-pv-verdict {
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.epub-chapters-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+}
+.epub-chapter-list {
+  margin-top: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.epub-chapter-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.epub-chapter-row:last-child {
+  border-bottom: none;
+}
+.epub-chapter-row:hover {
+  background: var(--surface-2);
+}
+.epub-chapter-row.on {
+  background: var(--accent-soft);
+}
+.epub-chapter-row input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+.epub-chapter-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-1);
+}
+.epub-chapter-meta {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* ---------- 阅读页 · 章节栏 ---------- */
+.reader-chapter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.reader-chapter-bar .cb-book {
+  font-weight: 600;
+  color: var(--text-1);
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.reader-chapter-bar .cb-dot {
+  color: var(--text-3);
+}
+.reader-chapter-bar .btn {
+  margin-left: auto;
+}
+
+/* ---------- 书目录面板 ---------- */
+.book-toc-modal {
+  width: 560px;
+  max-width: calc(100vw - 80px);
+  max-height: calc(100vh - 120px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+.book-toc-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.book-toc-head .grow {
+  flex: 1;
+  min-width: 0;
+}
+.book-toc-head h3 {
+  margin: 0 0 4px;
+  font-size: 17px;
+  color: var(--text-1);
+}
+.book-toc-meta {
+  margin: 0 0 2px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.book-toc-radar {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.book-toc-cover {
+  flex: none;
+  width: 56px;
+  height: 80px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--accent-grad);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.book-toc-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.book-toc-cover span {
+  font-size: 24px;
+  font-weight: 600;
+  color: #fff;
+}
+.book-toc-list {
+  overflow-y: auto;
+  padding: 6px;
+}
+.book-toc-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.book-toc-row:hover {
+  background: var(--surface-2);
+}
+.book-toc-row.current {
+  background: var(--accent-soft);
+}
+.book-toc-row .no {
+  flex: none;
+  width: 22px;
+  text-align: right;
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.book-toc-row .t {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-1);
+}
+.book-toc-row.current .t {
+  color: var(--accent);
+}
+.book-toc-row .meta {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* ---------- 章末小结卡 ---------- */
+.chapter-end-modal {
+  width: 380px;
+  max-width: calc(100vw - 80px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-pop);
+  padding: 22px 22px 18px;
+  text-align: center;
+}
+.chapter-end-modal .ce-badge {
+  font-size: 30px;
+  line-height: 1;
+}
+.chapter-end-modal h3 {
+  margin: 10px 0 2px;
+  font-size: 19px;
+  color: var(--text-1);
+}
+.chapter-end-modal .ce-book {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.chapter-end-modal .ce-stats {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  padding: 10px 0;
+  margin-bottom: 10px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.chapter-end-modal .ce-stats b {
+  color: var(--accent);
+}
+.chapter-end-modal .ce-next {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.chapter-end-modal .ce-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+/* 章末小结卡的笔记/复习入口（位于主操作行上方）。 */
+.chapter-end-modal .ce-more {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+/* ---------- 读完结课条（短文，播放条上方常驻可关） ---------- */
+.reader-finish-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 20px 8px;
+  padding: 8px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  animation: reader-fade-in 0.18s ease-out;
+}
+.reader-finish-bar .fb-text {
+  font-size: 13px;
+  color: var(--text-2);
+}
+.reader-finish-bar .fb-text b {
+  color: var(--accent);
+}
+.reader-finish-bar .fb-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---------- 正文末「读完本篇/本章」按钮（手动阅读路径） ---------- */
+.reader-finish-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 28px 0 8px;
+  text-align: center;
+}
+.reader-finish-action .hint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* ---------- 今日已读（每日阅读目标行） ---------- */
+.today-read {
+  margin-top: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.today-read-label {
+  font-size: 11px;
+  color: var(--text-2);
+}
+.today-read-label strong {
+  color: var(--text-1);
+}
+.today-read-bar {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.today-read-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.3s;
+}
