@@ -325,7 +325,7 @@ final class SpeakViewController: ObservableObject {
                 }
                 let result = try await assessPronunciation(text: self.shadowText, pcm: floatToPcm16Bytes(samples), creds: creds)
                 await MainActor.run {
-                    self.applyShadowScore(result.total)
+                    self.applyShadowScore(result)
                     self.phase = .idleTurn
                 }
             } catch {
@@ -336,12 +336,44 @@ final class SpeakViewController: ObservableObject {
         }
     }
 
-    /// 跟读分回写最近 assistant 轮。
-    private func applyShadowScore(_ score: Double) {
+    /// 跟读报告回写最近 assistant 轮：append 进 shadowAttempts（每轮最多留
+    /// speakMaxShadowAttemptsPerTurn 条，对齐 Windows SpeakView.tsx:550 的 slice(-10)），
+    /// 重复跟读不再互相覆盖（口语复盘的跨尝试规则 R2/R5 依赖完整历史）；
+    /// shadowScore 字段保留为最新一次总分（兼容现有 UI SpeakView 的跟读分行）。
+    private func applyShadowScore(_ result: PronunciationResult) {
         guard var s = session,
               let idx = s.turns.lastIndex(where: { $0.role == .assistant }) else { return }
-        s.turns[idx].shadowScore = score
-        s.updatedAt = Int64(Date().timeIntervalSince1970 * 1000)
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let attempt = ShadowAttempt(
+            at: now,
+            total: result.total,
+            accuracy: result.accuracy,
+            fluency: result.fluency,
+            integrity: result.integrity,
+            words: result.words.map { w in
+                ShadowWord(
+                    content: w.content,
+                    totalScore: w.totalScore,
+                    dpMessage: w.dpMessage,
+                    sylls: w.sylls.map { syll in
+                        ShadowSyll(
+                            content: syll.content,
+                            syllScore: syll.syllScore,
+                            serrMsg: syll.serrMsg,
+                            phones: syll.phones.map { ShadowPhone(content: $0.content, dpMessage: $0.dpMessage, gwpp: $0.gwpp) }
+                        )
+                    }
+                )
+            }
+        )
+        var attempts = s.turns[idx].shadowAttempts ?? []
+        attempts.append(attempt)
+        if attempts.count > speakMaxShadowAttemptsPerTurn {
+            attempts = Array(attempts.suffix(speakMaxShadowAttemptsPerTurn))
+        }
+        s.turns[idx].shadowAttempts = attempts
+        s.turns[idx].shadowScore = result.total
+        s.updatedAt = now
         session = s
         _ = try? store.saveSession(s)
     }

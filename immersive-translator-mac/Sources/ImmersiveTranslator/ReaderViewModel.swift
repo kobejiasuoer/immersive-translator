@@ -1472,6 +1472,41 @@ final class ReaderViewModel: ObservableObject {
         noteDialogShown = true
     }
 
+    // MARK: - 口语复盘入生词本（对齐 Windows SpeakReviewDialog）
+
+    /// 复盘弱词入生词本（单条）：公共 CollectActions.addTextToVocab——查词典补
+    /// 词性/释义/音标 + 例句生成并行，mergeVocabWord 合并落库（已有同名词保留 SRS，
+    /// 不重复添加）。词典查询失败时降级为裸词保存（例句用本轮 AI 原句，不阻塞
+    /// 其余词），对齐 Windows「释义获取失败按裸词收藏」。
+    @discardableResult
+    func saveSpeakReviewCandidate(_ candidate: SpeakVocabCandidate) async throws -> CollectVocabOutcome {
+        do {
+            return try await CollectActions.addTextToVocab(chat: chat, rawText: candidate.word)
+        } catch {
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            let word = speakCandidateToVocab(candidate, entry: nil, now: now)
+            let added = try ReaderStore.shared.mergeVocabWord(word)
+            NotificationCenter.default.post(
+                name: .readerVocabAdded,
+                object: nil,
+                userInfo: ["wordId": word.id]
+            )
+            return CollectVocabOutcome(status: added ? .added : .merged, word: word, withExample: false)
+        }
+    }
+
+    /// 复盘「唤醒」：已收藏且挣扎/到期的弱词 srs.dueAt 置 now——
+    /// dueVocab 按 dueAt 升序（ReaderSrs），提到今日复习队列最前；其余 SRS 字段原样保留。
+    func wakeSpeakReviewWords(_ ids: [String]) {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        for id in ids {
+            guard var w = vocabWords.first(where: { $0.id == id }) else { continue }
+            w.srs.dueAt = now
+            try? store.saveVocabWord(w)
+        }
+        if !ids.isEmpty { refreshVocab() }
+    }
+
     /// 笔记生成/复盘共用的流式补全通道（弹窗直接调用）。
     func streamChat(
         systemPrompt: String,

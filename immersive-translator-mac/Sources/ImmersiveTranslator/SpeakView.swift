@@ -12,6 +12,15 @@ struct SpeakView: View {
     @ObservedObject var vm: ReaderViewModel
     @ObservedObject var controller: SpeakViewController
     @Environment(\.readerPalette) private var palette
+    @State private var reviewShown = false
+    /// 复盘弹层关掉之后要接的动作（完成页「生成复习笔记 / 去复习」）：
+    /// 在 onDismiss 里执行，保证上一个 sheet 完全收起后再开下一个。
+    @State private var pendingAfterReview: PendingAfterReview?
+
+    private enum PendingAfterReview {
+        case noteDialog(ids: [String])
+        case goReview
+    }
 
     var body: some View {
         Group {
@@ -23,6 +32,33 @@ struct SpeakView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { controller.refreshRecent() }
+        .sheet(isPresented: $reviewShown, onDismiss: {
+            switch pendingAfterReview {
+            case .noteDialog(let ids):
+                vm.openNoteDialog(preselect: ids)
+            case .goReview:
+                vm.openReview()
+            case nil:
+                break
+            }
+            pendingAfterReview = nil
+        }) {
+            if let session = controller.session {
+                SpeakReviewView(
+                    vm: vm,
+                    session: session,
+                    onGenerateNote: { pendingAfterReview = .noteDialog(ids: $0); reviewShown = false },
+                    onGoReview: { pendingAfterReview = .goReview; reviewShown = false }
+                )
+            }
+        }
+    }
+
+    /// 有没有可复盘的跟读数据（一次都没跟读过时复盘入口禁用）。
+    private var hasAssessments: Bool {
+        controller.session?.turns.contains {
+            $0.role == .assistant && !($0.shadowAttempts ?? []).isEmpty
+        } ?? false
     }
 
     // MARK: - 入口页
@@ -322,6 +358,23 @@ struct SpeakView: View {
             .foregroundColor(palette.accent)
             .disabled(controller.phase != .idleTurn)
             .help("照最近一句 AI 的话重录一遍，讯飞评测打分")
+
+            // 结束本轮并复盘：跟读弱词 → 确认后加入生词本（无跟读记录时禁用）
+            Button {
+                controller.stopSpeaking()
+                reviewShown = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "text.badge.checkmark").font(.system(size: 11))
+                    Text("结束本轮并复盘").font(.system(size: 11.5))
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(hasAssessments ? palette.accent : palette.textTertiary)
+            .disabled(!hasAssessments)
+            .help(hasAssessments
+                ? "复盘本轮跟读中没掌握的词，确认后加入生词本"
+                : "还没有跟读记录——先「跟读打分」一次再来复盘")
 
             if controller.phase == .shadowRecording {
                 Button("说完") { controller.finishShadowRecord() }
