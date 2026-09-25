@@ -60,6 +60,38 @@ final class ReaderViewModel: ObservableObject {
         var total: Int
     }
 
+    /// 章末小结卡数据（本章查词/收录生词/到期词/用时 + 下一章）。
+    /// collected/dueIds 口径 = 归属本章的全部生词（不区分本次阅读是否新增）。
+    struct ChapterEndSummary: Equatable {
+        let bookId: String
+        let bookTitle: String
+        let chapterIdx: Int
+        let chapterCount: Int
+        let lookups: Int
+        let collected: Int
+        /// 本章用时（会话起止累计，分钟）。
+        let minutes: Int
+        let nextChapterId: String?
+        let nextChapterTitle: String?
+        let lastChapter: Bool
+        /// 本章生词 id（「整理本章笔记」预选用）。
+        let wordIds: [String]
+        /// 本章已到期的生词 id（「复习本章」只送这批进加练，不碰其他词的计划）。
+        let dueIds: [String]
+    }
+
+    /// 短文结课条数据：自然播完末句或手动确认「读完本篇」时的本篇收获快照。
+    struct ArticleFinishSummary: Equatable {
+        let articleId: String
+        let lookups: Int
+        /// 本篇收录的词块和生词数。
+        let collected: Int
+        /// 其中已到期、可立即复习的数量。
+        let dueCount: Int
+        let wordIds: [String]
+        let dueIds: [String]
+    }
+
     // ---- 数据 ----
     @Published var globalSettings: ReaderSettings
     @Published var articleList: [ArticleSummary] = []
@@ -81,6 +113,12 @@ final class ReaderViewModel: ObservableObject {
     /// 播放引擎状态的镜像（PlayBar 绑定用）。
     @Published private(set) var playbackPlaying = false
     @Published private(set) var shadowingWait = false
+    /// 书内目录弹层（书章文章才有内容；文章头「目录」按钮打开，点章即跳）。
+    @Published var bookTocShown = false
+    /// 章末小结卡（书章自然播完末句 / 手动「读完本章」后弹出）。
+    @Published private(set) var chapterEnd: ChapterEndSummary?
+    /// 短文结课条（自然播完或手动「读完本篇」后常驻底部，可关闭）。
+    @Published private(set) var finishCard: ArticleFinishSummary?
 
     let store: ReaderStore
     private let chat: ReaderChatClient
@@ -91,6 +129,11 @@ final class ReaderViewModel: ObservableObject {
     private var translationTask: Task<Void, Never>?
     private var translationRunID = 0
     private var toastTask: Task<Void, Never>?
+    /// 阅读计时：本次打开这篇文章以来的累计秒数（章末小结「本章用时」用，
+    /// 切章清零）与未落盘缓冲。
+    private var sessionSeconds = 0
+    private var readingSecondsBuffer = 0
+    private var readingClock: AnyCancellable?
     /// 打开的文章 id 集合里的源文缓存（复习卡回跳展示用）。
     var sourceCache: [String: Article] = [:]
     /// 每篇文章的查词次数（读完统计用）。
@@ -149,6 +192,11 @@ final class ReaderViewModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.refreshArticleList() }
             .store(in: &cancellables)
+        // 每秒阅读计时：阅读路线且应用前台时累计（播放/静读都算），
+        // 15s 批量并入章 Article.progress.secondsListened 与书级 secondsListened。
+        readingClock = Timer.publish(every: 1, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in self?.tickReadingSecond() }
         setupShadowAssess()
         setupSpeak()
     }
@@ -207,13 +255,167 @@ final class ReaderViewModel: ObservableObject {
         case .activeIdx(let idx):
             activeSentenceIdx = idx
         case .finished:
-            let id = article?.id ?? ""
-            let lookups = dictLookupCounts[id] ?? 0
-            let added = vocabWords.filter { $0.source.articleId == id }.count
-            showToast("本篇读完 🎉 共查词 \(lookups) 次 · 生词本新增 \(added) 个")
+            // 「读完」统一落点（引擎只在连续朗读自然播完末句时发布）：
+            // 书章 → 章末小结卡；短文 → 底部常驻结课条（替代原先一闪而过的 toast）。
+            guard let current = article else { return }
+            presentFinish(for: current)
         case .failed(let message):
             showToast("朗读失败：\(message)")
         }
+    }
+
+    // MARK: - 读完落点（章末小结卡 / 短文结课条）
+
+    /// 当前打开文章所属的书（书章模式；短文 nil）。目录弹层与章节栏用。
+    var currentBook: BookMeta? {
+        guard let bookId = article?.bookId else { return nil }
+        return bookList.first { $0.id == bookId }
+    }
+
+    /// 正文末「读完本章/读完本篇」按钮（纯手动阅读路径）：光标到末句且没在
+    /// 播放/跟读等待、也没有已弹的卡时出现，确认后撤下（中途滚过末句不算读完）。
+    var showFinishAction: Bool {
+        guard route == .reading, let a = article, !a.sentences.isEmpty else { return false }
+        return activeSentenceIdx >= a.sentences.count - 1
+            && !playbackPlaying
+            && !shadowingWait
+            && chapterEnd == nil
+            && finishCard == nil
+    }
+
+    var finishActionLabel: String { article?.bookId != nil ? "读完本章" : "读完本篇" }
+
+    /// 「读完」统一落点（自然播完末句 / 手动点按钮）：书章 → 章末小结卡，短文 → 结课条。
+    func presentFinish(for current: Article) {
+        if current.bookId != nil {
+            showChapterEnd(for: current)
+        } else {
+            showFinishCard(for: current)
+        }
+    }
+
+    func confirmFinishRead() {
+        guard let current = article else { return }
+        presentFinish(for: current)
+    }
+
+    /// 章末小结卡：本章查词/收录生词/到期词/用时 + 下一章入口。
+    private func showChapterEnd(for a: Article) {
+        flushReadingSeconds()
+        guard let book = bookList.first(where: { $0.id == a.bookId }) else { return }
+        let chapterIdx = a.chapterIdx ?? bookChapterIndexOf(book: book, chapterId: a.id)
+        let next = book.chapters[safe: chapterIdx + 1]
+        let words = vocabWords.filter { $0.source.articleId == a.id }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let due = words.filter { isDue($0, now: now) }
+        chapterEnd = ChapterEndSummary(
+            bookId: book.id,
+            bookTitle: book.title,
+            chapterIdx: chapterIdx,
+            chapterCount: book.chapters.count,
+            lookups: dictLookupCounts[a.id] ?? 0,
+            collected: words.count,
+            minutes: Int((Double(sessionSeconds) / 60).rounded()),
+            nextChapterId: next?.id,
+            nextChapterTitle: next?.title,
+            lastChapter: next == nil,
+            wordIds: words.map(\.id),
+            dueIds: due.map(\.id)
+        )
+    }
+
+    /// 短文结课条：本篇收获快照 + 笔记/复习入口（替代原先一闪而过的 toast）。
+    private func showFinishCard(for a: Article) {
+        flushReadingSeconds()
+        let words = vocabWords.filter { $0.source.articleId == a.id }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let due = words.filter { isDue($0, now: now) }
+        finishCard = ArticleFinishSummary(
+            articleId: a.id,
+            lookups: dictLookupCounts[a.id] ?? 0,
+            collected: words.count,
+            dueCount: due.count,
+            wordIds: words.map(\.id),
+            dueIds: due.map(\.id)
+        )
+    }
+
+    func dismissChapterEnd() {
+        chapterEnd = nil
+    }
+
+    func dismissFinishCard() {
+        finishCard = nil
+    }
+
+    /// 小结卡「开始下一章」。
+    func openNextChapter() {
+        guard let next = chapterEnd?.nextChapterId else { return }
+        chapterEnd = nil
+        openArticle(id: next)
+    }
+
+    /// 小结卡「复习本章」：只把这批已到期词送进加练队列，不打乱其他词的复习计划。
+    func reviewChapterWords() {
+        guard let ids = chapterEnd?.dueIds, !ids.isEmpty else { return }
+        chapterEnd = nil
+        startFocusReview(ids: ids)
+    }
+
+    /// 小结卡「整理本章笔记」：本章词预选进复习笔记生成弹窗。
+    func noteChapterWords() {
+        guard let ids = chapterEnd?.wordIds, !ids.isEmpty else { return }
+        chapterEnd = nil
+        openNoteDialog(preselect: ids)
+    }
+
+    /// 结课条「复习本篇」。
+    func reviewFinishCardWords() {
+        guard let ids = finishCard?.dueIds, !ids.isEmpty else { return }
+        finishCard = nil
+        startFocusReview(ids: ids)
+    }
+
+    /// 结课条「整理本篇复习笔记」。
+    func noteFinishCardWords() {
+        guard let ids = finishCard?.wordIds, !ids.isEmpty else { return }
+        finishCard = nil
+        openNoteDialog(preselect: ids)
+    }
+
+    // MARK: - 阅读计时
+
+    /// 每秒计时：只在阅读路线、有文章且应用前台时累计；每 15s 批量落盘。
+    private func tickReadingSecond() {
+        guard route == .reading, article != nil, NSApp.isActive else { return }
+        sessionSeconds += 1
+        readingSecondsBuffer += 1
+        guard readingSecondsBuffer >= 15 else { return }
+        flushReadingSeconds()
+    }
+
+    /// 把缓冲秒数同步落盘（不走 700ms 防抖：切章/收尾时这段时长不丢）。
+    private func flushReadingSeconds() {
+        guard readingSecondsBuffer > 0, var current = article else { return }
+        let seconds = Double(readingSecondsBuffer)
+        readingSecondsBuffer = 0
+        current.progress.secondsListened += seconds
+        article = current
+        sourceCache[current.id] = current
+        _ = try? store.saveArticle(current)
+        if current.bookId != nil {
+            scheduleBookMetaSave { meta in
+                var next = meta
+                next.secondsListened += seconds
+                return next
+            }
+        }
+    }
+
+    /// 切章/清场前收口：未落盘秒数先写库，会话计时清零。
+    private func settleReadingSeconds() {
+        flushReadingSeconds()
+        sessionSeconds = 0
     }
 
     /// 当前文章句文与播放设置同步给引擎。
@@ -338,11 +540,15 @@ final class ReaderViewModel: ObservableObject {
 
     func openArticle(id: String) {
         guard let full = (try? store.getArticle(id: id)) ?? nil else { return }
+        settleReadingSeconds()  // 上一章的未落盘秒数先写库；本章用时重新累计
         translationTask?.cancel()
         translationRunID += 1
         route = .reading
         dict = .closed
         searchMatchIdx = nil
+        bookTocShown = false
+        chapterEnd = nil
+        finishCard = nil
         article = full
         activeSentenceIdx = min(full.progress.sentenceIdx, max(0, full.sentences.count - 1))
         sourceCache[full.id] = full
@@ -443,6 +649,9 @@ final class ReaderViewModel: ObservableObject {
         refreshArticleList()
         refreshVocab()
         if article?.bookId == bookId {
+            bookTocShown = false
+            chapterEnd = nil
+            finishCard = nil
             article = nil
             activeSentenceIdx = 0
             playback.reset(startIdx: 0)
@@ -1123,10 +1332,13 @@ final class ReaderViewModel: ObservableObject {
 
     func articleTitle(articleId: String) -> String? {
         guard !articleId.isEmpty else { return nil }
-        // 书章不在 articleList（书架只列短文）：回落「《书名》·第 N 章」。
+        // 书章（词典卡/复习卡「回到原文」来源文案唯一出口）：统一「《书名》·第 N 章」，
+        // 不回落章自身标题；短文回落标题。
+        if let label = bookChapterLabel(articleId: articleId) {
+            return label
+        }
         return sourceCache[articleId]?.title
             ?? articleList.first { $0.id == articleId }?.article.title
-            ?? bookChapterLabel(articleId: articleId)
     }
 
     // MARK: - 复习评分

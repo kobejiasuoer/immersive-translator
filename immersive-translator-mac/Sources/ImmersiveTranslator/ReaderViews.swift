@@ -58,6 +58,16 @@ struct ReaderRootView: View {
                 ReaderSettingsDrawer(vm: vm)
             }
         }
+        .overlay {
+            if vm.bookTocShown, let book = vm.currentBook {
+                BookTocView(vm: vm, book: book)
+            }
+        }
+        .overlay {
+            if let chapterEnd = vm.chapterEnd {
+                ChapterEndCardView(vm: vm, summary: chapterEnd)
+            }
+        }
         .onChange(of: vm.activeSentenceIdx) { idx in
             vm.noteReadProgress(idx: idx)
         }
@@ -479,9 +489,14 @@ struct ReadingStageView: View {
     @State private var editDraft = ""
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
             if let article = vm.article {
                 ReaderScroll(article: article, vm: vm, editingIdx: $editingIdx, editDraft: $editDraft)
+                // 短文结课条：读完后的本篇收获快照，常驻底部直到关闭。
+                if let finish = vm.finishCard, article.id == finish.articleId {
+                    Divider().opacity(0.5)
+                    ReaderFinishBarView(vm: vm, summary: finish)
+                }
             } else {
                 EmptyStateView {
                     vm.importSheetShown = true
@@ -522,6 +537,22 @@ private struct ReaderScroll: View {
         }
     }
 
+    /// 正文末「读完本篇/本章」按钮（纯手动阅读路径）：与自然播完走同一落点。
+    private var finishActionRow: some View {
+        HStack(spacing: 10) {
+            Button(vm.finishActionLabel) {
+                vm.confirmFinishRead()
+            }
+            .buttonStyle(.borderedProminent)
+            Text("已到文章末尾：确认读完，整理本篇收获或稍后复习。")
+                .font(.system(size: 11.5))
+                .foregroundColor(palette.textTertiary)
+        }
+        .padding(.top, 20)
+        .padding(.horizontal, 24)
+        .frame(maxWidth: 760, alignment: .leading)
+    }
+
     var body: some View {
         GeometryReader { outer in
             ScrollViewReader { proxy in
@@ -537,6 +568,9 @@ private struct ReaderScroll: View {
                             editingIdx: $editingIdx,
                             editDraft: $editDraft
                         )
+                        if vm.showFinishAction {
+                            finishActionRow
+                        }
                     }
                     .padding(.top, 18)
                     .padding(.bottom, 60)
@@ -688,10 +722,22 @@ struct ArticleHeader: View {
             }
             HStack(spacing: 8) {
                 if let bookId = article.bookId, let book = vm.bookList.first(where: { $0.id == bookId }) {
-                    Text("《\(book.title)》· 第 \(bookChapterIndexOf(book: book, chapterId: article.id) + 1)/\(book.chapters.count) 章")
-                        .font(.system(size: 12))
-                        .foregroundColor(palette.textSecondary)
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text("《\(book.title)》· 第 \(bookChapterIndexOf(book: book, chapterId: article.id) + 1)/\(book.chapters.count) 章")
+                            .font(.system(size: 12))
+                            .foregroundColor(palette.textSecondary)
+                            .lineLimit(1)
+                            .help(book.title)
+                        Button {
+                            vm.bookTocShown = true
+                        } label: {
+                            Label("目录", systemImage: "list.bullet")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("本书目录：各章词数与已收藏生词数，点章即跳")
+                    }
                 }
                 Text("\(article.wordCount) 词 · \(article.sentences.count) 句")
                     .font(.system(size: 12))
@@ -1896,6 +1942,313 @@ struct ZenControlsView: View {
         .background(palette.surface.opacity(0.92))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+    }
+}
+
+// MARK: - 书内目录弹层
+
+/// 书目录弹层（BookTocModal.tsx 的 Mac 对应物）：这本书有哪些章、每章多少词
+/// 多少生词，标注当前章，点章即跳。从文章头章节栏「目录」按钮打开。
+struct BookTocView: View {
+    @ObservedObject var vm: ReaderViewModel
+    let book: BookMeta
+    @Environment(\.readerPalette) private var palette
+
+    private var currentChapterId: String? { vm.article?.id }
+
+    private var overallPercent: Int {
+        Int(bookOverallPercent(book: book).rounded())
+    }
+
+    /// 每章已收藏生词数（VocabWord.source.articleId → BookChapterMeta.id 归堆）。
+    private var vocabCountByChapter: [String: Int] {
+        var counts: [String: Int] = [:]
+        for word in vm.vocabWords {
+            counts[word.source.articleId, default: 0] += 1
+        }
+        return counts
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.32)
+                .contentShape(Rectangle())
+                .onTapGesture { vm.bookTocShown = false }
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                Divider().opacity(0.5)
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(Array(book.chapters.enumerated()), id: \.element.id) { idx, chapter in
+                            BookTocRow(
+                                index: idx + 1,
+                                chapter: chapter,
+                                vocabCount: vocabCountByChapter[chapter.id] ?? 0,
+                                current: chapter.id == currentChapterId,
+                                onSelect: { vm.openArticle(id: chapter.id) }
+                            )
+                        }
+                    }
+                    .padding(10)
+                }
+            }
+            .frame(width: 480, height: 540)
+            .background(palette.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .shadow(color: .black.opacity(0.22), radius: 18, y: 6)
+            .onExitCommand { vm.bookTocShown = false }
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Group {
+                if let cover = BookCoverImage.image(fromDataURL: book.cover) {
+                    Image(nsImage: cover)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    Text(String(book.title.prefix(1)).uppercased())
+                        .font(.system(size: 20, weight: .bold, design: .serif))
+                        .foregroundColor(.white)
+                }
+            }
+            .frame(width: 52, height: 74)
+            .background(
+                LinearGradient(
+                    colors: [Color(hue: 0.08, saturation: 0.55, brightness: 0.82), Color(hue: 0.02, saturation: 0.5, brightness: 0.68)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("《\(book.title)》")
+                    .font(.system(size: 16, weight: .semibold, design: .serif))
+                    .foregroundColor(palette.text)
+                    .lineLimit(2)
+                Text("\(book.author.map { "\($0) · " } ?? "")\(book.chapters.count) 章 · 总进度 \(overallPercent)%")
+                    .font(.system(size: 11.5))
+                    .foregroundColor(palette.textSecondary)
+                Text("考研词 \(book.radar.kaoyan) · 四级词 \(book.radar.cet4) · 六级词 \(book.radar.cet6)")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(palette.textTertiary)
+            }
+            Spacer(minLength: 8)
+            Button {
+                vm.bookTocShown = false
+            } label: {
+                Image(systemName: ReaderIcons.close)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(palette.textSecondary)
+            .help("关闭目录 (Esc)")
+        }
+        .padding(16)
+    }
+}
+
+/// 目录里的单章行：序号 + 章名 + 词数/句数/生词数/当前章。
+private struct BookTocRow: View {
+    let index: Int
+    let chapter: BookChapterMeta
+    let vocabCount: Int
+    let current: Bool
+    let onSelect: () -> Void
+    @Environment(\.readerPalette) private var palette
+    @State private var hover = false
+
+    private var metaText: String {
+        var parts = ["\(chapter.wordCount) 词", "\(chapter.sentenceCount) 句"]
+        if vocabCount > 0 { parts.append("\(vocabCount) 生词") }
+        if current { parts.append("当前章") }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("\(index)")
+                .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                .foregroundColor(current ? .white : palette.textTertiary)
+                .frame(width: 20, height: 20)
+                .background(current ? palette.accent : Color.clear)
+                .clipShape(Circle())
+            Text(chapter.title)
+                .font(.system(size: 12.5, design: .serif))
+                .foregroundColor(current ? palette.accent : palette.text)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(chapter.title)
+            Spacer(minLength: 8)
+            Text(metaText)
+                .font(.system(size: 10.5))
+                .foregroundColor(palette.textTertiary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            current ? palette.accent.opacity(0.1)
+                : (hover ? palette.border.opacity(0.25) : Color.clear)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+        .onTapGesture(perform: onSelect)
+    }
+}
+
+// MARK: - 章末小结卡
+
+/// 书章读完的小结卡（自然播完末句 / 手动「读完本章」触发）：
+/// 本章查词、收录生词、到期词、用时，以及下一章 / 复习本章 / 整理笔记入口。
+struct ChapterEndCardView: View {
+    @ObservedObject var vm: ReaderViewModel
+    let summary: ReaderViewModel.ChapterEndSummary
+    @Environment(\.readerPalette) private var palette
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.4)
+                .contentShape(Rectangle())
+                .onTapGesture { vm.dismissChapterEnd() }
+            VStack(spacing: 14) {
+                Text("🎉")
+                    .font(.system(size: 30))
+                Text("第 \(summary.chapterIdx + 1) 章读完")
+                    .font(.system(size: 17, weight: .semibold, design: .serif))
+                    .foregroundColor(palette.text)
+                Text("《\(summary.bookTitle)》 · \(summary.chapterIdx + 1)/\(summary.chapterCount) 章")
+                    .font(.system(size: 12))
+                    .foregroundColor(palette.textSecondary)
+                HStack(spacing: 16) {
+                    stat("查词", "\(summary.lookups) 次")
+                    stat("本章收录", "\(summary.collected) 词")
+                    stat("本章用时", "\(summary.minutes) 分钟")
+                }
+                if summary.lastChapter {
+                    Text("全书读完，恭喜！这些生词都已在复习闭环里了。")
+                        .font(.system(size: 11.5))
+                        .foregroundColor(palette.ok)
+                        .multilineTextAlignment(.center)
+                } else if let nextTitle = summary.nextChapterTitle {
+                    Text("下一章：\(nextTitle)")
+                        .font(.system(size: 11.5))
+                        .foregroundColor(palette.textTertiary)
+                        .lineLimit(1)
+                }
+                if summary.collected > 0 || !summary.dueIds.isEmpty {
+                    HStack(spacing: 8) {
+                        if summary.collected > 0 {
+                            Button {
+                                vm.noteChapterWords()
+                            } label: {
+                                Text("整理本章笔记").font(.system(size: 12))
+                            }
+                            .controlSize(.small)
+                            .help("把本章这批词预选进复习笔记生成弹窗")
+                        }
+                        if !summary.dueIds.isEmpty {
+                            Button {
+                                vm.reviewChapterWords()
+                            } label: {
+                                Text("复习本章 \(summary.dueIds.count) 词").font(.system(size: 12))
+                            }
+                            .controlSize(.small)
+                            .buttonStyle(.borderedProminent)
+                            .help("只复习本章已到期的词，不打乱其他词的复习计划")
+                        }
+                    }
+                }
+                Divider().opacity(0.5)
+                HStack(spacing: 8) {
+                    Button("留在本章") {
+                        vm.dismissChapterEnd()
+                    }
+                    .controlSize(.small)
+                    if summary.nextChapterId != nil {
+                        Button("开始下一章") {
+                            vm.openNextChapter()
+                        }
+                        .controlSize(.small)
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+            .padding(22)
+            .frame(width: 360)
+            .background(palette.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .shadow(color: .black.opacity(0.24), radius: 20, y: 8)
+        }
+    }
+
+    private func stat(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 11.5))
+                .foregroundColor(palette.textTertiary)
+            Text(value)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundColor(palette.text)
+        }
+    }
+}
+
+// MARK: - 短文结课条
+
+/// 短文读完的常驻结课条（替代一闪而过的 toast）：本篇收获快照 +
+/// 笔记/复习入口，「继续阅读」关闭。只对短文（无 bookId）显示。
+struct ReaderFinishBarView: View {
+    @ObservedObject var vm: ReaderViewModel
+    let summary: ReaderViewModel.ArticleFinishSummary
+    @Environment(\.readerPalette) private var palette
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: ReaderIcons.book)
+                .font(.system(size: 12))
+                .foregroundColor(palette.accent)
+            Text(finishText)
+                .font(.system(size: 12))
+                .foregroundColor(palette.text)
+                .lineLimit(1)
+            Spacer(minLength: 12)
+            if summary.collected > 0 {
+                Button {
+                    vm.noteFinishCardWords()
+                } label: {
+                    Text("整理本篇复习笔记").font(.system(size: 12))
+                }
+                .controlSize(.small)
+                .help("把这批词预选进复习笔记生成弹窗")
+            }
+            if summary.dueCount > 0 {
+                Button {
+                    vm.reviewFinishCardWords()
+                } label: {
+                    Text("复习本篇 \(summary.dueCount) 词").font(.system(size: 12))
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+                .help("只复习本篇已到期的词，不打乱其他词的复习计划")
+            }
+            Button("继续阅读") {
+                vm.dismissFinishCard()
+            }
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(palette.accent.opacity(0.08))
+    }
+
+    private var finishText: String {
+        var text = "本篇读完 🎉 共查词 \(summary.lookups) 次 · 收录 \(summary.collected) 个词块和生词"
+        if summary.dueCount > 0 {
+            text += "，其中 \(summary.dueCount) 个待复习"
+        }
+        return text
     }
 }
 
