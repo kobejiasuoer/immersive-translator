@@ -35,9 +35,10 @@ final class OnboardingWindowController: NSWindowController {
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
         window.title = "开始使用沉浸式翻译"
-        window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 720, height: 580))
-        window.minSize = NSSize(width: 640, height: 520)
+        // 加入三大能力卡片后内容变长：加 .resizable + 滚动中段，窗口再小也不会裁掉底部按钮。
+        window.styleMask = [.titled, .closable, .resizable]
+        window.setContentSize(NSSize(width: 720, height: 640))
+        window.minSize = NSSize(width: 560, height: 480)
         window.isReleasedWhenClosed = false
         model.window = window
         super.init(window: window)
@@ -62,13 +63,20 @@ private struct OnboardingView: View {
     let onStartOCR: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            header
-            permissionAndOCRSection
-            providerSection
-            privacyNote
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    header
+                    capabilitySection
+                    permissionAndOCRSection
+                    providerSection
+                    privacyNote
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
 
-            Spacer()
+            Divider()
 
             HStack {
                 Button("刷新状态") {
@@ -83,8 +91,10 @@ private struct OnboardingView: View {
                 }
                 .keyboardShortcut(.defaultAction)
             }
+            .padding(.horizontal, 24)
+            .padding(.top, 14)
+            .padding(.bottom, 16)
         }
-        .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -95,6 +105,46 @@ private struct OnboardingView: View {
             Text("新用户可以先看到本机 OCR 预览，再决定接本地模型还是云服务 API Key。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// 三大能力卡片区：纯展示、不依赖权限状态（对齐 Windows 首启引导的
+    /// 「划词翻译 / 截图 OCR / 沉浸阅读室」卡片）；快捷键与菜单栏菜单同源（settingsStore）。
+    private var capabilitySection: some View {
+        section("三大能力") {
+            VStack(alignment: .leading, spacing: 8) {
+                capabilityCard(
+                    icon: "character.cursor.ibeam",
+                    title: "划词翻译",
+                    detail: Text("选中任意文字，按 ")
+                        + Text(settingsStore.selectionHotKeyShortcut.title).fontWeight(.semibold)
+                        + Text(" 弹出浮窗即时翻译。")
+                )
+                capabilityCard(
+                    icon: "camera.viewfinder",
+                    title: "截图 OCR",
+                    detail: Text("按 ")
+                        + Text(settingsStore.ocrHotKeyShortcut.title).fontWeight(.semibold)
+                        + Text("，框选屏幕区域，图片里的文字直接译出来。")
+                )
+                capabilityCard(
+                    icon: "book",
+                    title: "沉浸阅读室",
+                    detail: Text("按 ")
+                        + Text(settingsStore.readerHotKeyShortcut.title).fontWeight(.semibold)
+                        + Text(" 把选中内容送进精读空间：句对翻译、朗读、收藏生词。")
+                )
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "sparkles")
+                        .font(.footnote)
+                        .foregroundStyle(.blue)
+                        .frame(width: 18)
+                    Text("菜单栏右上角的「译」图标是常驻入口：点开即全部入口——阅读室、生词本、快速复习、录音直译、翻译历史、设置都在里面。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 
@@ -223,6 +273,25 @@ private struct OnboardingView: View {
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func capabilityCard(icon: String, title: String, detail: Text) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.blue)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                detail
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func providerModeRow(icon: String, title: String, detail: String) -> some View {
