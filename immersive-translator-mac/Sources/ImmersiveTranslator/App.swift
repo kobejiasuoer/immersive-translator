@@ -237,8 +237,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onLookupCard: { [weak self] word in
             try await self?.lookupPanelDictCard(word) ?? nil
         },
-        onAddVocab: { [weak self] word, card in
-            self?.addPanelVocab(word: word, card: card) ?? false
+        onAddVocab: { [weak self] word, card, fallbackCn in
+            guard let self else { throw CollectActionError.appUnavailable }
+            return try await self.addPanelVocab(word: word, card: card, fallbackCn: fallbackCn)
         },
         onSendToReader: { [weak self] text in
             self?.sendPanelTextToReader(text)
@@ -249,6 +250,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         historyStore: historyStore,
         onRetranslate: { [weak self] record in
             self?.startTranslation(record.original, source: .retry)
+        },
+        onAddVocab: { [weak self] record in
+            guard let self else { throw CollectActionError.appUnavailable }
+            return try await CollectActions.addTextToVocab(
+                chat: self.readerChat,
+                rawText: record.original,
+                fallbackCn: record.translation
+            )
+        },
+        onSendToReader: { [weak self] record in
+            guard let self else { throw CollectActionError.appUnavailable }
+            try CollectActions.sendTextToReader(record.original, readerController: self.readerController)
         }
     )
     private lazy var onboardingController = OnboardingWindowController(
@@ -1612,41 +1625,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 加入生词本（划词收藏，无文章来源）：用预取的词典卡拼词条；
-    /// 卡片未就绪时按裸词收藏（释义待复习时补全）。
+    /// 加入生词本（浮窗划词收藏，无文章来源）：公共 CollectActions.addTextToVocab——
+    /// 词典查词条（优先复用面板已预取的词典卡，省一次请求）+ LLM 造例句并行，
+    /// mergeVocabWord 合并落库（已有同名词保留 SRS 进度）。
+    /// 卡片未就绪时走词典请求；词典失败用当前译文兜底（resolveVocabEntry 的
+    /// 「短释义形状」把关，整句翻译不会被当作释义收进去）。
     @MainActor
-    private func addPanelVocab(word: String, card: DictCardData?) -> Bool {
-        let now = Int64(Date().timeIntervalSince1970 * 1000)
-        let phonetic = card?.phonetics.first?.value
-        var senses: [VocabSense] = []
-        if let card {
-            senses = card.senses.map { VocabSense(pos: $0.pos, cn: $0.gloss.isEmpty ? card.translation : $0.gloss) }
-        }
-        if senses.isEmpty {
-            senses = [VocabSense(pos: "", cn: "划词收藏 · 释义待补全")]
-        }
-        let isChunk = word.split(separator: " ").count > 1
-        let vocab = VocabWord(
-            id: normalizeWordKey(word),
-            word: word,
-            kind: isChunk ? .chunk : .word,
-            phonetic: phonetic,
-            senses: senses,
-            source: VocabSource(articleId: "", sentenceIdx: 0),
-            srs: initialSrs(now: now),
-            addedAt: now
+    private func addPanelVocab(word: String, card: DictCardData?, fallbackCn: String) async throws -> CollectVocabOutcome {
+        try await CollectActions.addTextToVocab(
+            chat: readerChat,
+            rawText: word,
+            fallbackCn: fallbackCn,
+            prefetchedCard: card
         )
-        do {
-            try ReaderStore.shared.saveVocabWord(vocab)
-            return true
-        } catch {
-            return false
-        }
     }
 
     @MainActor
     private func sendPanelTextToReader(_ text: String) {
-        readerController.show(pendingImportText: text)
+        do {
+            // 公共入口：可导入性校验 + 打开阅读室；建文交给阅读室导入管线。
+            try CollectActions.sendTextToReader(text, readerController: readerController)
+        } catch {
+            // 面板发送入口已挡空文本；这里兜底记录，不影响浮窗继续使用。
+            NSLog("[collect] send to reader failed: \(error.localizedDescription)")
+        }
     }
 
     @MainActor

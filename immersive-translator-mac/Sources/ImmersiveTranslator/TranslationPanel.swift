@@ -80,7 +80,7 @@ final class TranslationPanelController {
     private let onOCRReselect: () -> Void
     private let onRunQuickAction: (QuickAction, String, String) async throws -> String
     private let onLookupCard: (String) async throws -> DictCardData?
-    private let onAddVocab: (String, DictCardData?) -> Bool
+    private let onAddVocab: (String, DictCardData?, String) async throws -> CollectVocabOutcome
     private let onSendToReader: (String) -> Void
     private var panel: NSPanel?
     private var frameObservers: [Any] = []
@@ -88,6 +88,8 @@ final class TranslationPanelController {
     private var autoHideTask: Task<Void, Never>?
     private var elapsedTask: Task<Void, Never>?
     private var loadingStartedAt: Date?
+    /// 「加入生词本」进行中（连点守卫；setState 异步，靠它拦截重复请求）。
+    private var vocabActionRunning = false
     private var openSettingsActionOverride: (() -> Void)?
 
     init(
@@ -101,7 +103,7 @@ final class TranslationPanelController {
         onOCRReselect: @escaping () -> Void,
         onRunQuickAction: @escaping (QuickAction, String, String) async throws -> String,
         onLookupCard: @escaping (String) async throws -> DictCardData?,
-        onAddVocab: @escaping (String, DictCardData?) -> Bool,
+        onAddVocab: @escaping (String, DictCardData?, String) async throws -> CollectVocabOutcome,
         onSendToReader: @escaping (String) -> Void
     ) {
         self.settingsStore = settingsStore
@@ -542,19 +544,32 @@ final class TranslationPanelController {
         }
     }
 
-    /// 加入生词本：优先用已预取的词典卡；未取到时让回调侧自行补查。
+    /// 加入生词本：公共 CollectActions.addTextToVocab（词典查词条优先复用预取卡 +
+    /// 例句生成并行，mergeVocabWord 合并落库，已有同名词保留 SRS 进度）。
+    /// 异步执行：进行中拦截重复点击，结果写进 notice（三态文案对齐 Windows 面板）。
     func addCurrentToVocab() {
         let word = model.original.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !word.isEmpty else { return }
-        if onAddVocab(word, model.dictCard) {
-            model.notice = "已加入生词本：\(word)"
-        } else {
-            model.notice = "加入生词本失败"
+        guard !word.isEmpty, !vocabActionRunning else { return }
+        vocabActionRunning = true
+        autoHideTask?.cancel()
+        model.notice = "正在加入生词本…"
+        let card = model.dictCard
+        let fallbackCn = model.translationTrimmed
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.vocabActionRunning = false }
+            do {
+                let outcome = try await self.onAddVocab(word, card, fallbackCn)
+                self.model.notice = CollectActions.vocabResultMessage(outcome)
+            } catch {
+                let message = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                self.model.notice = "加入生词本失败：\(message)"
+            }
+            self.scheduleAutoHideIfNeeded()
         }
-        scheduleAutoHideIfNeeded()
     }
 
-    /// 发送到阅读室：原文建文章并打开阅读室。
+    /// 发送到阅读室：公共入口（可导入性校验 + 打开阅读室，建文交给阅读室导入管线）。
     func sendToReader() {
         let text = model.original
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
