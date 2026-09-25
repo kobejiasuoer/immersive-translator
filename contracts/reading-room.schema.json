@@ -544,6 +544,28 @@
         }
       }
     },
+    "readingLog": {
+      "type": "array",
+      "description": "每日阅读时长（reader_vocab.json 的可选字段：老数据/老应用双向兼容，schemaVersion 维持 1；辅助增强二：每日阅读目标追踪的数据源）",
+      "items": {
+        "type": "object",
+        "required": [
+          "day",
+          "seconds"
+        ],
+        "properties": {
+          "day": {
+            "type": "string",
+            "description": "本地时区 YYYY-MM-DD"
+          },
+          "seconds": {
+            "type": "number",
+            "minimum": 0,
+            "description": "当天累计阅读秒数（朗读播放与停留阅读均计入，每 ~15s 批量上报）"
+          }
+        }
+      }
+    },
     "speakRole": {
       "type": "string",
       "enum": [
@@ -1091,6 +1113,9 @@
         },
         "reviewLog": {
           "$ref": "#/$defs/reviewLog"
+        },
+        "readingLog": {
+          "$ref": "#/$defs/readingLog"
         }
       }
     },
