@@ -11,6 +11,8 @@ import ReaderCore
 @MainActor
 final class QuickReviewWindowController {
     private var window: NSWindow?
+    /// vm 由 controller 持有（单窗口单 vm）：重开窗不新建，靠 show 时 reload 作废上次会话。
+    private var vm: QuickReviewViewModel?
 
     func show() {
         if window == nil {
@@ -26,8 +28,11 @@ final class QuickReviewWindowController {
             w.contentView = NSHostingView(rootView: view)
             w.level = .floating
             w.isReleasedWhenClosed = false
+            self.vm = vm
             window = w
         }
+        // 每次进窗先重拉到期词（对齐 Windows：show 即重建卡片，不复用上次会话的旧到期卡）。
+        vm?.reload()
         window?.center()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
