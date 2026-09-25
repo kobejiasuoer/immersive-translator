@@ -22,8 +22,11 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
         case activeIdx(Int)
         /// 自然播完最后一句。
         case finished
-        /// 朗读失败。
-        case failed(String)
+        /// 朗读失败（播放已停止）：携带归因信息（对齐 Windows onError → classifyTtsError）。
+        case failed(TtsErrorInfo)
+        /// 云合成失败但已回落本地合成（朗读未断流）：携带归因信息，
+        /// 让用户知道云音色为什么没响。
+        case cloudFallback(TtsErrorInfo)
     }
 
     struct Settings {
@@ -208,8 +211,10 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
                 // 掐掉即可
             } catch {
                 guard let self, self.epoch == myEpoch else { return }
-                // 云失败回落本地合成，保证朗读不断流。
-                DiagnosticLogger.log("reader.tts.cloud-fallback: \(error)")
+                // 云失败回落本地合成，保证朗读不断流；归因上浮（凭据/网络/系统），
+                // 让用户知道云音色为什么没响（对齐 Windows P1 归因）。
+                let info = classifyTtsError(error)
+                DiagnosticLogger.log("reader.tts.cloud-fallback kind=\(info.kind) error=\(error)")
                 let utterance = self.makeUtterance(
                     text,
                     chinese: looksMostlyChinese(text),
@@ -218,6 +223,7 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
                 )
                 self.currentUtterance = utterance
                 self.sentenceSynth.speak(utterance)
+                self.publish(.cloudFallback(info))
             }
         }
     }
@@ -372,7 +378,7 @@ extension ReaderPlaybackEngine: AVAudioPlayerDelegate {
                 self.handleCloudFinished()
             } else {
                 self.stopCloudPlayback()
-                self.publish(.failed("云朗读播放中断"))
+                self.publish(.failed(.cloudPlaybackInterrupted()))
             }
         }
     }

@@ -49,6 +49,11 @@ let package = Package(
             name: "ProviderCoreTests",
             dependencies: ["ProviderCore"]
         ),
+        // 主可执行目标里的纯逻辑单测（用 @main 入口，SwiftPM 支持被测试目标导入）。
+        .testTarget(
+            name: "ImmersiveTranslatorTests",
+            dependencies: ["ImmersiveTranslator", "XfyunCore"]
+        ),
         .testTarget(
             name: "ReaderCoreTests",
             dependencies: ["ReaderCore"]
