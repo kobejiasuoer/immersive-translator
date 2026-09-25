@@ -63,6 +63,8 @@ final class ReaderViewModel: ObservableObject {
     // ---- 数据 ----
     @Published var globalSettings: ReaderSettings
     @Published var articleList: [ArticleSummary] = []
+    /// 书架的书（索引与元信息，不含章正文；按最近阅读倒序）。
+    @Published var bookList: [BookMeta] = []
     @Published var article: Article?
     @Published var vocabWords: [VocabWord] = []
     @Published var reviewLog: ReviewLogFile = .empty
@@ -85,6 +87,7 @@ final class ReaderViewModel: ObservableObject {
     let playback = ReaderPlaybackEngine()
     private var cancellables = Set<AnyCancellable>()
     private var saveTask: Task<Void, Never>?
+    private var bookSaveTask: Task<Void, Never>?
     private var translationTask: Task<Void, Never>?
     private var translationRunID = 0
     private var toastTask: Task<Void, Never>?
@@ -295,6 +298,7 @@ final class ReaderViewModel: ObservableObject {
     func bootstrap(pendingImportText: String? = nil, openReview: Bool = false) {
         globalSettings = store.loadGlobalReaderSettings()
         refreshVocab()
+        refreshBooks()
         let list = (try? store.listArticles()) ?? []
         articleList = list
         if let text = pendingImportText, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -307,6 +311,9 @@ final class ReaderViewModel: ObservableObject {
         }
         if let first = list.first {
             openArticle(id: first.id)
+        } else if let book = bookList.first {
+            // 只有书没有短文：打开最近读的那本（断点章）。
+            openBookAt(bookId: book.id)
         }
     }
 
@@ -325,6 +332,10 @@ final class ReaderViewModel: ObservableObject {
         articleList = (try? store.listArticles()) ?? []
     }
 
+    func refreshBooks() {
+        bookList = (try? store.listBooks()) ?? []
+    }
+
     func openArticle(id: String) {
         guard let full = (try? store.getArticle(id: id)) ?? nil else { return }
         translationTask?.cancel()
@@ -338,6 +349,14 @@ final class ReaderViewModel: ObservableObject {
         playback.reset(startIdx: activeSentenceIdx)
         syncPlaybackContext()
         scheduleSave(mutate: { $0.lastReadAt = Int64(Date().timeIntervalSince1970 * 1000) })
+        if full.bookId != nil {
+            // 书章打开即记最近阅读（书卡排序依据）。
+            scheduleBookMetaSave { meta in
+                var next = meta
+                next.lastReadAt = Int64(Date().timeIntervalSince1970 * 1000)
+                return next
+            }
+        }
         runTranslationPipeline(for: full.id)
     }
 
@@ -355,6 +374,95 @@ final class ReaderViewModel: ObservableObject {
             }
         }
         showToast("文章已删除")
+    }
+
+    // MARK: - 整本书（书卡 / 断点直达 / 删书）
+
+    /// 书卡/导入后进书：直达书级断点章（断点章缺失时回落第一章）。
+    func openBookAt(bookId: String) {
+        guard let book = bookList.first(where: { $0.id == bookId }), !book.chapters.isEmpty else { return }
+        let target = book.chapters.contains { $0.id == book.progress.chapterId }
+            ? book.progress.chapterId
+            : book.chapters[0].id
+        openArticle(id: target)
+    }
+
+    /// 整本入库（EPUB/长书 tab 确认导入）：章文本 → 章 Article（sourceType="epub"）。
+    func importBook(_ draft: BookImportDraft) {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let bookId = newBookId(now: now)
+        var chapters: [Article] = []
+        var metas: [BookChapterMeta] = []
+        for (idx, ch) in draft.chapters.enumerated() {
+            guard var built = buildArticleFromText(ch.text, options: BuildArticleOptions(
+                sourceType: .epub,
+                now: now + Int64(idx),
+                title: ch.title
+            )) else { continue }
+            built.bookId = bookId
+            built.chapterIdx = metas.count
+            chapters.append(built)
+            metas.append(BookChapterMeta(
+                id: built.id,
+                title: built.title,
+                wordCount: built.wordCount,
+                sentenceCount: built.sentences.count
+            ))
+        }
+        guard !metas.isEmpty else {
+            showToast("没有可导入的章节内容")
+            return
+        }
+        let meta = BookMeta(
+            id: bookId,
+            title: draft.title,
+            author: draft.author,
+            cover: draft.cover,
+            createdAt: now,
+            lastReadAt: now,
+            chapters: metas,
+            progress: BookProgress(chapterId: metas[0].id),
+            secondsListened: 0,
+            radar: draft.radar
+        )
+        do {
+            bookList = try store.saveBook(meta: meta, articles: chapters)
+            refreshArticleList()
+            showToast("已导入《\(draft.title)》· \(metas.count) 章")
+            openArticle(id: metas[0].id)
+        } catch {
+            showToast("导入书籍失败：\((error as? LocalizedError)?.errorDescription ?? "\(error)")")
+        }
+    }
+
+    /// 删除书 = 删书卡与全部章文章（进度不可恢复），生词一律保留。
+    func deleteBook(bookId: String) {
+        let removed = (try? store.deleteBook(bookId: bookId)) ?? false
+        guard removed else { return }
+        refreshBooks()
+        refreshArticleList()
+        refreshVocab()
+        if article?.bookId == bookId {
+            article = nil
+            activeSentenceIdx = 0
+            playback.reset(startIdx: 0)
+            syncPlaybackContext()
+            if let first = articleList.first {
+                openArticle(id: first.id)
+            } else if let book = bookList.first {
+                openBookAt(bookId: book.id)
+            }
+        }
+        showToast("这本书已删除（生词保留）")
+    }
+
+    /// 书章 id → 「《书名》·第 N 章」（复习卡/生词来源展示；短文回落标题）。
+    func bookChapterLabel(articleId: String) -> String? {
+        guard let book = bookList.first(where: { $0.chapters.contains { $0.id == articleId } }) else {
+            return nil
+        }
+        let idx = bookChapterIndexOf(book: book, chapterId: articleId)
+        return "《\(book.title)》·第 \(idx + 1) 章"
     }
 
     // MARK: - 导入
@@ -393,6 +501,19 @@ final class ReaderViewModel: ObservableObject {
         } catch {
             showToast("导入失败：\((error as? LocalizedError)?.errorDescription ?? "\(error)")")
         }
+    }
+
+    /// 生成书 id：b + 时间戳 base36 + 随机段（对齐 Windows ReaderApp.importBook）。
+    private func newBookId(now: Int64) -> String {
+        let digits = Array("0123456789abcdefghijklmnopqrstuvwxyz")
+        var value = UInt64(max(0, now))
+        var timePart = ""
+        repeat {
+            timePart.insert(digits[Int(value % 36)], at: timePart.startIndex)
+            value /= 36
+        } while value > 0
+        let rand = String(format: "%06x", Int.random(in: 0..<0x1000000)).prefix(6)
+        return "b" + timePart + rand
     }
 
     // MARK: - 文章落盘（防抖）
@@ -812,7 +933,8 @@ final class ReaderViewModel: ObservableObject {
         }
     }
 
-    /// 阅读进度（断点续读 + 墨线）。
+    /// 阅读进度（断点续读 + 墨线）。书章同时把断点写回书级 meta
+    ///（progress = {chapterId, sentenceIdx, percent}，1.2s 防抖落盘）。
     func noteReadProgress(idx: Int) {
         guard let a = article else { return }
         let total = a.sentences.count
@@ -824,6 +946,34 @@ final class ReaderViewModel: ObservableObject {
                 article.lastReadAt = Int64(Date().timeIntervalSince1970 * 1000)
                 article.progress.sentenceIdx = maxIdx
                 article.progress.percent = percent
+            }
+            if a.bookId != nil {
+                let chapterId = a.id
+                let now = Int64(Date().timeIntervalSince1970 * 1000)
+                scheduleBookMetaSave { meta in
+                    var next = meta
+                    next.lastReadAt = now
+                    next.progress = BookProgress(chapterId: chapterId, sentenceIdx: maxIdx, percent: percent)
+                    return next
+                }
+            }
+        }
+    }
+
+    /// 书级 meta 修改（进度/最近阅读）：先改内存 bookList，1.2s 防抖落盘
+    ///（对齐 Windows scheduleBookMetaSave 的防抖节奏）。
+    func scheduleBookMetaSave(_ updater: (BookMeta) -> BookMeta) {
+        guard let bookId = article?.bookId, !bookId.isEmpty,
+              let idx = bookList.firstIndex(where: { $0.id == bookId }) else { return }
+        let next = updater(bookList[idx])
+        bookList[idx] = next
+        bookSaveTask?.cancel()
+        let id = next.id
+        bookSaveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard !Task.isCancelled, let self else { return }
+            if let meta = self.bookList.first(where: { $0.id == id }) {
+                try? self.store.saveBookMeta(meta)
             }
         }
     }
@@ -973,7 +1123,10 @@ final class ReaderViewModel: ObservableObject {
 
     func articleTitle(articleId: String) -> String? {
         guard !articleId.isEmpty else { return nil }
-        return sourceCache[articleId]?.title ?? articleList.first { $0.id == articleId }?.article.title
+        // 书章不在 articleList（书架只列短文）：回落「《书名》·第 N 章」。
+        return sourceCache[articleId]?.title
+            ?? articleList.first { $0.id == articleId }?.article.title
+            ?? bookChapterLabel(articleId: articleId)
     }
 
     // MARK: - 复习评分

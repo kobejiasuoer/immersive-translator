@@ -228,15 +228,33 @@ struct ReaderShelfView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundColor(palette.textSecondary)
-                .help("导入文章（粘贴 / 打开 .txt）")
+                .help("导入文章 / 整本 EPUB")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
             ScrollView {
                 VStack(spacing: 2) {
-                    if vm.articleList.isEmpty {
-                        Text("还没有文章。\n在网页或文档里选中文字，点浮窗上的「发送到阅读室」，或使用菜单栏的「沉浸阅读室」。")
+                    if !vm.bookList.isEmpty {
+                        ForEach(vm.bookList) { book in
+                            BookShelfRow(
+                                book: book,
+                                active: vm.article?.bookId == book.id,
+                                onSelect: { vm.openBookAt(bookId: book.id) },
+                                onDelete: { vm.deleteBook(bookId: book.id) }
+                            )
+                        }
+                        if !vm.articleList.isEmpty {
+                            Text("短文")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundColor(palette.textTertiary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 4)
+                                .padding(.top, 8)
+                        }
+                    }
+                    if vm.bookList.isEmpty && vm.articleList.isEmpty {
+                        Text("还没有文章。\n点右上角 ＋ 导入整本 EPUB，或在网页或文档里选中文字，点浮窗上的「发送到阅读室」，或使用菜单栏的「沉浸阅读室」。")
                             .font(.system(size: 12))
                             .foregroundColor(palette.textTertiary)
                             .lineSpacing(4)
@@ -351,6 +369,99 @@ private struct ShelfRow: View {
         let alert = NSAlert()
         alert.messageText = "删除《\(summary.article.title)》？"
         alert.informativeText = "生词本不受影响。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        if alert.runModal() == .alertFirstButtonReturn {
+            onDelete()
+        }
+    }
+}
+
+// MARK: - 书架书卡（整本书：封面 + 章进度 + 断点直达）
+
+private struct BookShelfRow: View {
+    let book: BookMeta
+    let active: Bool
+    let onSelect: () -> Void
+    let onDelete: () -> Void
+    @Environment(\.readerPalette) private var palette
+    @State private var hover = false
+
+    var body: some View {
+        let chapterIdx = bookChapterIndexOf(book: book, chapterId: book.progress.chapterId)
+        let percent = Int(bookOverallPercent(book: book).rounded())
+        HStack(spacing: 8) {
+            Group {
+                if let cover = BookCoverImage.image(fromDataURL: book.cover) {
+                    Image(nsImage: cover)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    Text(String(book.title.prefix(1)).uppercased())
+                        .font(.system(size: 13, weight: .bold, design: .serif))
+                        .foregroundColor(.white)
+                }
+            }
+            .frame(width: 26, height: 38)
+            .background(
+                LinearGradient(
+                    colors: [Color(hue: 0.08, saturation: 0.55, brightness: 0.82), Color(hue: 0.02, saturation: 0.5, brightness: 0.68)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(book.title)
+                    .font(.system(size: 12.5, weight: .medium, design: .serif))
+                    .foregroundColor(active ? palette.accent : palette.text)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(book.title)
+                Text("\(book.author.map { "\($0) · " } ?? "")第 \(min(chapterIdx + 1, book.chapters.count))/\(book.chapters.count) 章")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(palette.textTertiary)
+                    .lineLimit(1)
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(palette.border.opacity(0.4))
+                        Capsule()
+                            .fill(palette.accent)
+                            .frame(width: max(0, geo.size.width * CGFloat(percent) / 100))
+                    }
+                }
+                .frame(height: 3)
+            }
+            Text("\(percent)%")
+                .font(.system(size: 10.5))
+                .foregroundColor(palette.textTertiary)
+            if hover {
+                Button(action: confirmDelete) {
+                    Image(systemName: ReaderIcons.trash)
+                        .font(.system(size: 10))
+                        .foregroundColor(palette.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .help("删除这本书（章文章与进度删除，生词保留）")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            active ? palette.accent.opacity(0.12) : (hover ? palette.border.opacity(0.25) : Color.clear)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+        .onTapGesture(perform: onSelect)
+    }
+
+    private func confirmDelete() {
+        let alert = NSAlert()
+        alert.messageText = "删除《\(book.title)》？"
+        alert.informativeText = "将删除全部 \(book.chapters.count) 章内容与这本书的阅读进度，不可恢复；生词本不受影响。"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "删除")
         alert.addButton(withTitle: "取消")
@@ -576,6 +687,12 @@ struct ArticleHeader: View {
                     .padding(.vertical, 4)
             }
             HStack(spacing: 8) {
+                if let bookId = article.bookId, let book = vm.bookList.first(where: { $0.id == bookId }) {
+                    Text("《\(book.title)》· 第 \(bookChapterIndexOf(book: book, chapterId: article.id) + 1)/\(book.chapters.count) 章")
+                        .font(.system(size: 12))
+                        .foregroundColor(palette.textSecondary)
+                        .lineLimit(1)
+                }
                 Text("\(article.wordCount) 词 · \(article.sentences.count) 句")
                     .font(.system(size: 12))
                     .foregroundColor(palette.textTertiary)

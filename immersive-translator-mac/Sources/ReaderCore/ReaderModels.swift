@@ -6,6 +6,9 @@ import Foundation
 /// reader_store.rs 的存储格式（camelCase 序列化）。改动任何字段必须同步
 /// schema、readerTypes.ts 与 reader_store.rs。可选字段编码时跳过（对齐
 /// serde skip_serializing_if），不给盘上文件引入 null 噪声。
+///
+/// 整本书（BookMeta / BookChapterMeta / BookProgress / BookRadar / BooksFile /
+/// BookFile）与 Article.bookId/chapterIdx 对齐 schema 1.1.0 的书级可选增量。
 
 public let readerSchemaVersion = 1
 
@@ -218,6 +221,10 @@ public struct Article: Codable, Equatable, Identifiable {
     public var chunkState: ArticleChunkState?
     /// 按文章覆盖的阅读设置；缺字段回落全局默认。
     public var settings: ReaderSettingsOverride?
+    /// 所属书 id（书章文章才有；存储据此路由到 books/<bookId>.json）。
+    public var bookId: String?
+    /// 书内章序号，从 0（与 BookMeta.chapters 下标一致）。
+    public var chapterIdx: Int?
 
     public init(
         id: String,
@@ -233,7 +240,9 @@ public struct Article: Codable, Equatable, Identifiable {
         progress: ArticleProgress = ArticleProgress(),
         sentences: [SentencePair] = [],
         chunkState: ArticleChunkState? = nil,
-        settings: ReaderSettingsOverride? = nil
+        settings: ReaderSettingsOverride? = nil,
+        bookId: String? = nil,
+        chapterIdx: Int? = nil
     ) {
         self.id = id
         self.title = title
@@ -249,11 +258,14 @@ public struct Article: Codable, Equatable, Identifiable {
         self.sentences = sentences
         self.chunkState = chunkState
         self.settings = settings
+        self.bookId = bookId
+        self.chapterIdx = chapterIdx
     }
 
     enum CodingKeys: String, CodingKey {
         case id, title, titleCn, titleCnState, sourceUrl, sourceType, level
         case wordCount, createdAt, lastReadAt, progress, sentences, chunkState, settings
+        case bookId, chapterIdx
     }
 
     public init(from decoder: Decoder) throws {
@@ -272,6 +284,8 @@ public struct Article: Codable, Equatable, Identifiable {
         sentences = try c.decodeIfPresent([SentencePair].self, forKey: .sentences) ?? []
         chunkState = try c.decodeIfPresent(ArticleChunkState.self, forKey: .chunkState)
         settings = try c.decodeIfPresent(ReaderSettingsOverride.self, forKey: .settings)
+        bookId = try c.decodeIfPresent(String.self, forKey: .bookId)
+        chapterIdx = try c.decodeIfPresent(Int.self, forKey: .chapterIdx)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -290,6 +304,8 @@ public struct Article: Codable, Equatable, Identifiable {
         try c.encode(sentences, forKey: .sentences)
         try c.encodeIfPresent(chunkState, forKey: .chunkState)
         try c.encodeIfPresent(settings, forKey: .settings)
+        try c.encodeIfPresent(bookId, forKey: .bookId)
+        try c.encodeIfPresent(chapterIdx, forKey: .chapterIdx)
     }
 }
 
@@ -303,6 +319,190 @@ public struct ArticleSummary: Codable, Equatable, Identifiable {
         self.article = article
         self.sentenceCount = sentenceCount ?? article.sentences.count
     }
+}
+
+// MARK: - 整本书（书级载体）
+//
+// 存储布局对齐 Windows reader_store.rs「存储改造方案 a」：短文照旧落
+// reader_articles.json；每本书的全部章文章整体落 books/<bookId>.json（BookFile），
+// reader_books.json 只存索引与书元信息（BookMeta，不含章正文）。流式翻译期间
+// 700ms 防抖的整文件重写只落在单本书自己的文件（0.5–1MB 量级）。
+
+/// 书目录里的一章（索引信息，不含正文）。
+public struct BookChapterMeta: Codable, Equatable {
+    /// 章文章 id（= Article.id，生词 source.articleId 即它）。
+    public var id: String
+    public var title: String
+    public var wordCount: Int
+    public var sentenceCount: Int
+
+    public init(id: String, title: String, wordCount: Int, sentenceCount: Int) {
+        self.id = id
+        self.title = title
+        self.wordCount = wordCount
+        self.sentenceCount = sentenceCount
+    }
+}
+
+/// 书级断点：进书直达。
+public struct BookProgress: Codable, Equatable {
+    public var chapterId: String
+    /// 章内句序号，从 0。
+    public var sentenceIdx: Int
+    /// 0–100，章内句序百分比。
+    public var percent: Double
+
+    public init(chapterId: String, sentenceIdx: Int = 0, percent: Double = 0) {
+        self.chapterId = chapterId
+        self.sentenceIdx = sentenceIdx
+        self.percent = percent
+    }
+}
+
+/// 选书雷达缓存：导入时按全书文本实算的大纲词命中数（去重）。键 = ExamGoal。
+/// schema 明文禁止写死——必须是导入时对所选章文本实算的结果。
+public struct BookRadar: Codable, Equatable {
+    public var kaoyan: Int
+    public var cet4: Int
+    public var cet6: Int
+
+    public init(kaoyan: Int, cet4: Int, cet6: Int) {
+        self.kaoyan = kaoyan
+        self.cet4 = cet4
+        self.cet6 = cet6
+    }
+}
+
+/// 一本书的索引与元信息（不含章正文）。
+public struct BookMeta: Codable, Equatable, Identifiable {
+    public var id: String
+    public var title: String
+    public var author: String?
+    /// 缩小后的封面 dataURL（JPEG，≤160px 宽；无封面缺省）。
+    public var cover: String?
+    /// Unix 毫秒。
+    public var createdAt: Int64
+    /// Unix 毫秒。
+    public var lastReadAt: Int64
+    /// 章的有序表；下标即 chapterIdx。
+    public var chapters: [BookChapterMeta]
+    /// 书级断点（书卡/进书直达的数据源）。
+    public var progress: BookProgress
+    /// 全书累计阅读秒数（章 Article.progress.secondsListened 的冗余汇总）。
+    public var secondsListened: Double
+    public var radar: BookRadar
+
+    public init(
+        id: String,
+        title: String,
+        author: String? = nil,
+        cover: String? = nil,
+        createdAt: Int64,
+        lastReadAt: Int64,
+        chapters: [BookChapterMeta],
+        progress: BookProgress,
+        secondsListened: Double = 0,
+        radar: BookRadar
+    ) {
+        self.id = id
+        self.title = title
+        self.author = author
+        self.cover = cover
+        self.createdAt = createdAt
+        self.lastReadAt = lastReadAt
+        self.chapters = chapters
+        self.progress = progress
+        self.secondsListened = secondsListened
+        self.radar = radar
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, author, cover, createdAt, lastReadAt, chapters
+        case progress, secondsListened, radar
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        author = try c.decodeIfPresent(String.self, forKey: .author)
+        cover = try c.decodeIfPresent(String.self, forKey: .cover)
+        createdAt = try c.decodeIfPresent(Int64.self, forKey: .createdAt) ?? 0
+        lastReadAt = try c.decodeIfPresent(Int64.self, forKey: .lastReadAt) ?? 0
+        chapters = try c.decodeIfPresent([BookChapterMeta].self, forKey: .chapters) ?? []
+        progress = try c.decodeIfPresent(BookProgress.self, forKey: .progress)
+            ?? BookProgress(chapterId: chapters.first?.id ?? "")
+        secondsListened = try c.decodeIfPresent(Double.self, forKey: .secondsListened) ?? 0
+        radar = try c.decodeIfPresent(BookRadar.self, forKey: .radar) ?? BookRadar(kaoyan: 0, cet4: 0, cet6: 0)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        try c.encodeIfPresent(author, forKey: .author)
+        try c.encodeIfPresent(cover, forKey: .cover)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(lastReadAt, forKey: .lastReadAt)
+        try c.encode(chapters, forKey: .chapters)
+        try c.encode(progress, forKey: .progress)
+        try c.encode(secondsListened, forKey: .secondsListened)
+        try c.encode(radar, forKey: .radar)
+    }
+}
+
+/// reader_books.json 顶层结构（书索引）。
+public struct BooksFile: Codable, Equatable {
+    public var schemaVersion: Int
+    public var books: [BookMeta]
+
+    public init(schemaVersion: Int = readerSchemaVersion, books: [BookMeta] = []) {
+        self.schemaVersion = schemaVersion
+        self.books = books
+    }
+
+    public static let empty = BooksFile()
+}
+
+/// books/<bookId>.json 顶层结构（整本书一个文件）。
+public struct BookFile: Codable, Equatable {
+    public var schemaVersion: Int
+    public var articles: [Article]
+
+    public init(schemaVersion: Int = readerSchemaVersion, articles: [Article] = []) {
+        self.schemaVersion = schemaVersion
+        self.articles = articles
+    }
+
+    public static let empty = BookFile()
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case articles
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? readerSchemaVersion
+        articles = try c.decodeIfPresent([Article].self, forKey: .articles) ?? []
+    }
+}
+
+/// 书卡/进书用的派生量（对齐 Windows readerTypes.ts bookChapterIndexOf / bookOverallPercent）。
+public func bookChapterIndexOf(book: BookMeta, chapterId: String?) -> Int {
+    guard let chapterId, !chapterId.isEmpty,
+          let idx = book.chapters.firstIndex(where: { $0.id == chapterId }) else { return 0 }
+    return idx
+}
+
+/// 全书进度百分比：断点章内进度 + 之前的章数，除以总章数。
+public func bookOverallPercent(book: BookMeta) -> Double {
+    let total = book.chapters.count
+    guard total > 0 else { return 0 }
+    let idx = bookChapterIndexOf(book: book, chapterId: book.progress.chapterId)
+    let clamped = min(100.0, max(0.0, book.progress.percent))
+    let pct = ((Double(idx) + clamped / 100.0) / Double(total)) * 100
+    return min(100, max(0, pct))
 }
 
 // MARK: - 生词（SRS）
