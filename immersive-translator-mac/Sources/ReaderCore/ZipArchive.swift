@@ -1,27 +1,35 @@
 import Foundation
 import Compression
 
-/// 最小 zip 读取器（仅列表 + 读单文件），供 docx 解析使用。
+/// 最小 zip 读取器（仅列表 + 读单文件），供 docx / EPUB 解析使用。
 /// docx 是标准 zip：中央目录定位条目 → 本地头校验 → 解压（deflate/stored）。
-/// 不支持 zip64 与加密——超过这些能力的文件在 docx 场景不存在。
+/// 不支持 zip64；加密条目（general purpose bit 第 0 位）读取时显式拒绝——
+/// EPUB 的 DRM 载体即靠它识别（BookImport 借 encryption.xml 细分字体混淆）。
 
 struct ZipEntry {
     var fileName: String
     var compressedSize: Int
     var uncompressedSize: Int
     var compressionMethod: UInt16
+    /// general purpose bit flag（本地头与中央目录同值）。
+    var flags: UInt16
     var localHeaderOffset: Int
+
+    /// 第 0 位 = 加密位（传统 PKWARE 加密或 DRM 载体）。
+    var isEncrypted: Bool { flags & 0x1 != 0 }
 }
 
 enum ZipArchiveError: Error, LocalizedError {
     case notAZipFile
     case entryNotFound(String)
+    case entryEncrypted(String)
     case unsupported(String)
 
     var errorDescription: String? {
         switch self {
         case .notAZipFile: return "不是有效的 zip 文件（缺少中央目录）"
         case .entryNotFound(let name): return "zip 里找不到 \(name)"
+        case .entryEncrypted(let name): return "zip 条目已加密，无法读取：\(name)"
         case .unsupported(let what): return "不支持的 zip 特性：\(what)"
         }
     }
@@ -90,6 +98,8 @@ struct ZipArchive {
         var result: [ZipEntry] = []
         for _ in 0..<entryCount {
             guard u32(at: dirOffset) == 0x02014b50 else { break }
+            // 中央目录偏移 8 = general purpose bit flag（与本地头同值）。
+            let flags = UInt16(u16(at: dirOffset + 8))
             let method = UInt16(u16(at: dirOffset + 10))
             let compressedSize = u32(at: dirOffset + 20)
             let uncompressedSize = u32(at: dirOffset + 24)
@@ -104,6 +114,7 @@ struct ZipArchive {
                 compressedSize: compressedSize,
                 uncompressedSize: uncompressedSize,
                 compressionMethod: method,
+                flags: flags,
                 localHeaderOffset: localOffset
             ))
             dirOffset += 46 + nameLength + extraLength + commentLength
@@ -119,6 +130,12 @@ struct ZipArchive {
         // 本地头：0x04034b50 + 固定 30 字节 + 文件名 + 额外字段
         let lo = entry.localHeaderOffset
         guard u32(at: lo) == 0x04034b50 else { throw ZipArchiveError.notAZipFile }
+        // general purpose bit flag 第 0 位 = 加密位：加密条目直接拒绝
+        //（EPUB DRM / 口令 zip 都会置位；本地头为准，中央目录值同）。
+        let localFlags = UInt16(u16(at: lo + 6))
+        if localFlags & 0x1 != 0 || entry.isEncrypted {
+            throw ZipArchiveError.entryEncrypted(name)
+        }
         let nameLength = u16(at: lo + 26)
         let extraLength = u16(at: lo + 28)
         let dataOffset = lo + 30 + nameLength + extraLength
