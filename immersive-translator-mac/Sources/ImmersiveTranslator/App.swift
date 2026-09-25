@@ -330,6 +330,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        manager.onContinueReading = { [weak self] bookId in
+            self?.openReaderAtBook(bookId)
+        }
         manager.start()
     }
 
@@ -488,6 +491,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 快速复习结束页「打开阅读室」入口（触点管理器转发）。
     func openReaderFromTouchpoint() {
         openReader()
+    }
+
+    /// 提醒卡「继续阅读」入口：打开阅读室并直达书级断点章（对齐 Windows openReaderBook）。
+    func openReaderAtBook(_ bookId: String) {
+        readerController.show(openBookId: bookId)
     }
 
     @objc private func openQuickReview() {

@@ -53,10 +53,27 @@ public struct ReminderConfig: Codable, Equatable {
     public static let `default` = ReminderConfig()
 }
 
-/// 到点是否应弹提醒（纯函数，可测）。
-public func reminderShouldShowNow(_ cfg: ReminderConfig, nowMin: Int, due: Int, today: String) -> Bool {
-    if !cfg.enabled || due == 0 || cfg.lastShownDay == today {
+/// 到点是否应弹提醒（纯函数，可测）。双态（对齐 Windows should_show_now）：
+/// - 到期词态：due > 0（原有行为）。
+/// - 阅读目标态（每日阅读目标）：无到期词，但设了每日阅读目标、今天没读够、
+///   且书架上有书可回 —— 「还差 M 分钟 · 继续读《书名》第 N 章」。
+///   没书 / 没设目标 / 目标已达成的用户维持「无到期不弹」，不被打扰。
+public func reminderShouldShowNow(
+    _ cfg: ReminderConfig,
+    nowMin: Int,
+    due: Int,
+    today: String,
+    readSecondsToday: Double = 0,
+    hasBooks: Bool = false
+) -> Bool {
+    if !cfg.enabled || cfg.lastShownDay == today {
         return false
+    }
+    if due == 0 {
+        let goalMet = readSecondsToday >= Double(cfg.readGoalMin) * 60
+        if cfg.readGoalMin == 0 || !hasBooks || goalMet {
+            return false
+        }
     }
     if cfg.dndEnabled && reminderInDndWindow(nowMin, startMin: cfg.dndStartMin, endMin: cfg.dndEndMin) {
         return false
@@ -98,6 +115,13 @@ public func reminderMinuteLabel(_ minuteOfDay: Int) -> String {
 /// 提醒卡文案：N 个词约 M 分钟（按 6 词/分钟估读）。
 public func reminderEstimateMinutes(due: Int) -> Int {
     max(1, Int((Double(due) / 6.0).rounded()))
+}
+
+/// 阅读目标态文案：离今日目标还差多少分钟（不足 1 分钟按 1 计；
+/// 对齐 Windows ReminderApp 的 remainMin 口径）。
+public func reminderReadingRemainMinutes(readGoalMin: Int, readSecondsToday: Double) -> Int {
+    let remain = Double(readGoalMin) * 60 - readSecondsToday
+    return max(1, Int((remain / 60).rounded(.up)))
 }
 
 public let reminderMinuteOfDayMin = 6 * 60

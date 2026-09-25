@@ -708,7 +708,7 @@ public struct VocabWord: Codable, Equatable, Identifiable {
     }
 }
 
-// MARK: - 复习日志
+// MARK: - 复习日志 / 每日阅读时长
 
 public struct ReviewLogDay: Codable, Equatable {
     /// 本地日期 YYYY-MM-DD。
@@ -718,6 +718,19 @@ public struct ReviewLogDay: Codable, Equatable {
     public init(day: String, count: Int) {
         self.day = day
         self.count = count
+    }
+}
+
+/// 一天的累计阅读秒数（每日阅读目标追踪的数据源；对齐 Windows reader_store.rs
+/// ReadingLogDay，camelCase 键 readingLog 同构）。
+public struct ReadingLogDay: Codable, Equatable {
+    /// 本地日期 YYYY-MM-DD。
+    public var day: String
+    public var seconds: Double
+
+    public init(day: String, seconds: Double) {
+        self.day = day
+        self.seconds = seconds
     }
 }
 
@@ -764,11 +777,20 @@ public struct VocabFile: Codable, Equatable {
     public var schemaVersion: Int
     public var words: [VocabWord]
     public var reviewLog: ReviewLogFile
+    /// 每日阅读时长（可选字段：老数据/老应用双向兼容，schemaVersion 维持 1；
+    /// 与 Windows reader_store.rs 的 reading_log 同构）。
+    public var readingLog: [ReadingLogDay]?
 
-    public init(schemaVersion: Int = readerSchemaVersion, words: [VocabWord] = [], reviewLog: ReviewLogFile = .empty) {
+    public init(
+        schemaVersion: Int = readerSchemaVersion,
+        words: [VocabWord] = [],
+        reviewLog: ReviewLogFile = .empty,
+        readingLog: [ReadingLogDay]? = nil
+    ) {
         self.schemaVersion = schemaVersion
         self.words = words
         self.reviewLog = reviewLog
+        self.readingLog = readingLog
     }
 
     public static let empty = VocabFile()

@@ -26,6 +26,8 @@ final class ReaderWindowController: NSWindowController {
         window.isReleasedWhenClosed = false
         window.center()
         window.contentView = NSHostingView(rootView: ReaderRootView(vm: viewModel))
+        // 阅读计时活跃判定要用 isKeyWindow，把窗口挂给 VM。
+        viewModel.attachedWindow = window
         super.init(window: window)
     }
 
@@ -34,20 +36,23 @@ final class ReaderWindowController: NSWindowController {
         fatalError("init(coder:) is not supported")
     }
 
-    /// 打开/聚焦阅读室。pendingImportText 非空时导入该文本（热键路径）。
-    func show(pendingImportText: String? = nil, openReview: Bool = false) {
+    /// 打开/聚焦阅读室。pendingImportText 非空时导入该文本（热键路径）；
+    /// openBookId 非空时直达书级断点章（提醒卡「继续阅读」路径）。
+    func show(pendingImportText: String? = nil, openReview: Bool = false, openBookId: String? = nil) {
         guard let window else { return }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
-        if !didBootstrap || pendingImportText != nil || openReview {
+        if !didBootstrap || pendingImportText != nil || openReview || openBookId != nil {
             if !didBootstrap {
                 didBootstrap = true
-                viewModel.bootstrap(pendingImportText: pendingImportText, openReview: openReview)
+                viewModel.bootstrap(pendingImportText: pendingImportText, openReview: openReview, openBookId: openBookId)
             } else if let text = pendingImportText {
                 viewModel.importPaste(text)
             } else if openReview {
                 viewModel.openReview()
+            } else if let bookId = openBookId {
+                viewModel.openBookAt(bookId: bookId)
             }
         }
         installKeyMonitors()

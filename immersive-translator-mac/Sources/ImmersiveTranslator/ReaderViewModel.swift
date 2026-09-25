@@ -119,6 +119,8 @@ final class ReaderViewModel: ObservableObject {
     @Published private(set) var chapterEnd: ChapterEndSummary?
     /// 短文结课条（自然播完或手动「读完本篇」后常驻底部，可关闭）。
     @Published private(set) var finishCard: ArticleFinishSummary?
+    /// 今日已读秒数（每日阅读目标追踪，书架今日卡进度条用；recordReading 返回值镜像）。
+    @Published private(set) var readSecondsToday: Double = 0
 
     let store: ReaderStore
     private let chat: ReaderChatClient
@@ -134,6 +136,10 @@ final class ReaderViewModel: ObservableObject {
     private var sessionSeconds = 0
     private var readingSecondsBuffer = 0
     private var readingClock: AnyCancellable?
+    /// 活跃判定（朗读播放中，或阅读窗为 key 且近 2 分钟有按键/翻句交互）。
+    private var readingSession = ReadingSession()
+    /// 阅读室窗口（ReaderWindowController 注入；活跃判定要用 isKeyWindow）。
+    weak var attachedWindow: NSWindow?
     /// 打开的文章 id 集合里的源文缓存（复习卡回跳展示用）。
     var sourceCache: [String: Article] = [:]
     /// 每篇文章的查词次数（读完统计用）。
@@ -385,9 +391,15 @@ final class ReaderViewModel: ObservableObject {
 
     // MARK: - 阅读计时
 
-    /// 每秒计时：只在阅读路线、有文章且应用前台时累计；每 15s 批量落盘。
+    /// 每秒计时：阅读路线且有文章，且处于活跃阅读（朗读播放中，或阅读窗为 key
+    /// 且近 2 分钟有按键/翻句交互）时累计；每 15s 批量落盘。
     private func tickReadingSecond() {
-        guard route == .reading, article != nil, NSApp.isActive else { return }
+        guard route == .reading, article != nil else { return }
+        guard readingSession.isCounting(
+            playbackPlaying: playbackPlaying,
+            windowIsKey: attachedWindow?.isKeyWindow ?? false,
+            now: Date.timeIntervalSinceReferenceDate
+        ) else { return }
         sessionSeconds += 1
         readingSecondsBuffer += 1
         guard readingSecondsBuffer >= 15 else { return }
@@ -395,6 +407,8 @@ final class ReaderViewModel: ObservableObject {
     }
 
     /// 把缓冲秒数同步落盘（不走 700ms 防抖：切章/收尾时这段时长不丢）。
+    /// 章内秒数/书级秒数之外，同时并入每日阅读时长 readingLog（对齐 Windows
+    /// 每 ~15s 上报 reader_record_reading，朗读播放与停留阅读均计入）。
     private func flushReadingSeconds() {
         guard readingSecondsBuffer > 0, var current = article else { return }
         let seconds = Double(readingSecondsBuffer)
@@ -409,6 +423,9 @@ final class ReaderViewModel: ObservableObject {
                 next.secondsListened += seconds
                 return next
             }
+        }
+        if let total = try? store.recordReading(day: dayKey(nowMs: Int64(Date().timeIntervalSince1970 * 1000)), seconds: seconds) {
+            readSecondsToday = total
         }
     }
 
@@ -497,7 +514,7 @@ final class ReaderViewModel: ObservableObject {
 
     // MARK: - 启动加载
 
-    func bootstrap(pendingImportText: String? = nil, openReview: Bool = false) {
+    func bootstrap(pendingImportText: String? = nil, openReview: Bool = false, openBookId: String? = nil) {
         globalSettings = store.loadGlobalReaderSettings()
         refreshVocab()
         refreshBooks()
@@ -509,6 +526,11 @@ final class ReaderViewModel: ObservableObject {
         }
         if openReview {
             route = .review
+            return
+        }
+        if let openBookId {
+            // 提醒卡「继续阅读」：直达书级断点章。
+            openBookAt(bookId: openBookId)
             return
         }
         if let first = list.first {
@@ -523,6 +545,10 @@ final class ReaderViewModel: ObservableObject {
         if let file = try? store.getVocabFile() {
             vocabWords = file.words
             reviewLog = file.reviewLog
+            readSecondsToday = readingSeconds(
+                in: file.readingLog ?? [],
+                day: dayKey(nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+            )
             loadSourceArticles(ids: file.words.map(\.source.articleId))
             ReviewTouchpointManager.shared.refreshBadge()
         }
@@ -1123,6 +1149,7 @@ final class ReaderViewModel: ObservableObject {
 
     func jumpTo(idx: Int, autoplay: Bool = false) {
         guard let total = article?.sentences.count, total > 0 else { return }
+        readingSession.noteInteraction(now: Date.timeIntervalSinceReferenceDate)
         let clamped = min(max(0, idx), total - 1)
         playback.jumpTo(clamped, autoplay: autoplay)
         if !playback.playing {
@@ -1135,6 +1162,7 @@ final class ReaderViewModel: ObservableObject {
 
     /// 滚动到哪 = 读到哪：未播放（且非跟读等待）时光标跟随视口。
     func viewportMoved(to idx: Int) {
+        readingSession.noteInteraction(now: Date.timeIntervalSinceReferenceDate)
         guard !playback.playing, !playback.shadowingWait else { return }
         if idx != activeSentenceIdx {
             activeSentenceIdx = idx
@@ -1520,6 +1548,7 @@ final class ReaderViewModel: ObservableObject {
             return reviewKeyHandler?(event) ?? false
         }
         guard route == .reading else { return false }
+        readingSession.noteInteraction(now: Date.timeIntervalSinceReferenceDate)
         guard let key = event.charactersIgnoringModifiers?.lowercased() else { return false }
         if key == " " || key == "k" {
             togglePlayback()

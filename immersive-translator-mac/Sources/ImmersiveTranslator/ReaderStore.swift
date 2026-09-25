@@ -360,6 +360,30 @@ final class ReaderStore {
         }
     }
 
+    // MARK: - 每日阅读时长（reader_vocab.json 的 readingLog；对齐 reader_store.rs）
+
+    /// 累计某天阅读秒数，返回该天累计值（每 ~15s 由阅读计时批量上报；
+    /// 对齐 Windows reader_record_reading）。
+    @discardableResult
+    func recordReading(day: String, seconds: Double) throws -> Double {
+        try queue.sync {
+            var file = try loadVocabFile()
+            file.schemaVersion = readerSchemaVersion
+            let log = readingLogRecorded(file.readingLog ?? [], day: day, seconds: seconds)
+            file.readingLog = log
+            try writeAtomically(try ReaderFileCodec.encode(file), to: vocabURL)
+            return readingSeconds(in: log, day: day)
+        }
+    }
+
+    /// 某天累计阅读秒数（提醒卡 / 今日卡展示用；对齐 reader_read_seconds_today）。
+    func readSeconds(day: String) throws -> Double {
+        try queue.sync {
+            let file = try loadVocabFile()
+            return readingSeconds(in: file.readingLog ?? [], day: day)
+        }
+    }
+
     // MARK: - 全局阅读设置（UserDefaults）
 
     private static let globalSettingsKey = "readerGlobalSettings"
