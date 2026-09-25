@@ -2,6 +2,12 @@ import SwiftUI
 import Combine
 import ReaderCore
 
+/// toast 行内动作按钮（朗读失败归因的「打开设置」等）。
+struct ToastAction {
+    let title: String
+    let handler: () -> Void
+}
+
 /// 沉浸阅读室组合根（ReaderApp.tsx 的 Mac 对应物）。
 ///
 /// 职责：加载数据（文章/生词/设置）、驱动翻译管线（段级流式 + 单段重试 +
@@ -102,6 +108,8 @@ final class ReaderViewModel: ObservableObject {
     @Published var reviewLog: ReviewLogFile = .empty
     @Published var route: Route = .reading
     @Published var toast: String = ""
+    /// toast 行内动作（与 toast 同生同灭；nil = 无按钮）。
+    @Published var toastAction: ToastAction?
     @Published var translating: StepProgress?
     @Published var chunking: ChunkProgress?
     @Published var dict: DictPanel = .closed
@@ -265,9 +273,20 @@ final class ReaderViewModel: ObservableObject {
             // 书章 → 章末小结卡；短文 → 底部常驻结课条（替代原先一闪而过的 toast）。
             guard let current = article else { return }
             presentFinish(for: current)
-        case .failed(let message):
-            showToast("朗读失败：\(message)")
+        case .failed(let info):
+            // 播放已停止：对齐 Windows「朗读失败，已停止：…」；缺凭据时附「打开设置」。
+            showToast("朗读失败，已停止：\(info.message)", action: info.allowSettings ? Self.openSettingsToastAction : nil)
+        case .cloudFallback(let info):
+            // 云合成失败但已回落本地合成（朗读未断流）：把归因讲清楚。
+            showToast("云朗读失败，已换系统朗读：\(info.message)", action: info.allowSettings ? Self.openSettingsToastAction : nil)
         }
+    }
+
+    /// 朗读归因 toast 的「打开设置」按钮：经 NSApp.delegate 调 AppDelegate 公开方法
+    /// （ReaderWindowController 只持有 settingsStore，不持有设置窗引用，
+    /// 仿 QuickReviewWindow → openReaderFromTouchpoint 先例）。
+    private static let openSettingsToastAction = ToastAction(title: "打开设置") {
+        (NSApp.delegate as? AppDelegate)?.openSettingsFromReader()
     }
 
     // MARK: - 读完落点（章末小结卡 / 短文结课条）
@@ -1605,13 +1624,15 @@ final class ReaderViewModel: ObservableObject {
 
     // MARK: - Toast
 
-    func showToast(_ message: String) {
+    func showToast(_ message: String, action: ToastAction? = nil) {
         toast = message
+        toastAction = action
         toastTask?.cancel()
         toastTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 3_200_000_000)
             guard !Task.isCancelled else { return }
             self?.toast = ""
+            self?.toastAction = nil
         }
     }
 }

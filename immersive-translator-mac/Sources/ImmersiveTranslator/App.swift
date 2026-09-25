@@ -500,6 +500,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openReader()
     }
 
+    /// 阅读室朗读失败归因 toast 的「打开设置」入口：ReaderWindowController 只持有
+    /// settingsStore 不持有设置窗引用，仿 openReaderFromTouchpoint 先例经
+    /// NSApp.delegate 消费（ReaderViewModel.openSettingsToastAction）。
+    func openSettingsFromReader() {
+        openSettings()
+    }
+
     /// 提醒卡「继续阅读」入口：打开阅读室并直达书级断点章（对齐 Windows openReaderBook）。
     func openReaderAtBook(_ bookId: String) {
         readerController.show(openBookId: bookId)

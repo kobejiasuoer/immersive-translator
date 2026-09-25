@@ -44,7 +44,7 @@ struct ReaderRootView: View {
         .environment(\.colorScheme, palette.colorScheme)
         .overlay(alignment: .bottom) {
             if !vm.toast.isEmpty {
-                ReaderToast(text: vm.toast)
+                ReaderToast(text: vm.toast, action: vm.toastAction)
             }
         }
         .sheet(isPresented: $vm.importSheetShown) {
@@ -1699,18 +1699,36 @@ struct ReaderSettingsDrawer: View {
 
 struct ReaderToast: View {
     let text: String
+    var action: ToastAction?
 
     var body: some View {
-        Text(text)
-            .font(.system(size: 12.5))
-            .foregroundColor(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(Color.black.opacity(0.78))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .padding(.bottom, 56)
-            .transition(.opacity)
-            .animation(.easeInOut(duration: 0.18), value: text)
+        HStack(spacing: 10) {
+            Text(text)
+                .font(.system(size: 12.5))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.leading)
+            if let action {
+                Button {
+                    action.handler()
+                } label: {
+                    Text(action.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 3)
+                        .background(Color.white.opacity(0.92), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(action.title)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color.black.opacity(0.78))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.bottom, 56)
+        .transition(.opacity)
+        .animation(.easeInOut(duration: 0.18), value: text)
     }
 }
 
