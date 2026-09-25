@@ -26,6 +26,34 @@ final class ReminderTests: XCTestCase {
         XCTAssertFalse(reminderShouldShowNow(cfg, nowMin: 1230, due: 5, today: "2026-09-21"))  // 窗口尾之外
     }
 
+    func testReadingGoalStateFiresWhenUnmetWithBooks() {
+        // 阅读目标态：无到期词 + 有书 + 目标 10 分钟没读够（3 分钟）→ 弹。
+        let cfg = ReminderConfig.default
+        XCTAssertTrue(reminderShouldShowNow(cfg, nowMin: 1200, due: 0, today: "2026-09-21", readSecondsToday: 180, hasBooks: true))
+        // 读够了（10 分钟）→ 不弹。
+        XCTAssertFalse(reminderShouldShowNow(cfg, nowMin: 1200, due: 0, today: "2026-09-21", readSecondsToday: 600, hasBooks: true))
+        // 没书 / 没设目标：维持「无到期不弹」。
+        XCTAssertFalse(reminderShouldShowNow(cfg, nowMin: 1200, due: 0, today: "2026-09-21", readSecondsToday: 0, hasBooks: false))
+        var noGoal = ReminderConfig.default
+        noGoal.readGoalMin = 0
+        XCTAssertFalse(reminderShouldShowNow(noGoal, nowMin: 1200, due: 0, today: "2026-09-21", readSecondsToday: 0, hasBooks: true))
+        // 有到期词时目标态不参与判断（走原有复习卡路径）。
+        XCTAssertTrue(reminderShouldShowNow(cfg, nowMin: 1200, due: 3, today: "2026-09-21", readSecondsToday: 600, hasBooks: false))
+        // 阅读目标态同样受免打扰与每日一次约束。
+        XCTAssertFalse(reminderShouldShowNow(cfg, nowMin: 23 * 60 + 30, due: 0, today: "2026-09-21", readSecondsToday: 0, hasBooks: true))
+        var shown = ReminderConfig.default
+        shown.lastShownDay = "2026-09-21"
+        XCTAssertFalse(reminderShouldShowNow(shown, nowMin: 1200, due: 0, today: "2026-09-21", readSecondsToday: 0, hasBooks: true))
+    }
+
+    func testReadingRemainMinutes() {
+        // 目标 10 分钟，已读 3 分钟 → 还差 7 分钟（向上取整）。
+        XCTAssertEqual(reminderReadingRemainMinutes(readGoalMin: 10, readSecondsToday: 180), 7)
+        // 不足 1 分钟按 1 计。
+        XCTAssertEqual(reminderReadingRemainMinutes(readGoalMin: 10, readSecondsToday: 595), 1)
+        XCTAssertEqual(reminderReadingRemainMinutes(readGoalMin: 10, readSecondsToday: 600), 1)
+    }
+
     func testDndWindowAcrossMidnight() {
         // 23:00–08:00 跨零点
         XCTAssertTrue(reminderInDndWindow(23 * 60 + 30, startMin: 23 * 60, endMin: 8 * 60))

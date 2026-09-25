@@ -220,6 +220,8 @@ struct ReaderBodyView: View {
 
 struct ReaderShelfView: View {
     @ObservedObject var vm: ReaderViewModel
+    /// 阅读目标配置（ReviewTouchpointManager.config.readGoalMin；提醒设置组同源）。
+    @ObservedObject private var touchpoint = ReviewTouchpointManager.shared
     @Environment(\.readerPalette) private var palette
 
     var body: some View {
@@ -327,11 +329,52 @@ struct ReaderShelfView: View {
                     : "今日没有到期生词，去阅读里攒几个吧。")
                     .font(.system(size: 11))
                     .foregroundColor(palette.textTertiary)
+
+                // 每日阅读目标进度（设了目标才显示；朗读播放与停留阅读均计入）。
+                if touchpoint.config.readGoalMin > 0 {
+                    ReadingGoalProgress(
+                        seconds: vm.readSecondsToday,
+                        goalMin: touchpoint.config.readGoalMin
+                    )
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
         }
         .background(palette.surfaceAlt)
+    }
+}
+
+/// 今日已读 M/N 分钟 + 目标进度条（每日阅读目标；对齐 Windows TodayCard 的 today-read）。
+private struct ReadingGoalProgress: View {
+    /// 今日已读秒数（M 按分钟四舍五入展示）。
+    let seconds: Double
+    let goalMin: Int
+    @Environment(\.readerPalette) private var palette
+
+    private var minutes: Int { max(0, Int((seconds / 60).rounded())) }
+    private var percent: Double {
+        goalMin > 0 ? min(1, max(0, seconds / (Double(goalMin) * 60))) : 0
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("今日已读 \(minutes)/\(goalMin) 分钟")
+                .font(.system(size: 11))
+                .foregroundColor(palette.textTertiary)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(palette.border.opacity(0.5))
+                    Capsule()
+                        .fill(percent >= 1 ? palette.ok : palette.accent)
+                        .frame(width: max(0, geo.size.width * percent))
+                }
+            }
+            .frame(height: 4)
+        }
+        .help("阅读时长：朗读播放与停留阅读均计入")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("今日已读 \(minutes) 分钟，目标 \(goalMin) 分钟")
     }
 }
 
