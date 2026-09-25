@@ -838,6 +838,10 @@ struct SettingsView: View {
     @State private var customPromptMessage = ""
     @State private var glossaryMaintenanceMessage = ""
 
+    // 开机自启（对齐 Windows：乐观切换，失败回滚并提示）
+    @State private var launchAtLoginEnabled = LaunchAtLogin.isEnabled
+    @State private var launchAtLoginErrorMessage: String?
+
     // 多 Provider UI 状态
     @State private var showAddCustomProvider = false
     @State private var pendingDeleteProvider: ProviderProfile?
@@ -1026,6 +1030,7 @@ struct SettingsView: View {
 
                     settingsSection("关于") {
                         aboutVersionRow
+                        aboutLaunchAtLoginRow
                         aboutOnboardingRow
                     }
 
@@ -1128,6 +1133,14 @@ struct SettingsView: View {
         } message: {
             Text("确认删除“\(pendingDeleteProvider?.displayName ?? "")”？其 API Key 会一并从钥匙串清除，常驻提供商（DeepSeek/智谱/OpenAI）不可删除。")
         }
+        .alert("设置开机自启失败", isPresented: Binding(
+            get: { launchAtLoginErrorMessage != nil },
+            set: { if !$0 { launchAtLoginErrorMessage = nil } }
+        )) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(launchAtLoginErrorMessage ?? "")
+        }
         .onChange(of: settingsStore.providerDiagnosticRequestID) { _ in
             runRequestedProviderDiagnostic()
         }
@@ -1186,6 +1199,51 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.primary.opacity(0.10), lineWidth: 1)
         )
+    }
+
+    /// 「关于」分区：开机自启开关（对齐 Windows 设置 → 关于 的开机自启行，SMAppService 登录项）。
+    private var aboutLaunchAtLoginRow: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("开机自启")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("登录系统后自动启动并驻留菜单栏，复习提醒与角标不会因为忘了打开应用而漏掉。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Toggle("开机自启", isOn: Binding(
+                get: { launchAtLoginEnabled },
+                set: { setLaunchAtLoginEnabled($0) }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .labelsHidden()
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+        )
+    }
+
+    /// 对齐 Windows toggleAutostart：先尝试注册/注销登录项，失败则回滚开关并弹 alert（不做乐观落盘）。
+    private func setLaunchAtLoginEnabled(_ enabled: Bool) {
+        do {
+            if enabled {
+                try LaunchAtLogin.register()
+            } else {
+                try LaunchAtLogin.unregister()
+            }
+            launchAtLoginEnabled = enabled
+            launchAtLoginErrorMessage = nil
+        } catch {
+            launchAtLoginEnabled = !enabled
+            launchAtLoginErrorMessage = "设置开机自启失败：\(error.localizedDescription)"
+        }
     }
 
     private var aboutOnboardingRow: some View {
