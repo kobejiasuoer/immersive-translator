@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import ReaderCore
 
 enum TranslationSource: String, Codable {
     case selection
@@ -405,11 +406,25 @@ final class TranslationHistoryStore: ObservableObject {
 final class TranslationHistoryWindowController: NSWindowController {
     private let historyStore: TranslationHistoryStore
     private let onRetranslate: (TranslationRecord) -> Void
+    private let onAddVocab: (TranslationRecord) async throws -> CollectVocabOutcome
+    private let onSendToReader: (TranslationRecord) async throws -> Void
 
-    init(historyStore: TranslationHistoryStore, onRetranslate: @escaping (TranslationRecord) -> Void) {
+    init(
+        historyStore: TranslationHistoryStore,
+        onRetranslate: @escaping (TranslationRecord) -> Void,
+        onAddVocab: @escaping (TranslationRecord) async throws -> CollectVocabOutcome,
+        onSendToReader: @escaping (TranslationRecord) async throws -> Void
+    ) {
         self.historyStore = historyStore
         self.onRetranslate = onRetranslate
-        let view = TranslationHistoryView(historyStore: historyStore, onRetranslate: onRetranslate)
+        self.onAddVocab = onAddVocab
+        self.onSendToReader = onSendToReader
+        let view = TranslationHistoryView(
+            historyStore: historyStore,
+            onRetranslate: onRetranslate,
+            onAddVocab: onAddVocab,
+            onSendToReader: onSendToReader
+        )
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
         window.title = "翻译历史"
@@ -608,12 +623,22 @@ private enum HistoryExportFileName {
 struct TranslationHistoryView: View {
     @ObservedObject var historyStore: TranslationHistoryStore
     let onRetranslate: (TranslationRecord) -> Void
+    /// 「加入生词本」公共实现（CollectActions）。结果由调用方写入 exportMessage。
+    let onAddVocab: (TranslationRecord) async throws -> CollectVocabOutcome
+    /// 「送到阅读室」公共实现。结果由调用方写入 exportMessage。
+    let onSendToReader: (TranslationRecord) async throws -> Void
     @State private var filter: HistoryFilter = .all
     @State private var searchText = ""
     @State private var selectedRecordID: UUID?
     @State private var exportMessage = ""
     @State private var lastExportResult: TranslationHistoryExportResult?
     @State private var recentlyDeletedRecord: TranslationHistoryDeletedRecord?
+    /// 「加入生词本」进行中的记录（行按钮转 spinner 并 disabled；状态不随 hover 消失）。
+    @State private var vocabBusyRecordIDs: Set<UUID> = []
+    /// 「送到阅读室」进行中的记录。
+    @State private var sendBusyRecordIDs: Set<UUID> = []
+    /// 本次窗口会话里已成功加入生词本的记录（按钮置为已入册态）。
+    @State private var vocabSavedRecordIDs: Set<UUID> = []
     @FocusState private var isSearchFocused: Bool
     private let historySearchDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -983,6 +1008,44 @@ struct TranslationHistoryView: View {
                 .buttonStyle(.borderless)
                 .help("复制原文")
 
+                if isVocabCandidate(record) {
+                    Button {
+                        addRecordToVocab(record)
+                    } label: {
+                        if vocabBusyRecordIDs.contains(record.id) {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .frame(width: 14, height: 14)
+                        } else {
+                            Image(systemName: vocabSavedRecordIDs.contains(record.id) ? "text.book.closed.fill" : "text.book.closed")
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(vocabBusyRecordIDs.contains(record.id) || vocabSavedRecordIDs.contains(record.id))
+                    .help(
+                        vocabSavedRecordIDs.contains(record.id)
+                            ? "已在生词本"
+                            : (vocabBusyRecordIDs.contains(record.id) ? "正在查询词条并生成例句…" : "加入生词本")
+                    )
+                }
+
+                if canSendToReader(record) {
+                    Button {
+                        sendRecordToReader(record)
+                    } label: {
+                        if sendBusyRecordIDs.contains(record.id) {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .frame(width: 14, height: 14)
+                        } else {
+                            Image(systemName: "book")
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(sendBusyRecordIDs.contains(record.id))
+                    .help(sendBusyRecordIDs.contains(record.id) ? "正在送到阅读室…" : "送到阅读室")
+                }
+
                 Button {
                     deleteHistoryRecord(record)
                 } label: {
@@ -1021,6 +1084,24 @@ struct TranslationHistoryView: View {
             retranslateHistoryRecord(record)
         } label: {
             Label("重新翻译原文", systemImage: "arrow.clockwise")
+        }
+
+        if isVocabCandidate(record) {
+            Button {
+                addRecordToVocab(record)
+            } label: {
+                Label("加入生词本", systemImage: "text.book.closed")
+            }
+            .disabled(vocabBusyRecordIDs.contains(record.id) || vocabSavedRecordIDs.contains(record.id))
+        }
+
+        if canSendToReader(record) {
+            Button {
+                sendRecordToReader(record)
+            } label: {
+                Label("送到阅读室", systemImage: "book")
+            }
+            .disabled(sendBusyRecordIDs.contains(record.id))
         }
 
         Divider()
@@ -1116,6 +1197,60 @@ struct TranslationHistoryView: View {
         recentlyDeletedRecord = nil
         exportMessage = "正在用当前设置重新翻译这条原文"
         onRetranslate(record)
+    }
+
+    // MARK: - 串联入口：加入生词本 / 送到阅读室
+
+    /// 阅读室面向英文精读：中文原文一律不显示串联入口（looksMostlyChinese）。
+    private func canSendToReader(_ record: TranslationRecord) -> Bool {
+        !looksMostlyChinese(record.original)
+    }
+
+    /// 生词入口再叠加 isLookupText：整句/段落不像词条，不误收为一个生词。
+    /// 双条件对齐 Windows History.tsx 的 isVocabCandidate。
+    private func isVocabCandidate(_ record: TranslationRecord) -> Bool {
+        canSendToReader(record) && isLookupText(record.original)
+    }
+
+    /// 加入生词本：公共 CollectActions（词典查词条 + 例句生成并行、合并落库保留
+    /// SRS 进度）。进行中转 spinner 并 disabled，结果写入底部状态条。
+    private func addRecordToVocab(_ record: TranslationRecord) {
+        guard !vocabBusyRecordIDs.contains(record.id),
+              !vocabSavedRecordIDs.contains(record.id) else { return }
+        vocabBusyRecordIDs.insert(record.id)
+        lastExportResult = nil
+        recentlyDeletedRecord = nil
+        exportMessage = "正在查询词条并生成例句…"
+        Task { @MainActor in
+            defer { vocabBusyRecordIDs.remove(record.id) }
+            do {
+                let outcome = try await onAddVocab(record)
+                vocabSavedRecordIDs.insert(record.id)
+                exportMessage = CollectActions.vocabResultMessage(outcome)
+            } catch {
+                let message = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                exportMessage = "加入生词本失败：\(message)"
+            }
+        }
+    }
+
+    /// 送到阅读室：公共入口（可导入性校验 + 打开阅读室，建文交给阅读室导入管线）。
+    private func sendRecordToReader(_ record: TranslationRecord) {
+        guard !sendBusyRecordIDs.contains(record.id) else { return }
+        sendBusyRecordIDs.insert(record.id)
+        lastExportResult = nil
+        recentlyDeletedRecord = nil
+        exportMessage = "正在送到阅读室…"
+        Task { @MainActor in
+            defer { sendBusyRecordIDs.remove(record.id) }
+            do {
+                try await onSendToReader(record)
+                exportMessage = "已送到阅读室"
+            } catch {
+                let message = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                exportMessage = "送到阅读室失败：\(message)"
+            }
+        }
     }
 
     private func combinedHistoryText(for record: TranslationRecord) -> String {

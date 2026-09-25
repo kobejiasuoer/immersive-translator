@@ -135,6 +135,17 @@ final class ReaderViewModel: ObservableObject {
         playback.onEvent = { [weak self] event in
             self?.handlePlaybackEvent(event)
         }
+        // 跨窗刷新广播（对齐 Windows collectActions 的 emit）：浮窗/历史窗口
+        // 「加入生词本」后刷新词表（refreshVocab 内部会刷复习角标），
+        // 新文章落库后刷新书架。
+        NotificationCenter.default.publisher(for: .readerVocabAdded)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshVocab() }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: .readerArticleAdded)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshArticleList() }
+            .store(in: &cancellables)
         setupShadowAssess()
         setupSpeak()
     }
@@ -372,6 +383,12 @@ final class ReaderViewModel: ObservableObject {
             _ = try store.saveArticle(built)
             refreshArticleList()
             openArticle(id: built.id)
+            // 广播新文章（「送到阅读室」等入口建文后，其他阅读室界面刷新书架）。
+            NotificationCenter.default.post(
+                name: .readerArticleAdded,
+                object: nil,
+                userInfo: ["articleId": built.id]
+            )
             showToast("已导入「\(built.title)」")
         } catch {
             showToast("导入失败：\((error as? LocalizedError)?.errorDescription ?? "\(error)")")

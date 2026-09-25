@@ -141,6 +141,31 @@ final class ReaderStore {
         }
     }
 
+    /// 合并生词（历史窗口/浮窗「加入生词本」共用；对齐 Windows reader_merge_vocab_words）：
+    /// 按 normalizeWordKey 命中旧词时保留 srs/recall/addedAt/source，
+    /// 仅补缺失的 senses/phonetic/example；未命中时新词入库。
+    /// 返回是否新增（false = 合并进已有词，复习进度保持不变）。
+    @discardableResult
+    func mergeVocabWord(_ word: VocabWord) throws -> Bool {
+        try queue.sync {
+            var file = try loadVocabFile()
+            file.schemaVersion = readerSchemaVersion
+            let key = normalizeWordKey(word.word)
+            if let idx = file.words.firstIndex(where: { $0.id == word.id || (!key.isEmpty && $0.id == key) }) {
+                var merged = file.words[idx]
+                if merged.senses.isEmpty { merged.senses = word.senses }
+                if (merged.phonetic ?? "").isEmpty { merged.phonetic = word.phonetic }
+                if merged.example == nil { merged.example = word.example }
+                file.words[idx] = merged
+                try writeAtomically(try ReaderFileCodec.encode(file), to: vocabURL)
+                return false
+            }
+            file.words.append(word)
+            try writeAtomically(try ReaderFileCodec.encode(file), to: vocabURL)
+            return true
+        }
+    }
+
     @discardableResult
     func deleteVocabWord(id: String) throws -> Bool {
         try queue.sync {
