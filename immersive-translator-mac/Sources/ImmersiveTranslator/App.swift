@@ -245,7 +245,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.sendPanelTextToReader(text)
         }
     )
-    private lazy var settingsController = SettingsWindowController(settingsStore: settingsStore)
+    // onShowOnboarding 走 showOnboarding() 方法而不是直接摸 onboardingController：
+    // 两个 lazy var 的初始化闭包互相引用成员会构成 circular reference，方法体不参与该解析。
+    private lazy var settingsController = SettingsWindowController(
+        settingsStore: settingsStore,
+        onShowOnboarding: { [weak self] in
+            self?.showOnboarding()
+        }
+    )
     private lazy var historyController = TranslationHistoryWindowController(
         historyStore: historyStore,
         onRetranslate: { [weak self] record in

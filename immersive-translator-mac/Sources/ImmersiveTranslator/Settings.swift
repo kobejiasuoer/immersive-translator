@@ -792,9 +792,12 @@ private struct GlossarySummary {
 final class SettingsWindowController: NSWindowController {
     private let settingsStore: SettingsStore
 
-    init(settingsStore: SettingsStore) {
+    init(
+        settingsStore: SettingsStore,
+        onShowOnboarding: @escaping () -> Void
+    ) {
         self.settingsStore = settingsStore
-        let view = SettingsView(settingsStore: settingsStore)
+        let view = SettingsView(settingsStore: settingsStore, onShowOnboarding: onShowOnboarding)
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
         window.title = "沉浸式翻译设置"
@@ -818,6 +821,7 @@ final class SettingsWindowController: NSWindowController {
 
 struct SettingsView: View {
     @ObservedObject var settingsStore: SettingsStore
+    let onShowOnboarding: () -> Void
     @State private var recordingHotKey: HotKeyRecorderTarget?
     @State private var hotKeyRecorderMessage = ""
     @State private var providerDiagnostic = ProviderConnectionDiagnostic.idle
@@ -1020,6 +1024,11 @@ struct SettingsView: View {
                         XfyunVoiceSettingsSection()
                     }
 
+                    settingsSection("关于") {
+                        aboutVersionRow
+                        aboutOnboardingRow
+                    }
+
                     storageMessage
                 }
                 .padding(24)
@@ -1152,6 +1161,62 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// 「关于」分区：版本行 + 查看引导入口（对齐 Windows 设置 → 关于 的版本与功能引导行）。
+    private var aboutVersionRow: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("版本")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("更新从 GitHub Releases 拉取，下载后自动校验签名再安装；也可点菜单栏「译」→「检查更新」手动检查。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Text(aboutVersionText)
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .textSelection(.enabled)
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+        )
+    }
+
+    private var aboutOnboardingRow: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("功能引导")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("再看一次三大能力与快捷键介绍。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Button("查看引导") {
+                onShowOnboarding()
+            }
+            .controlSize(.small)
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+        )
+    }
+
+    /// 版本号读打包后的 Info.plist；swift run 未打包时没有该键，按开发运行提示。
+    private var aboutVersionText: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        return version.isEmpty ? "开发版（未打包）" : "v\(version)"
     }
 
     private var providerOnboardingGuide: some View {
