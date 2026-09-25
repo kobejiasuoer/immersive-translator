@@ -120,7 +120,7 @@ final class XfyunCoreTests: XCTestCase {
     private let sampleXml = """
     <?xml version="1.0" encoding="UTF-8"?>
     <xml_result>
-      <read_chapter except_info="0" is_rejected="false" total_score="4.5" />
+      <read_chapter except_info="0" is_rejected="false" integrity_score="4.6" total_score="4.5" />
       <rec_paper>
         <sentence content="the cat sat" total_score="4.2" accuracy_score="4.0" fluency_score="4.4" standard_score="4.1">
           <word content="the" total_score="5" dp_message="0">
@@ -140,6 +140,7 @@ final class XfyunCoreTests: XCTestCase {
         let result = parseIseXml(sampleXml)
         XCTAssertEqual(result.total, 4.2, accuracy: 0.001)
         XCTAssertEqual(result.accuracy, 4.0, accuracy: 0.001)
+        XCTAssertEqual(result.integrity, 4.6, accuracy: 0.001)
         XCTAssertFalse(result.isRejected)
         XCTAssertNil(result.exceptInfo)
         XCTAssertEqual(result.words.count, 4)
@@ -147,6 +148,22 @@ final class XfyunCoreTests: XCTestCase {
         XCTAssertEqual(result.words[0].sylls.count, 1)
         XCTAssertEqual(result.words[0].sylls[0].phones[0].content, "dh")
         XCTAssertEqual(result.words[3].dpMessage, 32)
+    }
+
+    func testParseIseXmlIntegritySentenceFallbackAndDefault() {
+        // 篇章层没有 integrity_score：句层兜底
+        let sentenceOnly = """
+        <xml_result><read_chapter is_rejected="false"/>
+        <sentence content="a" total_score="3.0" accuracy_score="3" fluency_score="3" standard_score="3" integrity_score="3.9">
+        <word content="a" total_score="3" dp_message="0"/></sentence></xml_result>
+        """
+        XCTAssertEqual(parseIseXml(sentenceOnly).integrity, 3.9, accuracy: 0.001)
+        // 两层都没有：缺省 5（单句评测恒接近 5）
+        let none = """
+        <xml_result><sentence content="a" total_score="3.0" accuracy_score="3" fluency_score="3" standard_score="3">
+        <word content="a" total_score="3" dp_message="0"/></sentence></xml_result>
+        """
+        XCTAssertEqual(parseIseXml(none).integrity, 5, accuracy: 0.001)
     }
 
     func testParseIseXmlRejectedFallsBackToSentenceAttrs() {

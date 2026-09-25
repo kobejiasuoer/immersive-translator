@@ -99,21 +99,29 @@ public struct SpeakTurn: Codable, Equatable, Identifiable {
     public var text: String
     /// assistant 轮的中文提示（这句意思 + 怎么接话）。
     public var hintZh: String?
-    /// assistant 轮的跟读得分（5 分制 ISE；nil = 没测）。
+    /// assistant 轮的跟读分（5 分制 ISE；nil = 没测）。
+    /// 兼容字段：等于最新一次 attempt 的总分（UI 直读它）。
     public var shadowScore: Double?
+    /// 跟读报告历史（最新在末尾；旧会话无此字段）。重复跟读 append 而不是覆盖，
+    /// 口语复盘的跨尝试规则（R2/R5）依赖完整历史。
+    public var shadowAttempts: [ShadowAttempt]?
     /// Unix 毫秒。
     public var at: Int64
 
-    public init(role: Role, text: String, hintZh: String? = nil, shadowScore: Double? = nil, at: Int64) {
+    public init(
+        role: Role, text: String, hintZh: String? = nil, shadowScore: Double? = nil,
+        shadowAttempts: [ShadowAttempt]? = nil, at: Int64
+    ) {
         self.role = role
         self.text = text
         self.hintZh = hintZh
         self.shadowScore = shadowScore
+        self.shadowAttempts = shadowAttempts
         self.at = at
     }
 
     enum CodingKeys: String, CodingKey {
-        case role, text, hintZh, shadowScore, at
+        case role, text, hintZh, shadowScore, shadowAttempts, at
     }
 
     public init(from decoder: Decoder) throws {
@@ -122,6 +130,7 @@ public struct SpeakTurn: Codable, Equatable, Identifiable {
         text = try c.decode(String.self, forKey: .text)
         hintZh = try c.decodeIfPresent(String.self, forKey: .hintZh)
         shadowScore = try c.decodeIfPresent(Double.self, forKey: .shadowScore)
+        shadowAttempts = try c.decodeIfPresent([ShadowAttempt].self, forKey: .shadowAttempts)
         at = try c.decodeIfPresent(Int64.self, forKey: .at) ?? 0
     }
 
@@ -131,7 +140,130 @@ public struct SpeakTurn: Codable, Equatable, Identifiable {
         try c.encode(text, forKey: .text)
         try c.encodeIfPresent(hintZh, forKey: .hintZh)
         try c.encodeIfPresent(shadowScore, forKey: .shadowScore)
+        try c.encodeIfPresent(shadowAttempts, forKey: .shadowAttempts)
         try c.encode(at, forKey: .at)
+    }
+}
+
+// MARK: - 跟读报告（落盘结构，对齐 contracts speakShadowAttempt / Windows speak_store.rs）
+
+/// 每轮最多保留的跟读报告数（更旧的挤掉；对齐 Windows SpeakView 的 slice(-10)）。
+public let speakMaxShadowAttemptsPerTurn = 10
+
+/// 一次跟读评测报告（分数均为 5 分制）。
+public struct ShadowAttempt: Codable, Equatable, Sendable {
+    /// Unix 毫秒。
+    public var at: Int64
+    public var total: Double
+    public var accuracy: Double
+    public var fluency: Double
+    /// 完整度：漏读/增读会拉低（跟丢护栏用它）。
+    public var integrity: Double
+    public var words: [ShadowWord]
+
+    public init(
+        at: Int64, total: Double, accuracy: Double, fluency: Double,
+        integrity: Double, words: [ShadowWord]
+    ) {
+        self.at = at
+        self.total = total
+        self.accuracy = accuracy
+        self.fluency = fluency
+        self.integrity = integrity
+        self.words = words
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case at, total, accuracy, fluency, integrity, words
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        at = try c.decodeIfPresent(Int64.self, forKey: .at) ?? 0
+        total = try c.decodeIfPresent(Double.self, forKey: .total) ?? 0
+        accuracy = try c.decodeIfPresent(Double.self, forKey: .accuracy) ?? 0
+        fluency = try c.decodeIfPresent(Double.self, forKey: .fluency) ?? 0
+        integrity = try c.decodeIfPresent(Double.self, forKey: .integrity) ?? 5
+        words = try c.decodeIfPresent([ShadowWord].self, forKey: .words) ?? []
+    }
+}
+
+/// 词级评测明细（content 是识别出的词）。
+public struct ShadowWord: Codable, Equatable, Sendable {
+    public var content: String
+    public var totalScore: Double
+    /// 0 正常 / 16 漏读 / 32 增读 / 64 回读 / 128 替换。
+    public var dpMessage: Int
+    public var sylls: [ShadowSyll]
+
+    public init(content: String, totalScore: Double, dpMessage: Int, sylls: [ShadowSyll] = []) {
+        self.content = content
+        self.totalScore = totalScore
+        self.dpMessage = dpMessage
+        self.sylls = sylls
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case content, totalScore, dpMessage, sylls
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        content = try c.decodeIfPresent(String.self, forKey: .content) ?? ""
+        totalScore = try c.decodeIfPresent(Double.self, forKey: .totalScore) ?? 0
+        dpMessage = try c.decodeIfPresent(Int.self, forKey: .dpMessage) ?? 0
+        sylls = try c.decodeIfPresent([ShadowSyll].self, forKey: .sylls) ?? []
+    }
+}
+
+/// 音节级评测明细。
+public struct ShadowSyll: Codable, Equatable, Sendable {
+    public var content: String
+    public var syllScore: Double
+    public var serrMsg: Int
+    public var phones: [ShadowPhone]
+
+    public init(content: String, syllScore: Double, serrMsg: Int, phones: [ShadowPhone] = []) {
+        self.content = content
+        self.syllScore = syllScore
+        self.serrMsg = serrMsg
+        self.phones = phones
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case content, syllScore, serrMsg, phones
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        content = try c.decodeIfPresent(String.self, forKey: .content) ?? ""
+        syllScore = try c.decodeIfPresent(Double.self, forKey: .syllScore) ?? 0
+        serrMsg = try c.decodeIfPresent(Int.self, forKey: .serrMsg) ?? 0
+        phones = try c.decodeIfPresent([ShadowPhone].self, forKey: .phones) ?? []
+    }
+}
+
+/// 音素级评测明细（ARPAbet 音素码 + GOP 惩罚值）。
+public struct ShadowPhone: Codable, Equatable, Sendable {
+    public var content: String
+    public var dpMessage: Int
+    public var gwpp: Double
+
+    public init(content: String, dpMessage: Int, gwpp: Double) {
+        self.content = content
+        self.dpMessage = dpMessage
+        self.gwpp = gwpp
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case content, dpMessage, gwpp
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        content = try c.decodeIfPresent(String.self, forKey: .content) ?? ""
+        dpMessage = try c.decodeIfPresent(Int.self, forKey: .dpMessage) ?? 0
+        gwpp = try c.decodeIfPresent(Double.self, forKey: .gwpp) ?? 0
     }
 }
 

@@ -62,6 +62,8 @@ public struct PronunciationResult: Equatable, Sendable {
     public var accuracy: Double
     public var fluency: Double
     public var standard: Double
+    /// 完整度（漏读/增读会拉低；篇章层字段，单句评测恒接近 5）。
+    public var integrity: Double
     public var isRejected: Bool
     /// 异常码字符串（"28673" 无语音/音量小、"28676" 乱说、"28680" 信噪比低…）；正常为 nil。
     public var exceptInfo: String?
@@ -69,12 +71,14 @@ public struct PronunciationResult: Equatable, Sendable {
 
     public init(
         total: Double, accuracy: Double, fluency: Double, standard: Double,
+        integrity: Double = 5,
         isRejected: Bool, exceptInfo: String?, words: [WordScore]
     ) {
         self.total = total
         self.accuracy = accuracy
         self.fluency = fluency
         self.standard = standard
+        self.integrity = integrity
         self.isRejected = isRejected
         self.exceptInfo = exceptInfo
         self.words = words
@@ -177,7 +181,7 @@ private func parseSylls(_ inner: String) -> [SyllScore] {
 }
 
 /// 解析评测结果 XML。英文题型层级：read_chapter（篇章分）> sentence（句分）> word > syll > phone。
-/// is_rejected / except_info 挂在篇章层，句层兜底。
+/// is_rejected / except_info / integrity_score 挂在篇章层，句层兜底（对齐 pronunciation.ts:149/:193）。
 public func parseIseXml(_ xml: String) -> PronunciationResult {
     let sentenceAttrs = matchAll(xml, pattern: #"<sentence\b([^>]*)>"#).first.map { attrMap($0.0) } ?? [:]
     let chapterAttrs = matchAll(xml, pattern: #"<read_chapter\b([^>]*)>"#).first.map { attrMap($0.0) } ?? sentenceAttrs
@@ -204,11 +208,15 @@ public func parseIseXml(_ xml: String) -> PronunciationResult {
     }
 
     let except = chapterAttrs["except_info"].flatMap { $0 != "0" ? $0 : nil }
+    // 完整度：篇章层 integrity_score，缺了句层兜底，再缺省 5（漏读/增读会拉低它）。
+    let integrity = (chapterAttrs["integrity_score"] ?? sentenceAttrs["integrity_score"])
+        .flatMap { Double($0) } ?? 5
     return PronunciationResult(
         total: num(sentenceAttrs, "total_score"),
         accuracy: num(sentenceAttrs, "accuracy_score"),
         fluency: num(sentenceAttrs, "fluency_score"),
         standard: num(sentenceAttrs, "standard_score"),
+        integrity: integrity,
         isRejected: chapterAttrs["is_rejected"] == "true",
         exceptInfo: except,
         words: words
