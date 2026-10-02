@@ -12,7 +12,7 @@ import Foundation
 
 public enum XfyunTts {
     public static let host = "tts-api.xfyun.cn"
-    static let path = "/v2/tts"
+    public static let path = "/v2/tts"
     /// 官方限制：base64 编码前 < 8000 字节（约 2000 汉字）。
     public static let maxTextBytes = 8000
     /// vcn 缺省发音人（中文句）。

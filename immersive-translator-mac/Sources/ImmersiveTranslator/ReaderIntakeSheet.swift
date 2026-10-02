@@ -114,6 +114,11 @@ struct ReaderImportSheet: View {
             ForEach(IntakeTab.allCases, id: \.self) { item in
                 Button {
                     tab = item
+                    // 本地埋点：切到「EPUB / 长书」tab（对齐 Windows ImportDialog 的
+                    // epub_import_intent，初始 tab 是内置文库，进 epub 必经此处）。
+                    if item == .epub {
+                        ReaderTelemetry.track(.epubImportIntent(entry: "tab"))
+                    }
                 } label: {
                     Text(item.rawValue)
                         .font(.system(size: 12, weight: tab == item ? .semibold : .regular))
@@ -729,7 +734,8 @@ private struct IntakeBookTab: View {
         let chapters = state.book.chapters.enumerated()
             .filter { state.selected.contains($0.offset) }
             .map { BookImportChapter(title: $0.element.title, text: $0.element.text) }
-        // 章文本全为空时不产空书（buildBookImportDraft 返回 nil）。
+        // 章文本全为空时不产空书（buildBookImportDraft 返回 nil；此时不埋点，
+        // 对齐 Windows chapters.length === 0 直接 return）。
         guard let draft = buildBookImportDraft(
             title: state.book.title,
             author: state.book.author.isEmpty ? nil : state.book.author,
@@ -740,11 +746,21 @@ private struct IntakeBookTab: View {
             vm.showToast("没有可导入的章节内容")
             return
         }
+        // 本地埋点：确认导入成功路径（对齐 Windows book_import_result ok:true）。
+        ReaderTelemetry.track(.bookImportResult(
+            ok: true,
+            chapterCount: draft.chapters.count,
+            wordCount: draft.totalWords,
+            tocUsed: state.book.tocUsed
+        ))
         onImported()
         vm.importBook(draft)
     }
 
     private func parse(url: URL) {
+        // 本地埋点：选中文件开始解析（对齐 Windows book_import_attempt；
+        // 文件大小读不到时省略该键，不阻断解析、不发 0）。
+        ReaderTelemetry.track(.bookImportAttempt(fileSizeBytes: fileSizeBytes(of: url)))
         phase = .parsing
         DispatchQueue.global(qos: .userInitiated).async {
             let result = Result { try Self.parseBook(url: url) }
@@ -753,10 +769,20 @@ private struct IntakeBookTab: View {
                 case .success(let state):
                     phase = .preview(state)
                 case .failure(let error):
-                    phase = .error((error as? LocalizedError)?.errorDescription ?? "\(error)")
+                    let message = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                    // 本地埋点：解析失败（对齐 Windows book_import_result ok:false，
+                    // failReason 在工厂内截断到 60 字符）。
+                    ReaderTelemetry.track(.bookImportResult(ok: false, failReason: message))
+                    phase = .error(message)
                 }
             }
         }
+    }
+
+    /// 文件字节数（埋点用；读不到时返回 nil，由工厂省略该键）。
+    private func fileSizeBytes(of url: URL) -> Int? {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attrs?[.size] as? NSNumber)?.intValue
     }
 
     /// 解析电子书 / 长文 → 预览态。epub 走 BookImport.parseEpub；其余走应用层

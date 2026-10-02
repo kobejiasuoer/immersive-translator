@@ -1,5 +1,28 @@
 import AVFoundation
 import AppKit
+import CoreAudio
+import AudioToolbox
+
+/// 跟读 / 口语麦克风设备偏好（对齐 Windows localStorage "immersive-translator-mic-device"）：
+/// 机器本地 UserDefaults，不随文章、不进 reader 设置 schema。
+enum MicDevicePreference {
+    static let key = "readerMicDeviceUID"
+
+    /// 空串表示「系统默认」。
+    static var savedUID: String {
+        UserDefaults.standard.string(forKey: key) ?? ""
+    }
+
+    static func save(_ uid: String) {
+        UserDefaults.standard.set(uid, forKey: key)
+    }
+
+    /// 录音入口用：空串视为未选，传 nil 走系统默认。
+    static var selectedUID: String? {
+        let uid = savedUID
+        return uid.isEmpty ? nil : uid
+    }
+}
 
 /// 麦克风录音器（跟读评测 / 口语陪练 / 录音直译共用）。
 /// 对齐 src/core/micRecorder.ts 的采集链路：AVAudioEngine 输入 →
@@ -49,7 +72,10 @@ final class MicRecorder {
     private init() {}
 
     /// 开始录音。返回控制句柄；失败抛 MicRecorderError。
+    /// deviceUID 非空时先绑定偏好设备再建格式/convert/tap（换设备后输入格式会变，
+    /// 顺序是硬约束）；绑定失败回退系统默认（对齐 Windows OverconstrainedError 回退）。
     static func start(
+        deviceUID: String? = nil,
         onLevel: ((MicLevelEvent) -> Void)? = nil,
         onChunk: (([Float], MicLevelEvent) -> Void)? = nil
     ) async throws -> MicRecorder {
@@ -68,6 +94,10 @@ final class MicRecorder {
         recorder.onChunk = onChunk
 
         let input = recorder.engine.inputNode
+        // 偏好设备绑定必须在读 inputFormat 之前（每次 start 新建 engine，无运行中切设备问题）。
+        if let deviceUID, !deviceUID.isEmpty {
+            _ = bindInputDevice(recorder.engine, deviceUID: deviceUID)
+        }
         let inputFormat = input.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             throw MicRecorderError.noInputDevice
@@ -86,6 +116,91 @@ final class MicRecorder {
         recorder.running = true
         recorder.startedAt = .now()
         return recorder
+    }
+
+    // MARK: - 设备枚举与绑定（CoreAudio；mac 无 WebRTC 的 {exact: deviceId}，走 AUHAL CurrentDevice）
+
+    /// 枚举系统输入设备（对齐 Windows listMicDevices 挂载时枚举）。
+    /// CoreAudio 一趟枚举同时拿 uid/name/deviceID；仅枚举不触发麦克风权限弹窗。
+    /// 有输入流（kAudioDevicePropertyStreams, scope Input）的才算输入设备。
+    static func availableMicDevices() -> [(uid: String, name: String, deviceID: AudioDeviceID)] {
+        var devicesAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        let systemObject = AudioObjectID(kAudioObjectSystemObject)
+        guard AudioObjectGetPropertyDataSize(systemObject, &devicesAddress, 0, nil, &size) == noErr, size > 0 else {
+            return []
+        }
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(systemObject, &devicesAddress, 0, nil, &size, &deviceIDs) == noErr else {
+            return []
+        }
+
+        var devices: [(uid: String, name: String, deviceID: AudioDeviceID)] = []
+        for deviceID in deviceIDs {
+            var streamsAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreams,
+                mScope: kAudioObjectPropertyScopeInput,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var streamsSize: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(deviceID, &streamsAddress, 0, nil, &streamsSize) == noErr,
+                  streamsSize > 0 else { continue }
+            guard let name = stringProperty(deviceID, selector: kAudioObjectPropertyName),
+                  let uid = stringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID) else { continue }
+            devices.append((uid: uid, name: name, deviceID: deviceID))
+        }
+        return devices
+    }
+
+    private static func stringProperty(_ objectID: AudioObjectID, selector: AudioObjectPropertySelector) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(objectID, &address, 0, nil, &size) == noErr,
+              size >= UInt32(MemoryLayout<CFString?>.size) else { return nil }
+        // 名称 / UID 属性都是 CFStringRef；按 CFString 引用直读。
+        var value: CFString?
+        let status = withUnsafeMutablePointer(to: &value) { pointer in
+            AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, pointer)
+        }
+        guard status == noErr, let cfString = value else { return nil }
+        return cfString as String
+    }
+
+    /// 把 engine 输入节点（AUHAL）绑到指定 UID 的设备。落盘的是 UID 字符串，
+    /// AudioDeviceID 每次按 UID 重新枚举（设备可被拔/换，不宜落盘）。
+    /// 失败记一条诊断并返回 false，由调用方回退系统默认。
+    @discardableResult
+    static func bindInputDevice(_ engine: AVAudioEngine, deviceUID: String) -> Bool {
+        guard let device = availableMicDevices().first(where: { $0.uid == deviceUID }) else {
+            DiagnosticLogger.log("mic.bind.device-not-found uid=\(deviceUID)")
+            return false
+        }
+        guard let audioUnit = engine.inputNode.audioUnit else {
+            DiagnosticLogger.log("mic.bind.audio-unit-unavailable")
+            return false
+        }
+        var deviceID = device.deviceID
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &deviceID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+        guard status == noErr else {
+            DiagnosticLogger.log("mic.bind.set-current-device.failed status=\(status)")
+            return false
+        }
+        return true
     }
 
     private func handleInput(buffer: AVAudioPCMBuffer) {

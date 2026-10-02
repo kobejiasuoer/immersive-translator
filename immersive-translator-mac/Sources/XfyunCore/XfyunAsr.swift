@@ -10,7 +10,7 @@ import Foundation
 
 public enum XfyunAsr {
     public static let host = "iat-api.xfyun.cn"
-    static let path = "/v2/iat"
+    public static let path = "/v2/iat"
     /// 讯飞听写业务错误码 → 用户能看懂的话（详见会话层公共表）。
     static let frameBytes = 1280
 }

@@ -45,9 +45,11 @@ let package = Package(
             name: "XfyunCore",
             dependencies: []
         ),
+        // 埋点 sink 测试用 ReaderCore.TelemetryEvent.decodeLine 逐行断言写入的 JSONL，
+        // 故测试 target 追加 ReaderCore 依赖（ProviderCore 本体仍保持无依赖约束）。
         .testTarget(
             name: "ProviderCoreTests",
-            dependencies: ["ProviderCore"]
+            dependencies: ["ProviderCore", "ReaderCore"]
         ),
         // 主可执行目标里的纯逻辑单测（用 @main 入口，SwiftPM 支持被测试目标导入）。
         .testTarget(

@@ -3,7 +3,7 @@ import Foundation
 import ReaderCore
 
 /// 领读器：慢速示范朗读一句（跟读评测「领读」用，0.72×）。
-/// 云引擎可用时走讯飞合成（AVAudioPlayer 变速），否则系统语音。
+/// 云引擎（讯飞 / Edge）可用时走云合成（AVAudioPlayer 变速），否则系统语音。
 @MainActor
 final class LeadSpeaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegate {
     private let synth = AVSpeechSynthesizer()
@@ -16,7 +16,7 @@ final class LeadSpeaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         synth.delegate = self
     }
 
-    func speak(_ text: String, rate: Double, completion: @escaping () -> Void) {
+    func speak(_ text: String, rate: Double, provider: TtsProvider = .xfyun, completion: @escaping () -> Void) {
         stop()
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else {
@@ -26,7 +26,22 @@ final class LeadSpeaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         self.completion = completion
         let chinese = looksMostlyChinese(clean)
 
-        if XfyunTtsEngine.shared.isReady {
+        if provider == .edge {
+            // Edge 免凭据恒尝试（isReady 恒 true）；失败静默回落本地（领读不弹归因 toast）。
+            cloudTask = Task { [weak self] in
+                do {
+                    let data = try await EdgeTtsEngine.shared.audioData(for: clean)
+                    guard !Task.isCancelled else { return }
+                    guard let self else { return }
+                    try self.play(data: data, rate: rate)
+                } catch {
+                    // stop() 取消（cloudTask.cancel）也会以错误落到 catch：取消后不得再回落
+                    // 本地出声，否则旧句会混进随后开始的评测录音（与上方成功路径同一取消守卫）。
+                    guard !Task.isCancelled, let self else { return }
+                    self.speakLocal(clean, chinese: chinese, rate: rate)
+                }
+            }
+        } else if provider == .xfyun, XfyunTtsEngine.shared.isReady {
             cloudTask = Task { [weak self] in
                 do {
                     let data = try await XfyunTtsEngine.shared.audioData(for: clean)

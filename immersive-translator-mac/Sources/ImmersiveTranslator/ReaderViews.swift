@@ -42,11 +42,6 @@ struct ReaderRootView: View {
         }
         .environment(\.readerPalette, palette)
         .environment(\.colorScheme, palette.colorScheme)
-        .overlay(alignment: .bottom) {
-            if !vm.toast.isEmpty {
-                ReaderToast(text: vm.toast, action: vm.toastAction)
-            }
-        }
         .sheet(isPresented: $vm.importSheetShown) {
             ReaderImportSheet(vm: vm)
         }
@@ -66,6 +61,21 @@ struct ReaderRootView: View {
         .overlay {
             if let chapterEnd = vm.chapterEnd {
                 ChapterEndCardView(vm: vm, summary: chapterEnd)
+            }
+        }
+        // 跟读报告卡（failed 相位浮在 PlayBar 上方）与差词抽屉（遮罩盖住 PlayBar）：
+        // 均 wrapper 直观察控制器（ShadowReportOverlay / ShadowDrillOverlay），
+        // 不依赖 vm 重渲；抽屉在报告卡之上。
+        .overlay(alignment: .bottom) {
+            ShadowReportOverlay(vm: vm)
+        }
+        .overlay {
+            ShadowDrillOverlay(vm: vm)
+        }
+        // toast 置顶：差词抽屉的提示（没听到声音/未配置凭据…）不能被抽屉 sheet 盖住
+        .overlay(alignment: .bottom) {
+            if !vm.toast.isEmpty {
+                ReaderToast(text: vm.toast, action: vm.toastAction)
             }
         }
         .onChange(of: vm.activeSentenceIdx) { idx in
@@ -323,20 +333,14 @@ struct ReaderShelfView: View {
                 .buttonStyle(.plain)
                 .foregroundColor(palette.text)
 
-                let todayTotal = stats.reviewedToday + dueNow
-                Text(todayTotal > 0
-                    ? "今日复习 \(stats.reviewedToday) / \(todayTotal) · 连续打卡 \(stats.streak) 天"
-                    : "今日没有到期生词，去阅读里攒几个吧。")
-                    .font(.system(size: 11))
-                    .foregroundColor(palette.textTertiary)
-
-                // 每日阅读目标进度（设了目标才显示；朗读播放与停留阅读均计入）。
-                if touchpoint.config.readGoalMin > 0 {
-                    ReadingGoalProgress(
-                        seconds: vm.readSecondsToday,
-                        goalMin: touchpoint.config.readGoalMin
-                    )
-                }
+                ShelfTodayCard(
+                    reviewedToday: stats.reviewedToday,
+                    dueNow: dueNow,
+                    streak: stats.streak,
+                    readSecondsToday: vm.readSecondsToday,
+                    goalMin: touchpoint.config.readGoalMin,
+                    onGoReview: { vm.openReview() }
+                )
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -375,6 +379,72 @@ private struct ReadingGoalProgress: View {
         .help("阅读时长：朗读播放与停留阅读均计入")
         .accessibilityElement(children: .combine)
         .accessibilityLabel("今日已读 \(minutes) 分钟，目标 \(goalMin) 分钟")
+    }
+}
+
+/// 书架左栏今日卡（对齐 Windows TodayCard.tsx）：进度环 + 主行 + 副行 +
+/// 每日阅读目标条 + 「继续复习」按钮；todayTotal == 0 走空态（空文案 + 目标条）。
+/// 无障碍信息由主行文字承载，进度环纯装饰。
+private struct ShelfTodayCard: View {
+    let reviewedToday: Int
+    let dueNow: Int
+    let streak: Int
+    let readSecondsToday: Double
+    let goalMin: Int
+    let onGoReview: () -> Void
+    @Environment(\.readerPalette) private var palette
+
+    private var todayTotal: Int { reviewedToday + dueNow }
+
+    var body: some View {
+        if todayTotal == 0 {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("今日没有到期生词，去阅读里攒几个吧。")
+                    .font(.system(size: 11))
+                    .foregroundColor(palette.textTertiary)
+                if goalMin > 0 {
+                    ReadingGoalProgress(seconds: readSecondsToday, goalMin: goalMin)
+                }
+            }
+        } else {
+            HStack(alignment: .center, spacing: 10) {
+                progressRing
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("今日复习 \(reviewedToday) / \(todayTotal) · 连续打卡 \(streak) 天")
+                        .font(.system(size: 11))
+                        .foregroundColor(palette.textTertiary)
+                    Text(dueNow > 0 ? "还差 \(dueNow) 个清空今天到期" : "今天的到期已清空 ✓")
+                        .font(.system(size: 11))
+                        .foregroundColor(palette.textTertiary)
+                    if goalMin > 0 {
+                        ReadingGoalProgress(seconds: readSecondsToday, goalMin: goalMin)
+                    }
+                    if dueNow > 0 {
+                        Button("继续复习", action: onGoReview)
+                            .controlSize(.small)
+                            .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 环心「已复习/总数」，进度 = reviewedToday / (reviewedToday + dueNow)。
+    private var progressRing: some View {
+        let progress = todayTotal > 0 ? Double(reviewedToday) / Double(todayTotal) : 0
+        return ZStack {
+            Circle()
+                .stroke(palette.border.opacity(0.6), lineWidth: 3.5)
+            Circle()
+                .trim(from: 0, to: progress)
+                .stroke(palette.accent, style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            Text("\(reviewedToday)/\(todayTotal)")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundColor(palette.text)
+        }
+        .frame(width: 46, height: 46)
+        .accessibilityHidden(true)
     }
 }
 
@@ -1357,6 +1427,8 @@ struct DictColumnView: View {
 struct ReaderSettingsDrawer: View {
     @ObservedObject var vm: ReaderViewModel
     @Environment(\.readerPalette) private var palette
+    /// 系统输入设备列表（onAppear 时枚举一次，对齐 Windows 挂载时 listMicDevices）。
+    @State private var micDevices: [(uid: String, name: String)] = []
 
     var body: some View {
         let settings = vm.effectiveSettings
@@ -1442,6 +1514,7 @@ struct ReaderSettingsDrawer: View {
                                 .labelsHidden()
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
+                            .help("Edge 在线 = 微软神经音色（免费、无需凭据，默认）；讯飞在线 = 云音色需凭据；本地 = 系统语音（离线可用）")
                             if settings.ttsProvider == .xfyun {
                                 VStack(alignment: .leading, spacing: 6) {
                                     if !XfyunCredentialsStore.shared.isComplete(.tts) {
@@ -1460,6 +1533,23 @@ struct ReaderSettingsDrawer: View {
                                     cloudVoiceField(label: "英文音色", text: settings.cloudVoiceEn, placeholder: "catherine") { value in
                                         vm.patchSettings { $0.cloudVoiceEn = value }
                                     }
+                                }
+                            } else if settings.ttsProvider == .edge {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    edgeVoiceField(label: "中文音色", text: settings.edgeVoiceZh, placeholder: EdgeTts.defaultVoice) { value in
+                                        vm.patchSettings { $0.edgeVoiceZh = value }
+                                    }
+                                    edgeVoiceField(label: "英文音色", text: settings.edgeVoiceEn, placeholder: EdgeTts.defaultVoiceEn) { value in
+                                        vm.patchSettings { $0.edgeVoiceEn = value }
+                                    }
+                                    HStack {
+                                        rowLabel("服务说明")
+                                        Text("免费 · 无需凭据 · 需联网")
+                                            .font(.system(size: 11.5))
+                                            .foregroundColor(palette.textSecondary)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    .help("Edge 在线合成为微软「大声朗读」同源服务，免费且无需账号；属非官方接口，偶发不可用时朗读自动回落系统语音，也可切回讯飞或本地")
                                 }
                             } else {
                                 voiceRow(selection: settings.voice)
@@ -1511,6 +1601,24 @@ struct ReaderSettingsDrawer: View {
                                 }
                             }
 
+                            // 麦克风选择：无条件显示（不嵌进跟读开关块，Windows 该行也在条件块外）。
+                            // 跟读评测 / 口语陪练 / 影子跟读生效；录音直译恒用默认。
+                            HStack {
+                                rowLabel("麦克风")
+                                Picker("麦克风", selection: Binding(
+                                    get: { MicDevicePreference.savedUID },
+                                    set: { MicDevicePreference.save($0) }
+                                )) {
+                                    Text("系统默认").tag("")
+                                    ForEach(micDevices, id: \.uid) { device in
+                                        Text(device.name).tag(device.uid)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .help("跟读录音用的麦克风；录不出声音时优先换一个（默认可能选到虚拟声卡）")
+
                             groupTitle("提醒")
                             ReminderSectionView()
 
@@ -1538,6 +1646,10 @@ struct ReaderSettingsDrawer: View {
                 .frame(width: 340)
                 .background(palette.surface)
             }
+        }
+        .onAppear {
+            // 挂载时枚举一次系统输入设备（仅 CoreAudio 枚举，不触发麦克风权限弹窗）。
+            micDevices = MicRecorder.availableMicDevices().map { (uid: $0.uid, name: $0.name) }
         }
     }
 
@@ -1591,6 +1703,32 @@ struct ReaderSettingsDrawer: View {
             .frame(maxWidth: .infinity)
         }
         .help("讯飞发音人 vcn；建议：catherine（英）、xiaoyan（中）、x4_xiaoyan、aisjiuxu（男）、aisbabyxu（童）")
+    }
+
+    /// Edge 音色输入框 + 建议菜单（Menu 弹层替代 Windows 的 input datalist）。
+    private func edgeVoiceField(label: String, text: String, placeholder: String, onCommit: @escaping (String) -> Void) -> some View {
+        HStack {
+            rowLabel(label)
+            TextField(placeholder, text: Binding(
+                get: { text },
+                set: { value in onCommit(value) }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 11.5))
+            .frame(maxWidth: .infinity)
+            Menu {
+                ForEach(EdgeTts.voiceSuggestions, id: \.voice) { suggestion in
+                    Button(suggestion.label) { onCommit(suggestion.voice) }
+                }
+            } label: {
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(palette.textSecondary)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        .help("Edge 音色 ShortName（微软神经音色）；留空 = 默认音色（中文晓晓 / 英文 Ava），男声推荐 AndrewNeural。已播句子进缓存（内存+磁盘），重听不再请求网络")
     }
 
     private func voiceRow(selection: String) -> some View {
@@ -1763,7 +1901,7 @@ struct PlayBarView: View {
             countLabel
             HStack(spacing: 8) {
                 if vm.shadowingWait, vm.assessActive {
-                    AssessStripView(vm: vm)
+                    AssessStripView(vm: vm, assess: vm.assess)
                 } else if vm.shadowingWait {
                     HStack(spacing: 6) {
                         Text("请跟读当前句").font(.system(size: 11.5)).foregroundColor(palette.warn)

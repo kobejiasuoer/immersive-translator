@@ -125,6 +125,9 @@ final class ReviewTouchpointManager: ObservableObject {
             onContinueReading: book.map { target in
                 { [weak self] in
                     self?.closeReminderCard()
+                    // 本地埋点：提醒卡「继续阅读」点击（对齐 Windows reminder_continue_click；
+                    // 「开始复习」按钮 Windows 不埋点，此处同样不埋）。
+                    ReaderTelemetry.track(.reminderContinueClick(bookId: target.id))
                     self?.onContinueReading?(target.id)
                 }
             },

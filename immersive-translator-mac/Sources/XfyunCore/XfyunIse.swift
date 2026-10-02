@@ -10,7 +10,7 @@ import Foundation
 
 public enum XfyunIse {
     public static let host = "ise-api.xfyun.cn"
-    static let path = "/v2/open-ise"
+    public static let path = "/v2/open-ise"
 }
 
 /// 音素级结果（gwpp 是 GOP 逐音素惩罚值，绝对值越大问题越大）。
@@ -98,12 +98,16 @@ public struct WordMark: Equatable, Sendable {
     public var end: Int
     public var quality: WordQuality
     public var score: Double
+    /// 源自评测返回的词明细（音节/音素，点词弹层与差词训练用）；对不上时缺省。
+    /// （对齐 Windows pronunciation.ts:69 的 word?: WordScore）
+    public var word: WordScore?
 
-    public init(start: Int, end: Int, quality: WordQuality, score: Double) {
+    public init(start: Int, end: Int, quality: WordQuality, score: Double, word: WordScore? = nil) {
         self.start = start
         self.end = end
         self.quality = quality
         self.score = score
+        self.word = word
     }
 }
 
@@ -314,7 +318,7 @@ public func mapWordsToText(text: String, words: [WordScore]) -> [WordMark] {
         } else {
             quality = .bad
         }
-        marks.append(WordMark(start: token.start, end: token.end, quality: quality, score: word.totalScore))
+        marks.append(WordMark(start: token.start, end: token.end, quality: quality, score: word.totalScore, word: word))
         p = choice.match + 1
     }
     return marks
