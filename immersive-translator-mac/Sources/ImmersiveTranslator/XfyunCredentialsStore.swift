@@ -27,6 +27,16 @@ enum XfyunService: String, CaseIterable, Identifiable {
     }
 }
 
+/// 凭据来源（镜像 Windows xfyunTtsCredSource/asrCredSource，适配 mac 三卡独立 + asr 回落 ise 模型）。
+enum XfyunCredSource: Equatable {
+    /// 本服务自身已配置完整凭据。
+    case own
+    /// 本服务未配置，回落「语音评测」凭据（仅 asr）。
+    case fallbackISE
+    /// 没有可用凭据。
+    case none
+}
+
 final class XfyunCredentialsStore: ObservableObject {
     static let shared = XfyunCredentialsStore()
 
@@ -94,5 +104,16 @@ final class XfyunCredentialsStore: ObservableObject {
             return ise
         }
         return nil
+    }
+
+    /// 凭据来源查询（状态灯行文案用）：own→「本服务凭据」；fallbackISE→「回落评测凭据」；none→「未配置」。
+    func source(for service: XfyunService) -> XfyunCredSource {
+        if credentials[service]?.isComplete == true {
+            return .own
+        }
+        if service == .asr, credentials[.ise]?.isComplete == true {
+            return .fallbackISE
+        }
+        return .none
     }
 }

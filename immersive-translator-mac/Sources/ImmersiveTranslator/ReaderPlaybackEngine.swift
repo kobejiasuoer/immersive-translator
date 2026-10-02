@@ -34,8 +34,9 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
         var voice: String = ""
         var sentencePauseMs: Double = 0
         var shadowingMode: Bool = false
-        /// 朗读引擎：local = 系统语音；xfyun = 讯飞在线合成（凭据缺失自动回落本地）。
-        var ttsProvider: TtsProvider = .local
+        /// 朗读引擎：edge = Edge 在线（默认，免费无凭据，恒尝试）；
+        /// xfyun = 讯飞在线合成（凭据缺失自动回落本地）；local = 系统语音。
+        var ttsProvider: TtsProvider = .edge
         var cloudVoice: String = ""
         var cloudVoiceEn: String = "catherine"
 
@@ -180,9 +181,16 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
         cursor = idx
         publish(.activeIdx(idx))
         let text = texts[idx]
-        if settings.ttsProvider == .xfyun, XfyunTtsEngine.shared.isReady {
-            speakCloud(idx, text: text)
+        switch settings.ttsProvider {
+        case .xfyun where XfyunTtsEngine.shared.isReady:
+            speakCloud(idx, text: text, engine: .xfyun)
             return
+        case .edge:
+            // Edge 免凭据，恒尝试；失败在 speakCloud 的 catch 回落本地。
+            speakCloud(idx, text: text, engine: .edge)
+            return
+        default:
+            break
         }
         let utterance = makeUtterance(
             text,
@@ -194,18 +202,34 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
         sentenceSynth.speak(utterance)
     }
 
-    /// 云播放（讯飞合成 → AVAudioPlayer 变速播放）。
-    private func speakCloud(_ idx: Int, text: String) {
+    /// speakCloud 的云引擎选择（.edge 免凭据恒尝试；.xfyun 需 isReady 才路由进来）。
+    private enum CloudEngine {
+        case xfyun
+        case edge
+    }
+
+    /// 云播放（云合成 → AVAudioPlayer 变速播放；讯飞 / Edge 同一回落语义）。
+    private func speakCloud(_ idx: Int, text: String, engine: CloudEngine) {
         stopCloudPlayback()
         let myEpoch = epoch
         cloudTask = Task { [weak self] in
             do {
-                let data = try await XfyunTtsEngine.shared.audioData(for: text)
+                let data: Data
+                switch engine {
+                case .xfyun:
+                    data = try await XfyunTtsEngine.shared.audioData(for: text)
+                case .edge:
+                    data = try await EdgeTtsEngine.shared.audioData(for: text)
+                }
                 guard !Task.isCancelled, let self, self.epoch == myEpoch, self.playing else { return }
                 try self.playCloud(data: data)
                 // 预取下一句（命中缓存则无网络请求）
                 if idx + 1 < self.texts.count {
-                    XfyunTtsEngine.shared.prefetch(self.texts[idx + 1])
+                    let next = self.texts[idx + 1]
+                    switch engine {
+                    case .xfyun: XfyunTtsEngine.shared.prefetch(next)
+                    case .edge: EdgeTtsEngine.shared.prefetch(next)
+                    }
                 }
             } catch is CancellationError {
                 // 掐掉即可

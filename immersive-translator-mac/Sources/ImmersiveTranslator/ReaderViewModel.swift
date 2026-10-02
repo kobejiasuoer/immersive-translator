@@ -174,6 +174,10 @@ final class ReaderViewModel: ObservableObject {
     let noteStore = NoteStore()
     /// 跟读评测状态机（shadowingMode + shadowingAssess 时接管跟读等待）。
     let assess = ShadowAssessController()
+    /// 差词训练控制器（报告卡「只练 N 个词」落点；UI 直观察它，不经 vm 转发）。
+    let drill = ShadowDrillController()
+    /// 「听我的录音」回放器（最近一次跟读录音，内存 PCM）。
+    private let shadowPlayer = ShadowRecordingPlayer()
     private let leadSpeaker = LeadSpeaker()
     /// 口语陪练控制器（R3）。
     let speak = SpeakViewController()
@@ -241,7 +245,14 @@ final class ReaderViewModel: ObservableObject {
             )
         }
         assess.leadProvider = { [weak self] text, done in
-            self?.leadSpeaker.speak(text, rate: ShadowAssessController.leadRate, completion: done)
+            guard let self else { return }
+            // 领读与朗读同引擎：Edge/讯飞走云合成，本地走系统语音（对齐 Windows 领读走 speechEngine）。
+            self.leadSpeaker.speak(
+                text,
+                rate: ShadowAssessController.leadRate,
+                provider: self.effectiveSettings.ttsProvider,
+                completion: done
+            )
         }
         assess.stopLead = { [weak self] in
             self?.leadSpeaker.stop()
@@ -249,6 +260,11 @@ final class ReaderViewModel: ObservableObject {
         assess.onAdvance = { [weak self] in
             self?.playback.continueAfterShadowing()
         }
+        // 差词训练接线：词发音走 word 音轨、提示走 toast、练完回整句立即重录
+        //（对齐 Windows drillDone → startShadow）。
+        drill.onSpeakWord = { [weak self] in self?.speakWord($0) }
+        drill.onToast = { [weak self] in self?.showToast($0) }
+        drill.onDone = { [weak self] in self?.assessRetry() }
         playback.$shadowingWait
             .dropFirst()
             .removeDuplicates()
@@ -258,9 +274,24 @@ final class ReaderViewModel: ObservableObject {
                 if waiting, settings.shadowingMode, settings.shadowingAssess {
                     self.assess.begin(idx: self.activeSentenceIdx)
                 } else {
+                    // 主评测复位（跳过/放行/切句/停止）时强制收词练抽屉（收麦），
+                    // 避免抽屉在评测退出后残留可用录音。
+                    self.drill.close()
                     self.assess.cancelAssess()
                 }
             }
+            .store(in: &cancellables)
+        // 相位级转发：只服务 assessActive 门（PlayBar 切跟读 UI）与正文词着色
+        //（ReaderBodyView 的 assessMarks——词着色随 failed 相位到达、随 retry 清除，
+        // 都是相位跳变时刻）。不做全量转发：state 里的 level/elapsedMs 在录音期
+        // ~23Hz 变化，全量转发会让阅读室全树以 23Hz 重渲（ReaderSentenceText 每次
+        // updateNSView 重建整段 NSAttributedString）；高频变化由直观察控制器的
+        // 叶子视图（评测条/报告卡/差词抽屉）就地消化。
+        assess.$state
+            .map(\.phase)
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
     }
 
@@ -347,6 +378,16 @@ final class ReaderViewModel: ObservableObject {
             wordIds: words.map(\.id),
             dueIds: due.map(\.id)
         )
+        // 本地埋点：章末小结卡弹出（自然播完与手动「读完本章」的统一落点；
+        // 对齐 Windows chapter_complete，secondsRead 为本次打开文章以来的累计秒）。
+        ReaderTelemetry.track(.chapterComplete(
+            bookId: book.id,
+            chapterIdx: chapterIdx,
+            lookedUpCount: dictLookupCounts[a.id] ?? 0,
+            collectedCount: words.count,
+            dueCount: due.count,
+            secondsRead: sessionSeconds
+        ))
     }
 
     /// 短文结课条：本篇收获快照 + 笔记/复习入口（替代原先一闪而过的 toast）。
@@ -363,6 +404,13 @@ final class ReaderViewModel: ObservableObject {
             wordIds: words.map(\.id),
             dueIds: due.map(\.id)
         )
+        // 本地埋点：短文结课条弹出（对齐 Windows article_finish）。
+        ReaderTelemetry.track(.articleFinish(
+            articleId: a.id,
+            lookedUpCount: dictLookupCounts[a.id] ?? 0,
+            collectedCount: words.count,
+            dueCount: due.count
+        ))
     }
 
     func dismissChapterEnd() {
@@ -445,6 +493,9 @@ final class ReaderViewModel: ObservableObject {
         }
         if let total = try? store.recordReading(day: dayKey(nowMs: Int64(Date().timeIntervalSince1970 * 1000)), seconds: seconds) {
             readSecondsToday = total
+            // 本地埋点：阅读时长（Windows telemetry.ts 注释声明了 reading_minutes 但无调用点，
+            // mac 在 15s 批量落盘点顺手补齐；seconds 为本批秒数）。
+            ReaderTelemetry.track(.readingMinutes(seconds: Int(seconds)))
         }
     }
 
@@ -460,6 +511,10 @@ final class ReaderViewModel: ObservableObject {
         XfyunTtsEngine.shared.updateVoiceConfig(XfyunTtsEngine.VoiceConfig(
             vcnCn: settings.cloudVoice,
             vcnEn: settings.cloudVoiceEn
+        ))
+        EdgeTtsEngine.shared.updateVoiceConfig(EdgeTtsEngine.VoiceConfig(
+            voiceZh: settings.edgeVoiceZh,
+            voiceEn: settings.edgeVoiceEn
         ))
         playback.updateContext(
             texts: article?.sentences.map(\.en) ?? [],
@@ -496,6 +551,33 @@ final class ReaderViewModel: ObservableObject {
     func assessSkip() { assess.skip() }
     /// 手动「说完」：结束录音送评测（静音 VAD 之外的路）。
     func assessFinishManually() { assess.finishManually() }
+
+    /// 报告卡切句与差词训练的底本（单一出处，ShadowMarkedSentence 与
+    /// shadowDrillEntries 一律用它，不各算各的）。**必须带 .en**：marks 的
+    /// start/end 是对 textsProvider 字符串（= article?.sentences.map(\.en)，
+    /// 对齐发生在 ShadowAssessController 取句与 mapWordsToText）的 UTF-16 偏移，
+    /// 取 zh 或整 pair 都会错位。
+    var assessTargetSentence: String? {
+        assess.state.sentenceIdx.flatMap { article?.sentences[safe: $0]?.en }
+    }
+
+    /// 报告卡「🎯 只练 N 个词」：bad+missed 词按出现序前 4 个进抽屉。
+    func openDrillFromCard() {
+        guard let target = assessTargetSentence else { return }
+        drill.open(entries: shadowDrillEntries(target: target, marks: assess.state.marks))
+    }
+
+    /// 点词弹层「🎯 练这个词」：该词（lowercase 匹配）提到队首。
+    func openDrill(preferring word: String) {
+        guard let target = assessTargetSentence else { return }
+        drill.open(entries: shadowDrillEntries(target: target, marks: assess.state.marks), preferring: word)
+    }
+
+    /// 「▶ 听我的录音」：回放最近一次跟读的录音（含被拒结果的留存）。
+    func playAssessRecording() {
+        guard let pcm = assess.lastAttemptPcm else { return }
+        shadowPlayer.play(pcm)
+    }
 
     func stopPlayback() {
         playback.stop()
@@ -600,13 +682,19 @@ final class ReaderViewModel: ObservableObject {
         playback.reset(startIdx: activeSentenceIdx)
         syncPlaybackContext()
         scheduleSave(mutate: { $0.lastReadAt = Int64(Date().timeIntervalSince1970 * 1000) })
-        if full.bookId != nil {
+        if let bookId = full.bookId {
             // 书章打开即记最近阅读（书卡排序依据）。
             scheduleBookMetaSave { meta in
                 var next = meta
                 next.lastReadAt = Int64(Date().timeIntervalSince1970 * 1000)
                 return next
             }
+            // 本地埋点：打开书章文章（对齐 Windows 只对书章埋 book_open，短文不埋）。
+            ReaderTelemetry.track(.bookOpen(
+                bookId: bookId,
+                chapterIdx: full.chapterIdx ?? 0,
+                sentenceIdx: full.progress.sentenceIdx
+            ))
         }
         runTranslationPipeline(for: full.id)
     }

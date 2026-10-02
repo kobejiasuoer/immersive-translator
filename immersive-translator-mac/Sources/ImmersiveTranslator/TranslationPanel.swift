@@ -474,9 +474,11 @@ final class TranslationPanelController {
     // MARK: - 词典卡预取 / 快捷动作 / 生词本 / 阅读室（M5）
 
     /// 词条类文本后台预取：原文像单词/短语且是完整译文时拉词典卡。
+    /// 受「词典卡片」开关控制（对齐 Windows `dictCard === "auto" && isLookupText`）；
+    /// 生词本入口按文本形状出现，不跟随该开关。
     private func beginDictPrefetchIfNeeded(original: String) {
         let word = original.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard model.isTranslationOutput, !model.isLoading, isLookupText(word),
+        guard model.isTranslationOutput, !model.isLoading, settingsStore.dictCardAuto, isLookupText(word),
               word != model.dictCardWord else { return }
         model.dictCard = nil
         model.dictCardWord = word

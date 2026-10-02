@@ -92,15 +92,18 @@ public enum ReaderFontPair: String, Codable, Equatable, CaseIterable {
     }
 }
 
-/// 朗读引擎：local = 系统 AVSpeechSynthesizer（离线），xfyun = 讯飞在线合成。
+/// 朗读引擎：local = 系统 AVSpeechSynthesizer（离线），xfyun = 讯飞在线合成，
+/// edge = 微软 Edge 在线合成（免费无凭据，对齐 Windows 默认引擎）。
 public enum TtsProvider: String, Codable, Equatable, CaseIterable {
     case local
     case xfyun
+    case edge
 
     public var label: String {
         switch self {
         case .local: return "系统语音（离线）"
         case .xfyun: return "讯飞在线合成"
+        case .edge: return "Edge 在线"
         }
     }
 }
@@ -131,12 +134,17 @@ public struct ReaderSettings: Codable, Equatable {
     /// 每句停顿 0–2000ms。
     public var sentencePauseMs: Double
     public var shadowingMode: Bool
-    /// 朗读引擎：local = 系统语音（默认），xfyun = 讯飞在线合成（凭据在设置）。
+    /// 朗读引擎：edge = Edge 在线（默认，免费无凭据），xfyun = 讯飞在线合成
+    /// （凭据在设置），local = 系统语音（离线）。
     public var ttsProvider: TtsProvider
     /// 讯飞合成发音人（vcn），中文句用它；空串 = xiaoyan。
     public var cloudVoice: String
     /// 讯飞合成英文句发音人（vcn）；空串 = 回退 cloudVoice（再缺省 catherine）。
     public var cloudVoiceEn: String
+    /// Edge 合成中文句音色（ShortName）；空串 = 晓晓（zh-CN-XiaoxiaoNeural）。
+    public var edgeVoiceZh: String
+    /// Edge 合成英文句音色；空串 = Ava（en-US-AvaNeural）。
+    public var edgeVoiceEn: String
     /// 跟读评测：跟读句送讯飞语音评测，达到阈值才放行（凭据在设置配置）。
     public var shadowingAssess: Bool
     /// 跟读过关阈值（5 分制），默认 4.2 ≈ 84 分。
@@ -166,9 +174,11 @@ public struct ReaderSettings: Codable, Equatable {
         rate: Double = 1,
         sentencePauseMs: Double = 0,
         shadowingMode: Bool = false,
-        ttsProvider: TtsProvider = .local,
+        ttsProvider: TtsProvider = .edge,
         cloudVoice: String = "",
         cloudVoiceEn: String = "catherine",
+        edgeVoiceZh: String = "",
+        edgeVoiceEn: String = "",
         shadowingAssess: Bool = false,
         shadowingPassScore: Double = 4.2,
         shadowingAutoMic: Bool = true,
@@ -193,6 +203,8 @@ public struct ReaderSettings: Codable, Equatable {
         self.ttsProvider = ttsProvider
         self.cloudVoice = cloudVoice
         self.cloudVoiceEn = cloudVoiceEn
+        self.edgeVoiceZh = edgeVoiceZh
+        self.edgeVoiceEn = edgeVoiceEn
         self.shadowingAssess = shadowingAssess
         self.shadowingPassScore = shadowingPassScore
         self.shadowingAutoMic = shadowingAutoMic
@@ -229,6 +241,8 @@ public struct ReaderSettingsOverride: Codable, Equatable {
     public var ttsProvider: String?
     public var cloudVoice: String?
     public var cloudVoiceEn: String?
+    public var edgeVoiceZh: String?
+    public var edgeVoiceEn: String?
     public var shadowingAssess: Bool?
     public var shadowingPassScore: Double?
     public var shadowingAutoMic: Bool?
@@ -263,6 +277,7 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         case contrastMode, maskTranslation, maskStyle, showProgress, zenMode, theme
         case fontSize, lineHeight, fontPair, voice, rate, sentencePauseMs
         case shadowingMode, ttsProvider, cloudVoice, cloudVoiceEn
+        case edgeVoiceZh, edgeVoiceEn
         case shadowingAssess, shadowingPassScore, shadowingAutoMic, shadowingSilenceMs
         case chunkHighlight, showVocabMarks, reviewMode
     }
@@ -285,6 +300,8 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         ttsProvider = try c.decodeIfPresent(String.self, forKey: .ttsProvider)
         cloudVoice = try c.decodeIfPresent(String.self, forKey: .cloudVoice)
         cloudVoiceEn = try c.decodeIfPresent(String.self, forKey: .cloudVoiceEn)
+        edgeVoiceZh = try c.decodeIfPresent(String.self, forKey: .edgeVoiceZh)
+        edgeVoiceEn = try c.decodeIfPresent(String.self, forKey: .edgeVoiceEn)
         shadowingAssess = try c.decodeIfPresent(Bool.self, forKey: .shadowingAssess)
         shadowingPassScore = try c.decodeIfPresent(Double.self, forKey: .shadowingPassScore)
         shadowingAutoMic = try c.decodeIfPresent(Bool.self, forKey: .shadowingAutoMic)
@@ -312,6 +329,8 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         try c.encodeIfPresent(ttsProvider, forKey: .ttsProvider)
         try c.encodeIfPresent(cloudVoice, forKey: .cloudVoice)
         try c.encodeIfPresent(cloudVoiceEn, forKey: .cloudVoiceEn)
+        try c.encodeIfPresent(edgeVoiceZh, forKey: .edgeVoiceZh)
+        try c.encodeIfPresent(edgeVoiceEn, forKey: .edgeVoiceEn)
         try c.encodeIfPresent(shadowingAssess, forKey: .shadowingAssess)
         try c.encodeIfPresent(shadowingPassScore, forKey: .shadowingPassScore)
         try c.encodeIfPresent(shadowingAutoMic, forKey: .shadowingAutoMic)
@@ -339,6 +358,8 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         if let v = patch["ttsProvider"] as? String { ttsProvider = v }
         if let v = patch["cloudVoice"] as? String { cloudVoice = v }
         if let v = patch["cloudVoiceEn"] as? String { cloudVoiceEn = v }
+        if let v = patch["edgeVoiceZh"] as? String { edgeVoiceZh = v }
+        if let v = patch["edgeVoiceEn"] as? String { edgeVoiceEn = v }
         if let v = patch["shadowingAssess"] as? Bool { shadowingAssess = v }
         if let v = patch["shadowingPassScore"] as? Double { shadowingPassScore = v }
         if let v = patch["shadowingAutoMic"] as? Bool { shadowingAutoMic = v }
@@ -377,6 +398,8 @@ public func mergeReaderSettings(_ global: ReaderSettings, _ override: ReaderSett
     if let v = o.ttsProvider, let parsed = TtsProvider(rawValue: v) { merged.ttsProvider = parsed }
     if let v = o.cloudVoice { merged.cloudVoice = v }
     if let v = o.cloudVoiceEn { merged.cloudVoiceEn = v }
+    if let v = o.edgeVoiceZh { merged.edgeVoiceZh = v }
+    if let v = o.edgeVoiceEn { merged.edgeVoiceEn = v }
     if let v = o.shadowingAssess { merged.shadowingAssess = v }
     if let v = o.shadowingPassScore, v.isFinite {
         merged.shadowingPassScore = min(readerAssessPassMax, max(readerAssessPassMin, v))
@@ -411,6 +434,8 @@ public func readerSettingsPatch(from old: ReaderSettings, to new: ReaderSettings
     if old.ttsProvider != new.ttsProvider { patch["ttsProvider"] = new.ttsProvider.rawValue }
     if old.cloudVoice != new.cloudVoice { patch["cloudVoice"] = new.cloudVoice }
     if old.cloudVoiceEn != new.cloudVoiceEn { patch["cloudVoiceEn"] = new.cloudVoiceEn }
+    if old.edgeVoiceZh != new.edgeVoiceZh { patch["edgeVoiceZh"] = new.edgeVoiceZh }
+    if old.edgeVoiceEn != new.edgeVoiceEn { patch["edgeVoiceEn"] = new.edgeVoiceEn }
     if old.shadowingAssess != new.shadowingAssess { patch["shadowingAssess"] = new.shadowingAssess }
     if old.shadowingPassScore != new.shadowingPassScore { patch["shadowingPassScore"] = new.shadowingPassScore }
     if old.shadowingAutoMic != new.shadowingAutoMic { patch["shadowingAutoMic"] = new.shadowingAutoMic }

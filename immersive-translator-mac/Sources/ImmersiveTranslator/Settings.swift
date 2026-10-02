@@ -46,6 +46,12 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(enableStreamingTranslation, forKey: Keys.enableStreamingTranslation) }
     }
 
+    /// 词典卡片自动模式（对齐 Windows dictCard: "auto" | "off"，默认 auto）：
+    /// 开启时划选单词/短语浮窗自动切词典卡片；关闭后一律整句翻译。
+    @Published var dictCardAuto: Bool {
+        didSet { UserDefaults.standard.set(dictCardAuto, forKey: Keys.dictCardAuto) }
+    }
+
     @Published var customPrompt: String {
         didSet { UserDefaults.standard.set(customPrompt, forKey: Keys.customPrompt) }
     }
@@ -137,6 +143,8 @@ final class SettingsStore: ObservableObject {
         ocrMode = OCRRecognitionMode(rawValue: UserDefaults.standard.string(forKey: Keys.ocrMode) ?? "") ?? .accurate
         ocrLanguagePreset = OCRLanguagePreset(rawValue: UserDefaults.standard.string(forKey: Keys.ocrLanguagePreset) ?? "") ?? .autoMixed
         enableStreamingTranslation = UserDefaults.standard.object(forKey: Keys.enableStreamingTranslation) as? Bool ?? true
+        // object(forKey:) 区分「从未写入」与显式 false；默认 true 对齐 Windows "auto"。
+        dictCardAuto = UserDefaults.standard.object(forKey: Keys.dictCardAuto) as? Bool ?? true
         customPrompt = UserDefaults.standard.string(forKey: Keys.customPrompt) ?? ""
         glossaryText = UserDefaults.standard.string(forKey: Keys.glossaryText) ?? ""
         selectionHotKeyShortcut = Self.loadSelectionHotKeyShortcut()
@@ -297,6 +305,7 @@ final class SettingsStore: ObservableObject {
         static let ocrMode = "ocrMode"
         static let ocrLanguagePreset = "ocrLanguagePreset"
         static let enableStreamingTranslation = "enableStreamingTranslation"
+        static let dictCardAuto = "dictCardAuto"
         static let customPrompt = "customPrompt"
         static let glossaryText = "glossaryText"
         static let selectionHotKeyShortcut = "selectionHotKeyShortcut"
@@ -897,6 +906,11 @@ struct SettingsView: View {
                             labeledField("目标语言", text: $settingsStore.targetLanguage)
                         }
                         Toggle("流式显示译文", isOn: $settingsStore.enableStreamingTranslation)
+                        Toggle("词典卡片", isOn: $settingsStore.dictCardAuto)
+                        Text("划选单个单词或短语时，浮窗自动切换为词典卡片（音标、多义项释义、例句）；关闭后一律整句翻译。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     settingsSection("接口诊断") {

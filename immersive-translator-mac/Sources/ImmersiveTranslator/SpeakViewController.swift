@@ -104,7 +104,7 @@ final class SpeakViewController: ObservableObject {
         elapsedMs = 0
         Task { [weak self] in
             do {
-                let rec = try await MicRecorder.start { [weak self] event in
+                let rec = try await MicRecorder.start(deviceUID: MicDevicePreference.selectedUID) { [weak self] event in
                     Task { @MainActor [weak self] in
                         guard let self, self.phase == .holding else { return }
                         self.level = event.level
@@ -277,7 +277,7 @@ final class SpeakViewController: ObservableObject {
         elapsedMs = 0
         Task { [weak self] in
             do {
-                let rec = try await MicRecorder.start { [weak self] event in
+                let rec = try await MicRecorder.start(deviceUID: MicDevicePreference.selectedUID) { [weak self] event in
                     Task { @MainActor [weak self] in
                         guard let self, self.phase == .shadowRecording else { return }
                         self.level = event.level

@@ -6,10 +6,13 @@ import ReaderCore
 /// evaluating / leading / passed（✅ 自动下一句）/ failed（分数+再试/领读/跳过）/ error。
 struct AssessStripView: View {
     @ObservedObject var vm: ReaderViewModel
+    /// 直观察评测控制器（v2 刷新架构）：电平条/计时/相位文案的 ~23Hz 更新由本
+    /// 子树自己消化，不依赖 vm 重渲——修复容器只观察 vm 的既有刷新缺陷。
+    @ObservedObject var assess: ShadowAssessController
     @Environment(\.readerPalette) private var palette
 
     var body: some View {
-        let state = vm.assess.state
+        let state = assess.state
         HStack(spacing: 10) {
             phaseLabel(state)
             if state.phase == .recording {
