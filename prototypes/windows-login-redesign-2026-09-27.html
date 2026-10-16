@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录窗改版原型 · 半保真 — 沉浸翻译 Windows</title>
+<style>
+  /* ================= 原型演示台(非产品 UI) ================= */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  :root {
+    /* —— 产品设计令牌(与应用 styles.css 同源)—— */
+    --accent: #4c5ff0;
+    --accent-hover: #3f52e0;
+    --accent-soft: #eef0fe;
+    --accent-grad: linear-gradient(135deg, #4c5ff0 0%, #7a5cf0 100%);
+    --ink: #1b2240;
+    --ink-2: #2a3672;
+    --bg: #f4f5f9;
+    --surface: #ffffff;
+    --surface-2: #f9fafc;
+    --border: #e4e7ee;
+    --border-strong: #d6dae4;
+    --text-1: #1c2029;
+    --text-2: #4b5261;
+    --text-3: #7c8494;
+    --text-4: #a6adbb;
+    --err: #dc2626;
+    --err-soft: #fdeaea;
+    --err-border: #f4c7c7;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --shadow-card: 0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06);
+    --shadow-float: 0 6px 16px rgba(16,24,40,.08), 0 2px 6px rgba(16,24,40,.06);
+    --shadow-ring: 0 0 0 3px rgba(76,95,240,.18);
+    --font-ui: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  }
+  body {
+    font-family: var(--font-ui);
+    background: #14171f;
+    background-image: radial-gradient(1200px 500px at 50% -10%, #232946 0%, #14171f 60%);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 16px 64px;
+    color: #aeb5c6;
+  }
+  .desk-caption { font-size: 13px; color: #8b93a7; letter-spacing: .02em; }
+  .desk-caption b { color: #d6dae6; font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 16px 0 28px; max-width: 720px; }
+  .chip {
+    font: 500 12.5px/1 var(--font-ui);
+    color: #aeb5c6;
+    background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 999px;
+    padding: 8px 14px;
+    cursor: pointer;
+    transition: background .15s, color .15s, border-color .15s;
+  }
+  .chip:hover { background: rgba(255,255,255,.12); color: #e8eaf2; }
+  .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chip:focus-visible { outline: 2px solid #93a0ff; outline-offset: 2px; }
+  .desk-note { margin-top: 24px; font-size: 12px; color: #6c7488; max-width: 460px; text-align: center; line-height: 1.7; }
+
+  /* ================= 窗口模型(420×560,含模拟标题栏) ================= */
+  .window {
+    width: 420px;
+    height: 560px;
+    background: var(--surface);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 24px 64px rgba(0,0,0,.5), 0 4px 16px rgba(0,0,0,.4);
+    display: flex;
+    flex-direction: column;
+  }
+  .titlebar {
+    height: 36px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    background: #fbfbfd;
+    border-bottom: 1px solid var(--border);
+    padding-left: 12px;
+    user-select: none;
+  }
+  .titlebar .app-ico {
+    width: 16px; height: 16px; border-radius: 4px;
+    background: var(--accent-grad);
+    color: #fff; font-size: 10px; font-weight: 700;
+    display: grid; place-items: center;
+    margin-right: 8px;
+  }
+  .titlebar .t { font-size: 12px; color: var(--text-2); }
+  .titlebar .win-btns { margin-left: auto; display: flex; height: 100%; }
+  .titlebar .win-btns span {
+    width: 44px; display: grid; place-items: center;
+    font-size: 10px; color: var(--text-3);
+  }
+  .titlebar .win-btns span.close:hover { background: #e81123; color: #fff; }
+
+  /* ================= 品牌条带(浅色:淡靛蓝渐隐到白,与应用同调) ================= */
+  .band {
+    position: relative;
+    flex: none;
+    padding: 22px 24px 20px;
+    background: linear-gradient(180deg, #e9ecfd 0%, rgba(255,255,255,0) 100%);
+    color: var(--text-1);
+    overflow: hidden;
+  }
+  .band-row { display: flex; align-items: center; gap: 12px; position: relative; z-index: 1; }
+  .band-logo {
+    width: 42px; height: 42px; flex: none;
+    border-radius: 11px;
+    background: var(--accent-grad);
+    color: #fff;
+    display: grid; place-items: center;
+    font-size: 21px; font-weight: 700;
+    box-shadow: 0 2px 8px rgba(76, 95, 240, 0.35);
+  }
+  .band-title { font-size: 19px; font-weight: 650; letter-spacing: .01em; color: var(--text-1); }
+  .band-sub {
+    margin-top: 12px;
+    position: relative; z-index: 1;
+    font-size: 12.5px; line-height: 1.6;
+    color: var(--text-3);
+    max-width: 300px;
+  }
+  .band-glyph {
+    position: absolute; right: 10px; bottom: -20px;
+    font-size: 88px; font-weight: 700; line-height: 1;
+    color: rgba(76, 95, 240, 0.10);
+    letter-spacing: .02em;
+    user-select: none; pointer-events: none;
+  }
+  .band-glyph em { font-style: normal; color: rgba(76, 95, 240, 0.05); }
+
+  /* ================= 表单区 ================= */
+  .body { flex: 1; display: flex; flex-direction: column; padding: 20px 24px 18px; overflow-y: auto; }
+
+  .seg {
+    flex: none;
+    display: grid; grid-template-columns: 1fr 1fr;
+    background: #edeff6;
+    border-radius: var(--radius-md);
+    padding: 3px;
+    gap: 3px;
+  }
+  .seg button {
+    font: 600 13.5px/1 var(--font-ui);
+    color: var(--text-3);
+    background: transparent;
+    border: 0; border-radius: 6px;
+    padding: 9px 0;
+    cursor: pointer;
+    transition: color .15s, background .15s;
+  }
+  .seg button:hover { color: var(--text-2); }
+  .seg button.on {
+    background: var(--surface);
+    color: var(--text-1);
+    box-shadow: var(--shadow-card);
+  }
+  .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .pane { display: flex; flex-direction: column; flex: 1; }
+  .pane[hidden] { display: none; }
+
+  .banner {
+    flex: none;
+    display: flex; align-items: flex-start; gap: 8px;
+    margin-bottom: 16px;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    font-size: 13px; line-height: 1.5;
+  }
+  .banner[hidden] { display: none; }
+  .banner.err { background: var(--err-soft); border: 1px solid var(--err-border); color: #b91c1c; }
+  .banner svg { flex: none; margin-top: 2px; }
+
+  .field { margin-bottom: 16px; }
+  .field label {
+    display: block;
+    font-size: 13px; font-weight: 600; color: var(--text-2);
+    margin-bottom: 7px;
+  }
+  .input {
+    width: 100%; height: 44px;
+    padding: 0 14px;
+    font: 400 15px/1 var(--font-ui);
+    color: var(--text-1);
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .input::placeholder { color: var(--text-4); }
+  .input:focus { outline: none; border-color: var(--accent); box-shadow: var(--shadow-ring); }
+  .input:disabled { background: var(--surface-2); color: var(--text-4); }
+  .field-hint { display: block; margin-top: 7px; font-size: 12px; color: var(--text-3); }
+  .field-hint.err-hint { color: var(--err); }
+
+  .btn-primary {
+    width: 100%; height: 46px;
+    border: 0; border-radius: var(--radius-md);
+    font: 600 15px/1 var(--font-ui);
+    color: #fff;
+    background: var(--accent-grad);
+    cursor: pointer;
+    transition: filter .15s, transform .05s;
+  }
+  .btn-primary:hover:not(:disabled) { filter: brightness(1.06); }
+  .btn-primary:active:not(:disabled) { transform: translateY(1px); }
+  .btn-primary:disabled {
+    background: #e6e8f0;
+    color: var(--text-4);
+    cursor: default;
+  }
+  .btn-primary:focus-visible { outline: none; box-shadow: var(--shadow-ring); }
+
+  .foot {
+    margin-top: 14px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    font-size: 12.5px; color: var(--text-3);
+  }
+  .foot .sep { color: var(--border-strong); }
+  .linklike {
+    font: inherit; color: var(--accent);
+    background: none; border: 0; cursor: pointer;
+    padding: 2px 4px; border-radius: 4px;
+  }
+  .linklike:hover { text-decoration: underline; }
+  .linklike:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .foot-info { display: flex; align-items: center; gap: 6px; color: var(--text-3); }
+  .foot-info svg { color: var(--text-4); }
+
+  .gap { flex: 1; min-height: 14px; }
+
+  /* —— 验证码页 —— */
+  .code-target { font-size: 13.5px; color: var(--text-2); margin-bottom: 18px; }
+  .code-target b { color: var(--text-1); font-weight: 600; }
+  .cells { display: flex; gap: 8px; justify-content: center; }
+  .cells input {
+    width: 50px; height: 58px;
+    text-align: center;
+    font: 600 24px/1 var(--font-mono);
+    color: var(--text-1);
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    caret-color: var(--accent);
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .cells input:focus { outline: none; border-color: var(--accent); box-shadow: var(--shadow-ring); }
+  .cells input.filled { border-color: var(--accent); background: var(--accent-soft); }
+
+  /* —— 已登录兜底 / 成功态 —— */
+  .center-pane {
+    flex: 1;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 0 12px;
+  }
+  .big-badge {
+    width: 64px; height: 64px; border-radius: 50%;
+    display: grid; place-items: center;
+    margin-bottom: 16px;
+  }
+  .big-badge.ok { background: var(--accent-soft); color: var(--accent); }
+  .big-badge.exist { background: #eef1f6; color: var(--text-2); font-size: 28px; }
+  .center-pane h4 { font-size: 17px; font-weight: 650; color: var(--text-1); margin-bottom: 8px; }
+  .center-pane p { font-size: 13px; color: var(--text-3); line-height: 1.7; max-width: 320px; }
+  .center-pane .who { font-size: 14px; color: var(--text-1); font-weight: 600; margin-bottom: 4px; }
+  .btn-secondary {
+    margin-top: 20px;
+    height: 40px; padding: 0 18px;
+    border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+    background: var(--surface);
+    font: 600 13.5px/1 var(--font-ui); color: var(--text-1);
+    cursor: pointer;
+  }
+  .btn-secondary:hover { background: var(--surface-2); }
+  .btn-ghost-link {
+    margin-top: 12px;
+    background: none; border: 0;
+    font: 500 12.5px/1 var(--font-ui); color: var(--text-3);
+    cursor: pointer;
+  }
+  .btn-ghost-link:hover { color: var(--text-1); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+  <p class="desk-caption"><b>登录窗改版 · 半保真原型</b>&nbsp;&nbsp;点击下方状态切换,窗内也可直接操作</p>
+
+  <div class="chips" role="tablist" aria-label="演示状态">
+    <button class="chip on" data-goto="email">① 邮箱页</button>
+    <button class="chip" data-goto="code">② 验证码页</button>
+    <button class="chip" data-goto="password">③ 密码页签</button>
+    <button class="chip" data-goto="rate">④ 限流 429</button>
+    <button class="chip" data-goto="banned">⑤ 封禁阻断</button>
+    <button class="chip" data-goto="success">⑥ 登录成功</button>
+    <button class="chip" data-goto="existing">⑦ 已登录兜底</button>
+  </div>
+
+  <div class="window">
+    <div class="titlebar">
+      <span class="app-ico">译</span>
+      <span class="t">账号登录</span>
+      <div class="win-btns" aria-hidden="true"><span>━</span><span>☐</span><span class="close">✕</span></div>
+    </div>
+
+    <!-- 品牌条带 -->
+    <header class="band">
+      <div class="band-row">
+        <div class="band-logo" aria-hidden="true">译</div>
+        <div class="band-title">沉浸翻译</div>
+      </div>
+      <p class="band-sub">登录后同步生词本、阅读进度与偏好设置</p>
+      <div class="band-glyph" aria-hidden="true">文<em>A</em></div>
+    </header>
+
+    <div class="body">
+      <!-- 错误/提示条 -->
+      <div class="banner err" id="banner" hidden>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm0 3a.9.9 0 0 1 .9.9v3.2a.9.9 0 1 1-1.8 0V5.4A.9.9 0 0 1 8 4.5Zm0 8.2a1.05 1.05 0 1 1 0-2.1 1.05 1.05 0 0 1 0 2.1Z"/></svg>
+        <span id="banner-text"></span>
+      </div>
+
+      <!-- 页签 -->
+      <div class="seg" id="seg" hidden>
+        <button id="tab-otp" class="on">验证码登录</button>
+        <button id="tab-pwd">密码登录</button>
+      </div>
+      <div style="height:18px" id="seg-gap"></div>
+
+      <!-- ① 邮箱页 -->
+      <div class="pane" id="pane-email">
+        <div class="field">
+          <label for="email">邮箱地址</label>
+          <input class="input" id="email" type="email" placeholder="you@example.com" autocomplete="off" spellcheck="false">
+          <span class="field-hint err-hint" id="email-hint" hidden>请输入有效的邮箱地址</span>
+        </div>
+        <button class="btn-primary" id="btn-send" disabled>获取验证码</button>
+        <div class="gap"></div>
+        <div class="foot">
+          <span class="foot-info">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm-.75 5a.75.75 0 0 1 1.5 0v4a.75.75 0 0 1-1.5 0v-4ZM8 4.2a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/></svg>
+            未注册的邮箱将在验证后自动创建账号
+          </span>
+          <button class="linklike" id="unban" hidden>返回修改邮箱</button>
+        </div>
+      </div>
+
+      <!-- ② 验证码页 -->
+      <div class="pane" id="pane-code" hidden>
+        <p class="code-target">验证码已发送至 <b id="code-email">you@example.com</b></p>
+        <div class="cells" id="cells">
+          <input inputmode="numeric" maxlength="1" aria-label="验证码第 1 位">
+          <input inputmode="numeric" maxlength="1" aria-label="验证码第 2 位">
+          <input inputmode="numeric" maxlength="1" aria-label="验证码第 3 位">
+          <input inputmode="numeric" maxlength="1" aria-label="验证码第 4 位">
+          <input inputmode="numeric" maxlength="1" aria-label="验证码第 5 位">
+          <input inputmode="numeric" maxlength="1" aria-label="验证码第 6 位">
+        </div>
+        <div class="gap"></div>
+        <button class="btn-primary" id="btn-verify" disabled>登 录</button>
+        <div class="foot">
+          <button class="linklike" id="btn-resend">重新发送</button>
+          <span class="sep">·</span>
+          <button class="linklike" id="btn-change-email">换一个邮箱</button>
+        </div>
+      </div>
+
+      <!-- ③ 密码页签 -->
+      <div class="pane" id="pane-pwd" hidden>
+        <div class="field">
+          <label for="email2">邮箱地址</label>
+          <input class="input" id="email2" type="email" placeholder="you@example.com" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="pwd">密码</label>
+          <input class="input" id="pwd" type="password" placeholder="输入密码">
+          <span class="field-hint">从未设置过密码的账号,请改用验证码登录</span>
+        </div>
+        <div class="gap"></div>
+        <button class="btn-primary" id="btn-pwd" disabled>登 录</button>
+        <div class="foot">
+          <span class="foot-info">忘记密码?可先用验证码登录,再在设置中设置密码</span>
+        </div>
+      </div>
+
+      <!-- ⑥ 成功态 -->
+      <div class="center-pane" id="pane-success" hidden>
+        <div class="big-badge ok">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 12.5 10 18 19.5 7"/></svg>
+        </div>
+        <h4>登录成功</h4>
+        <p>窗口即将自动关闭,账号信息可在「设置 → 账号」中查看</p>
+        <button class="btn-secondary">进入账号管理</button>
+      </div>
+
+      <!-- ⑦ 已登录兜底 -->
+      <div class="center-pane" id="pane-existing" hidden>
+        <div class="big-badge exist" aria-hidden="true">◐</div>
+        <h4>已登录</h4>
+        <p class="who">yangbishang</p>
+        <p>账号信息与登出请在「设置 → 账号」管理</p>
+        <button class="btn-secondary">打开账号设置</button>
+        <button class="btn-ghost-link">使用其他账号登录</button>
+      </div>
+    </div>
+  </div>
+
+  <p class="desk-note">
+    半保真原型:视觉方向与状态覆盖为准,不代表最终像素。配色、字体、圆角、阴影均取自应用现有设计令牌;
+    「文A」水印为翻译产品符号。确认方向后再落地到 LoginView.tsx。
+  </p>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const panes = { email: $("pane-email"), code: $("pane-code"), password: $("pane-pwd"), success: $("pane-success"), existing: $("pane-existing") };
+  const banner = $("banner"), bannerText = $("banner-text");
+  const seg = $("seg"), segGap = $("seg-gap"), tabOtp = $("tab-otp"), tabPwd = $("tab-pwd");
+  const email = $("email"), email2 = $("email2"), pwd = $("pwd");
+  const btnSend = $("btn-send"), btnVerify = $("btn-verify"), btnPwd = $("btn-pwd");
+  const emailHint = $("email-hint"), unban = $("unban");
+  const cellEls = [...$("cells").children];
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  const state = { view: "email", tab: "otp", banned: false, cooldown: 0, rate: 0 };
+  let cellTimer = null, rateTimer = null;
+
+  function show(view) {
+    state.view = view;
+    for (const [name, el] of Object.entries(panes)) el.hidden = name !== view;
+    const showTabs = view === "email" || view === "code" || view === "password";
+    seg.hidden = !showTabs; segGap.style.display = showTabs ? "" : "none";
+    tabOtp.classList.toggle("on", state.tab === "otp");
+    tabPwd.classList.toggle("on", state.tab === "password");
+    document.querySelectorAll(".chip").forEach((c) => {
+      c.classList.toggle("on", c.dataset.goto === view);
+    });
+    if (view === "code") cellEls[0].focus();
+    syncSend();
+  }
+
+  function say(text) {
+    bannerText.textContent = text;
+    banner.hidden = !text;
+  }
+
+  function syncSend() {
+    const inCooldown = state.cooldown > 0 || state.rate > 0;
+    btnSend.disabled = state.banned || inCooldown || !EMAIL_RE.test(email.value.trim());
+    btnSend.textContent =
+      state.rate > 0 ? `请 ${state.rate} 秒后再试`
+      : state.cooldown > 0 ? `获取验证码(${state.cooldown}s)`
+      : "获取验证码";
+    unban.hidden = !state.banned;
+    email.disabled = state.banned;
+    const code = cellEls.map((c) => c.value).join("");
+    btnVerify.disabled = code.length < 6;
+    btnPwd.disabled = !EMAIL_RE.test(email2.value.trim()) || !pwd.value;
+    $("btn-resend").textContent = state.cooldown > 0 ? `重新发送(${state.cooldown}s)` : "重新发送";
+    $("btn-resend").style.pointerEvents = state.cooldown > 0 ? "none" : "";
+    $("btn-resend").style.opacity = state.cooldown > 0 ? ".5" : "";
+    $("code-email").textContent = email.value.trim() || "you@example.com";
+  }
+
+  document.querySelectorAll(".chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const g = chip.dataset.goto;
+      say(""); state.banned = false; state.rate = 0; clearInterval(rateTimer);
+      if (g === "email") { state.tab = "otp"; show("email"); }
+      if (g === "code") { state.tab = "otp"; email.value = email.value || "you@example.com"; show("code"); }
+      if (g === "password") { state.tab = "password"; show("password"); }
+      if (g === "rate") {
+        state.tab = "otp"; show("email");
+        state.rate = 43; say("操作过于频繁,请 43 秒后再试"); syncSend();
+        rateTimer = setInterval(() => { state.rate--; if (state.rate <= 0) { clearInterval(rateTimer); say(""); } syncSend(); }, 1000);
+      }
+      if (g === "banned") {
+        state.tab = "otp"; show("email");
+        state.banned = true; say("该账号已被封禁,如有疑问请联系支持"); syncSend();
+      }
+      if (g === "success") show("success");
+      if (g === "existing") show("existing");
+    });
+  });
+
+  tabOtp.addEventListener("click", () => { state.tab = "otp"; say(""); show(state.view === "code" ? "code" : "email"); });
+  tabPwd.addEventListener("click", () => { state.tab = "password"; say(""); show("password"); });
+
+  email.addEventListener("input", () => { emailHint.hidden = true; syncSend(); });
+  email.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      if (btnSend.disabled) { emailHint.hidden = !email.value || EMAIL_RE.test(email.value.trim()); syncSend(); return; }
+      startCooldown(); show("code");
+    }
+  });
+  $("unban").addEventListener("click", () => { state.banned = false; say(""); syncSend(); email.focus(); });
+
+  btnSend.addEventListener("click", () => { if (btnSend.disabled) { emailHint.hidden = !!EMAIL_RE.test(email.value.trim()); syncSend(); return; } startCooldown(); show("code"); });
+
+  function startCooldown() {
+    state.cooldown = 10; // 演示用 10s(实际为 60s)
+    syncSend();
+    clearInterval(cellTimer);
+    cellTimer = setInterval(() => { state.cooldown--; if (state.cooldown <= 0) clearInterval(cellTimer); syncSend(); }, 1000);
+  }
+
+  $("btn-change-email").addEventListener("click", () => show("email"));
+  $("btn-resend").addEventListener("click", startCooldown);
+  cellEls.forEach((cell, i) => {
+    cell.addEventListener("input", () => {
+      cell.value = cell.value.replace(/\D/g, "").slice(-1);
+      cell.classList.toggle("filled", !!cell.value);
+      if (cell.value && i < 5) cellEls[i + 1].focus();
+      syncSend();
+    });
+    cell.addEventListener("keydown", (e) => {
+      if (e.key === "Backspace" && !cell.value && i > 0) { cellEls[i - 1].focus(); cellEls[i - 1].value = ""; cellEls[i - 1].classList.remove("filled"); syncSend(); e.preventDefault(); }
+      if (e.key === "Enter" && !btnVerify.disabled) show("success");
+    });
+  });
+  btnVerify.addEventListener("click", () => show("success"));
+
+  email2.addEventListener("input", syncSend);
+  pwd.addEventListener("input", syncSend);
+  [email2, pwd].forEach((el) => el.addEventListener("keydown", (e) => { if (e.key === "Enter" && !btnPwd.disabled) show("success"); }));
+  btnPwd.addEventListener("click", () => show("success"));
+
+  show("email");
+
+  // 深链:?state=code|password|rate|banned|success|existing 直达对应状态(演示/截图用)
+  const deep = new URLSearchParams(location.search).get("state");
+  if (deep) document.querySelector(`.chip[data-goto="${deep}"]`)?.click();
+  email.value = "yangbishang@outlook.com"; // 半保真演示:预填示例邮箱
+  if (deep === "code") {
+    ["3", "8", "2", "5", "1", "9"].forEach((d, i) => {
+      cellEls[i].value = d;
+      cellEls[i].classList.add("filled");
+    });
+  }
+  syncSend();
+</script>
+</body>
+</html>

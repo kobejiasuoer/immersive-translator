@@ -14,6 +14,16 @@ edition = "2021"
 name = "immersive_translator_windows_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "immersive-translator-windows"
+# main.rs 仅是 run() 入口包装、不含任何测试（全部 91 个测试在 lib），
+# 关闭其 test harness：本机企业杀软（Kaspersky/360）会把「应用全量代码 +
+# harness」的 ~35MB 测试二进制定向隔离（deps 下 <hash>.exe 链接落盘即被
+# 删除、同名 .pdb 幸存），cargo test 执行时报 os error 5 拒绝访问。
+# test = false 后 cargo test 不再构建/执行该无测试的 harness，零测试损失；
+# cargo build/check 的 bin 本体构建不受影响。
+test = false
+
 [features]
 # 生产构建必须启用：generate_context! 据此嵌入 ../dist 前端资源；
 # 不启用时 exe 会去连 devUrl (http://localhost:1420)，运行即"localhost 拒绝连接"。
@@ -31,6 +41,9 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-autostart = "2"
+# 单实例：防双开导致两进程各持同一旧 refreshToken 刷新 → 服务端 token_reused
+# 全设备下线（客户端-auth-integration.md §7 红线 2 的进程维度设防）。
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 enigo = "0.5"

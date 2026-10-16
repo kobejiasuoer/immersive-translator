@@ -24,7 +24,7 @@ import {
   normalizeHotkey,
   RECOMMENDED_HOTKEYS,
 } from "../core/hotkeyValidator";
-import { reregisterHotkeys, testConnectivity, openOnboarding } from "../lib/tauriBridge";
+import { reregisterHotkeys, testConnectivity, openOnboarding, settingsTakePendingTab, listenSettingsNavigateTab } from "../lib/tauriBridge";
 import {
   enable as enableAutostart,
   disable as disableAutostart,
@@ -61,10 +61,12 @@ import {
   IconInfo,
   IconKeyboard,
   IconVolume,
+  IconUser,
 } from "../ui/icons";
 import { XfyunVoiceSection } from "./XfyunVoiceSection";
+import { AccountSection, useAccountStatus } from "./AccountSection";
 
-type SettingsTab = "provider" | "translation" | "voice" | "glossary" | "hotkeys" | "about";
+type SettingsTab = "provider" | "translation" | "voice" | "glossary" | "hotkeys" | "account" | "about";
 
 const TABS: { id: SettingsTab; label: string; icon: ComponentType<{ size?: number }> }[] = [
   { id: "provider", label: "模型服务", icon: IconSparkles },
@@ -72,13 +74,16 @@ const TABS: { id: SettingsTab; label: string; icon: ComponentType<{ size?: numbe
   { id: "voice", label: "语音", icon: IconVolume },
   { id: "glossary", label: "术语表", icon: IconBookOpen },
   { id: "hotkeys", label: "快捷键", icon: IconKeyboard },
+  { id: "account", label: "账号", icon: IconUser },
   { id: "about", label: "关于", icon: IconInfo },
 ];
 
 /**
  * 设置窗口。点托盘「设置」菜单打开。
- * 左侧导航 + 右侧内容的双栏壳；六个分区：模型服务 / 翻译 / 语音 / 术语表 / 快捷键 / 关于。
+ * 左侧导航 + 右侧内容的双栏壳；七个分区：模型服务 / 翻译 / 语音 / 术语表 / 快捷键 / 账号 / 关于。
  * apiKey 按服务商分桶经 DPAPI 加密存储，其余字段存 localStorage。
+ * 账号 tab（AccountSection）状态由 Rust 侧 auth-state-changed 事件驱动；
+ * 托盘「账号登录」在已登录时经 settings_open_tab 双路径定位到账号 tab（挂载 take + 运行中 listen）。
  */
 export function Settings() {
   const [settings, setSettings] = useState<AppSettings>(() => ({
@@ -123,6 +128,37 @@ export function Settings() {
     void isAutostartEnabled()
       .then(setAutoStart)
       .catch(() => setAutoStart(null));
+  }, []);
+
+  // ---- 账号（windows-auth）----
+  // 状态机由 AccountSection 内的 useAccountStatus 持有；这里再取一份给侧栏 conn-chip。
+  const { status: accountStatus } = useAccountStatus();
+
+  // 账号 tab 双入口定位（docs §7 命令 10/11）：挂载时取走 pending tab（恰好一次，
+  // settings 窗 hide 不销毁、挂载一生一次，pending 只覆盖启动早期的窗口窄缝）。
+  useEffect(() => {
+    let active = true;
+    void settingsTakePendingTab()
+      .then((tab) => {
+        if (!active || !tab) return;
+        const known = TABS.find((t) => t.id === tab);
+        if (known) setActiveTab(known.id);
+      })
+      .catch((e) => console.error("[settings] take pending tab failed", e));
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // 窗口已存在时的即时导航：settings_open_tab 走 emit_to("settings")。
+  useEffect(() => {
+    const unlistenP = listenSettingsNavigateTab((tab) => {
+      const known = TABS.find((t) => t.id === tab);
+      if (known) setActiveTab(known.id);
+    });
+    return () => {
+      void unlistenP.then((u) => u());
+    };
   }, []);
 
   function toggleAutostart() {
@@ -377,6 +413,10 @@ export function Settings() {
           <span className={`conn-chip ${configured ? "ok" : "off"}`}>
             <i aria-hidden />
             {configured ? "接口已配置" : "未配置接口"}
+          </span>
+          <span className={`conn-chip ${accountStatus?.loggedIn ? "ok" : "off"}`}>
+            <i aria-hidden />
+            {accountStatus?.loggedIn ? "账号已登录" : "未登录账号"}
           </span>
           <span className="set-version">v{appVersion || "…"}</span>
         </div>
@@ -797,6 +837,10 @@ export function Settings() {
               </p>
             )}
           </>
+        )}
+
+        {activeTab === "account" && (
+          <AccountSection />
         )}
 
         {activeTab === "about" && (

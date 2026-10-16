@@ -137,6 +137,20 @@
         "skipTaskbar": false,
         "visible": false,
         "center": true
+      },
+      {
+        "label": "login",
+        "title": "账号登录",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --auto-accept-camera-and-microphone-capture",
+        "width": 420,
+        "height": 560,
+        "minWidth": 360,
+        "minHeight": 460,
+        "resizable": true,
+        "minimizable": true,
+        "maximizable": false,
+        "visible": false,
+        "center": true
       }
     ],
     "security": {
