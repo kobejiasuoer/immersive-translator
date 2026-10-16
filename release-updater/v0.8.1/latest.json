@@ -1,0 +1,11 @@
+{
+  "version": "0.8.1",
+  "notes": "v0.8.1：修复更新——Edge 在线朗读恢复可用（微软升级签名校验导致 403），阅读室浮层 Esc 关闭、播放条键盘操作等可用性打磨。",
+  "pub_date": "2026-10-16T10:20:39Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSeU96WmpWcTg1TlF0SGI2TXBjRVgrS3ZzMUV5S2tBNjMydVdqbDU1U09MZW5ONElCdlpEM2xCSVBqRDRFeExzbzcxTFJrQjVvOHpRdFFCdjNyclVhTG9ETlM4SkYrMndVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMTQ2MDI5CWZpbGU6SW1tZXJzaXZlVHJhbnNsYXRvcl8wLjguMV94NjQtc2V0dXAuZXhlCllTSlh1YTN4RWpocnErdkhrR3M4Zm5hSkdHcSs4dTFsWkZFbWQyNk9HTHk2eDB6RzdhUkpEb2xnUGt5blQvUEUzL214NGdtSXVLWldYZnFOeDlTQkJ3PT0K",
+      "url": "https://gh-proxy.com/https://github.com/kobejiasuoer/immersive-translator/releases/latest/download/ImmersiveTranslator_0.8.1_x64-setup.exe"
+    }
+  }
+}
