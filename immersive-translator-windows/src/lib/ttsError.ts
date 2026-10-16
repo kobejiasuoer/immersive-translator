@@ -5,7 +5,8 @@
  * 覆盖的错误源：
  * - tts.rs（Windows SAPI）：「TTS COM 初始化失败」「创建 SpVoice 失败」「TTS 线程…」
  * - xfyunTts.ts（讯飞在线合成）：「未配置讯飞合成凭据」「语音合成超时」「鉴权…」
- * - edgeTts.ts（Edge 在线合成）：「语音合成超时（20s 无结果）」「签名计算失败」
+ * - edgeTts.ts（Edge 在线合成）：「语音合成超时（20s 无结果）」「连接被拒：…」
+ *   （WebView2 无法读取握手 HTTP 状态，服务拒绝与断网会走相同的连接错误路径）
  * - 浏览器 Audio.play() 被策略阻止的 NotAllowedError 等
  */
 

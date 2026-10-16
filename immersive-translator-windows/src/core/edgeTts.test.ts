@@ -151,12 +151,14 @@ describe("synthesizeEdgeTts（mock WS）", () => {
     vi.resetModules();
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
   it("拼装多帧二进制音频为完整 mp3，URL 带签名参数", async () => {
     const mod = await freshModule();
     stubEdgeSocket();
+    vi.spyOn(Date, "now").mockReturnValue(1_760_000_000_000);
     const mp3 = new Uint8Array(1000);
     mp3[0] = 0xff;
     for (let i = 1; i < mp3.length; i += 1) mp3[i] = i & 0xff;
@@ -172,10 +174,13 @@ describe("synthesizeEdgeTts（mock WS）", () => {
     expect(blob.type).toBe("audio/mpeg");
     expect(Array.from(await blobBytes(blob))).toEqual(Array.from(mp3));
 
-    const url = FakeEdgeSocket.instances[0].url;
-    expect(url).toContain("TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4");
-    expect(url).toContain("Sec-MS-GEC=");
-    expect(url).toContain("Sec-MS-GEC-Version=1-");
+    const params = new URL(FakeEdgeSocket.instances[0].url).searchParams;
+    expect(params.get("TrustedClientToken")).toBe("6A5AA1D4EAFF4E9FB37E23D68491D6F4");
+    // 上游固定向量：同时锁定时间窗口、v2 摘要和协议版本，防止只更新版本号。
+    expect(params.get("Sec-MS-GEC")).toBe(
+      "6D50DDDB91812C33-DD68EFB01898B0750C9797D51A5FF93471DFDAE6888A1039D532CBDCCE54545D",
+    );
+    expect(params.get("Sec-MS-GEC-Version")).toBe("2-143.0.3650.75");
     // 两条发送帧：speech.config 与 ssml
     expect(FakeEdgeSocket.instances[0].sent).toHaveLength(2);
   });
@@ -227,5 +232,8 @@ describe("synthesizeEdgeTts（mock WS）", () => {
     const blob = await mod.synthesizeEdgeTts("skew retry", { voice: "v" });
     expect(Array.from(await blobBytes(blob))).toEqual([9, 9, 9]);
     expect(FakeEdgeSocket.instances).toHaveLength(2); // 重试建了第二条连接
+    const [first, second] = FakeEdgeSocket.instances.map((ws) => new URL(ws.url).searchParams);
+    expect(second.get("Sec-MS-GEC")).not.toBe(first.get("Sec-MS-GEC"));
+    expect(second.get("Sec-MS-GEC-Version")).toBe("2-143.0.3650.75");
   });
 });

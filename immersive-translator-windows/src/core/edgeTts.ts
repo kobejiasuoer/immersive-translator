@@ -1,12 +1,14 @@
 /**
  * Edge 在线语音合成客户端（微软 Edge 浏览器「大声朗读」同源服务，逆向接口）。
  *
- * 协议要点（2026-09 对照 rany2/edge-tts 实测验证，样例见 .spike/probe-headers.mjs）：
+ * 协议要点（2026-10 对照 rany2/edge-tts 实测验证，样例见 .spike/probe-headers.mjs）：
  * - 端点：wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1
- *   + 查询参数 TrustedClientToken（公开常量）、Sec-MS-GEC（防滥用签名）、Sec-MS-GEC-Version。
- * - Sec-MS-GEC = SHA-256 大写十六进制(`${ticks}${TOKEN}`)；ticks 为对齐到 5 分钟的
- *   Windows filetime——本机时钟偏差 >5 分钟即 403，失败后用 voices 接口的 Date 头
- *   校准一次再重试（对齐 edge-tts 的 clock skew 处理）。
+ *   + 查询参数 TrustedClientToken（公开常量）、Sec-MS-GEC（v2 签名）、Sec-MS-GEC-Version。
+ * - 2026-10 起服务端只认 v2 签名：Sec-MS-GEC = "<CS64>-<魔改SHA256>"、版本串前缀
+ *   "2-"（见 edgeDrm.ts / edge-tts issue #290）；旧 v1（纯 SHA-256 + "1-"）一律 403。
+ *   本机时钟偏差 >5 分钟仍会 403，失败后用 voices 接口的 Date 头校准一次再重试
+ *   （对齐 edge-tts 的 clock skew 处理）。实测握手只需 v2 签名 + Edge UA，
+ *   WebView2 原生 WS 即可（无需 Cookie/Origin/ConnectionId）。
  * - 握手要求 User-Agent：浏览器 WS 不能自设，但 WebView2 自动携带真实 Edge UA，
  *   实测可通过；Node 原生 WS（无 UA）会被拒——单测须 mock WebSocket。
  * - 帧序列：连上发两条文本帧（speech.config 指定 mp3 输出；ssml 带 voice/prosody），
@@ -19,6 +21,7 @@
  */
 
 import { diskCacheGet, diskCachePut } from "./ttsDiskCache";
+import { secMsGecV2 } from "./edgeDrm";
 
 export interface EdgeTtsOptions {
   /** Edge 音色 ShortName，如 en-US-AvaNeural / zh-CN-XiaoxiaoNeural。 */
@@ -35,8 +38,8 @@ const WSS_URL =
   "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1";
 /** 公开的 Edge 客户端令牌（逆向自浏览器，非机密）。 */
 const TRUSTED_CLIENT_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
-/** 随 Chromium 主版本走；服务端只校验格式，过大版本号无副作用（edge-tts 同款策略）。 */
-const SEC_MS_GEC_VERSION = "1-143.0.3650.75";
+/** 随 Chromium 主版本走；前缀 "2-" 是 2026-10 起 v2 签名的硬要求（"1-" 一律 403）。 */
+const SEC_MS_GEC_VERSION = "2-143.0.3650.75";
 /** voices 列表接口：校准时钟用（只读响应 Date 头，不解析列表）。 */
 const VOICES_URL =
   "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list";
@@ -132,17 +135,10 @@ export function edgeTokenTicks(nowMs: number, skewSeconds = 0): number {
   return seconds * TICKS_PER_SECOND;
 }
 
-/** Sec-MS-GEC 签名：SHA-256(`${ticks}${TOKEN}`) 大写十六进制。 */
-async function secMsGec(skewSeconds: number): Promise<string> {
+/** v2 签名：`${ticks}${TOKEN}` 经魔改 SHA-256 + CS64 组合（算法见 edgeDrm.ts）。 */
+function secMsGec(skewSeconds: number): string {
   const ticks = edgeTokenTicks(Date.now(), skewSeconds);
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(`${ticks}${TRUSTED_CLIENT_TOKEN}`),
-  );
-  return [...new Uint8Array(digest)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("")
-    .toUpperCase();
+  return secMsGecV2(new TextEncoder().encode(`${ticks}${TRUSTED_CLIENT_TOKEN}`));
 }
 
 /** 校准后的时钟偏差（秒），跨调用复用；null = 未知。 */
@@ -204,88 +200,84 @@ function cacheSet(key: string, blob: Blob): void {
 /** 单次合成尝试（不含校准重试）。 */
 function synthesizeOnce(trimmed: string, voice: string, skewSeconds: number, ratePercent: string): Promise<Blob> {
   return new Promise<Blob>((resolve, reject) => {
-    void secMsGec(skewSeconds).then(
-      (gec) => {
-        const url =
-          `${WSS_URL}?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}` +
-          `&Sec-MS-GEC=${gec}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}`;
-        const ws = new WebSocket(url);
-        ws.binaryType = "arraybuffer";
-        const audioChunks: Uint8Array[] = [];
-        let settled = false;
+    const gec = secMsGec(skewSeconds);
+    const url =
+      `${WSS_URL}?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}` +
+      `&Sec-MS-GEC=${gec}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}`;
+    const ws = new WebSocket(url);
+    ws.binaryType = "arraybuffer";
+    const audioChunks: Uint8Array[] = [];
+    let settled = false;
 
-        const finish = (fn: () => void) => {
-          if (settled) return;
-          settled = true;
-          window.clearTimeout(timer);
-          try {
-            ws.close(1000, "");
-          } catch {
-            /* 已关闭 */
-          }
-          fn();
-        };
-        const timer = window.setTimeout(() => {
-          finish(() => reject(new Error("语音合成超时（20s 无结果）")));
-        }, REQUEST_TIMEOUT_MS);
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      try {
+        ws.close(1000, "");
+      } catch {
+        /* 已关闭 */
+      }
+      fn();
+    };
+    const timer = window.setTimeout(() => {
+      finish(() => reject(new Error("语音合成超时（20s 无结果）")));
+    }, REQUEST_TIMEOUT_MS);
 
-        // 浏览器 WS 拿不到握手 HTTP 状态码：403/断网统一表现为 error→close。
-        ws.onerror = () => {
-          /* 具体 reason 在 onclose 给 */
-        };
-        ws.onclose = (ev) => {
-          if (!settled) {
-            finish(() =>
-              reject(
-                new Error(
-                  ev.reason ||
-                    (audioChunks.length
-                      ? "连接提前中断（音频不完整）"
-                      : "连接被拒：网络不可达或服务暂不可用"),
-                ),
-              ),
-            );
-          }
-        };
-        ws.onmessage = (ev) => {
-          if (typeof ev.data === "string") {
-            if (ev.data.includes("Path:turn.end")) {
-              let total = 0;
-              for (const chunk of audioChunks) total += chunk.length;
-              if (!total) {
-                finish(() => reject(new Error("合成返回空音频")));
-                return;
-              }
-              const merged = new Uint8Array(new ArrayBuffer(total));
-              let offset = 0;
-              for (const chunk of audioChunks) {
-                merged.set(chunk, offset);
-                offset += chunk.length;
-              }
-              const blob = new Blob([merged], { type: "audio/mpeg" });
-              finish(() => resolve(blob));
-            }
+    // 浏览器 WS 拿不到握手 HTTP 状态码：403/断网统一表现为 error→close。
+    ws.onerror = () => {
+      /* 具体 reason 在 onclose 给 */
+    };
+    ws.onclose = (ev) => {
+      if (!settled) {
+        finish(() =>
+          reject(
+            new Error(
+              ev.reason ||
+                (audioChunks.length
+                  ? "连接提前中断（音频不完整）"
+                  : "连接被拒：网络不可达或服务暂不可用"),
+            ),
+          ),
+        );
+      }
+    };
+    ws.onmessage = (ev) => {
+      if (typeof ev.data === "string") {
+        if (ev.data.includes("Path:turn.end")) {
+          let total = 0;
+          for (const chunk of audioChunks) total += chunk.length;
+          if (!total) {
+            finish(() => reject(new Error("合成返回空音频")));
             return;
           }
-          const payload = parseEdgeBinaryFrame(ev.data as ArrayBuffer);
-          if (payload) audioChunks.push(payload);
-        };
-        ws.onopen = () => {
-          const ts = new Date().toString();
-          ws.send(buildSpeechConfigMessage(ts));
-          ws.send(
-            buildSsmlMessage(
-              voice,
-              trimmed,
-              crypto.randomUUID().replace(/-/g, ""),
-              ts,
-              ratePercent,
-            ),
-          );
-        };
-      },
-      (err) => reject(err instanceof Error ? err : new Error("签名计算失败")),
-    );
+          const merged = new Uint8Array(new ArrayBuffer(total));
+          let offset = 0;
+          for (const chunk of audioChunks) {
+            merged.set(chunk, offset);
+            offset += chunk.length;
+          }
+          const blob = new Blob([merged], { type: "audio/mpeg" });
+          finish(() => resolve(blob));
+        }
+        return;
+      }
+      const payload = parseEdgeBinaryFrame(ev.data as ArrayBuffer);
+      if (payload) audioChunks.push(payload);
+    };
+    ws.onopen = () => {
+      const ts = new Date().toString();
+      ws.send(buildSpeechConfigMessage(ts));
+      ws.send(
+        buildSsmlMessage(
+          voice,
+          trimmed,
+          crypto.randomUUID().replace(/-/g, ""),
+          ts,
+          ratePercent,
+        ),
+      );
+    };
   });
 }
 
