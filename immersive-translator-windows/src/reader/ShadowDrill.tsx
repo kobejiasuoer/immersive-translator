@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { evaluateSentence, type PronunciationResult } from "../core/pronunciation";
 import { phoneTip, worstPhoneOf } from "../core/shadowDiagnose";
 import { startMicRecorder, type MicRecorderHandle } from "../core/micRecorder";
+import { useEscapeClose } from "./useEscapeClose";
 import { loadIseCredentials } from "../lib/iseCredentials";
 import type { DrillEntry } from "./ShadowReport";
 
@@ -156,8 +157,11 @@ export function ShadowDrill(props: Props) {
   const worst = worstPhoneOf(word);
   const phones = word?.sylls.flatMap((s) => s.phones) ?? [];
 
+  // Esc 退出词练（此前只能点右上角 × 或等流程走完）。
+  useEscapeClose(props.onClose);
+
   return (
-    <div className="drill-backdrop" role="dialog" aria-label="只练差的词">
+    <div className="drill-backdrop" role="dialog" aria-modal="true" aria-label="只练差的词">
       <div className="drill-sheet">
         <div className="drill-head">
           <span className="t">只练差的词</span>

@@ -145,6 +145,28 @@ textarea:focus-visible {
   box-shadow: var(--shadow-ring);
 }
 
+/* 阅读室焦点环加固。
+   全局 :focus-visible 用的是 3px / 0.18alpha 软影（--shadow-ring），叠在白底上
+   对比度仅 1.28:1（低于 3:1 即视为不可见），且常被祖先 overflow 裁掉。这里在
+   阅读室作用域内改用实色 outline：
+     - 用 outline 而非 box-shadow：reader.css 里 button.on 等高优先级规则会吃掉
+       box-shadow（特异性 0,2,1 > 此处 0,2,0），outline 抢不走；
+     - outline 在 Windows 高对比度（forced-colors）下不会被系统抹掉。
+   仅键盘 Tab 时出现，鼠标点击不出现。 */
+.reader-root :where(button, [role="tab"], [role="button"], a,
+                input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: none;
+  border-radius: var(--radius-sm);
+}
+
+@media (forced-colors: active) {
+  .reader-root :where(button, [role="tab"], a, input, select, textarea):focus-visible {
+    outline: 3px solid Highlight;
+  }
+}
+
 /* ============================================================
    通用组件
    ============================================================ */
@@ -2951,6 +2973,13 @@ input[type="radio"] {
 
   --sonic-teal: #C84B31;
   --sonic-teal-soft: rgba(200, 75, 49, 0.11);
+
+  /* nordic-mist（护眼）专属：句法结构回标色。
+     此前漏定义，浏览器会回退取全局/深色模式的靛蓝（--clause-indigo 在
+     :root 与 dark/oled 下都有值），于是在浅色墨绿底上出现亮靛蓝 + 深靛蓝字，
+     对比度仅 2.15:1（AA 需 4.5）。这里给墨绿系，AA 实测 4.81:1。 */
+  --clause-indigo: #1F6E5E;
+  --clause-indigo-soft: rgba(31, 110, 94, 0.12);
 
   --tape-bg: #D7E2DC;
   --tape-border: #B6C8BE;
