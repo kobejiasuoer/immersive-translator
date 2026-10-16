@@ -239,7 +239,7 @@ fn send_ctrl_c_with(mut send: impl FnMut(&[INPUT]) -> u32) -> Result<(), String>
             let _ = send(&releases);
         }
         return Err(format!(
-            "Windows 未完整发送复制按键（{sent}/4），请检查目标应用是否以管理员权限运行"
+            "Windows 未完整接受模拟复制按键（{sent}/4）。多款软件都出现此问题时，请联系 IT 检查终端防护或应用控制策略；管理员权限只是其中一种可能原因。"
         ));
     }
     Ok(())

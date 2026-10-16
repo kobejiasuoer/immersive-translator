@@ -1,0 +1,945 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>账号登录 · 交互原型 2026-09-26</title>
+<!--
+  Windows 端账号登录高保真原型 · 自包含单文件，双击 file:// 即可用。
+  无网络字体、无 CDN、无框架——全部样式内联，全部交互原生 JS 模拟，不发任何请求。
+  对应设计文档 docs/windows-auth-design-2026-09-26.md。
+
+  覆盖状态（文档 §8.2 界面清单，第 2 轮补 banned/network_error/storage_error 与失效状态条）：
+    登录窗：邮箱输入页 / 验证码页（60s 倒计时+重发）/ 密码页签 / 登录成功
+    错误态（服务端）：otp_invalid · invalid_credentials · rate_limited(读 retry-after 倒计时) · service_unavailable · banned(阻断)
+    错误态（本地伪码）：network_error(可重试) · storage_error(流程中止)
+    设置页：未登录空态 / 未登录+失效状态条(notice=session_expired/session_kicked) / 已登录（昵称·邮箱·套餐徽标·当前设备·登出）
+
+  演示约定（左侧导览底部也有说明）：
+    - 验证码页：输入 364882 → 登录成功；其他任意码 → otp_invalid
+    - 密码页签：任意密码前 2 次提交 → invalid_credentials；第 3 次 → rate_limited（27s 倒计时，模拟 retry-after）
+    - 舞台右下浮条为演示控制（重置 / 倒计时快进），非产品 UI
+
+  视觉令牌 1:1 拷贝自 immersive-translator-windows/src/styles.css:7-51（浅色 root 原值）；
+  按钮组件类对应 styles.css:153-220（.btn/.btn-primary/.btn-secondary/.btn-danger）。
+  错误文案与 docs/windows-auth-design-2026-09-26.md §3 错误码映射表逐字一致，
+  映射依据 immersive-translator-server/docs/client-auth-integration.md §6。
+-->
+<style>
+  /* ===== 设计令牌（原值摘自 styles.css:7-51，浅色） ===== */
+  :root {
+    --accent: #4c5ff0;
+    --accent-hover: #3f52e0;
+    --accent-active: #3445cc;
+    --accent-soft: #eef0fe;
+    --accent-softer: #f6f7ff;
+    --accent-grad: linear-gradient(135deg, #4c5ff0 0%, #7a5cf0 100%);
+    --ok: #15803d;
+    --ok-soft: #e8f7ee;
+    --warn: #b45309;
+    --warn-soft: #fdf3e1;
+    --err: #dc2626;
+    --err-soft: #fdeaea;
+    --bg: #f4f5f9;
+    --surface: #ffffff;
+    --surface-2: #f9fafc;
+    --border: #e4e7ee;
+    --border-strong: #d6dae4;
+    --text-1: #1c2029;
+    --text-2: #4b5261;
+    --text-3: #7c8494;
+    --text-4: #a6adbb;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+    --shadow-float: 0 6px 16px rgba(16, 24, 40, 0.08), 0 2px 6px rgba(16, 24, 40, 0.06);
+    --shadow-pop: 0 12px 32px rgba(16, 24, 40, 0.16), 0 3px 10px rgba(16, 24, 40, 0.1);
+    --shadow-ring: 0 0 0 3px rgba(76, 95, 240, 0.18);
+    --font-ui: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC",
+      system-ui, -apple-system, sans-serif;
+    --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: var(--font-ui);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-1);
+    background: #e9ebf2;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  .mono { font-family: var(--font-mono); }
+
+  /* ===== 评审台布局（左导览 + 右舞台，非产品 UI） ===== */
+  .proto-shell { display: flex; height: 100vh; }
+  .rail {
+    width: 264px; flex: none;
+    padding: 24px 18px 20px 24px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 2px;
+    overflow-y: auto;
+  }
+  .rail h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: 0.02em; }
+  .rail .sub { margin: 6px 0 0; font-size: 12px; color: var(--text-3); line-height: 1.7; }
+  .rail h2 {
+    margin: 20px 0 6px; font-size: 12px; font-weight: 600; color: var(--text-2);
+  }
+  .rail h2::after {
+    content: ""; display: block; width: 18px; height: 2px;
+    background: var(--accent); margin-top: 5px; border-radius: 1px;
+  }
+  .scene-btn {
+    text-align: left; border: 1px solid transparent; background: transparent;
+    font-family: inherit; font-size: 12.5px; color: var(--text-2);
+    padding: 7px 10px; border-radius: var(--radius-md); cursor: pointer; line-height: 1.45;
+    transition: background .12s ease, color .12s ease, border-color .12s ease;
+  }
+  .scene-btn:hover { background: var(--surface-2); color: var(--text-1); }
+  .scene-btn.active {
+    background: var(--accent-soft); border-color: rgba(76,95,240,.28);
+    color: var(--accent); font-weight: 600;
+  }
+  .scene-btn .no { display: inline-block; width: 16px; color: var(--text-4); font-variant-numeric: tabular-nums; }
+  .scene-btn.active .no { color: var(--accent); }
+  .rail .tips {
+    margin-top: auto; padding-top: 16px; font-size: 11.5px; color: var(--text-3);
+    line-height: 1.75; border-top: 1px dashed var(--border);
+  }
+  .rail .tips b { color: var(--text-2); font-weight: 600; }
+
+  /* ===== 舞台（仿桌面壁纸 + 居中窗口） ===== */
+  .stage {
+    flex: 1; position: relative; overflow: hidden;
+    background: radial-gradient(1100px 650px at 68% 18%, #38415f 0%, #272e44 55%, #1b2030 100%);
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  /* ===== 仿真窗口通用（真实应用为系统标题栏，此处示意） ===== */
+  .win {
+    background: var(--bg); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-pop); overflow: hidden;
+    display: flex; flex-direction: column;
+    animation: win-in .22s cubic-bezier(.2,.8,.3,1);
+  }
+  @keyframes win-in { from { opacity: 0; transform: scale(.96) translateY(8px); } to { opacity: 1; transform: none; } }
+  .titlebar {
+    height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding-left: 13px;
+    background: var(--surface); border-bottom: 1px solid var(--border); user-select: none;
+  }
+  .titlebar .app-ico {
+    width: 16px; height: 16px; border-radius: 4px; flex: none;
+    background: var(--accent-grad); color: #fff; font-size: 9px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .titlebar .t { font-size: 12px; color: var(--text-2); flex: 1; }
+  .titlebar .wbtn {
+    width: 42px; height: 34px; display: flex; align-items: center; justify-content: center;
+    color: var(--text-2); cursor: pointer; font-size: 11px;
+  }
+  .titlebar .wbtn:hover { background: var(--accent-soft); color: var(--text-1); }
+  .titlebar .wbtn.close:hover { background: #e81123; color: #fff; }
+
+  /* ===== 登录窗（label=login，420×560，真实窗口 resizable:false） ===== */
+  #login-win { width: 400px; }
+  .login-body { padding: 22px 28px 24px; display: flex; flex-direction: column; min-height: 470px; }
+  .login-head { text-align: center; margin-bottom: 14px; }
+  .login-head .logo {
+    width: 44px; height: 44px; border-radius: 12px; margin: 2px auto 10px;
+    background: var(--accent-grad); color: #fff; font-size: 20px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 12px rgba(76,95,240,.35);
+  }
+  .login-head h3 { margin: 0; font-size: 16px; font-weight: 600; }
+  .login-head p { margin: 4px 0 0; font-size: 12px; color: var(--text-3); }
+
+  /* 页签（验证码登录 / 密码登录） */
+  .login-tabs {
+    display: flex; gap: 4px; background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--radius-md); padding: 3px; margin-bottom: 16px;
+  }
+  .login-tabs .tab {
+    flex: 1; padding: 6px 0; border-radius: var(--radius-sm); border: none; background: transparent;
+    font-family: inherit; font-size: 12.5px; color: var(--text-2); cursor: pointer;
+    transition: background .12s ease, color .12s ease;
+  }
+  .login-tabs .tab.active { background: var(--surface); color: var(--accent); font-weight: 600; box-shadow: var(--shadow-card); }
+
+  /* 表单 */
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12px; color: var(--text-2); margin-bottom: 5px; font-weight: 500; }
+  .field .input, .field input {
+    width: 100%; font-family: inherit; font-size: 13px; color: var(--text-1);
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md); padding: 8px 11px; outline: none;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .field input:focus { border-color: var(--accent); box-shadow: var(--shadow-ring); }
+  .field input.invalid { border-color: var(--err); }
+  .field .hint { font-size: 11.5px; margin-top: 5px; color: var(--text-3); }
+  .field .hint.err { color: var(--err); }
+
+  /* 6 位验证码分格输入 */
+  .code-cells { display: flex; gap: 7px; justify-content: center; margin: 4px 0 2px; }
+  .code-cells input {
+    width: 42px; height: 46px; text-align: center; font-family: var(--font-mono);
+    font-size: 17px; color: var(--text-1); background: var(--surface);
+    border: 1px solid var(--border-strong); border-radius: var(--radius-md); outline: none;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .code-cells input:focus { border-color: var(--accent); box-shadow: var(--shadow-ring); }
+  .code-cells input.filled { border-color: var(--accent); background: var(--accent-softer); }
+  .code-target { font-size: 12px; color: var(--text-2); text-align: center; margin-bottom: 10px; }
+  .code-target b { color: var(--text-1); font-weight: 600; }
+
+  /* ===== 按钮（对应 styles.css .btn 系列） ===== */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    font-family: inherit; font-size: 13px; line-height: 1; padding: 9px 14px;
+    border-radius: var(--radius-md); border: 1px solid transparent; cursor: pointer;
+    user-select: none; white-space: nowrap;
+    transition: background .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease;
+  }
+  .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .btn-block { width: 100%; padding: 10px 14px; font-weight: 600; }
+  .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 1px 2px rgba(76,95,240,.3); }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+  .btn-primary:active:not(:disabled) { background: var(--accent-active); }
+  .btn-secondary { background: var(--surface); color: var(--text-1); border-color: var(--border-strong); }
+  .btn-secondary:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-softer); }
+  .btn-ghost { background: transparent; color: var(--text-2); }
+  .btn-ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text-1); }
+  .btn-danger { background: transparent; color: var(--err); border-color: transparent; }
+  .btn-danger:hover:not(:disabled) { background: var(--err-soft); }
+
+  /* ===== 提示条（错误/成功，对应 styles.css .msg-bar 气质） ===== */
+  .banner {
+    display: none; align-items: flex-start; gap: 8px;
+    border-radius: var(--radius-md); padding: 9px 12px; font-size: 12.5px;
+    line-height: 1.5; margin-bottom: 14px; border: 1px solid transparent;
+  }
+  .banner.show { display: flex; animation: pop-in .16s ease; }
+  .banner .bicn { flex: none; font-size: 13px; line-height: 1.45; }
+  .banner.err { background: var(--err-soft); color: var(--err); border-color: rgba(220,38,38,.25); }
+  .banner.ok { background: var(--ok-soft); color: var(--ok); border-color: rgba(21,128,61,.22); }
+  .banner b { font-weight: 600; }
+  /* 账号 tab 顶部失效状态条（notice=session_expired/session_kicked，docs D8） */
+  .acct-notice {
+    display: none; align-items: flex-start; gap: 8px; margin-bottom: 12px;
+    background: var(--warn-soft); color: var(--warn);
+    border: 1px solid rgba(180,83,9,.25); border-radius: var(--radius-md);
+    padding: 9px 12px; font-size: 12.5px; line-height: 1.5; cursor: pointer;
+    animation: pop-in .16s ease;
+  }
+  .acct-notice.show { display: flex; }
+  .acct-notice .bicn { flex: none; font-size: 13px; line-height: 1.45; }
+  @keyframes pop-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+
+  .login-foot { margin-top: auto; padding-top: 16px; text-align: center; }
+  .linklike {
+    background: none; border: none; font-family: inherit; font-size: 12px;
+    color: var(--text-3); cursor: pointer; padding: 4px 6px; border-radius: var(--radius-sm);
+  }
+  .linklike:hover { color: var(--accent); background: var(--accent-softer); }
+
+  /* 登录成功页 */
+  .success-pane { text-align: center; padding: 44px 10px 20px; }
+  .success-pane .big {
+    width: 56px; height: 56px; border-radius: 50%; margin: 0 auto 14px;
+    background: var(--ok-soft); color: var(--ok); font-size: 26px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    border: 2px solid var(--ok);
+  }
+  .success-pane h4 { margin: 0 0 6px; font-size: 15px; }
+  .success-pane p { margin: 0; color: var(--text-3); font-size: 12.5px; }
+
+  /* ===== 设置窗（label=settings 双栏壳，账号 tab） ===== */
+  #settings-win { width: 660px; }
+  .set-body { flex: 1; display: flex; min-height: 0; }
+  .set-side {
+    width: 138px; flex: none; background: var(--surface-2); border-right: 1px solid var(--border);
+    padding: 12px 8px; display: flex; flex-direction: column; gap: 2px;
+  }
+  .set-side .tab { padding: 7px 12px; border-radius: var(--radius-sm); color: var(--text-2); cursor: pointer; font-size: 12.5px; }
+  .set-side .tab.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .set-side .spacer { flex: 1; }
+  .set-side .conn-chip {
+    margin: 0 4px; padding: 6px 8px; border-radius: var(--radius-sm);
+    background: var(--surface); border: 1px solid var(--border);
+    font-size: 11px; color: var(--text-3); display: flex; align-items: center; gap: 6px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; }
+  .dot.off { background: var(--text-4); }
+  .set-main { flex: 1; overflow-y: auto; padding: 18px 22px; }
+  .set-pagehead { margin-bottom: 14px; }
+  .set-pagehead h2 { margin: 0; font-size: 15px; }
+  .set-pagehead p { margin: 3px 0 0; font-size: 12px; color: var(--text-3); }
+
+  /* 账号卡（对应 styles.css .group-card 气质） */
+  .group-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card); padding: 18px; margin-bottom: 12px;
+  }
+  .group-card h3 {
+    margin: 0 0 4px; font-size: 12.5px; font-weight: 600; color: var(--text-2);
+  }
+  .group-card .desc { font-size: 11.5px; color: var(--text-3); margin: 0 0 14px; }
+
+  .acct-row { display: flex; align-items: center; gap: 14px; }
+  .avatar {
+    width: 46px; height: 46px; border-radius: 50%; flex: none;
+    background: var(--accent-grad); color: #fff; font-size: 18px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .acct-row .who { flex: 1; min-width: 0; }
+  .acct-row .who .n { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .plan-badge {
+    font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent); letter-spacing: .3px;
+  }
+  .acct-row .who .e { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+
+  .field-row {
+    display: flex; justify-content: space-between; align-items: center; gap: 14px;
+    padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 12.5px;
+  }
+  .field-row:last-child { border-bottom: none; }
+  .field-row .k { color: var(--text-2); }
+  .field-row .v { color: var(--text-1); font-weight: 500; }
+  .field-row .v .dim { color: var(--text-3); font-weight: 400; }
+  .field-row .v .cur {
+    font-size: 10.5px; color: var(--ok); background: var(--ok-soft);
+    padding: 1px 7px; border-radius: 999px; margin-left: 6px; font-weight: 600;
+  }
+
+  .empty-state { text-align: center; padding: 26px 12px 22px; }
+  .empty-state .ico {
+    width: 52px; height: 52px; border-radius: 14px; margin: 0 auto 12px;
+    background: var(--accent-soft); color: var(--accent); font-size: 22px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .empty-state h4 { margin: 0 0 6px; font-size: 13.5px; }
+  .empty-state p { margin: 0 auto 14px; color: var(--text-3); font-size: 12px; max-width: 300px; line-height: 1.7; }
+
+  /* ===== 演示控制浮条（非产品 UI） ===== */
+  .demo-dock {
+    position: absolute; right: 14px; bottom: 12px; display: flex; gap: 6px; align-items: center;
+    background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.22);
+    backdrop-filter: blur(8px); border-radius: 999px; padding: 4px 6px 4px 12px;
+  }
+  .demo-dock .lbl { color: rgba(255,255,255,.75); font-size: 11px; user-select: none; }
+  .demo-dock button {
+    font-family: inherit; font-size: 11px; border: none; cursor: pointer;
+    background: rgba(255,255,255,.9); color: var(--text-1);
+    border-radius: 999px; padding: 4px 10px;
+  }
+  .demo-dock button:hover { background: #fff; }
+
+  /* 状态说明角标（标注当前场景对应的服务端交互，非产品 UI） */
+  .scene-note {
+    position: absolute; left: 14px; bottom: 12px; max-width: 380px;
+    color: rgba(255,255,255,.82); font-size: 11.5px; line-height: 1.7;
+    background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.18);
+    border-radius: var(--radius-md); padding: 7px 12px;
+  }
+  .scene-note .mono { color: #c9d2ff; }
+</style>
+</head>
+<body>
+<div class="proto-shell">
+
+  <!-- ============ 左侧导览（评审台，非产品 UI） ============ -->
+  <aside class="rail">
+    <h1>账号登录</h1>
+    <p class="sub">Windows 端 · 验证码主入口 + 密码页签<br>配套 docs/windows-auth-design-2026-09-26.md</p>
+
+    <h2>登录窗（label=login）</h2>
+    <button class="scene-btn" data-scene="1"><span class="no">1</span>邮箱输入页 · 验证码主入口</button>
+    <button class="scene-btn" data-scene="2"><span class="no">2</span>验证码页 · 60s 倒计时与重发</button>
+    <button class="scene-btn" data-scene="3"><span class="no">3</span>密码登录页签</button>
+    <button class="scene-btn" data-scene="4"><span class="no">4</span>错误 · otp_invalid</button>
+    <button class="scene-btn" data-scene="5"><span class="no">5</span>错误 · invalid_credentials</button>
+    <button class="scene-btn" data-scene="6"><span class="no">6</span>错误 · rate_limited（429）</button>
+    <button class="scene-btn" data-scene="7"><span class="no">7</span>错误 · service_unavailable</button>
+    <button class="scene-btn" data-scene="8"><span class="no">8</span>登录成功 · 自动关窗</button>
+
+    <h2>错误 · 封禁与本地伪码</h2>
+    <button class="scene-btn" data-scene="9"><span class="no">9</span>banned · 阻断（仅可返回改邮箱）</button>
+    <button class="scene-btn" data-scene="10"><span class="no">10</span>network_error · 可重试</button>
+    <button class="scene-btn" data-scene="11"><span class="no">11</span>storage_error · 流程中止</button>
+
+    <h2>设置页 · 账号 tab</h2>
+    <button class="scene-btn" data-scene="12"><span class="no">12</span>账号区 · 未登录空态</button>
+    <button class="scene-btn" data-scene="13"><span class="no">13</span>账号区 · 未登录+失效状态条</button>
+    <button class="scene-btn" data-scene="14"><span class="no">14</span>账号区 · 已登录与登出</button>
+
+    <div class="tips">
+      <b>演示约定</b><br>
+      验证码：<span class="mono">364882</span> → 成功；其他码 → otp_invalid<br>
+      密码页签：任意密码错 2 次 → invalid_credentials；第 3 次 → rate_limited（模拟 retry-after=27s）<br>
+      场景 13 点击状态条本体可切换 session_expired / session_kicked 两种文案<br>
+      场景 14 点「登出」→ 跳场景 12；场景 1 流程走完 → 场景 14<br>
+      右下浮条：倒计时快进 / 重置演示<br>
+      <b>设计令牌</b> 1:1 摘自 src/styles.css:7-51
+    </div>
+  </aside>
+
+  <!-- ============ 舞台 ============ -->
+  <div class="stage" id="stage">
+
+    <!-- ===== 登录窗 ===== -->
+    <div class="win" id="login-win">
+      <div class="titlebar">
+        <div class="app-ico">沉</div>
+        <div class="t">账号登录</div>
+        <div class="wbtn" title="最小化">─</div>
+        <div class="wbtn" title="最大化">□</div>
+        <div class="wbtn close" title="关闭">✕</div>
+      </div>
+      <div class="login-body">
+
+        <!-- 错误/成功横幅 -->
+        <div class="banner" id="banner">
+          <span class="bicn" id="banner-icn">!</span>
+          <span id="banner-text"></span>
+        </div>
+
+        <!-- 页签（仅登录态下可见，成功页隐藏） -->
+        <div class="login-tabs" id="login-tabs">
+          <button class="tab active" id="tab-otp" onclick="switchTab('otp')">验证码登录</button>
+          <button class="tab" id="tab-pwd" onclick="switchTab('password')">密码登录</button>
+        </div>
+
+        <!-- —— 视图：邮箱输入页（验证码流第 1 步） —— -->
+        <div id="view-email">
+          <div class="field">
+            <label for="in-email">邮箱地址</label>
+            <input id="in-email" type="email" placeholder="you@example.com" autocomplete="off" />
+            <div class="hint err" id="email-hint" style="display:none">请输入有效的邮箱地址</div>
+          </div>
+          <button class="btn btn-primary btn-block" id="btn-send" onclick="sendOtp()">获取验证码</button>
+          <div class="login-foot">
+            <span style="font-size:11.5px;color:var(--text-4)">未注册的邮箱将在验证后自动创建账号</span>
+            <button class="linklike" id="btn-back-email" onclick="clearBanned()" style="display:none">返回修改邮箱</button>
+          </div>
+        </div>
+
+        <!-- —— 视图：验证码页 —— -->
+        <div id="view-code" style="display:none">
+          <div class="code-target">验证码已发送至 <b id="code-email">you@example.com</b></div>
+          <div class="code-cells" id="code-cells">
+            <input inputmode="numeric" maxlength="1" />
+            <input inputmode="numeric" maxlength="1" />
+            <input inputmode="numeric" maxlength="1" />
+            <input inputmode="numeric" maxlength="1" />
+            <input inputmode="numeric" maxlength="1" />
+            <input inputmode="numeric" maxlength="1" />
+          </div>
+          <div style="height:10px"></div>
+          <button class="btn btn-primary btn-block" id="btn-verify" onclick="verifyOtp()" disabled>登 录</button>
+          <div class="login-foot">
+            <button class="btn btn-ghost" id="btn-resend" onclick="resendOtp()" style="padding:6px 16px">重新发送</button>
+            <span style="color:var(--border-strong)">·</span>
+            <button class="linklike" onclick="backToEmail()">换一个邮箱</button>
+          </div>
+        </div>
+
+        <!-- —— 视图：密码页签 —— -->
+        <div id="view-password" style="display:none">
+          <div class="field">
+            <label for="in-email2">邮箱地址</label>
+            <input id="in-email2" type="email" placeholder="you@example.com" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="in-pwd">密码</label>
+            <input id="in-pwd" type="password" placeholder="输入密码" />
+            <div class="hint">从未设置过密码的账号，请改用验证码登录</div>
+          </div>
+          <div style="height:6px"></div>
+          <button class="btn btn-primary btn-block" id="btn-login-pwd" onclick="loginPassword()">登 录</button>
+          <div class="login-foot">
+            <span style="font-size:11.5px;color:var(--text-4)">忘记密码？可在验证码登录后随时设置密码（后续迭代）</span>
+          </div>
+        </div>
+
+        <!-- —— 视图：登录成功 —— -->
+        <div id="view-success" class="success-pane" style="display:none">
+          <div class="big">✓</div>
+          <h4>登录成功</h4>
+          <p>窗口即将自动关闭，账号信息可在「设置 → 账号」中查看</p>
+          <div style="margin-top:22px">
+            <button class="btn btn-secondary" onclick="gotoScene(14)">进入账号管理（演示）</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ===== 设置窗（账号 tab） ===== -->
+    <div class="win" id="settings-win" style="display:none">
+      <div class="titlebar">
+        <div class="app-ico">沉</div>
+        <div class="t">设置</div>
+        <div class="wbtn" title="最小化">─</div>
+        <div class="wbtn" title="最大化">□</div>
+        <div class="wbtn close" title="关闭">✕</div>
+      </div>
+      <div class="set-body">
+        <div class="set-side">
+          <div class="tab">模型服务</div>
+          <div class="tab">翻译</div>
+          <div class="tab">语音</div>
+          <div class="tab">术语表</div>
+          <div class="tab">快捷键</div>
+          <div class="tab active">账号</div>
+          <div class="tab">关于</div>
+          <div class="spacer"></div>
+          <div class="conn-chip"><span class="dot" id="conn-dot"></span><span id="conn-text">接口正常</span></div>
+        </div>
+        <div class="set-main">
+
+          <!-- —— 账号区：未登录 —— -->
+          <div id="acct-anon">
+            <!-- 失效状态条：notice=session_expired / session_kicked（token_invalid/token_reused 清凭据后的落点，docs §3/D8） -->
+            <div class="acct-notice" id="acct-notice" onclick="toggleNotice()" title="点击切换两种文案（演示）">
+              <span class="bicn">!</span><span id="acct-notice-text"></span>
+            </div>
+            <div class="set-pagehead">
+              <h2>账号</h2>
+              <p>登录是可选项——翻译、阅读室与复习全部本地可用</p>
+            </div>
+            <div class="group-card">
+              <div class="empty-state">
+                <div class="ico">◐</div>
+                <h4>未登录</h4>
+                <p>登录后可使用官方翻译服务、同步云端配置；不登录不影响任何本地功能</p>
+                <button class="btn btn-primary" style="padding:8px 22px" onclick="gotoScene(1)">登 录</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- —— 账号区：已登录 —— -->
+          <div id="acct-logged" style="display:none">
+            <div class="set-pagehead">
+              <h2>账号</h2>
+              <p>账号信息与登录状态</p>
+            </div>
+            <div class="group-card">
+              <div class="acct-row">
+                <div class="avatar" id="acct-avatar">读</div>
+                <div class="who">
+                  <div class="n"><span id="acct-nickname">读译</span><span class="plan-badge" id="acct-plan">FREE</span></div>
+                  <div class="e" id="acct-email">reader@example.com</div>
+                </div>
+              </div>
+            </div>
+            <div class="group-card">
+              <h3>登录信息</h3>
+              <div class="field-row">
+                <span class="k">当前设备</span>
+                <span class="v">DESKTOP-7C21 <span class="dim">· Windows</span><span class="cur">当前</span></span>
+              </div>
+              <div class="field-row">
+                <span class="k">登录方式</span>
+                <span class="v" id="acct-via">邮箱验证码</span>
+              </div>
+              <div class="field-row">
+                <span class="k">云端配置</span>
+                <span class="v"><span class="dim" id="acct-config">已同步 · </span>2026-09-26 15:42</span>
+              </div>
+            </div>
+            <div class="group-card">
+              <div class="field-row" style="border:none;padding:2px 0 0">
+                <span class="k" style="color:var(--text-2)">退出当前账号后，本地数据（生词本/历史/书架）不受影响</span>
+                <button class="btn btn-danger" onclick="doLogout()">登出</button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- 场景说明角标（非产品 UI） -->
+    <div class="scene-note" id="scene-note"></div>
+
+    <!-- 演示控制浮条（非产品 UI） -->
+    <div class="demo-dock">
+      <span class="lbl">演示</span>
+      <button onclick="fastForward()">倒计时 −10s</button>
+      <button onclick="resetDemo()">重置</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   纯前端演示状态机。真实实现：
+   - auth_send_otp / auth_verify_otp / auth_login_password / auth_logout 走 Rust 命令
+   - 错误文案来自 src/lib/authErrorText.ts（docs §3 错误码映射表）
+   ============================================================ */
+
+// §3 错误码映射表的逐字文案（code -> 展示）
+var ERROR_TEXT = {
+  otp_invalid:        '验证码错误或已过期，请重新获取',
+  invalid_credentials:'邮箱或密码不正确；若从未设置密码，请改用验证码登录',
+  rate_limited:       '操作过于频繁，请 {N} 秒后再试',
+  service_unavailable:'邮件服务暂时不可用，请稍后再试',
+  banned:             '该账号已被封禁，如有疑问请联系支持',
+  network_error:      '网络连接失败，请检查网络后重试',
+  storage_error:      '本地安全存储读写失败，请重试或反馈'
+};
+// 账号 tab 失效状态条文案（notice -> docs §3 statusbar）
+var NOTICE_TEXT = {
+  session_expired: '<b>登录已失效</b>，请重新登录',
+  session_kicked:  '<b>检测到登录凭据异常复用</b>，该账号已在所有设备安全下线，请重新登录'
+};
+
+var state = {
+  tab: 'otp',            // 'otp' | 'password'
+  view: 'email',         // 'email' | 'code' | 'password' | 'success'
+  email: '',
+  code: ['', '', '', '', '', ''],
+  cooldown: 0,           // 重发倒计时（秒）
+  rateUntil: 0,          // rate_limited 禁用剩余秒
+  pwdFails: 0,
+  banned: false,         // banned 阻断态：提交禁用，仅可「返回修改邮箱」
+  banner: null           // null | {kind:'err'|'ok', text}
+};
+var DEMO_CODE = '364882';
+var timerId = null;
+
+var $ = function (id) { return document.getElementById(id); };
+
+/* ---------- 渲染 ---------- */
+function render() {
+  var banner = $('banner');
+  if (state.banner) {
+    banner.className = 'banner show ' + state.banner.kind;
+    $('banner-icn').textContent = state.banner.kind === 'ok' ? '✓' : '!';
+    $('banner-text').innerHTML = state.banner.text;
+  } else {
+    banner.className = 'banner';
+  }
+
+  // 页签与视图
+  var inFlow = state.view !== 'success';
+  $('login-tabs').style.display = inFlow ? 'flex' : 'none';
+  $('tab-otp').classList.toggle('active', state.tab === 'otp');
+  $('tab-pwd').classList.toggle('active', state.tab === 'password');
+
+  $('view-email').style.display    = state.view === 'email' ? 'block' : 'none';
+  $('view-code').style.display     = state.view === 'code' ? 'block' : 'none';
+  $('view-password').style.display = state.view === 'password' ? 'block' : 'none';
+  $('view-success').style.display  = state.view === 'success' ? 'block' : 'none';
+
+  if (state.view === 'email') {
+    $('in-email').value = state.email;
+    validateEmail(false);
+    // banned 阻断态：提交禁用 + 仅显示「返回修改邮箱」（docs §3）
+    $('btn-send').disabled = state.banned || !validEmail(state.email);
+    $('btn-back-email').style.display = state.banned ? 'inline-block' : 'none';
+  }
+  if (state.view === 'code') {
+    $('code-email').textContent = state.email || 'you@example.com';
+    paintCodeCells();
+    $('btn-verify').disabled = state.code.join('').length < 6 || state.rateUntil > 0;
+  }
+  if (state.view === 'password') {
+    $('in-email2').value = state.email;
+    paintPwdButton();
+  }
+  paintResend();
+}
+
+function paintResend() {
+  var b = $('btn-resend');
+  if (state.cooldown > 0) {
+    b.disabled = true;
+    b.textContent = '重新发送（' + state.cooldown + 's）';
+  } else {
+    b.disabled = false;
+    b.textContent = '重新发送';
+  }
+}
+
+function paintPwdButton() {
+  var b = $('btn-login-pwd');
+  if (state.rateUntil > 0) {
+    b.disabled = true;
+    b.textContent = '请 ' + state.rateUntil + ' 秒后再试';
+  } else {
+    b.disabled = false;
+    b.textContent = '登 录';
+  }
+}
+
+function paintCodeCells() {
+  var cells = $('code-cells').children;
+  for (var i = 0; i < 6; i++) {
+    cells[i].value = state.code[i];
+    cells[i].classList.toggle('filled', !!state.code[i]);
+  }
+}
+
+/* ---------- 邮箱页 ---------- */
+function validEmail(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
+
+function validateEmail(showHint) {
+  var v = $('in-email').value.trim();
+  var ok = validEmail(v);
+  $('btn-send').disabled = !ok;
+  $('in-email').classList.toggle('invalid', showHint && !ok && v.length > 0);
+  $('email-hint').style.display = (showHint && !ok && v.length > 0) ? 'block' : 'none';
+  if (ok) state.email = v;
+  return ok;
+}
+
+function sendOtp() {
+  if (!validateEmail(true)) return;
+  // 演示分支：真实实现调用 auth_send_otp（503→service_unavailable、429→rate_limited）
+  state.view = 'code';
+  state.code = ['', '', '', '', '', ''];
+  state.cooldown = 60;
+  state.banner = null;
+  startTimer();
+  render();
+  setTimeout(function () { $('code-cells').children[0].focus(); }, 60);
+}
+
+function backToEmail() { state.view = 'email'; state.banner = null; render(); }
+
+/* banned 阻断态的「返回修改邮箱」：清除阻断与错误，回到可编辑（docs §3） */
+function clearBanned() {
+  state.banned = false;
+  state.banner = null;
+  render();
+  $('in-email').focus();
+}
+
+/* ---------- 验证码页 ---------- */
+function verifyOtp() {
+  var code = state.code.join('');
+  if (code.length < 6) return;
+  if (code === DEMO_CODE) {
+    state.view = 'success';
+    state.banner = null;
+    state.cooldown = 0;
+    render();
+  } else {
+    // 400 otp_invalid：停验证码页，清空码输入并聚焦（docs §3）
+    state.code = ['', '', '', '', '', ''];
+    state.banner = { kind: 'err', text: '<b>otp_invalid</b> — ' + ERROR_TEXT.otp_invalid };
+    render();
+    setTimeout(function () { $('code-cells').children[0].focus(); }, 60);
+  }
+}
+
+function resendOtp() {
+  if (state.cooldown > 0) return;
+  state.cooldown = 60;
+  state.banner = null;
+  startTimer();
+  render();
+}
+
+/* ---------- 密码页签 ---------- */
+function loginPassword() {
+  if (state.rateUntil > 0) return;
+  var email = $('in-email2').value.trim();
+  if (!validEmail(email)) { state.banner = { kind: 'err', text: '请输入有效的邮箱地址' }; render(); return; }
+  state.email = email;
+  state.pwdFails++;
+  if (state.pwdFails >= 3) {
+    // 429 rate_limited：读 retry-after（演示 27s），按钮禁用倒计时，不自动重试
+    state.rateUntil = 27;
+    state.banner = { kind: 'err', text: '<b>rate_limited</b> — ' + ERROR_TEXT.rate_limited.replace('{N}', '27') };
+    startTimer();
+  } else {
+    state.banner = { kind: 'err', text: '<b>invalid_credentials</b> — ' + ERROR_TEXT.invalid_credentials };
+  }
+  render();
+  $('in-pwd').value = '';
+  $('in-pwd').focus();
+}
+
+/* ---------- 页签切换 ---------- */
+function switchTab(tab) {
+  state.tab = tab;
+  state.banner = null;
+  state.view = (tab === 'otp') ? 'email' : 'password';
+  render();
+}
+
+/* ---------- 倒计时（演示时钟：0.25s 一跳，约等 4 倍速；快进按钮再 −10） ---------- */
+function startTimer() {
+  if (timerId) clearInterval(timerId);
+  timerId = setInterval(function () {
+    var dirty = false;
+    if (state.cooldown > 0) { state.cooldown--; dirty = true; }
+    if (state.rateUntil > 0) { state.rateUntil--; dirty = true; }
+    if (dirty) {
+      paintResend();
+      if (state.view === 'password') paintPwdButton();
+      if (state.view === 'code') $('btn-verify').disabled = state.code.join('').length < 6 || state.rateUntil > 0;
+    }
+    if (state.cooldown === 0 && state.rateUntil === 0) { clearInterval(timerId); timerId = null; }
+  }, 250);
+}
+
+function fastForward() {
+  if (state.cooldown > 0) state.cooldown = Math.max(0, state.cooldown - 10);
+  if (state.rateUntil > 0) state.rateUntil = Math.max(0, state.rateUntil - 10);
+  paintResend();
+  if (state.view === 'password') paintPwdButton();
+  if (state.view === 'code') $('btn-verify').disabled = state.code.join('').length < 6 || state.rateUntil > 0;
+}
+
+/* ---------- 设置页账号区（演示） ---------- */
+function doLogout() {
+  // 真实实现：auth_logout（服务端吊销尽力 + 本地无条件清空；clear 失败保态报错，docs §5.3）
+  gotoScene(12);
+}
+
+var noticeWhich = 'session_expired';
+function toggleNotice() {
+  noticeWhich = (noticeWhich === 'session_expired') ? 'session_kicked' : 'session_expired';
+  $('acct-notice-text').innerHTML = NOTICE_TEXT[noticeWhich];
+}
+
+/* ---------- 场景切换（评审台） ---------- */
+var SCENE_NOTES = {
+  1: 'POST <span class="mono">/v1/auth/otp/request</span>（匿名）· 成功恒 {ok:true}，前端不据此判断账号存在（防枚举）',
+  2: '60 秒本地倒计时与服务端同邮箱冷却对齐；「登录」→ <span class="mono">POST /v1/auth/otp/verify</span>（device 由 Rust 侧填充）',
+  3: '<span class="mono">POST /v1/auth/login</span> · 密码错/账号不存在/无密码账号同为 invalid_credentials，故文案引导验证码',
+  4: '400 <span class="mono">otp_invalid</span>：码错/过期/试错超限统一此码 · 动作：停验证码页，清码聚焦，保留重发',
+  5: '401 <span class="mono">invalid_credentials</span> · 动作：停密码页签，选中密码框',
+  6: '429 <span class="mono">rate_limited</span> · 读响应头 retry-after（演示 27s）→ 按钮禁用倒计时，不自动重试',
+  7: '503 <span class="mono">service_unavailable</span>（服务端邮件通道未配置）· 停邮箱页，保留「获取验证码」可重试',
+  8: '200 → Rust 先 DPAPI 落盘双令牌（单槽 server_auth，经 secrets 写锁）→ 广播 auth-state-changed → fire-and-forget 拉取 /v1/me/config → 关窗',
+  9: '403 <span class="mono">banned</span> · 阻断：提交禁用，仅「返回修改邮箱」可清错误态重填（点击可演示）',
+  10: '本地伪码 <span class="mono">network_error</span>（reqwest 连接失败）· 保留输入，按钮恢复可点可重试',
+  11: '本地伪码 <span class="mono">storage_error</span>（DPAPI 落盘失败）· 令牌无法安全落盘则不允许「登录成功」，流程停在验证码页',
+  12: '空态：登录可选（D1 不阻断）·「登录」→ open_login_window',
+  13: '<span class="mono">notice=session_expired / session_kicked</span> 状态条（D8）：token_invalid / token_reused 清凭据后的落点，持久显示直到重新登录；点击可切换两种文案',
+  14: '已登录态：昵称/邮箱/套餐徽标只读 · 「登出」→ auth_logout：服务端吊销尽力 + 本地清空；clear 失败保登录态并报 storage_error（P13）'
+};
+
+function gotoScene(n) {
+  var btns = document.querySelectorAll('.scene-btn');
+  for (var i = 0; i < btns.length; i++)
+    btns[i].classList.toggle('active', btns[i].getAttribute('data-scene') === String(n));
+
+  $('scene-note').innerHTML = SCENE_NOTES[n] || '';
+
+  var isSettings = n === 12 || n === 13 || n === 14;
+  $('login-win').style.display = isSettings ? 'none' : 'flex';
+  $('settings-win').style.display = isSettings ? 'flex' : 'none';
+
+  // 重置演示状态再按场景摆放
+  if (timerId) { clearInterval(timerId); timerId = null; }
+  state = { tab: 'otp', view: 'email', email: '', code: ['', '', '', '', '', ''],
+            cooldown: 0, rateUntil: 0, pwdFails: 0, banned: false, banner: null };
+
+  if (!isSettings) {
+    if (n === 1) { /* 默认 */ }
+    if (n === 2) { state.email = 'reader@example.com'; state.view = 'code'; state.cooldown = 60; startTimer(); }
+    if (n === 3) { state.tab = 'password'; state.view = 'password'; state.email = 'reader@example.com'; }
+    if (n === 4) { state.email = 'reader@example.com'; state.view = 'code'; state.cooldown = 43;
+                   state.banner = { kind: 'err', text: '<b>otp_invalid</b> — ' + ERROR_TEXT.otp_invalid }; }
+    if (n === 5) { state.tab = 'password'; state.view = 'password'; state.email = 'reader@example.com';
+                   state.banner = { kind: 'err', text: '<b>invalid_credentials</b> — ' + ERROR_TEXT.invalid_credentials }; }
+    if (n === 6) { state.tab = 'password'; state.view = 'password'; state.email = 'reader@example.com';
+                   state.rateUntil = 27; state.pwdFails = 3;
+                   state.banner = { kind: 'err', text: '<b>rate_limited</b> — ' + ERROR_TEXT.rate_limited.replace('{N}', '27') };
+                   startTimer(); }
+    if (n === 7) { state.banner = { kind: 'err', text: '<b>service_unavailable</b> — ' + ERROR_TEXT.service_unavailable };
+                   state.email = 'reader@example.com'; }
+    if (n === 8) { state.view = 'success'; }
+    if (n === 9) { state.banned = true; state.email = 'reader@example.com';
+                   state.banner = { kind: 'err', text: '<b>banned</b> — ' + ERROR_TEXT.banned }; }
+    if (n === 10) { state.email = 'reader@example.com';
+                    state.banner = { kind: 'err', text: '<b>network_error</b> — ' + ERROR_TEXT.network_error }; }
+    if (n === 11) { state.email = 'reader@example.com'; state.view = 'code'; state.cooldown = 43;
+                    state.banner = { kind: 'err', text: '<b>storage_error</b> — ' + ERROR_TEXT.storage_error };
+                    for (var c = 0; c < 6; c++) state.code[c] = '364882'[c]; }
+    render();
+    if (n === 7 || n === 10) { $('btn-send').disabled = false; } // service_unavailable / network_error：保留可重试
+  } else {
+    $('acct-notice').className = 'acct-notice' + (n === 13 ? ' show' : '');
+    if (n === 13) {
+      noticeWhich = 'session_expired';
+      $('acct-notice-text').innerHTML = NOTICE_TEXT[noticeWhich];
+    }
+    $('acct-anon').style.display = (n === 14) ? 'none' : 'block';
+    $('acct-logged').style.display = (n === 14) ? 'block' : 'none';
+    if (n === 14) {
+      // 与登录成功的 user 对象一致（演示数据）
+      $('acct-nickname').textContent = 'reader';
+      $('acct-email').textContent = 'reader@example.com';
+      $('acct-avatar').textContent = 'r';
+      $('acct-plan').textContent = 'FREE';
+      $('acct-via').textContent = '邮箱验证码';
+      $('acct-config').textContent = '已同步 · ';
+      $('conn-dot').className = 'dot';
+      $('conn-text').textContent = '接口正常';
+    } else {
+      $('conn-dot').className = 'dot';
+      $('conn-text').textContent = '接口正常（未登录）';
+    }
+  }
+}
+
+function resetDemo() { gotoScene(1); }
+
+/* ---------- 事件绑定 ---------- */
+document.querySelectorAll('.scene-btn').forEach(function (b) {
+  b.addEventListener('click', function () { gotoScene(parseInt(b.getAttribute('data-scene'), 10)); });
+});
+
+$('in-email').addEventListener('input', function () { validateEmail(false); });
+$('in-email').addEventListener('keydown', function (e) { if (e.key === 'Enter') sendOtp(); });
+
+// 6 格验证码：自动前进 / 后退 / 粘贴整码
+(function bindCodeCells() {
+  var cells = $('code-cells').children;
+  var setCode = function (idx, ch) {
+    state.code[idx] = ch.replace(/\D/g, '');
+  };
+  for (var i = 0; i < cells.length; i++) {
+    (function (idx) {
+      cells[idx].addEventListener('input', function () {
+        setCode(idx, cells[idx].value);
+        if (state.code[idx] && idx < 5) cells[idx + 1].focus();
+        paintCodeCells();
+        $('btn-verify').disabled = state.code.join('').length < 6 || state.rateUntil > 0;
+      });
+      cells[idx].addEventListener('keydown', function (e) {
+        if (e.key === 'Backspace' && !state.code[idx] && idx > 0) cells[idx - 1].focus();
+        if (e.key === 'Enter') verifyOtp();
+      });
+      cells[idx].addEventListener('paste', function (e) {
+        e.preventDefault();
+        var text = (e.clipboardData || window.clipboardData).getData('text').replace(/\D/g, '').slice(0, 6);
+        for (var k = 0; k < 6; k++) state.code[k] = text[k] || '';
+        paintCodeCells();
+        $('btn-verify').disabled = state.code.join('').length < 6 || state.rateUntil > 0;
+        var next = Math.min(text.length, 5);
+        cells[next].focus();
+      });
+    })(i);
+  }
+})();
+
+$('in-pwd').addEventListener('keydown', function (e) { if (e.key === 'Enter') loginPassword(); });
+
+/* ---------- 启动：默认场景 1 ---------- */
+gotoScene(1);
+</script>
+</body>
+</html>

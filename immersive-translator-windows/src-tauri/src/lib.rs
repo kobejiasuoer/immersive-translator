@@ -1,3 +1,4 @@
+mod auth;
 mod clipboard;
 mod file_export;
 mod history;
@@ -78,6 +79,12 @@ struct PendingOpenReview(Mutex<Option<()>>);
 /// 窗口不存在时先记下 bookId，等窗口挂载后取走（同 PendingOpenReview 模式）。
 #[derive(Default)]
 struct PendingOpenBook(Mutex<Option<String>>);
+
+/// 托盘「账号登录」等入口要求设置页定位「账号」tab：窗口已存在时走
+/// settings:navigate-tab 事件即时切换；不存在时先记 tab id，等窗口挂载后
+/// 取走（同 PendingOpenBook 模式，lib.rs 窗口存在时不写 pending，避免陈旧请求）。
+#[derive(Default)]
+struct PendingSettingsTab(Mutex<Option<String>>);
 
 // 自动读取和手动复制等待共用一次会话，避免热键连按启动多个剪贴板监听。
 static SELECTION_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -267,6 +274,8 @@ fn show_window(app: &tauri::AppHandle, label: &str) {
         "settings" => Some(("ImmersiveTranslator 设置", 720.0, 660.0)),
         "history" => Some(("翻译历史", 780.0, 620.0)),
         "reader" => Some(("沉浸阅读室", 1200.0, 800.0)),
+        // 登录窗规格与 tauri.conf.json 一致（系统装饰 + resizable，D9 零分叉）
+        "login" => Some(("账号登录", 420.0, 560.0)),
         _ => None,
     };
     let Some((title, w, h)) = spec else {
@@ -615,6 +624,31 @@ fn open_reader_book(app: tauri::AppHandle, book_id: String) {
 /// 阅读室窗口挂载时取走「打开书断点」请求（提醒卡「继续阅读」入口）。
 #[tauri::command]
 fn take_pending_open_book(state: tauri::State<'_, PendingOpenBook>) -> Option<String> {
+    state.0.lock().unwrap().take()
+}
+
+/// 打开登录窗口（§7-9）：走 show_window 既有路径（含后台线程重建兜底）。
+#[tauri::command]
+fn open_login_window(app: tauri::AppHandle) {
+    show_window(&app, "login");
+}
+
+/// 设置页定位 tab（§7-10，双路径）：settings 窗已存在 → emit_to 即时切换；
+/// 不存在 → 写 pending 再开窗（照 open_reader_book 先例）。
+#[tauri::command]
+fn settings_open_tab(app: tauri::AppHandle, tab: String) {
+    if app.get_webview_window("settings").is_some() {
+        show_window(&app, "settings");
+        let _ = app.emit_to("settings", "settings:navigate-tab", tab);
+    } else {
+        *app.state::<PendingSettingsTab>().0.lock().unwrap() = Some(tab);
+        show_window(&app, "settings");
+    }
+}
+
+/// Settings 挂载时取走 pending tab（§7-11，恰好一次；取走即清空防陈旧）。
+#[tauri::command]
+fn settings_take_pending_tab(state: tauri::State<'_, PendingSettingsTab>) -> Option<String> {
     state.0.lock().unwrap().take()
 }
 
@@ -1300,6 +1334,16 @@ mod hotkey_switch_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 单实例防护（auth 红线 2 的进程维度设防）：双开的两个实例会各持同一
+        // 旧 refreshToken 同时刷新，服务端判 token_reused → 该账号全部设备
+        // 强制下线。第二实例启动即退出，仅把已有实例的设置窗提前。
+        // 官方要求 single-instance 最先注册（先于任何窗口创建）。
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(win) = app.get_webview_window("settings") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -1320,6 +1364,7 @@ pub fn run() {
         .manage(review_reminder::TrayHandles::default())
         .manage(review_reminder::PendingReminder::default())
         .manage(ActiveHotkeys::default())
+        .manage(PendingSettingsTab::default())
         .invoke_handler(tauri::generate_handler![
             take_pending_panel_payload,
             clear_pending_panel_payload,
@@ -1393,6 +1438,17 @@ pub fn run() {
             review_reminder::take_pending_reminder,
             review_reminder::tray_refresh_badge,
             review_reminder::open_quick_review,
+            auth::auth_send_otp,
+            auth::auth_verify_otp,
+            auth::auth_login_password,
+            auth::auth_logout,
+            auth::auth_get_status,
+            auth::auth_refresh_now,
+            auth::auth_fetch_me,
+            auth::auth_fetch_server_config,
+            open_login_window,
+            settings_open_tab,
+            settings_take_pending_tab,
         ])
         .setup(|app| {
             // 首次启动把安装包里的 OCR 模型释放到 app_data_dir/models/，
@@ -1409,13 +1465,16 @@ pub fn run() {
             let reader = MenuItem::with_id(app, "reader", "沉浸阅读室", true, None::<&str>)?;
             let vocab = MenuItem::with_id(app, "vocab", "生词本", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
+            let account =
+                MenuItem::with_id(app, "account", "账号登录", true, None::<&str>)?;
             let history = MenuItem::with_id(app, "history", "翻译历史", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
                 &[
-                    &ocr, &quick, &live, &reader, &vocab, &sep, &history, &settings, &quit,
+                    &ocr, &quick, &live, &reader, &vocab, &sep, &account, &history, &settings,
+                    &quit,
                 ],
             )?;
 
@@ -1449,6 +1508,22 @@ pub fn run() {
                         // 截图 OCR：截全屏 → 发给 overlay → 显示 overlay
                         open_ocr_overlay(app.clone());
                     }
+                    "account" => {
+                        // 账号登录（D2）：未登录 → 开 login 窗；已登录 → 打开
+                        // 设置页并定位「账号」tab。get_status 只读内存/磁盘
+                        // 凭据（短临界区），菜单事件里 block_on 安全。
+                        let logged_in = app
+                            .try_state::<std::sync::Arc<auth::TokenManager>>()
+                            .map(|manager| {
+                                tauri::async_runtime::block_on(manager.get_status()).logged_in
+                            })
+                            .unwrap_or(false);
+                        if logged_in {
+                            settings_open_tab(app.clone(), "account".to_string());
+                        } else {
+                            show_window(app, "login");
+                        }
+                    }
                     _ => {}
                 })
                 .build(app)?;
@@ -1464,7 +1539,37 @@ pub fn run() {
             review_reminder::spawn_scheduler(app.handle().clone());
 
             // 首次启动弹出引导窗口（展示三大能力 + 当前快捷键；完成/跳过写标记）。
+            // 引导已完成（标记存在）→ 启动直接进阅读室主窗口（v0.8 Phase 1：
+            // 阅读室收敛为唯一主工作台；此前引导完成后窗口保持隐藏，只能托盘进）。
+            // show_reader_window 复用既有路径：预建窗口只 show+focus，缺失才在
+            // std::thread::spawn 里 build（红线 3 线程铁律在函数内满足）。
             maybe_show_onboarding(app.handle());
+            let onboarding_done = app
+                .path()
+                .app_data_dir()
+                .map(|dir| dir.join(ONBOARDING_FLAG).exists())
+                .unwrap_or(false);
+            if onboarding_done {
+                show_reader_window(app.handle());
+            }
+
+            // 账号认证（windows-auth §4.4）：令牌管理器需 AppHandle（DPAPI 路径
+            // 与 base_url 覆盖文件都在 app_data_dir），故在 setup 注入；setup 完成
+            // 先于任何 WebView 命令调用，State 提取始终可用。随后 spawn 启动静默
+            // 续登录：预填内存态 → 广播已登录 → 后台刷新校验存活，不阻塞窗口显示。
+            match auth::build_token_manager(app.handle()) {
+                Ok(manager) => {
+                    let bootstrap_manager = std::sync::Arc::clone(&manager);
+                    app.manage(manager);
+                    tauri::async_runtime::spawn(auth::auth_bootstrap(
+                        app.handle().clone(),
+                        bootstrap_manager,
+                    ));
+                }
+                Err(e) => {
+                    eprintln!("[auth] 令牌管理器初始化失败（登录功能不可用）: {e}");
+                }
+            }
 
             // 注册默认全局热键（启动占位；用户改键后由 reregister_hotkeys 覆盖）：
             //   Ctrl+Shift+Q —— 选中文字翻译

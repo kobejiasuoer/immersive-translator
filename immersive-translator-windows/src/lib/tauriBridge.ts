@@ -364,9 +364,17 @@ export interface ReaderSpeakOptions {
   voice?: string;
   /** 事件目标窗口 label，默认 "panel"。阅读室传 "reader"。 */
   target?: string;
+  /**
+   * 云引擎原生合成语速（SSML 百分比，如 "-25%"；v0.8 慢速示范用）。
+   * 只被 Edge/讯飞引擎消费——SAPI（tts_speak）invoke 载荷不含此字段，
+   * 缺省 undefined 走既有「1× 合成 + playbackRate 变速」路径。
+   */
+  nativeRate?: string;
 }
 
-/** 带完整参数的朗读（阅读室用）。返回本次朗读代数。 */
+/** 带完整参数的朗读（阅读室用）。返回本次朗读代数。
+ * 显式挑选 track/rate/voice/target 传参：nativeRate 是云引擎专属字段，
+ * 不透传给 SAPI，保证 tts_speak invoke 载荷与旧版逐字节一致。 */
 export async function ttsSpeakAdvanced(text: string, chinese: boolean, opts: ReaderSpeakOptions = {}): Promise<number> {
   return invoke<number>("tts_speak", {
     text,
@@ -416,4 +424,113 @@ export function finishOnboarding(): Promise<void> {
 /** 重新打开引导窗口（设置 → 关于「查看引导」）。 */
 export function openOnboarding(): Promise<void> {
   return invoke("open_onboarding");
+}
+
+// ---- 账号登录（windows-auth；docs/windows-auth-design-2026-09-26.md §7 IPC 契约表）----
+// 令牌永不跨 IPC：前端只见 user / 登录态布尔 / notice 失效原因（设计 D4/D5）。
+// 错误统一为 AuthError（invoke reject 的对象），文案映射唯一出口在 authErrorText.ts。
+
+/** Rust AuthError 结构（serde camelCase），code 分支见设计 §3。 */
+export interface AuthError {
+  code: string;
+  message: string;
+  httpStatus: number | null;
+  retryAfterSeconds: number | null;
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  /** Rust 侧 Option<String>（服务端 PublicUser.nickname 可为 null，auth.rs 注释）。 */
+  nickname: string | null;
+  plan: string;
+  createdAt: string;
+}
+
+/** 登录 / 刷新成功只回 user，不含任何令牌。 */
+export interface AuthSession {
+  user: AuthUser;
+}
+
+/** 失效原因：token_invalid → session_expired；token_reused → session_kicked。 */
+export type AuthNotice = "session_expired" | "session_kicked" | null;
+
+export interface AuthStatus {
+  loggedIn: boolean;
+  user: AuthUser | null;
+  notice: AuthNotice;
+}
+
+export interface LogoutOutcome {
+  /** 服务端吊销是否成功（尽力而为，失败仍完成本地清空）。 */
+  serverRevoked: boolean;
+}
+
+/** 请求向 email 发送验证码（服务端恒 {ok:true}，防枚举）。 */
+export function authSendOtp(email: string): Promise<void> {
+  return invoke("auth_send_otp", { email });
+}
+
+/** 验证码登录（未注册邮箱自动建号；device 由 Rust 填充，前端不传）。 */
+export function authVerifyOtp(email: string, code: string): Promise<AuthSession> {
+  return invoke("auth_verify_otp", { email, code });
+}
+
+/** 密码登录（密码页签）。 */
+export function authLoginPassword(email: string, password: string): Promise<AuthSession> {
+  return invoke("auth_login_password", { email, password });
+}
+
+/** 登出：服务端吊销尽力 + 本地清空；clear 失败保登录态并 reject storage_error（§5.3）。 */
+export function authLogout(): Promise<LogoutOutcome> {
+  return invoke("auth_logout");
+}
+
+/** 当前登录态（内存优先，空则回读 DPAPI 懒预填；不会 reject）。 */
+export function authGetStatus(): Promise<AuthStatus> {
+  return invoke("auth_get_status");
+}
+
+/** 手动触发一次刷新（账号区「刷新」入口，走 Rust 单飞）。 */
+export function authRefreshNow(): Promise<AuthSession> {
+  return invoke("auth_refresh_now");
+}
+
+/** GET /v1/me（带鉴权请求样板，Rust 侧 401 分支处理）。 */
+export function authFetchMe(): Promise<AuthUser> {
+  return invoke("auth_fetch_me");
+}
+
+/** GET /v1/me/config：Rust 落盘 app_data_dir/server_config.json 后原样返回（MVP 只存不消费）。 */
+export function authFetchServerConfig(): Promise<unknown> {
+  return invoke("auth_fetch_server_config");
+}
+
+/** 打开（或聚焦）登录窗口。 */
+export function openLoginWindow(): Promise<void> {
+  return invoke("open_login_window");
+}
+
+/** 定位设置页指定 tab（settings 窗存在走事件，不存在写 pending 由挂载时取走）。 */
+export function settingsOpenTab(tab: string): Promise<void> {
+  return invoke("settings_open_tab", { tab });
+}
+
+/** Settings 挂载时取走 pending tab（恰好一次，取走即清空）。 */
+export function settingsTakePendingTab(): Promise<string | null> {
+  return invoke("settings_take_pending_tab");
+}
+
+/** 登录态变化（登录/登出/启动预填/续期/失效），全窗广播。 */
+export function listenAuthStateChanged(
+  handler: (status: AuthStatus) => void,
+): Promise<UnlistenFn> {
+  return listen<AuthStatus>("auth-state-changed", (event) => handler(event.payload));
+}
+
+/** settings 窗运行中的 tab 定位事件（settings_open_tab 在窗口已存在时）。 */
+export function listenSettingsNavigateTab(
+  handler: (tab: string) => void,
+): Promise<UnlistenFn> {
+  return listen<string>("settings:navigate-tab", (event) => handler(event.payload));
 }
