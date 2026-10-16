@@ -88,6 +88,44 @@ pub struct ShadowAttempt {
     pub words: Vec<ShadowWord>,
 }
 
+/// 表达改进对比片段：t = "keep" | "del" | "ins"（String 而非枚举，宽容解析）。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CoachSeg {
+    pub t: String,
+    pub v: String,
+}
+
+/// user 轮的表达改进建议（BETTER 改写词级对比 + TIP 中文点评）。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CoachDiff {
+    #[serde(default)]
+    pub segs: Vec<CoachSeg>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// 会话语境（v0.8 场景中心）：book=聊刚读的章节，vocab=生词造句闯关。
+/// 场景枚举保持四值不动，新场景由这个可选字段承载（老会话无此字段）。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum SpeakSessionContext {
+    #[serde(rename_all = "camelCase")]
+    Book {
+        book_title: String,
+        chapter_article_id: String,
+        chapter_idx: u32,
+        #[serde(default)]
+        excerpt: Vec<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Vocab {
+        #[serde(default)]
+        word_ids: Vec<String>,
+    },
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeakTurn {
@@ -102,6 +140,12 @@ pub struct SpeakTurn {
     /// 跟读报告历史（最新在末尾；旧会话无此字段）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow_attempts: Option<Vec<ShadowAttempt>>,
+    /// user 轮：本轮发言的发音评测（at 必填，由前端写入；旧会话无此字段）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pron: Option<ShadowAttempt>,
+    /// user 轮：表达改进建议（旧会话无此字段）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coach_diff: Option<CoachDiff>,
     /// Unix 毫秒
     pub at: i64,
 }
@@ -115,6 +159,9 @@ pub struct SpeakSession {
     pub turns: Vec<SpeakTurn>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// 会话语境（v0.8 book/vocab；旧会话无此字段）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<SpeakSessionContext>,
 }
 
 #[derive(Serialize, Deserialize, Default, Debug)]
@@ -330,5 +377,106 @@ mod tests {
         let a = &out["shadowAttempts"][0];
         assert_eq!(a["total"], 4.1);
         assert_eq!(a["words"][0]["sylls"][0]["phones"][1]["gwpp"], -1.9);
+    }
+
+    #[test]
+    fn session_with_context_coach_diff_and_pron_roundtrip() {
+        let json = r#"{
+            "id": "s2", "scenario": "smalltalk", "difficulty": "medium",
+            "turns": [
+                { "role": "assistant", "text": "Hey!", "at": 1 },
+                {
+                    "role": "user", "text": "I feel a nomadic longing", "at": 2,
+                    "pron": { "at": 2, "total": 3.9, "accuracy": 4.0, "fluency": 3.4, "integrity": 4.6, "words": [] },
+                    "coachDiff": {
+                        "segs": [
+                            { "t": "keep", "v": "I feel a " },
+                            { "t": "ins", "v": "nomadic longing" }
+                        ],
+                        "note": "自然用上了本章词块。"
+                    }
+                }
+            ],
+            "createdAt": 0, "updatedAt": 2,
+            "context": {
+                "kind": "book", "bookTitle": "The Call of the Wild",
+                "chapterArticleId": "a1", "chapterIdx": 0,
+                "excerpt": ["Buck lived at a big house."]
+            }
+        }"#;
+        let s: SpeakSession = serde_json::from_str(json).expect("v0.8 会话反序列化");
+        let ctx = s.context.as_ref().expect("有语境");
+        match ctx {
+            SpeakSessionContext::Book { book_title, chapter_idx, excerpt, .. } => {
+                assert_eq!(book_title, "The Call of the Wild");
+                assert_eq!(*chapter_idx, 0);
+                assert_eq!(excerpt.len(), 1);
+            }
+            other => panic!("语境应为 book：{other:?}"),
+        }
+        let user = &s.turns[1];
+        let pron = user.pron.as_ref().expect("有发音评测");
+        assert_eq!(pron.at, 2);
+        assert_eq!(pron.total, 3.9);
+        let diff = user.coach_diff.as_ref().expect("有表达改进");
+        assert_eq!(diff.segs.len(), 2);
+        assert_eq!(diff.segs[1].t, "ins");
+        assert_eq!(diff.note.as_deref(), Some("自然用上了本章词块。"));
+
+        // 序列化回 camelCase，内部 tag=kind 保持
+        let out = serde_json::to_value(&s).unwrap();
+        assert_eq!(out["context"]["kind"], "book");
+        assert_eq!(out["context"]["bookTitle"], "The Call of the Wild");
+        assert_eq!(out["turns"][1]["pron"]["at"], 2);
+        assert_eq!(out["turns"][1]["coachDiff"]["segs"][0]["t"], "keep");
+        // 整文件 roundtrip（保存通道 speak_save_session 的载荷同构）
+        let back: SpeakSession = serde_json::from_value(out).expect("roundtrip");
+        assert!(back.context.is_some());
+    }
+
+    #[test]
+    fn vocab_context_roundtrip() {
+        let json = r#"{
+            "id": "s3", "scenario": "smalltalk", "difficulty": "easy",
+            "turns": [{ "role": "assistant", "text": "Hi", "at": 1 }],
+            "createdAt": 0, "updatedAt": 1,
+            "context": { "kind": "vocab", "wordIds": ["w1", "w2"] }
+        }"#;
+        let s: SpeakSession = serde_json::from_str(json).expect("vocab 语境反序列化");
+        match s.context.as_ref().expect("有语境") {
+            SpeakSessionContext::Vocab { word_ids } => assert_eq!(word_ids, &["w1".to_string(), "w2".to_string()]),
+            other => panic!("语境应为 vocab：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn pron_without_at_is_rejected() {
+        let json = r#"{ "role": "user", "text": "hi", "at": 1,
+            "pron": { "total": 3.9, "accuracy": 4.0, "fluency": 3.4, "integrity": 4.6, "words": [] } }"#;
+        let err = serde_json::from_str::<SpeakTurn>(json).unwrap_err();
+        assert!(err.to_string().contains("missing field `at`"), "{err}");
+    }
+
+    #[test]
+    fn legacy_turn_without_new_fields_loads_as_none() {
+        let json = r#"{
+            "id": "old", "scenario": "ordering", "difficulty": "easy",
+            "turns": [
+                { "role": "assistant", "text": "Hi!", "hintZh": "你好", "at": 1 },
+                { "role": "user", "text": "A coffee please", "at": 2 }
+            ],
+            "createdAt": 0, "updatedAt": 2
+        }"#;
+        let s: SpeakSession = serde_json::from_str(json).expect("老会话可加载");
+        assert!(s.context.is_none());
+        for t in &s.turns {
+            assert!(t.pron.is_none());
+            assert!(t.coach_diff.is_none());
+        }
+        // 序列化不吐新字段（skip_serializing_if）
+        let out = serde_json::to_string(&s).unwrap();
+        assert!(!out.contains("coachDiff"));
+        assert!(!out.contains("pron"));
+        assert!(!out.contains("context"));
     }
 }

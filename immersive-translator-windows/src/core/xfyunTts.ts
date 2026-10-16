@@ -32,6 +32,12 @@ export interface XfyunTtsOptions {
   vcn: string;
   /** 音量 0–100，默认 50。 */
   volume?: number;
+  /**
+   * 原生合成语速（business.speed 百分比 0–100，50=1×；v0.8 慢速示范用）。
+   * 缺省不发送：speed 恒 50，帧与旧版逐字节一致、缓存 key 不变（变速由播放端
+   * playbackRate 承担）；传值后 speed 映射该值，缓存 key 纳入该值。
+   */
+  rate?: number;
 }
 
 export const XFYUN_TTS_HOST = "tts-api.xfyun.cn";
@@ -76,7 +82,15 @@ export function friendlyTtsError(code: number, message: string): string {
   return known ? `${known}（${code}）` : `语音合成失败：${message}（${code}）`;
 }
 
-/** 构造一次性请求帧（单测用，导出以便验证字段）。语速恒 1×，变速在播放端。 */
+/** SSML 百分比语速（如 "-25%"）→ 讯飞 business.speed（0–100，50=1×）。非法值回落 50。 */
+export function speedFromRatePercent(ratePercent: string): number {
+  const pct = Number.parseFloat(ratePercent);
+  if (!Number.isFinite(pct)) return 50;
+  return Math.min(100, Math.max(0, Math.round(50 * (1 + pct / 100))));
+}
+
+/** 构造一次性请求帧（单测用，导出以便验证字段）。缺省 1× 合成（speed 恒 50，
+ * 与旧帧逐字节一致）；传 opts.rate 才映射进 business.speed。变速默认在播放端。 */
 export function buildTtsRequestFrame(appId: string, text: string, opts: XfyunTtsOptions): string {
   return JSON.stringify({
     common: { app_id: appId },
@@ -86,7 +100,7 @@ export function buildTtsRequestFrame(appId: string, text: string, opts: XfyunTts
       auf: "audio/L16;rate=16000",
       vcn: opts.vcn || DEFAULT_TTS_VCN,
       tte: "UTF8",
-      speed: 50,
+      speed: Math.min(100, Math.max(0, Math.round(opts.rate ?? 50))),
       volume: Math.min(100, Math.max(0, Math.round(opts.volume ?? 50))),
       pitch: 50,
     },
@@ -110,12 +124,14 @@ function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   return out;
 }
 
-// ---------- LRU 缓存（key = vcn|volume|text；语速不入 key，变速在播放端） ----------
+// ---------- LRU 缓存（key = vcn|volume|text；缺省语速不入 key（1× 变速在播放端），
+// 传了 rate 才纳入 key——缺省值 key 与旧 key 完全一致，缓存不失效） ----------
 
 const blobCache = new Map<string, Blob>();
 
 export function ttsCacheKey(text: string, opts: XfyunTtsOptions): string {
-  return `${opts.vcn || DEFAULT_TTS_VCN}|${opts.volume ?? 50}|${text}`;
+  const base = `${opts.vcn || DEFAULT_TTS_VCN}|${opts.volume ?? 50}`;
+  return opts.rate === undefined ? `${base}|${text}` : `${base}|r${opts.rate}|${text}`;
 }
 
 export function ttsCacheGet(key: string): Blob | undefined {

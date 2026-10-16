@@ -1,19 +1,29 @@
 /**
- * 阅读舞台（屏 A）：进度线 + 文章头 + 句对列表；内嵌屏 E 遮罩与
- * 屏 C 划选查词入口。视觉按 §5 句对主从版式，640px 列居中。
+ * 阅读舞台（屏 A）：v0.8 画报排版（原型「模块 1：阅读」1:1 还原）。
+ *
+ * 结构：左侧 .editorial-spine-col 书脊列（超大句码/竖排书名/进度）+
+ * .literary-spread-scroll 正文画布（.masthead 刊头：display 标题、中文副题、
+ * 行内三开关）+ .prose-body 行内英文流（专注模式聚光）或
+ * .parallel-spread-row 双语对照双栏。
+ *
+ * 词块/生词着色、跟读着色、遮罩（cn-frost/cn-slot）、手改译文、单段重试、
+ * 滚动跟随（pairRefs/onViewportIdx）全部保留复用；prose 模式下译文展示位
+ * 由当前句的 .interlinear-fold 行间折叠卡承担（朗读/句子解析/练口语/编辑
+ * 译文都在 fold-actions 里）。
  */
 
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import {
   IconBookOpen,
   IconEdit,
   IconEyeOff,
+  IconMic,
   IconVolume,
 } from "../ui/icons";
-import type { Article, ReaderSettings, SentenceChunk } from "../core/readerTypes";
+import type { Article, ReaderSettings, SentenceChunk, SentencePair } from "../core/readerTypes";
 import type { WordMark } from "../core/pronunciation";
 import { extractSelectionText } from "../core/readerDict";
-import { buildSentenceSpans, splitBySpans, type ChunkSpan } from "../core/chunkAnnotate";
+import { buildSentenceSpans, findChunkRange, splitBySpans, type ChunkSpan } from "../core/chunkAnnotate";
 
 interface Props {
   article: Article | null;
@@ -57,6 +67,17 @@ interface Props {
   /** 书章模式：章节栏数据（短文缺省不渲染）。 */
   book?: { title: string; chapterIdx: number; chapterCount: number } | null;
   onOpenToc?: () => void;
+  // ---- v0.8 画报排版新增 ----
+  /** 刊头行内三开关（专注模式/排版/译文显隐）走设置补丁。 */
+  onPatchSettings: (patch: Partial<ReaderSettings>) => void;
+  /** 行间折叠卡「句子解析」：请求当前句的结构解析（右栏透镜卡）。 */
+  onOpenXray: (idx: number) => void;
+  /** 行间折叠卡/刊头「用这句（本章）练口语」。 */
+  onPracticeSentence: (idx: number) => void;
+  /** 刊头中文副题行「围绕本章练口语 →」。 */
+  onPracticeChapter?: () => void;
+  /** 透镜卡结构拆解悬停中的片段（优先级高于词块着色，回标原文）。 */
+  hoveredClause: string | null;
 }
 
 const WORD_CHARS = /[A-Za-z0-9'’-]/;
@@ -67,12 +88,14 @@ const NO_IDS: ReadonlySet<string> = new Set<string>();
 export function ReadingView(props: Props) {
   const { article, settings, activeIdx, translating, chunking, peekAll, searchMatchIdx } = props;
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const pairRefs = useRef(new Map<number, HTMLDivElement>());
+  const pairRefs = useRef(new Map<number, HTMLElement>());
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState("");
 
   const sentences = article?.sentences ?? [];
   const maskOn = settings.maskTranslation;
+  const spotlight = settings.spotlightMode ?? false;
+  const spread = settings.spreadLayout ?? "prose";
   const revealedCount = maskOn
     ? sentences.filter((s) => s.zh && (s.revealed || peekAll)).length
     : 0;
@@ -165,21 +188,38 @@ export function ReadingView(props: Props) {
     if (!sel || sel.isCollapsed) return;
     const text = extractSelectionText(sel.toString());
     if (!text) return;
-    const pairEl = (e.target as HTMLElement).closest(".pair") as HTMLElement | null;
+    const pairEl = (e.target as HTMLElement).closest("[data-idx]") as HTMLElement | null;
     if (!pairEl) return;
     const idx = Number(pairEl.dataset.idx);
     if (Number.isNaN(idx)) return;
     props.onSelection(idx, text);
   }
 
-  function handleEnClick(e: ReactMouseEvent<HTMLParagraphElement>) {
+  function idxFromTarget(target: EventTarget | null): number | null {
+    const pairEl = (target as HTMLElement | null)?.closest("[data-idx]") as HTMLElement | null;
+    if (!pairEl) return null;
+    const idx = Number(pairEl.dataset.idx);
+    return Number.isNaN(idx) ? null : idx;
+  }
+
+  /** 双语对照行英文列：单击查词、划选交 mouseup。 */
+  function handleEnClick(e: ReactMouseEvent<HTMLElement>) {
     // 有划选时交给 mouseup 处理；单击单词走词定位。
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed) return;
-    const pairEl = e.currentTarget.closest(".pair") as HTMLElement | null;
-    if (!pairEl) return;
-    const idx = Number(pairEl.dataset.idx);
-    if (Number.isNaN(idx)) return;
+    const idx = idxFromTarget(e.target);
+    if (idx === null) return;
+    const word = wordAtPoint(e.clientX, e.clientY, e.currentTarget);
+    if (word) props.onWordClick(idx, word);
+  }
+
+  /** 画报英文流：点句定位为当前句；点在单词上再顺带查词（查词通道不变）。 */
+  function handleProseClick(e: ReactMouseEvent<HTMLSpanElement>) {
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) return;
+    const idx = idxFromTarget(e.target);
+    if (idx === null) return;
+    props.onJumpTo(idx);
     const word = wordAtPoint(e.clientX, e.clientY, e.currentTarget);
     if (word) props.onWordClick(idx, word);
   }
@@ -206,10 +246,264 @@ export function ReadingView(props: Props) {
   const total = sentences.length;
   const resumeIdx = article.progress.sentenceIdx;
   const showResume = resumeIdx > 0 && resumeIdx < total;
+  const readMinutes = Math.max(1, Math.round(article.wordCount / 200));
+
+  /** 正文英文的装饰渲染（悬停意群 > 跟读着色 > 词块/生词跨度 > 纯文本）。 */
+  const decorateEn = (s: SentencePair, withDropCap: boolean): ReactNode[] => {
+    const hovered = props.hoveredClause;
+    if (hovered && findChunkRange(s.en, hovered)) {
+      // 悬停意群回标：整句只渲染这一个标记（优先级高于词块着色）。
+      const range = findChunkRange(s.en, hovered)!;
+      const nodes: ReactNode[] = [];
+      if (range.start > 0) nodes.push(s.en.slice(0, range.start));
+      nodes.push(
+        <mark key="clause" className="spatial-clause-mark">
+          {s.en.slice(range.start, range.end)}
+        </mark>,
+      );
+      if (range.end < s.en.length) nodes.push(s.en.slice(range.end));
+      return nodes;
+    }
+    let nodes: ReactNode[];
+    if (props.assessMarks && props.assessMarks.sentenceIdx === s.idx) {
+      nodes = renderMarkedEn(s.en, props.assessMarks.marks);
+    } else {
+      const spans = spansBySentence.get(s.idx) ?? NO_SPANS;
+      nodes =
+        spans.length === 0
+          ? [s.en]
+          : splitBySpans(s.en, spans).map((seg, i) =>
+              seg.span ? (
+                <span
+                  key={i}
+                  className={`chunk-hl${seg.span.kind === "known" ? " known" : ""}`}
+                  title={seg.span.chunk ? "词块 · 点击查看" : "生词再现 · 点击查词典"}
+                  onClick={(e) => {
+                    // 词块 span 自接管点击，避免触发句级点词查词/定位。
+                    e.stopPropagation();
+                    if (seg.span!.chunk) props.onChunkClick(s.idx, seg.span!.chunk);
+                    else props.onSelection(s.idx, seg.text);
+                  }}
+                >
+                  {seg.text}
+                </span>
+              ) : (
+                seg.text
+              ),
+            );
+    }
+    return withDropCap ? applyDropCap(nodes) : nodes;
+  };
+
+  /** 朗读/停止切换（行间折叠卡与对照行共用一套语义与提示文案）。 */
+  const speakButton = (s: SentencePair, isActive: boolean) => (
+    <button
+      className={`icon-btn${isActive ? " active" : ""}`}
+      onClick={() => {
+        if (props.playing && isActive) props.onStopSpeaking();
+        else props.onSpeakSentence(s.idx);
+      }}
+      title={
+        props.playing && isActive
+          ? "停止朗读（Space / 播放条的 ⏸ 也可以）"
+          : "朗读这一句（读完自动停，不会连读下去）"
+      }
+    >
+      <IconVolume size={13} />
+    </button>
+  );
+
+  /** 手改译文编辑器（沿用既有 pair-cn-editor 结构，行间折叠卡与对照行共用）。 */
+  const editorNode = (s: SentencePair) => (
+    <div className="pair-cn-editor">
+      <textarea
+        className="pair-cn-edit"
+        value={editDraft}
+        autoFocus
+        onChange={(e) => setEditDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) commitEdit(s.idx);
+          if (e.key === "Escape") setEditingIdx(null);
+        }}
+        rows={2}
+        aria-label="编辑译文（Ctrl+Enter 保存，Esc 取消）"
+      />
+      <div className="pair-cn-editor-actions">
+        <span className="tip">Ctrl+Enter 保存 · Esc 取消</span>
+        <button className="btn btn-secondary btn-sm" onClick={() => setEditingIdx(null)}>
+          取消
+        </button>
+        <button className="btn btn-primary btn-sm" disabled={!editDraft.trim()} onClick={() => commitEdit(s.idx)}>
+          保存
+        </button>
+      </div>
+    </div>
+  );
+
+  /** 双语对照行的译文列：遮罩（毛玻璃/留白显影）、待生成、失败重试、编辑、定位。 */
+  const renderZhSide = (s: SentencePair, isActive: boolean) => {
+    const maskSlot = maskOn && !!s.zh && s.zhState !== "failed" && editingIdx !== s.idx;
+    const maskShown = maskSlot && (!!s.revealed || peekAll);
+    return (
+      <>
+        {maskSlot ? (
+          settings.maskStyle === "frost" ? (
+            <p
+              className={`pair-cn cn-frost${maskShown ? " revealed" : ""}`}
+              onClick={() => (maskShown ? props.onMask(s.idx) : props.onReveal(s.idx))}
+              title={maskShown ? "点按重新遮住" : "点按显示译文"}
+            >
+              {s.zh}
+            </p>
+          ) : (
+            <div
+              className={`cn-slot${maskShown ? " revealed" : ""}`}
+              role="button"
+              tabIndex={0}
+              aria-label={maskShown ? "点按重新遮住译文" : "显示译文"}
+              onClick={() => (maskShown ? props.onMask(s.idx) : props.onReveal(s.idx))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  if (maskShown) props.onMask(s.idx);
+                  else props.onReveal(s.idx);
+                }
+              }}
+            >
+              <span className="zh-ghost" aria-hidden>
+                <IconEyeOff size={12} />
+                显示译文
+              </span>
+              <p className="pair-cn">{s.zh}</p>
+            </div>
+          )
+        ) : s.zhState === "pending" ? (
+          translating || s.zh ? (
+            s.zh ? (
+              // 流式增量先亮出来，done 后转正
+              <p className="pair-cn" style={{ opacity: 0.75 }}>
+                {s.zh}
+              </p>
+            ) : (
+              <span className="pair-cn-pending">
+                <span className="reader-skeleton-line" style={{ width: 140 }} />
+              </span>
+            )
+          ) : (
+            <span className="pair-cn-pending">译文待生成</span>
+          )
+        ) : s.zhState === "failed" ? (
+          <span className="pair-failed-row">
+            本段翻译失败
+            <button onClick={() => props.onRetryParagraph(s.paragraphIdx)}>重试本段</button>
+          </span>
+        ) : editingIdx === s.idx ? (
+          editorNode(s)
+        ) : (
+          <p className="pair-cn" onClick={() => props.onJumpTo(s.idx)} title="点中文定位到对应英文句">
+            {s.zh}
+          </p>
+        )}
+        <div className="spread-row-actions">
+          {speakButton(s, isActive)}
+          {s.zh && s.zhState !== "pending" && editingIdx !== s.idx && (
+            <button className="icon-btn" onClick={() => startEdit(s.idx, s.zh)} title="手改译文">
+              <IconEdit size={12} />
+            </button>
+          )}
+        </div>
+      </>
+    );
+  };
+
+  /** 行间折叠卡（prose 模式当前句的译文 + 操作条）。 */
+  const renderFold = (s: SentencePair, isActive: boolean) => {
+    const foldMasked = maskOn && !!s.zh && s.zhState !== "failed" && editingIdx !== s.idx && !(!!s.revealed || peekAll);
+    return (
+      <span className={`interlinear-fold${foldMasked ? " masked" : ""}`} onClick={(e) => e.stopPropagation()}>
+        {editingIdx === s.idx ? (
+          editorNode(s)
+        ) : s.zhState === "failed" ? (
+          <span className="pair-failed-row">
+            本段翻译失败
+            <button onClick={() => props.onRetryParagraph(s.paragraphIdx)}>重试本段</button>
+          </span>
+        ) : (
+          <div
+            className="fold-zh pair-cn"
+            onClick={() => {
+              if (!maskOn) return;
+              if (foldMasked) props.onReveal(s.idx);
+              else props.onMask(s.idx);
+            }}
+            title={maskOn ? (foldMasked ? "点按显示译文" : "点按重新遮住") : undefined}
+          >
+            {s.zhState === "pending"
+              ? translating || s.zh
+                ? s.zh ?? <span className="reader-skeleton-line" style={{ width: 160, display: "inline-block" }} />
+                : "译文待生成"
+              : s.zh}
+          </div>
+        )}
+        <div className="fold-actions">
+          <button
+            className="text-action-btn"
+            onClick={() => {
+              if (props.playing && isActive) props.onStopSpeaking();
+              else props.onSpeakSentence(s.idx);
+            }}
+            title={
+              props.playing && isActive
+                ? "停止朗读（Space / 播放条的 ⏸ 也可以）"
+                : "朗读这一句（读完自动停，不会连读下去）"
+            }
+          >
+            <IconVolume size={13} style={{ verticalAlign: -1 }} />
+            朗读本句
+          </button>
+          <button className="text-action-btn" onClick={() => props.onOpenXray(s.idx)} title="在右侧解析这句的主干与结构">
+            句子解析
+          </button>
+          <button className="text-action-btn" onClick={() => props.onPracticeSentence(s.idx)} title="带着这句去口语陪练">
+            <IconMic size={12} style={{ verticalAlign: -1 }} />
+            用这句练口语 →
+          </button>
+          {s.zh && s.zhState !== "pending" && editingIdx !== s.idx && (
+            <button className="text-action-btn" onClick={() => startEdit(s.idx, s.zh)} title="手改译文">
+              <IconEdit size={12} />
+              编辑译文
+            </button>
+          )}
+        </div>
+      </span>
+    );
+  };
+
+  const registerPairRef = (idx: number) => (el: HTMLElement | null) => {
+    if (el) pairRefs.current.set(idx, el);
+    else pairRefs.current.delete(idx);
+  };
+
+  const spineLabel = props.book
+    ? `${props.book.title} · CHAPTER ${props.book.chapterIdx + 1}`
+    : article.title;
 
   return (
-    <div className="reader-stage">
-      <div className="reader-scroll" ref={scrollRef}>
+    <div className="reader-stage reading-spread">
+      <div className="editorial-spine-col" aria-hidden>
+        <div>
+          <div className="oversized-folio-num tabular">
+            {String(Math.min(activeIdx + 1, 99)).padStart(2, "0")}
+          </div>
+          <div className="spine-col-cap tabular">当前句</div>
+        </div>
+        <div className="spine-vertical-label" title={spineLabel}>
+          {spineLabel}
+        </div>
+        <div className="spine-col-pct tabular">{Math.round(article.progress.percent)}%</div>
+      </div>
+
+      <div className="literary-spread-scroll" ref={scrollRef} onMouseUp={handleMouseUp}>
         {maskOn && (
           <div className="reader-maskbar">
             <span className="eye">
@@ -234,53 +528,22 @@ export function ReadingView(props: Props) {
         )}
 
         <article
-          className={`reader-article${maskOn ? " reader-mask-on" : ""}${
+          className={[
+            "literary-sheet",
             // 对照模式经 CSS 隐藏另一语种（reader-contrast-en / -zh），
             // 缺了这个 class 时视图菜单/设置抽屉怎么切都不生效。
-            settings.contrastMode === "en" ? " reader-contrast-en" : ""
-          }${settings.contrastMode === "zh" ? " reader-contrast-zh" : ""}`}
+            settings.contrastMode === "en" ? "reader-contrast-en" : "",
+            settings.contrastMode === "zh" ? "reader-contrast-zh" : "",
+            maskOn ? "reader-mask-on" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
         >
-          {props.book && (
-            <div className="reader-chapter-bar">
-              <span className="cb-book serif" title={props.book.title}>
-                《{props.book.title}》
-              </span>
-              <span className="cb-dot" aria-hidden>
-                ·
-              </span>
-              <span className="cb-ch">
-                第 {props.book.chapterIdx + 1}/{props.book.chapterCount} 章
-              </span>
-              {props.onOpenToc && (
-                <button className="btn btn-secondary btn-sm" onClick={props.onOpenToc} title="章节目录">
-                  目录
-                </button>
-              )}
-            </div>
-          )}
-          <header className="reader-article-head">
-            <h1 className="reader-article-title">{article.title}</h1>
-            {article.titleCn ? (
-              <p className="reader-article-subtitle">{article.titleCn}</p>
-            ) : article.titleCnState === "failed" ? (
-              <p className="reader-article-subtitle" style={{ color: "var(--err)", fontSize: 13 }}>
-                标题翻译失败
-                <button
-                  style={{ marginLeft: 8, border: "none", background: "none", color: "var(--accent)", cursor: "pointer", fontFamily: "inherit", fontSize: 13 }}
-                  onClick={props.onRetryTitle}
-                >
-                  重试
-                </button>
-              </p>
-            ) : translating ? (
-              <div style={{ maxWidth: 320, marginTop: 4 }}>
-                <div className="reader-skeleton-line" style={{ width: "70%" }} />
-              </div>
-            ) : null}
-            <div className="reader-article-meta">
+          <div className="masthead-top-meta tabular">
+            <span className="masthead-meta-line">
+              {props.book ? `CHAPTER ${props.book.chapterIdx + 1} · ` : ""}
+              {article.wordCount} 词 · 约 {readMinutes} 分钟读完
               {article.level && <span className="chip chip-blue">{article.level}</span>}
-              <span>{article.wordCount} 词</span>
-              <span>· {total} 句</span>
               {translating && (
                 <span className="chip chip-amber">
                   翻译中 {translating.done}/{translating.total} 段
@@ -300,185 +563,113 @@ export function ReadingView(props: Props) {
                   上次读到第 {resumeIdx + 1} 句 · 点击继续
                 </button>
               )}
+              {props.onOpenToc && (
+                <button className="pill-Ghost-btn" onClick={props.onOpenToc} title="章节目录">
+                  目录
+                </button>
+              )}
+            </span>
+            <div className="masthead-switches">
+              <button
+                className="text-action-btn"
+                onClick={() => props.onPatchSettings({ spotlightMode: !spotlight })}
+                title="开启后非当前句变淡，注意力聚焦当前句"
+              >
+                专注模式：{spotlight ? "开" : "关"}
+              </button>
+              <button
+                className="text-action-btn"
+                onClick={() => props.onPatchSettings({ spreadLayout: spread === "prose" ? "parallel" : "prose" })}
+                title="段落 = 行内英文流 + 当前句行间译文；双语对照 = 逐句双栏"
+              >
+                排版：{spread === "prose" ? "段落" : "双语对照"}
+              </button>
+              <button
+                className="text-action-btn"
+                onClick={() => props.onPatchSettings({ maskTranslation: !maskOn })}
+                title="遮住译文先读原文，需要时再点开"
+              >
+                译文：{maskOn ? "隐藏" : "显示"}
+              </button>
             </div>
-          </header>
-
-          <div className="reader-pairs" onMouseUp={handleMouseUp}>
-            {sentences.map((s) => {
-              const prev = sentences[s.idx - 1];
-              const isParaStart = !prev || prev.paragraphIdx !== s.paragraphIdx;
-              const isActive = s.idx === activeIdx;
-              // 罩层挂点：有译文且非失败、非编辑中。揭开/暂显（H）只切换样式类。
-              const maskSlot = maskOn && !!s.zh && s.zhState !== "failed" && editingIdx !== s.idx;
-              const maskShown = maskSlot && (!!s.revealed || peekAll);
-              return (
-                <div
-                  key={s.idx}
-                  data-idx={s.idx}
-                  ref={(el) => {
-                    if (el) pairRefs.current.set(s.idx, el);
-                    else pairRefs.current.delete(s.idx);
-                  }}
-                  className={`pair${isParaStart ? " paragraph-start" : ""}${isActive ? " is-active" : ""}${
-                    s.zhState === "failed" ? " failed" : ""
-                  }`}
-                >
-                  <button
-                    className="pair-no"
-                    onClick={() => props.onJumpTo(s.idx)}
-                    title={`第 ${s.idx + 1} 句 · 点击定位`}
-                    aria-label={`定位到第 ${s.idx + 1} 句`}
-                  >
-                    {s.idx + 1}
-                  </button>
-                  <div className="pair-body">
-                  <p className="pair-en" onClick={handleEnClick} title="单击查词，划选查短语">
-                    {props.assessMarks && props.assessMarks.sentenceIdx === s.idx
-                      ? renderMarkedEn(s.en, props.assessMarks.marks)
-                      : (spansBySentence.get(s.idx) ?? NO_SPANS).length === 0
-                        ? s.en
-                        : splitBySpans(s.en, spansBySentence.get(s.idx)!).map((seg, i) =>
-                          seg.span ? (
-                            <span
-                              key={i}
-                              className={`chunk-hl${seg.span.kind === "known" ? " known" : ""}`}
-                              title={seg.span.chunk ? "词块 · 点击查看" : "生词再现 · 点击查词典"}
-                              onClick={(e) => {
-                                // 词块 span 自接管点击，避免触发句级点词查词。
-                                e.stopPropagation();
-                                if (seg.span!.chunk) props.onChunkClick(s.idx, seg.span!.chunk);
-                                else props.onSelection(s.idx, seg.text);
-                              }}
-                            >
-                              {seg.text}
-                            </span>
-                          ) : (
-                            seg.text
-                          ),
-                        )}
-                  </p>
-
-                  {maskSlot ? (
-                    settings.maskStyle === "frost" ? (
-                      // 方案 C · 毛玻璃：译文一直在，模糊盖住；点击「显影」，再点重新遮住
-                      <p
-                        className={`pair-cn cn-frost${maskShown ? " revealed" : ""}`}
-                        onClick={() => (maskShown ? props.onMask(s.idx) : props.onReveal(s.idx))}
-                        title={maskShown ? "点按重新遮住" : "点按显示译文"}
-                      >
-                        {s.zh}
-                      </p>
-                    ) : (
-                      // 方案 A · 留白显影：隐藏时无痕占位，悬停浮现「显示译文」；揭开后再点重新遮住
-                      <div
-                        className={`cn-slot${maskShown ? " revealed" : ""}`}
-                        role="button"
-                        tabIndex={0}
-                        aria-label={maskShown ? "点按重新遮住译文" : "显示译文"}
-                        onClick={() => (maskShown ? props.onMask(s.idx) : props.onReveal(s.idx))}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            if (maskShown) props.onMask(s.idx);
-                            else props.onReveal(s.idx);
-                          }
-                        }}
-                      >
-                        <span className="zh-ghost" aria-hidden>
-                          <IconEyeOff size={12} />
-                          显示译文
-                        </span>
-                        <p className="pair-cn">{s.zh}</p>
-                      </div>
-                    )
-                  ) : s.zhState === "pending" ? (
-                    translating || s.zh ? (
-                      s.zh ? (
-                        // 流式增量先亮出来，done 后转正
-                        <p className="pair-cn" style={{ opacity: 0.75 }}>
-                          {s.zh}
-                        </p>
-                      ) : (
-                        <span className="pair-cn-pending">
-                          <span className="reader-skeleton-line" style={{ width: 140 }} />
-                        </span>
-                      )
-                    ) : (
-                      <span className="pair-cn-pending">译文待生成</span>
-                    )
-                  ) : s.zhState === "failed" ? (
-                    <span className="pair-failed-row">
-                      本段翻译失败
-                      <button onClick={() => props.onRetryParagraph(s.paragraphIdx)}>重试本段</button>
-                    </span>
-                  ) : editingIdx === s.idx ? (
-                    <div className="pair-cn-editor">
-                      <textarea
-                        className="pair-cn-edit"
-                        value={editDraft}
-                        autoFocus
-                        onChange={(e) => setEditDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) commitEdit(s.idx);
-                          if (e.key === "Escape") setEditingIdx(null);
-                        }}
-                        rows={2}
-                        aria-label="编辑译文（Ctrl+Enter 保存，Esc 取消）"
-                      />
-                      <div className="pair-cn-editor-actions">
-                        <span className="tip">Ctrl+Enter 保存 · Esc 取消</span>
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => setEditingIdx(null)}
-                        >
-                          取消
-                        </button>
-                        <button
-                          className="btn btn-primary btn-sm"
-                          disabled={!editDraft.trim()}
-                          onClick={() => commitEdit(s.idx)}
-                        >
-                          保存
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="pair-cn" onClick={() => props.onJumpTo(s.idx)} title="点中文定位到对应英文句">
-                      {s.zh}
-                    </p>
-                  )}
-
-                  <div className="pair-actions">
-                    <button
-                      className={`icon-btn${isActive ? " active" : ""}`}
-                      onClick={() => {
-                        // 正在读这句（或连续播放中）→ 停止；否则只读这一句，读完自动停
-                        if (props.playing && isActive) props.onStopSpeaking();
-                        else props.onSpeakSentence(s.idx);
-                      }}
-                      title={
-                        props.playing && isActive
-                          ? "停止朗读（Space / 播放条的 ⏸ 也可以）"
-                          : "朗读这一句（读完自动停，不会连读下去）"
-                      }
-                    >
-                      <IconVolume size={13} />
-                    </button>
-                    {s.zh && s.zhState !== "pending" && editingIdx !== s.idx && (
-                      <button
-                        className="icon-btn"
-                        onClick={() => startEdit(s.idx, s.zh)}
-                        title="手改译文"
-                      >
-                        <IconEdit size={12} />
-                      </button>
-                    )}
-                  </div>
-                  </div>
-                </div>
-              );
-            })}
           </div>
+
+          <h1 className="masthead-display-title">{article.title}</h1>
+          <div className="masthead-cn-sub">
+            {article.titleCn ? (
+              <span className="masthead-cn-text">{article.titleCn}</span>
+            ) : article.titleCnState === "failed" ? (
+              <span className="masthead-cn-text" style={{ color: "var(--err)", fontSize: 13 }}>
+                标题翻译失败
+                <button
+                  style={{ marginLeft: 8, border: "none", background: "none", color: "var(--accent)", cursor: "pointer", fontFamily: "inherit", fontSize: 13 }}
+                  onClick={props.onRetryTitle}
+                >
+                  重试
+                </button>
+              </span>
+            ) : translating ? (
+              <div style={{ maxWidth: 320 }}>
+                <div className="reader-skeleton-line" style={{ width: "70%" }} />
+              </div>
+            ) : (
+              <span className="masthead-cn-text" />
+            )}
+            {props.onPracticeChapter && (
+              <button className="pill-Ghost-btn active-lens" onClick={props.onPracticeChapter} title="带着本章内容去口语陪练">
+                围绕本章练口语 →
+              </button>
+            )}
+          </div>
+
+          {spread === "prose" ? (
+            <div className={`prose-body${spotlight ? " spotlight-active" : ""}`}>
+              {sentences.map((s) => {
+                const isActive = s.idx === activeIdx;
+                return (
+                  <Fragment key={s.idx}>
+                    <span
+                      ref={registerPairRef(s.idx)}
+                      data-idx={s.idx}
+                      className={`prose-sentence pair-en${isActive ? " is-current" : ""}${
+                        s.zhState === "failed" ? " failed" : ""
+                      }`}
+                      onClick={handleProseClick}
+                      title="点击定位到这一句"
+                    >
+                      {decorateEn(s, s.idx === 0)}
+                    </span>
+                    {isActive && renderFold(s, isActive)}
+                  </Fragment>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="parallel-spread-body">
+              {sentences.map((s) => {
+                const prev = sentences[s.idx - 1];
+                const isParaStart = !prev || prev.paragraphIdx !== s.paragraphIdx;
+                const isActive = s.idx === activeIdx;
+                return (
+                  <div
+                    key={s.idx}
+                    ref={registerPairRef(s.idx)}
+                    data-idx={s.idx}
+                    className={`parallel-spread-row${isParaStart ? " paragraph-start" : ""}${isActive ? " is-current" : ""}${
+                      s.zhState === "failed" ? " failed" : ""
+                    }`}
+                    onClick={() => props.onJumpTo(s.idx)}
+                    title="点击定位到这一句"
+                  >
+                    <div className="parallel-en pair-en" onClick={handleEnClick} title="单击查词，划选查短语">
+                      {decorateEn(s, s.idx === 0)}
+                    </div>
+                    <div className="parallel-zh">{renderZhSide(s, isActive)}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {props.showFinishAction && (
             <div className="reader-finish-action">
@@ -492,6 +683,20 @@ export function ReadingView(props: Props) {
       </div>
     </div>
   );
+}
+
+/** 首字母下沉：首段是纯文本才拆（被高亮跨度占据时放弃下沉，不破坏标注）。 */
+function applyDropCap(nodes: ReactNode[]): ReactNode[] {
+  if (nodes.length === 0) return nodes;
+  const first = nodes[0];
+  if (typeof first !== "string" || first.length === 0) return nodes;
+  return [
+    <span key="drop-cap" className="drop-cap">
+      {first.charAt(0)}
+    </span>,
+    first.slice(1),
+    ...nodes.slice(1),
+  ];
 }
 
 /** 跟读评测词着色：按字符区间给原文词上色（绿/黄/红，漏读加底纹）。 */
@@ -511,7 +716,7 @@ function renderMarkedEn(en: string, marks: WordMark[]): ReactNode[] {
   return parts;
 }
 
-/** 光标处的完整单词（阅读版式下 .pair-en 内单击查词）。 */
+/** 光标处的完整单词（阅读版式下正文内单击查词）。 */
 function wordAtPoint(x: number, y: number, container: HTMLElement): string | null {
   // vite 文件监视在 Windows 上可能吞掉同秒内的连续编辑，改动本文件后
   // 若 HMR 行为与源码不符，优先怀疑转换缓存过期（2026-09 实际踩过）。

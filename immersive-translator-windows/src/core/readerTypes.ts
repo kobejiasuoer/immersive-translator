@@ -149,6 +149,10 @@ export interface VocabWord {
   example?: VocabExample;
   /** 累计错题记录（每次复习判分后累加；老数据缺省 = 无记录）。 */
   recall?: RecallStat;
+  /** 最近一次在口语对话中真实用出的时间（Unix 毫秒）；缺省 = 从未用出。
+   * v0.8 口语命中目标词时写入（gradeVocab "easy" 档附带），内化看板
+   * 「已变成口语表达」的数据来源；老数据零迁移。 */
+  spokenAt?: number;
 }
 
 /** 单个复习模式下的错题计数。 */
@@ -224,6 +228,13 @@ export const REVIEW_MODE_LABELS: Record<ReviewModeSetting, string> = {
 /** 译文遮罩样式：blank = 留白显影（悬停出胶囊），frost = 毛玻璃（模糊→揭开）。 */
 export type MaskStyle = "blank" | "frost";
 
+/**
+ * 画报排版皮肤（v0.8）：prose = 行内英文流 + 当前句行间译文折叠，
+ * parallel = 双语对照双栏。只管「怎么排」；只看一种语言的对照语义
+ * 仍归 contrastMode 管，互不干扰。
+ */
+export type SpreadLayout = "prose" | "parallel";
+
 export type ReaderTheme = "light" | "dark" | "sepia" | "oled";
 
 /** 正文字体配对（屏 B 下拉）。 */
@@ -273,6 +284,10 @@ export interface ReaderSettings {
   showVocabMarks: boolean;
   /** 复习模式（全局，不入文章覆盖）：smart 按卡路由到识别/完形/听写。 */
   reviewMode: ReviewModeSetting;
+  /** 专注模式（v0.8）：非当前句降透明度聚光，仅影响画报正文流（默认关）。 */
+  spotlightMode?: boolean;
+  /** 画报排版（v0.8）：prose 段落式英文流 / parallel 双语对照（默认 prose）。 */
+  spreadLayout?: SpreadLayout;
 }
 
 export const DEFAULT_READER_SETTINGS: ReaderSettings = {
@@ -301,6 +316,8 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   chunkHighlight: true,
   showVocabMarks: true,
   reviewMode: "smart",
+  spotlightMode: false,
+  spreadLayout: "prose",
 };
 
 /** 屏 B 字号步进器范围。 */
@@ -382,6 +399,11 @@ export function mergeReaderSettings(
   merged.chunkHighlight = bool(override.chunkHighlight) ?? merged.chunkHighlight;
   merged.showVocabMarks = bool(override.showVocabMarks) ?? merged.showVocabMarks;
   merged.reviewMode = oneOf(override.reviewMode, ["smart", "recognition", "cloze", "dictation"]) ?? merged.reviewMode;
+  // v0.8 画报排版：spotlightMode/spreadLayout 与 Rust ReaderSettingsOverride 的
+  // camelCase 序列化键逐字一致（spotlight_mode→spotlightMode、spread_layout→spreadLayout），
+  // 字段名不一致会被 serde 静默剥离，文章保存即丢设置。
+  merged.spotlightMode = bool(override.spotlightMode) ?? merged.spotlightMode;
+  merged.spreadLayout = oneOf(override.spreadLayout, ["prose", "parallel"]) ?? merged.spreadLayout;
   return merged;
 }
 

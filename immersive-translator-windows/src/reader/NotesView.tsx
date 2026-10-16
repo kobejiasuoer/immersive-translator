@@ -177,10 +177,11 @@ export function NotesView({
   });
   const earlier = notes.filter((n) => !today.includes(n));
 
-  // 书架与主区一页纸必须是兄弟节点：aside 定宽 232px，notes-page 靠
-  // reader-body 的横向 flex 占据其余空间；嵌进 aside 会被挤成一条竖条。
+  // 书架与主区一页纸必须是兄弟节点：aside 定宽 232px，notes-page 占据其余空间。
+  // v0.8（Phase 4）：整组收进 .vault-studio-grid 网格容器——作为「笔记与复习」
+  // Markdown 导出档的回看弹层挂载；内部渲染（目录/一页纸/AI 复盘区）不动。
   return (
-    <>
+    <div className="vault-studio-grid vault-notes-grid">
     <aside className="reader-shelf noteslist">
       <div className="reader-shelf-header">
         笔记库
@@ -268,7 +269,7 @@ export function NotesView({
       onStartFocusReview={onStartFocusReview}
       onSpeakWord={onSpeakWord}
     />
-    </>
+    </div>
   );
 }
 

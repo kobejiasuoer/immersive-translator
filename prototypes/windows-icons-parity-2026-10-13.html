@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>图标跨端一致性预览 · 手机端 vs Windows</title>
+<style>
+  :root {
+    --accent: #4c5ff0;
+    --accent-soft: rgba(76, 95, 240, 0.1);
+    --surface: #ffffff;
+    --surface-2: #f9fafc;
+    --border: #e4e7ee;
+    --border-strong: #d4d9e4;
+    --text-1: #1c2029;
+    --text-2: #4b5261;
+    --text-3: #8a91a3;
+    --ok: #1a9e5c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    background: #f3f4f8;
+    color: var(--text-1);
+    line-height: 1.6;
+    padding: 36px 20px 80px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 22px; margin-bottom: 6px; }
+  .sub { color: var(--text-2); font-size: 13.5px; margin-bottom: 28px; }
+  .sub code { background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+  section { margin-bottom: 36px; }
+  h2 { font-size: 16px; margin-bottom: 4px; }
+  .hint { font-size: 12.5px; color: var(--text-3); margin-bottom: 14px; }
+
+  .note {
+    background: var(--accent-soft);
+    border: 1px solid rgba(76, 95, 240, 0.25);
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-size: 13px;
+    color: var(--text-2);
+    margin-bottom: 30px;
+  }
+  .note b { color: var(--text-1); }
+
+  /* ---------- 对照卡 ---------- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 18px 14px;
+  }
+  .card h3 { font-size: 14px; margin-bottom: 2px; }
+  .card .use { font-size: 12px; color: var(--text-3); margin-bottom: 14px; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px; }
+  .row.proposal { background: var(--surface-2); outline: 1px dashed var(--border-strong); }
+  .row + .row { margin-top: 6px; }
+  .row .who {
+    width: 92px; flex: none;
+    font-size: 12px; color: var(--text-3);
+  }
+  .row.proposal .who { color: var(--accent); font-weight: 600; }
+  .sizes { display: flex; align-items: center; gap: 14px; }
+  .sizes .sz { display: flex; align-items: center; gap: 4px; color: var(--text-2); }
+  .sizes .sz i { font-size: 10px; color: var(--text-3); font-style: normal; }
+  .verdict { font-size: 12px; color: var(--text-3); margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .verdict b { color: var(--ok); }
+
+  /* ---------- 手机 tab 栏模拟 ---------- */
+  .phone {
+    width: 300px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 22px;
+    padding: 14px 12px 12px; box-shadow: 0 10px 30px rgba(28, 32, 41, 0.08);
+  }
+  .phone .screen {
+    background: linear-gradient(180deg, #f7f8fc, #eef0f6);
+    border-radius: 14px; padding: 18px 14px 0; min-height: 210px;
+    display: flex; flex-direction: column;
+  }
+  .phone .large-title { font-size: 24px; font-weight: 700; }
+  .phone .page-sub { font-size: 11.5px; color: var(--text-3); margin: 2px 0 14px; }
+  .phone .block { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; font-size: 12.5px; color: var(--text-2); flex: 1; }
+  .tabbar {
+    display: flex; gap: 2px; padding: 8px 6px 10px;
+    background: rgba(255, 255, 255, 0.92);
+    border-top: 1px solid var(--border); border-radius: 0 0 14px 14px;
+    margin: 14px -14px 0;
+  }
+  .tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10.5px; color: var(--text-3); position: relative; padding-top: 3px; }
+  .tab.on { color: var(--accent); font-weight: 600; }
+  .tbadge {
+    position: absolute; top: -1px; right: 14px;
+    background: #f25555; color: #fff; border-radius: 8px;
+    font-size: 9px; line-height: 1; padding: 2px 5px;
+  }
+
+  /* ---------- Windows 落位模拟 ---------- */
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .duo { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 16px;
+  }
+  .panel .tag {
+    display: inline-block; font-size: 11px; padding: 2px 9px; border-radius: 20px;
+    margin-bottom: 12px; font-weight: 600;
+  }
+  .tag.now { background: #eef0f4; color: var(--text-3); }
+  .tag.new { background: var(--accent-soft); color: var(--accent); }
+
+  /* 阅读室左栏底部导航 */
+  .shelfnav { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); padding: 7px 6px; border-radius: 8px; }
+  .shelfnav:hover { background: var(--surface-2); }
+  .shelfnav .badge { background: #f25555; color: #fff; border-radius: 8px; font-size: 10px; padding: 1px 6px; margin-left: auto; }
+  .shelfnav .badge.soft { background: var(--accent-soft); color: var(--accent); }
+
+  /* 书架空态按钮 */
+  .shelf-empty {
+    width: 100%; display: flex; flex-direction: column; align-items: center; gap: 4px;
+    border: 1px dashed var(--border-strong); border-radius: 12px; background: var(--surface-2);
+    padding: 22px 10px; color: var(--text-2); font-size: 13.5px; cursor: pointer;
+  }
+  .shelf-empty .sub { font-size: 11.5px; color: var(--text-3); margin: 0; }
+  .shelf-empty svg { color: var(--accent); margin-bottom: 4px; }
+
+  /* 设置侧栏 */
+  .settabs { display: flex; flex-direction: column; gap: 2px; }
+  .settab { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-2); padding: 8px 10px; border-radius: 8px; }
+  .settab.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+  /* TodayCard */
+  .todaycard { display: flex; gap: 14px; align-items: center; background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .todaycard .line { font-size: 12.5px; color: var(--text-2); }
+  .todaycard .line strong { color: var(--accent); }
+  .todaycard .sub { font-size: 11.5px; color: var(--text-3); margin: 2px 0 0; }
+  .ring { position: relative; width: 46px; height: 46px; flex: none; }
+  .ring .num { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--text-2); }
+
+  /* 方案区 */
+  .plans { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .plans { grid-template-columns: 1fr; } }
+  .plan { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; }
+  .plan h3 { font-size: 14px; margin-bottom: 6px; }
+  .plan.reco { border-color: rgba(76, 95, 240, 0.5); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .plan ul { margin: 8px 0 0 18px; font-size: 12.5px; color: var(--text-2); }
+  .plan li { margin-bottom: 4px; }
+  .reco-tag { font-size: 11px; background: var(--accent); color: #fff; border-radius: 6px; padding: 1px 7px; margin-left: 8px; vertical-align: 2px; }
+  .foot { margin-top: 34px; font-size: 12px; color: var(--text-3); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>图标跨端一致性预览</h1>
+  <div class="sub">
+    手机端 <code>immersive-translator-mobile/src/App.tsx</code> tab 栏图标 &nbsp;vs&nbsp;
+    Windows 端 <code>immersive-translator-windows/src/ui/icons.tsx</code>（Feather 风格）· 2026-10-13
+  </div>
+
+  <div class="note">
+    <b>先说背景：</b>应用图标（桌面/安装包/托盘/手机启动图标）两端本来就是同一张图、逐字节一致，无需调整。
+    下面讨论的是<b>应用内 UI 图标</b>：手机端有四个定制 tab 图标，Windows 端同一概念目前用的是 Feather 通用图形，形状和描边（1.8 vs 2）都不一样。
+  </div>
+
+  <!-- ================= 1. 手机端 tab 栏原貌 ================= -->
+  <section>
+    <h2>① 手机端 tab 栏长这样（原貌复刻）</h2>
+    <div class="hint">描边 strokeWidth 1.8，圆角端点；「生词」tab 有到期角标。</div>
+    <div class="phone">
+      <div class="screen">
+        <div class="large-title">今天</div>
+        <div class="page-sub">手机端首页 · 待复习/继续阅读</div>
+        <div class="block">今天 · 生词 · 书架 · 我的<br><br>底部四个 tab 即本次要对齐的图标。</div>
+        <div class="tabbar">
+          <div class="tab on">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.8 13.2h5.7L9.3 22l8.9-11.2h-5.7z"/></svg>
+            <span>今天</span>
+          </div>
+          <div class="tab">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 18.5V21"/><path d="M9 7.5h7"/></svg>
+            <span>生词</span>
+            <span class="tbadge">3</span>
+          </div>
+          <div class="tab">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13.5 9 5 9-5"/></svg>
+            <span>书架</span>
+          </div>
+          <div class="tab">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c1.4-3.4 3.9-5 7-5s5.6 1.6 7 5"/></svg>
+            <span>我的</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 2. 逐概念对照 ================= -->
+  <section>
+    <h2>② 逐概念对照（每个概念看 24px 大图与 15px 实际使用尺寸）</h2>
+    <div class="hint">第三行「提案」= 直接采用手机端图形与 1.8 描边。</div>
+    <div class="grid">
+
+      <div class="card">
+        <h3>今天（闪电）</h3>
+        <div class="use">Windows 对应落点：今日复习卡「今日复习」行 · 手机端是首 tab</div>
+        <div class="row">
+          <span class="who">手机端</span>
+          <span class="sizes">
+            <span class="sz"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.8 13.2h5.7L9.3 22l8.9-11.2h-5.7z"/></svg><i>24</i></span>
+            <span class="sz"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.8 13.2h5.7L9.3 22l8.9-11.2h-5.7z"/></svg><i>15</i></span>
+          </span>
+        </div>
+        <div class="row proposal">
+          <span class="who">Windows 提案</span>
+          <span class="sizes">
+            <span class="sz"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.8 13.2h5.7L9.3 22l8.9-11.2h-5.7z"/></svg><i>24</i></span>
+            <span class="sz"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.8 13.2h5.7L9.3 22l8.9-11.2h-5.7z"/></svg><i>15</i></span>
+          </span>
+        </div>
+        <div class="verdict">Windows 现状：<b>无对应图标</b>（今日复习卡纯文字）→ 提案给「今日复习」行加上同款闪电</div>
+      </div>
+
+      <div class="card">
+        <h3>生词本（合上的书 + 书签线）</h3>
+        <div class="use">Windows 对应落点：左栏「生词本复习」入口</div>
+        <div class="row">
+          <span class="who">手机端</span>
+          <span class="sizes">
+            <span class="sz"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 18.5V21"/><path d="M9 7.5h7"/></svg><i>24</i></span>
+            <span class="sz"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 18.5V21"/><path d="M9 7.5h7"/></svg><i>15</i></span>
+          </span>
+        </div>
+        <div class="row">
+          <span class="who">Windows 现状</span>
+          <span class="sizes">
+            <span class="sz"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><i>24</i></span>
+            <span class="sz"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><i>15</i></span>
+          </span>
+        </div>
+        <div class="row proposal">
+          <span class="who">Windows 提案</span>
+          <span class="sizes">
+            <span class="sz"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 18.5V21"/><path d="M9 7.5h7"/></svg><i>24</i></span>
+            <span class="sz"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 18.5V21"/><path d="M9 7.5h7"/></svg><i>15</i></span>
+          </span>
+        </div>
+        <div class="verdict">现状用的是 Feather「翻开的书」，和手机端「合上的书」不是同一形状</div>
+      </div>
+
+      <div class="card">
+        <h3>书架（层叠）</h3>
+        <div class="use">Windows 对应落点：书架空态（导入整本 EPUB / 添加短文）</div>
+        <div class="row">
+          <span class="who">手机端</span>
+          <span class="sizes">
+            <span class="sz"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13.5 9 5 9-5"/></svg><i>24</i></span>
+            <span class="sz"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13.5 9 5 9-5"/></svg><i>15</i></span>
+          </span>
+        </div>
+        <div class="row">
+          <span class="who">Windows 现状</span>
+          <span class="sizes">
+            <span class="sz"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><i>24</i></span>
+            <span class="sz"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><i>15</i></span>
+          </span>
+        </div>
+        <div class="row proposal">
+          <span class="who">Windows 提案</span>
+          <span class="sizes">
+            <span class="sz"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13.5 9 5 9-5"/></svg><i>24</i></span>
+            <span class="sz"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13.5 9 5 9-5"/></svg><i>15</i></span>
+          </span>
+        </div>
+        <div class="verdict">现状与「生词本」共用同一个翻开书图形 —— 同形不同义，本身也值得拆开</div>
+      </div>
+
+      <div class="card">
+        <h3>我的（人像）</h3>
+        <div class="use">Windows 对应落点：设置窗口侧栏「账号」tab</div>
+        <div class="row">
+          <span class="who">手机端</span>
+          <span class="sizes">
+            <span class="sz"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c1.4-3.4 3.9-5 7-5s5.6 1.6 7 5"/></svg><i>24</i></span>
+            <span class="sz"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c1.4-3.4 3.9-5 7-5s5.6 1.6 7 5"/></svg><i>15</i></span>
+          </span>
+        </div>
+        <div class="row">
+          <span class="who">Windows 现状</span>
+          <span class="sizes">
+            <span class="sz"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><i>24</i></span>
+            <span class="sz"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><i>15</i></span>
+          </span>
+        </div>
+        <div class="row proposal">
+          <span class="who">Windows 提案</span>
+          <span class="sizes">
+            <span class="sz"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c1.4-3.4 3.9-5 7-5s5.6 1.6 7 5"/></svg><i>24</i></span>
+            <span class="sz"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c1.4-3.4 3.9-5 7-5s5.6 1.6 7 5"/></svg><i>15</i></span>
+          </span>
+        </div>
+        <div class="verdict">概念相同、几何略不同（头更小、肩更圆）——差异最小的一组</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ================= 3. Windows 落位效果 ================= -->
+  <section>
+    <h2>③ Windows 界面落位效果（现在 vs 提案）</h2>
+    <div class="hint">左列 = 当前代码的实际效果；右列 = 换成手机端图形后的效果。</div>
+
+    <div class="duo" style="margin-bottom: 14px;">
+      <div class="panel">
+        <span class="tag now">现在 · 阅读室左栏底部</span>
+        <div class="shelfnav">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+          生词本复习 <span class="badge">3</span>
+        </div>
+        <div class="shelfnav">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          口语陪练
+        </div>
+        <div class="shelfnav">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          笔记库 <span class="badge soft">5</span>
+        </div>
+      </div>
+      <div class="panel">
+        <span class="tag new">提案 · 阅读室左栏底部</span>
+        <div class="shelfnav">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 18.5V21"/><path d="M9 7.5h7"/></svg>
+          生词本复习 <span class="badge">3</span>
+        </div>
+        <div class="shelfnav">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          口语陪练
+        </div>
+        <div class="shelfnav">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          笔记库 <span class="badge soft">5</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="duo" style="margin-bottom: 14px;">
+      <div class="panel">
+        <span class="tag now">现在 · 书架空态</span>
+        <button class="shelf-empty">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+          <span>导入整本 EPUB</span>
+          <span class="sub">自动分章 · 断点续读 · 生词进复习闭环</span>
+        </button>
+      </div>
+      <div class="panel">
+        <span class="tag new">提案 · 书架空态</span>
+        <button class="shelf-empty">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13.5 9 5 9-5"/></svg>
+          <span>导入整本 EPUB</span>
+          <span class="sub">自动分章 · 断点续读 · 生词进复习闭环</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="duo" style="margin-bottom: 14px;">
+      <div class="panel">
+        <span class="tag now">现在 · 设置侧栏</span>
+        <div class="settabs">
+          <div class="settab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h7"/><path d="M9 3v2c0 4.97-3 8-7 8"/><path d="M5 9c0 2 1.5 4 4 5"/><path d="M14 21l4-10 4 10"/><path d="M15.5 18h5"/><path d="M11 21H7a2 2 0 0 1 0-4h2"/></svg>模型服务</div>
+          <div class="settab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h7"/><path d="M9 3v2c0 4.97-3 8-7 8"/><path d="M5 9c0 2 1.5 4 4 5"/><path d="M14 21l4-10 4 10"/><path d="M15.5 18h5"/><path d="M11 21H7a2 2 0 0 1 0-4h2"/></svg>翻译</div>
+          <div class="settab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>术语表</div>
+          <div class="settab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M6 10.5h.01M10 10.5h.01M14 10.5h.01M18 10.5h.01"/><path d="M6 14.5h.01M18 14.5h.01"/><path d="M9 14.5h6"/></svg>快捷键</div>
+          <div class="settab on"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>账号</div>
+          <div class="settab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>关于</div>
+        </div>
+      </div>
+      <div class="panel">
+        <span class="tag new">提案 · 设置侧栏</span>
+        <div class="settabs">
+          <div class="settab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h7"/><path d="M9 3v2c0 4.97-3 8-7 8"/><path d="M5 9c0 2 1.5 4 4 5"/><path d="M14 21l4-10 4 10"/><path d="M15.5 18h5"/><path d="M11 21H7a2 2 0 0 1 0-4h2"/></svg>模型服务</div>
+          <div class="settab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h7"/><path d="M9 3v2c0 4.97-3 8-7 8"/><path d="M5 9c0 2 1.5 4 4 5"/><path d="M14 21l4-10 4 10"/><path d="M15.5 18h5"/><path d="M11 21H7a2 2 0 0 1 0-4h2"/></svg>翻译</div>
+          <div class="settab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>术语表</div>
+          <div class="settab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M6 10.5h.01M10 10.5h.01M14 10.5h.01M18 10.5h.01"/><path d="M6 14.5h.01M18 14.5h.01"/><path d="M9 14.5h6"/></svg>快捷键</div>
+          <div class="settab on"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c1.4-3.4 3.9-5 7-5s5.6 1.6 7 5"/></svg>账号</div>
+          <div class="settab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>关于</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="duo">
+      <div class="panel">
+        <span class="tag now">现在 · 今日复习卡</span>
+        <div class="todaycard">
+          <div class="ring">
+            <svg width="46" height="46" viewBox="0 0 46 46"><circle cx="23" cy="23" r="19" fill="none" stroke="#e4e7ee" stroke-width="3.5"/><circle cx="23" cy="23" r="19" fill="none" stroke="#4c5ff0" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="119.4" stroke-dashoffset="35.8" transform="rotate(-90 23 23)"/></svg>
+            <span class="num">7/10</span>
+          </div>
+          <div>
+            <div class="line">今日复习 <strong>7</strong> / 10 · 连续打卡 <strong>12</strong> 天</div>
+            <div class="sub">还差 3 个清空今天到期</div>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <span class="tag new">提案 · 今日复习卡（加「今天」闪电）</span>
+        <div class="todaycard">
+          <div class="ring">
+            <svg width="46" height="46" viewBox="0 0 46 46"><circle cx="23" cy="23" r="19" fill="none" stroke="#e4e7ee" stroke-width="3.5"/><circle cx="23" cy="23" r="19" fill="none" stroke="#4c5ff0" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="119.4" stroke-dashoffset="35.8" transform="rotate(-90 23 23)"/></svg>
+            <span class="num">7/10</span>
+          </div>
+          <div>
+            <div class="line"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4c5ff0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:3px;"><path d="M13 2 4.8 13.2h5.7L9.3 22l8.9-11.2h-5.7z"/></svg>今日复习 <strong>7</strong> / 10 · 连续打卡 <strong>12</strong> 天</div>
+            <div class="sub">还差 3 个清空今天到期</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 4. 方案 ================= -->
+  <section>
+    <h2>④ 两个可选方案</h2>
+    <div class="plans">
+      <div class="plan reco">
+        <h3>方案 A · 共用概念用手机端图形<span class="reco-tag">推荐</span></h3>
+        <ul>
+          <li>生词本 / 书架 / 账号 三处换成手机端同款图形（1.8 描边）</li>
+          <li>「今日复习」行加手机端「今天」闪电</li>
+          <li>「沉浸式阅读」保留翻开的书 —— 与「生词本」合上的书正好形成区分</li>
+          <li>其余图标（复制/固定/齿轮等）手机端没有对应物，保持 Feather 不动</li>
+          <li>改动范围：icons.tsx + 6 个使用文件，全部可逆</li>
+        </ul>
+      </div>
+      <div class="plan">
+        <h3>方案 B · 只统一描边粗细</h3>
+        <ul>
+          <li>全部 Windows 图标描边从 2 调到 1.8，图形保持 Feather 不换</li>
+          <li>跨端观感更接近（线条粗细一致），但同概念仍是两个形状</li>
+          <li>改动极小（icons.tsx 一行），如对手机图形形状无感可选这个</li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot">
+      * 应用图标（icon.png / icon.ico / 托盘 / iOS / Android 启动图）两端已逐字节一致，不在本次范围。<br>
+      * 手机端图标源：immersive-translator-mobile/src/App.tsx 第 13–18 行 ICONS 定义。
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

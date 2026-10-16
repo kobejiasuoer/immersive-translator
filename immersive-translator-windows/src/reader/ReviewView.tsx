@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { IconVolume } from "../ui/icons";
+import { IconMic, IconVolume } from "../ui/icons";
 import type { ReviewGrade } from "../core/readerSrs";
 import {
   CHUNK_TYPE_LABELS,
@@ -27,6 +27,11 @@ import {
   type VocabWord,
 } from "../core/readerTypes";
 import { findChunkRange } from "../core/chunkAnnotate";
+import { startMicRecorder, type MicRecorderHandle } from "../core/micRecorder";
+import { createVadDetector, type VadDetector } from "../core/vad";
+import { transcribeSpeech } from "../core/xfyunAsr";
+import { loadAsrCredentials } from "../lib/iseCredentials";
+import { textHitsTarget } from "../core/speakLogic";
 import {
   firstLetters,
   judgeCloze,
@@ -122,8 +127,8 @@ const SMART_ROUTE_TIP: Record<RecallMode, string> = {
   recognition: "智能混合：本卡是新词，先看词想义",
 };
 
-/** 完形/听写卡的句子素材：挖空定位过的一段。 */
-interface SentenceSpec {
+/** 完形/听写卡的句子素材：挖空定位过的一段（v0.8 起随卡片一并导出，供闯关复用）。 */
+export interface SentenceSpec {
   sentence: string;
   zh: string | null;
   pre: string;
@@ -711,7 +716,7 @@ function GradeBar({ suggest, ask, onGrade }: { suggest: ReviewGrade | null; ask:
 }
 
 /** 评分区（页脚）：提问 + 四档；产出卡判分后附建议档快捷路径说明。 */
-function GradeFooter({
+export function GradeFooter({
   suggest,
   ask,
   onGrade,
@@ -756,9 +761,9 @@ function VerdictPanel({
   );
 }
 
-// ---------- 识别卡（词典词条式） ----------
+// ---------- 识别卡（词典词条式；v0.8 起具名导出供闯关复用） ----------
 
-function RecognitionCard({
+export function RecognitionCard({
   word,
   flipped,
   pos,
@@ -837,9 +842,9 @@ function RecognitionCard({
   );
 }
 
-// ---------- 完形卡 ----------
+// ---------- 完形卡（v0.8 起具名导出供闯关复用） ----------
 
-function ClozeCard({
+export function ClozeCard({
   word,
   spec,
   input,
@@ -985,8 +990,8 @@ function ClozeCard({
   );
 }
 
-/** 句中内嵌的下划线输入框，宽度随内容自适应。 */
-function BlankInput({
+/** 句中内嵌的下划线输入框，宽度随内容自适应（v0.8 起具名导出供闯关复用）。 */
+export function BlankInput({
   value,
   onChange,
   onSubmit,
@@ -1037,9 +1042,9 @@ function maskChinese(zh: string): string {
   return zh.replace(/[^\s，。；：、！？]/g, "＿");
 }
 
-// ---------- 听写卡 ----------
+// ---------- 听写卡（v0.8 起具名导出供闯关复用） ----------
 
-function DictationCard({
+export function DictationCard({
   word,
   spec,
   input,
@@ -1229,6 +1234,249 @@ function SummaryPanel({
           清空本轮统计
         </button>
       </div>
+    </div>
+  );
+}
+
+// ---------- 开口造句过关卡（v0.8 Phase 4，闯关第三题型） ----------
+
+/** 静音自动收麦的等待时长（说完话 1.4s 没声音即收）。 */
+const SPEAK_CHALLENGE_SILENCE_MS = 1400;
+
+export interface SpeakChallengeCardProps {
+  word: VocabWord;
+  /** 参考例句（词条 LLM 例句或文章原句）；null = 只给中文义自由发挥。 */
+  sample: string | null;
+  pos: number;
+  total: number;
+  sourceLabel: string;
+  /** 开口命中 / 打字判分通过：调用方按 easy 档落 SRS（交接语义）。 */
+  onPass: () => void;
+  /** 放弃：跳过不评分，由调用方推进队列。 */
+  onGiveUp: () => void;
+  /** 朗读参考例句（word 音轨）。 */
+  onSpeakSample: (text: string) => void;
+  micDeviceId?: string;
+}
+
+/**
+ * 「开口造句过关」：看目标词 + 参考例句，点击麦克风说一句包含目标词的话——
+ * 录音（micRecorder + VAD 静音自动停）→ 讯飞听写转写 → textHitsTarget 命中
+ * 即 onPass（按 easy 档完成 SRS）；未命中给重试/放弃（放弃 = 跳过不评分）。
+ * ASR 凭据缺失时降级为「打字造句」（复用 judgeCloze 宽容判分，perfect/close 过）。
+ */
+export function SpeakChallengeCard({
+  word,
+  sample,
+  pos,
+  total,
+  sourceLabel,
+  onPass,
+  onGiveUp,
+  onSpeakSample,
+  micDeviceId,
+}: SpeakChallengeCardProps) {
+  const [phase, setPhase] = useState<"idle" | "recording" | "recognizing" | "miss" | "error">("idle");
+  const [typedMode, setTypedMode] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [typedVerdict, setTypedVerdict] = useState<RecallVerdict | null>(null);
+  const [transcript, setTranscript] = useState("");
+  const [error, setError] = useState("");
+  const recRef = useRef<MicRecorderHandle | null>(null);
+  const vadRef = useRef<VadDetector | null>(null);
+  const finishingRef = useRef(false);
+
+  // 卸载保护：录音中切卡/换词直接丢弃，不留悬空麦克风。
+  useEffect(() => {
+    return () => {
+      recRef.current?.cancel();
+      recRef.current = null;
+      vadRef.current = null;
+    };
+  }, []);
+
+  const finishRecording = useCallback(async () => {
+    const rec = recRef.current;
+    if (!rec || finishingRef.current) return;
+    finishingRef.current = true;
+    recRef.current = null;
+    vadRef.current = null;
+    setPhase("recognizing");
+    setError("");
+    let pcm: Float32Array;
+    try {
+      pcm = await rec.stop();
+    } catch (e) {
+      setPhase("error");
+      setError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    // 静音兜底：没说到话不算一次尝试
+    let peak = 0;
+    for (let i = 0; i < pcm.length; i += 16) peak = Math.max(peak, Math.abs(pcm[i]));
+    if (peak < 0.01) {
+      setPhase("idle");
+      setError("没听到声音——离麦克风近一点再说一次");
+      return;
+    }
+    const creds = await loadAsrCredentials().catch(() => null);
+    if (!creds) {
+      setTypedMode(true);
+      setPhase("idle");
+      setError("未配置讯飞听写凭据，改用打字造句（到 设置 → 语音 可补配）");
+      return;
+    }
+    let text: string;
+    try {
+      text = await transcribeSpeech(pcm, "en_us", creds);
+    } catch (e) {
+      setPhase("error");
+      setError(`语音识别失败：${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    if (!text) {
+      setPhase("idle");
+      setError("没识别出内容，再试一次（尽量用完整的英语句子）");
+      return;
+    }
+    setTranscript(text);
+    if (textHitsTarget(text, word.word)) {
+      onPass();
+    } else {
+      setPhase("miss");
+    }
+  }, [word.word, onPass]);
+
+  /** 开麦（VAD 静音自动收）/ 录音中再点 = 说完手动收。 */
+  const toggleMic = useCallback(() => {
+    if (typedMode) return;
+    if (phase === "recording") {
+      void finishRecording();
+      return;
+    }
+    if (phase === "recognizing") return;
+    // 上一轮已收完（idle/error/miss 都允许重开），解锁新一轮录音。
+    finishingRef.current = false;
+    setTranscript("");
+    setError("");
+    setPhase("recording");
+    const vad = createVadDetector({
+      silenceMs: SPEAK_CHALLENGE_SILENCE_MS,
+      onAutoStop: () => void finishRecording(),
+    });
+    vadRef.current = vad;
+    void (async () => {
+      try {
+        const recorder = await startMicRecorder({
+          deviceId: micDeviceId || undefined,
+          onLevel: ({ level, elapsedMs }) => vad.feed(level, elapsedMs),
+        });
+        recRef.current = recorder;
+      } catch (e) {
+        const dom = e as DOMException;
+        setPhase("error");
+        setError(`麦克风打不开（${dom?.name ?? "错误"}）：${dom?.message ?? e}`);
+      }
+    })();
+  }, [typedMode, phase, micDeviceId, finishRecording]);
+
+  const submitTyped = useCallback(() => {
+    if (typedVerdict !== null || !typed.trim()) return;
+    const verdict = judgeCloze(typed, word.word, { trap: word.trap, accepted: [word.word] });
+    if (verdict === "perfect" || verdict === "close") {
+      onPass();
+      return;
+    }
+    setTypedVerdict(verdict);
+  }, [typedVerdict, typed, word, onPass]);
+
+  const retry = () => {
+    setPhase("idle");
+    setTranscript("");
+    setError("");
+    setTypedVerdict(null);
+    setTyped("");
+    finishingRef.current = false;
+  };
+
+  const gloss = word.senses[0]?.cn ?? "";
+
+  return (
+    <div className="review-card" key={word.id}>
+      <CardMeta pill="开口" tone="dict" source={sourceLabel} pos={pos} total={total} />
+
+      <div className="speak-challenge-prompt">
+        试着用「<b>{word.word}</b>」{gloss ? `（${gloss}）` : ""}随口说一句话：
+      </div>
+
+      {sample && (
+        <div className="speak-challenge-sample">
+          <div className="scs-label">参考例句（可直接跟读或自由发挥）：</div>
+          <div className="scs-text">
+            “{sample}”
+            <button className="rc-speak" onClick={() => onSpeakSample(sample)} title="朗读参考例句" aria-label="朗读参考例句">
+              <IconVolume size={15} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!typedMode ? (
+        <div className="speak-challenge-actions">
+          <button
+            className={`recall-btn primary speak-challenge-mic${phase === "recording" ? " rec" : ""}`}
+            onClick={toggleMic}
+            disabled={phase === "recognizing"}
+          >
+            <IconMic size={15} />
+            {phase === "recording" ? "正在听…说完自动收（再点立即收）" : phase === "recognizing" ? "识别中…" : "点击开口说一句（说对直接过关）"}
+          </button>
+          <button className="recall-btn" onClick={onGiveUp}>
+            放弃这题
+          </button>
+          <span className="scs-hint">说出包含目标词的句子即可，识别命中按「很轻松」完成复习</span>
+        </div>
+      ) : (
+        <div className="speak-challenge-typed">
+          <div className="cloze-sentence">
+            打字造一句：
+            <BlankInput value={typed} onChange={setTyped} onSubmit={submitTyped} />
+          </div>
+          {typedVerdict !== null && (
+            <VerdictPanel verdict={typedVerdict}>
+              <span className="v-body">
+                你写的：<b>{typed.trim()}</b>（判分规则与完形一致：拼写接近也算过）
+                <br />
+              </span>
+              <span className="ans">{word.word}</span>
+            </VerdictPanel>
+          )}
+          <div className="speak-challenge-actions">
+            <button className="recall-btn primary" onClick={submitTyped} disabled={typedVerdict !== null}>
+              提交判分
+            </button>
+            <button className="recall-btn" onClick={onGiveUp}>
+              放弃这题
+            </button>
+          </div>
+        </div>
+      )}
+
+      {transcript && phase === "miss" && (
+        <div className="recall-verdict wrong">
+          <span className="v-head">✗ 没说到目标词</span>
+          <span className="v-body">
+            识别为：<b>{transcript}</b>
+            <br />
+          </span>
+          <span className="ans">{word.word}</span>
+          <button className="rc-jump" onClick={retry}>
+            再试一次
+          </button>
+        </div>
+      )}
+
+      {error && phase !== "miss" && <div className="speak-challenge-error">{error}</div>}
     </div>
   );
 }

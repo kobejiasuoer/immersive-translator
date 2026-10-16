@@ -18,6 +18,7 @@ import {
   type PronunciationResult,
 } from "../core/pronunciation";
 import { startMicRecorder, type MicRecorderHandle } from "../core/micRecorder";
+import { createVadDetector, type VadDetector } from "../core/vad";
 
 export type AssessPhase =
   | "idle" // 非跟读等待（或尚未开始）
@@ -29,24 +30,10 @@ export type AssessPhase =
   | "failed"
   | "error";
 
-/** VAD 参数（经验值）。开说/静音阈值不再写死绝对电平——轻声说话或低灵敏
- * 麦克风的绝对电平可能永远够不到固定线，这里按「运行时估计的底噪 × 信噪比
- * 倍率」自适应，绝对下限兜住极安静房间的噪声毛刺，封顶保证开口即说话
- * （前面没有静音样本）时阈值不会被顶飞。
- * 静音断句时长不在此写死——由设置 shadowingSilenceMs 提供（默认 1500ms）。 */
-const SPEECH_LEVEL_MIN = 0.006;
-const SPEECH_LEVEL_CEILING = 0.05;
-const SILENCE_LEVEL_MIN = 0.003;
-/** 开说阈值 = clamp(底噪 × 2.8, 绝对下限, 封顶)；静音判定 = max(下限, 底噪 × 1.6)。 */
-const SPEECH_FLOOR_RATIO = 2.8;
-const SILENCE_FLOOR_RATIO = 1.6;
-/** 迟迟未判定开说时的救援线：3.5s 后持续高于底噪 1.8× 也算开口（超低电平麦克风）。 */
-const RESCUE_AFTER_MS = 3500;
-const RESCUE_FLOOR_RATIO = 1.8;
-/** 一直没听到开说 → 提前收（原来干等满 15s 才停），提示检查麦克风。 */
-const NO_SPEECH_TIMEOUT_MS = 8000;
-const MIN_RECORD_MS = 700;
-const MAX_RECORD_MS = 15000;
+/** VAD 参数与判定语义整体抽到 src/core/vad.ts（v0.8，跟读与口语免长按开麦
+ * 共用同一套自适应底噪/开说判定/静音断句/救援线逻辑）——阈值常量与逐行
+ * 语义以 vad.ts 为准，本文件只负责状态机与评测收尾。 */
+
 /** 过关后停留展示的时长，再自动进下一句。 */
 const PASS_LINGER_MS = 650;
 /** 领读语速（比正常朗读慢，示范用）。 */
@@ -99,10 +86,8 @@ export function useShadowAssess(deps: UseShadowAssessDeps) {
   const idxRef = useRef<number | null>(null);
   /** 一次评测尝试的纪元：cancel/retry 后旧结果作废。 */
   const epochRef = useRef(0);
-  /** VAD 状态：started=已判定开说；floor=运行时底噪估计（null=还没收到电平）。 */
-  const vadRef = useRef({ started: false, lastVoiceAt: 0, floor: null as number | null });
-  /** 本次录音生效的静音断句时长（开麦那一刻从配置取，录音中途改设置不打断本次）。 */
-  const silenceMsRef = useRef(1500);
+  /** 本轮录音的 VAD 检测器（底噪/开说/静音断句语义见 core/vad.ts）。 */
+  const vadRef = useRef<VadDetector | null>(null);
   const passTimerRef = useRef<number | null>(null);
   const leadGenRef = useRef<number | null>(null);
 
@@ -201,7 +186,6 @@ export function useShadowAssess(deps: UseShadowAssessDeps) {
     const idx = idxRef.current;
     if (idx == null) return;
     const epoch = epochRef.current;
-    vadRef.current = { started: false, lastVoiceAt: 0, floor: null };
     setState({
       phase: "recording",
       level: 0,
@@ -212,48 +196,17 @@ export function useShadowAssess(deps: UseShadowAssessDeps) {
     });
     try {
       const { micDeviceId, silenceMs } = depsRef.current.getConfig();
-      silenceMsRef.current = silenceMs;
+      // 静音断句时长开麦那一刻取定（录音中途改设置不打断本次）；
+      // 静音/无话/超长的自动收麦语义与抽取前的内联实现逐行等价（core/vad.ts）。
+      vadRef.current = createVadDetector({
+        silenceMs,
+        onAutoStop: () => void finishRecording(),
+      });
       const recorder = await startMicRecorder({
         deviceId: micDeviceId || undefined,
         onLevel: ({ level, elapsedMs }) => {
           setState((s) => (s.phase === "recording" ? { ...s, level, elapsedMs } : s));
-          const vad = vadRef.current;
-          const speechLevel = Math.min(
-            SPEECH_LEVEL_CEILING,
-            Math.max(SPEECH_LEVEL_MIN, (vad.floor ?? 0) * SPEECH_FLOOR_RATIO),
-          );
-          if (level < speechLevel) {
-            // 底噪估计只采信低于阈值的电平：说话块不抬高底噪，阈值不追着人声涨。
-            vad.floor = vad.floor === null ? level : Math.min(level, vad.floor * 1.05);
-          }
-          const silenceLevel = Math.max(SILENCE_LEVEL_MIN, (vad.floor ?? 0) * SILENCE_FLOOR_RATIO);
-          if (level >= speechLevel) {
-            vad.started = true;
-            vad.lastVoiceAt = elapsedMs;
-          } else if (
-            !vad.started &&
-            elapsedMs >= RESCUE_AFTER_MS &&
-            level >= (vad.floor ?? 0) * RESCUE_FLOOR_RATIO
-          ) {
-            // 超低电平麦克风：绝对阈值够不到，但持续高于底噪也算开口。
-            vad.started = true;
-            vad.lastVoiceAt = elapsedMs;
-          }
-          if (!vad.started && elapsedMs >= NO_SPEECH_TIMEOUT_MS) {
-            // 一直没等到开说：提前收，别让用户干等满 15s。
-            void finishRecording();
-            return;
-          }
-          if (
-            vad.started &&
-            level < silenceLevel &&
-            elapsedMs - vad.lastVoiceAt >= silenceMsRef.current &&
-            elapsedMs >= MIN_RECORD_MS
-          ) {
-            void finishRecording();
-          } else if (elapsedMs >= MAX_RECORD_MS) {
-            void finishRecording();
-          }
+          vadRef.current?.feed(level, elapsedMs);
         },
       });
       if (epoch !== epochRef.current) {

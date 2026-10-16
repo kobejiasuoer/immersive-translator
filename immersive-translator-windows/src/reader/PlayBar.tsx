@@ -181,37 +181,37 @@ export function PlayBar({ article, playback, settings, onPatchSettings, onOpenVi
   const playing = playback.playing;
   const previewText = hover && article?.sentences[hover.idx]?.en;
 
+  // v0.8 悬浮播放走带胶囊（原型 .floating-sonic-dock）：容器/按钮换壳，
+  // 拖拽语义不变——拖动只移光标（dragIdx），松手才 jumpTo（讯飞额度保护）。
   return (
-    <footer className="reader-playbar">
-      <div className="reader-transport">
-        <button
-          className="reader-skip-btn"
-          onClick={() => playback.step(-1)}
-          disabled={total === 0 || idx <= 0}
-          title="上一句 (L)"
-        >
-          <IconPrev size={17} />
-        </button>
-        <button
-          className="reader-play-btn"
-          onClick={playback.toggle}
-          disabled={total === 0}
-          title={playing ? "暂停 (Space)" : "播放 (Space)"}
-        >
-          {playing ? <IconPause size={18} /> : <IconPlay size={18} style={{ marginLeft: 2 }} />}
-        </button>
-        <button
-          className="reader-skip-btn"
-          onClick={() => playback.step(1)}
-          disabled={total === 0 || idx >= total - 1}
-          title="下一句 (J)"
-        >
-          <IconNext size={17} />
-        </button>
-      </div>
+    <footer className="floating-sonic-dock">
+      <button
+        className="pill-Ghost-btn"
+        onClick={() => playback.step(-1)}
+        disabled={total === 0 || idx <= 0}
+        title="上一句 (L)"
+      >
+        <IconPrev size={15} />
+      </button>
+      <button
+        className="sonic-play-orb"
+        onClick={playback.toggle}
+        disabled={total === 0}
+        title={playing ? "暂停 (Space)" : "播放 (Space)"}
+      >
+        {playing ? <IconPause size={15} /> : <IconPlay size={15} style={{ marginLeft: 1 }} />}
+      </button>
+      <button
+        className="pill-Ghost-btn"
+        onClick={() => playback.step(1)}
+        disabled={total === 0 || idx >= total - 1}
+        title="下一句 (J)"
+      >
+        <IconNext size={15} />
+      </button>
 
       <div
-        className="reader-progress"
+        className="dock-scrubber"
         ref={barRef}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -224,37 +224,25 @@ export function PlayBar({ article, playback, settings, onPatchSettings, onOpenVi
         aria-valuenow={idx + 1}
         aria-label="朗读进度"
       >
-        <div className="track">
-          <div className="fill" style={{ width: `${percent}%` }} />
-          {article &&
-            total > 1 &&
-            total <= 40 &&
-            article.sentences.map((_, i) =>
-              i === 0 ? null : (
-                <i key={i} className="tick" style={{ left: `${(i / (total - 1)) * 100}%` }} aria-hidden />
-              ),
-            )}
-          <div className="knob" style={{ left: `${percent}%` }} />
-        </div>
+        <div className="dock-scrubber-fill" style={{ width: `${percent}%` }} />
         {hover && previewText && (
-          <div className="preview" style={{ left: hover.x - (barRef.current?.getBoundingClientRect().left ?? 0) }}>
+          <div className="dock-preview" style={{ left: hover.x - (barRef.current?.getBoundingClientRect().left ?? 0) }}>
             第 {hover.idx + 1} 句 · {previewText}
           </div>
         )}
       </div>
 
-      <div className="reader-count" aria-hidden>
+      <span className="dock-sent-counter tabular" aria-hidden>
         {total > 0 ? (
           <>
-            <span className="cur">{idx + 1}</span>
-            <span className="total"> ∕ {total} 句</span>
+            {String(idx + 1).padStart(2, "0")} / {String(total).padStart(2, "0")}
           </>
         ) : (
           "暂无句子"
         )}
-      </div>
+      </span>
 
-      <div className="right">
+      <div className="dock-right">
         {playback.shadowingWait ? (
           assess ? (
             <AssessStrip assess={assess} passScore={settings.shadowingPassScore} />

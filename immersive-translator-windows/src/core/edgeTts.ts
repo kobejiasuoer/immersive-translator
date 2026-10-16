@@ -23,6 +23,12 @@ import { diskCacheGet, diskCachePut } from "./ttsDiskCache";
 export interface EdgeTtsOptions {
   /** Edge 音色 ShortName，如 en-US-AvaNeural / zh-CN-XiaoxiaoNeural。 */
   voice: string;
+  /**
+   * 原生合成语速（SSML prosody rate 百分比，如 "-25%"；v0.8 慢速示范用）。
+   * 缺省 "+0%"：请求与旧版逐字节一致，缓存 key 也不变（变速仍由播放端
+   * playbackRate 承担）；一旦传值，缓存 key 纳入该值（不同语速各合成一份）。
+   */
+  ratePercent?: string;
 }
 
 const WSS_URL =
@@ -65,13 +71,23 @@ export const EDGE_TTS_VOICE_SUGGESTIONS: { voice: string; label: string }[] = [
   { voice: "zh-CN-YunjianNeural", label: "云健 · 中文男声，有力" },
 ];
 
-/** 服务端要求单 voice 单 prosody；文本转义后嵌入。 */
-export function buildSsmlMessage(voice: string, text: string, requestId: string, timestamp: string): string {
+/** 缺省 prosody rate（与旧请求逐字节一致）。 */
+export const DEFAULT_EDGE_RATE_PERCENT = "+0%";
+
+/** 服务端要求单 voice 单 prosody；文本转义后嵌入。ratePercent 写入 prosody rate
+ * （缺省 "+0%" 与旧请求逐字节一致；慢速示范传 "-25%"）。 */
+export function buildSsmlMessage(
+  voice: string,
+  text: string,
+  requestId: string,
+  timestamp: string,
+  ratePercent: string = DEFAULT_EDGE_RATE_PERCENT,
+): string {
   const locale = voice.split("-").slice(0, 2).join("-") || "en-US";
   const safe = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const ssml =
     `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${locale}'>` +
-    `<voice name='${voice}'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>${safe}</prosody></voice></speak>`;
+    `<voice name='${voice}'><prosody pitch='+0Hz' rate='${ratePercent}' volume='+0%'>${safe}</prosody></voice></speak>`;
   return (
     `X-RequestId:${requestId}\r\nContent-Type:application/ssml+xml\r\n` +
     `X-Timestamp:${timestamp}\r\nPath:ssml\r\n\r\n${ssml}`
@@ -153,12 +169,17 @@ async function calibrateClockSkew(): Promise<number | null> {
   }
 }
 
-// ---------- LRU 缓存（key = edge|voice|text；语速不入 key，变速在播放端） ----------
+// ---------- LRU 缓存（key = edge|voice|text；缺省语速不入 key（1× 变速在播放端），
+// 传了 ratePercent 才纳入 key——缺省值 key 与旧 key 完全一致，缓存不失效） ----------
 
 const blobCache = new Map<string, Blob>();
 
 export function edgeTtsCacheKey(text: string, opts: EdgeTtsOptions): string {
-  return `edge:${opts.voice || DEFAULT_EDGE_VOICE}|${text}`;
+  const voice = opts.voice || DEFAULT_EDGE_VOICE;
+  const rate = opts.ratePercent ?? DEFAULT_EDGE_RATE_PERCENT;
+  return rate === DEFAULT_EDGE_RATE_PERCENT
+    ? `edge:${voice}|${text}`
+    : `edge:${voice}|r${rate}|${text}`;
 }
 
 function cacheGet(key: string): Blob | undefined {
@@ -181,7 +202,7 @@ function cacheSet(key: string, blob: Blob): void {
 }
 
 /** 单次合成尝试（不含校准重试）。 */
-function synthesizeOnce(trimmed: string, voice: string, skewSeconds: number): Promise<Blob> {
+function synthesizeOnce(trimmed: string, voice: string, skewSeconds: number, ratePercent: string): Promise<Blob> {
   return new Promise<Blob>((resolve, reject) => {
     void secMsGec(skewSeconds).then(
       (gec) => {
@@ -258,6 +279,7 @@ function synthesizeOnce(trimmed: string, voice: string, skewSeconds: number): Pr
               trimmed,
               crypto.randomUUID().replace(/-/g, ""),
               ts,
+              ratePercent,
             ),
           );
         };
@@ -275,7 +297,8 @@ export async function synthesizeEdgeTts(text: string, opts: EdgeTtsOptions): Pro
   const trimmed = text.trim();
   if (!trimmed) throw new Error("合成文本为空");
   const voice = opts.voice || DEFAULT_EDGE_VOICE;
-  const key = edgeTtsCacheKey(trimmed, { voice });
+  const ratePercent = opts.ratePercent ?? DEFAULT_EDGE_RATE_PERCENT;
+  const key = edgeTtsCacheKey(trimmed, { voice, ratePercent });
   const cached = cacheGet(key);
   if (cached) return cached;
   const disk = await diskCacheGet(key);
@@ -285,7 +308,7 @@ export async function synthesizeEdgeTts(text: string, opts: EdgeTtsOptions): Pro
   }
 
   try {
-    const blob = await synthesizeOnce(trimmed, voice, calibratedSkewSeconds ?? 0);
+    const blob = await synthesizeOnce(trimmed, voice, calibratedSkewSeconds ?? 0, ratePercent);
     cacheSet(key, blob);
     void diskCachePut(key, blob);
     return blob;
@@ -295,7 +318,7 @@ export async function synthesizeEdgeTts(text: string, opts: EdgeTtsOptions): Pro
     const skew = await calibrateClockSkew();
     if (skew === null || skew === prevSkew) throw err;
     try {
-      const blob = await synthesizeOnce(trimmed, voice, skew);
+      const blob = await synthesizeOnce(trimmed, voice, skew, ratePercent);
       cacheSet(key, blob);
       void diskCachePut(key, blob);
       return blob;

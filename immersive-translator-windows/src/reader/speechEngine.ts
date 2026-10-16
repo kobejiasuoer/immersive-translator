@@ -25,6 +25,7 @@ import {
 import {
   DEFAULT_TTS_VCN,
   DEFAULT_TTS_VCN_EN,
+  speedFromRatePercent,
   synthesizeXfyunTts,
   type XfyunTtsCredentials,
 } from "../core/xfyunTts";
@@ -91,10 +92,12 @@ function pickVcn(cfg: XfyunEngineConfig, chinese: boolean): string {
   return cfg.vcnEn || cfg.vcnZh || DEFAULT_TTS_VCN_EN;
 }
 
-/** 云引擎对合成器的最小依赖：按句子语言合成 mp3 Blob + 兜底语速。 */
+/** 云引擎对合成器的最小依赖：按句子语言合成 mp3 Blob + 兜底语速。
+ * nativeRate（SSML 百分比，如 "-25%"）是 v0.8 慢速示范的可选原生合成语速：
+ * 缺省 undefined 走既有 1× 合成（请求与缓存 key 均不变）。 */
 export interface CloudEngineDeps {
   /** 合成失败拒绝 Promise（原始错误上抛），不发送 ended。 */
-  synthesize: (text: string, chinese: boolean) => Promise<Blob>;
+  synthesize: (text: string, chinese: boolean, nativeRate?: string) => Promise<Blob>;
   /** speak opts 未带语速时的兜底。 */
   fallbackRate: () => number;
 }
@@ -144,7 +147,8 @@ function createCloudEngine(deps: CloudEngineDeps): SpeechEngine {
     teardownTrack(track); // 新朗读打断旧朗读
     trackGen[track] = gen; // 同步登记：此后只有本代数能在这个音轨落地
     // 启动失败交给调用方 catch；此时调用方尚未登记 gen，不能用 ended 通知失败。
-    const blob = await deps.synthesize(text, chinese);
+    // nativeRate 只影响云引擎的合成请求（慢速示范）；播放变速仍按 opts.rate。
+    const blob = await deps.synthesize(text, chinese, opts.nativeRate);
     if (trackGen[track] !== gen) {
       // 合成期间被 stopTrack / 新的朗读顶替：静默丢弃（不播、不发 ended、不报错），
       // 仍 resolve gen——调用方靠自己的纪元/代数守卫消化过期结果。
@@ -192,12 +196,19 @@ function createCloudEngine(deps: CloudEngineDeps): SpeechEngine {
 /** 讯飞在线合成引擎（凭据在 getCfg 里，缺失时 speak 拒绝）。 */
 export function createXfyunEngine(getCfg: () => XfyunEngineConfig): SpeechEngine {
   return createCloudEngine({
-    synthesize: (text, chinese) => {
+    synthesize: (text, chinese, nativeRate) => {
       const cfg = getCfg();
       if (!cfg.creds) {
         throw new Error("未配置讯飞合成凭据，请在设置中检查语音配置");
       }
-      return synthesizeXfyunTts(text, { vcn: pickVcn(cfg, chinese) }, cfg.creds);
+      return synthesizeXfyunTts(
+        text,
+        {
+          vcn: pickVcn(cfg, chinese),
+          ...(nativeRate ? { rate: speedFromRatePercent(nativeRate) } : {}),
+        },
+        cfg.creds,
+      );
     },
     fallbackRate: () => getCfg().rate,
   });
@@ -225,8 +236,11 @@ function pickEdgeVoice(cfg: EdgeEngineConfig, chinese: boolean): string {
 /** Edge 在线合成引擎：免费无凭据，开箱即用（服务可用性靠 SAPI 兜底）。 */
 export function createEdgeEngine(getCfg: () => EdgeEngineConfig): SpeechEngine {
   return createCloudEngine({
-    synthesize: (text, chinese) =>
-      synthesizeEdgeTts(text, { voice: pickEdgeVoice(getCfg(), chinese) }),
+    synthesize: (text, chinese, nativeRate) =>
+      synthesizeEdgeTts(text, {
+        voice: pickEdgeVoice(getCfg(), chinese),
+        ...(nativeRate ? { ratePercent: nativeRate } : {}),
+      }),
     fallbackRate: () => getCfg().rate,
   });
 }
