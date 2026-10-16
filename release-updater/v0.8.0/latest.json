@@ -1,0 +1,11 @@
+{
+  "version": "0.8.0",
+  "notes": "v0.8.0：桌面工作台大改版——读、说、记一站直达，另新增账号体系。设置 → 关于 → 检查更新，或到发布页下载安装包覆盖安装。",
+  "pub_date": "2026-10-16T07:26:02Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSeU96WmpWcTg1TmQ5YWVjQm1IaDhWNTlWUVd0U0RBNDk4Lzl6MTljUjlHdE1jdTFZMXlKb2cwaWUzQ2VFUUI1WWFnWDBCYXpCNlZNMmdXZzRUYnFtQUg4UTdzMTFza1FFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMTM1NTM4CWZpbGU6SW1tZXJzaXZlVHJhbnNsYXRvcl8wLjguMF94NjQtc2V0dXAuZXhlCjc0VndhT0FSMEsvZWtBVmluOGtQckhMVWxsQ0N4T0p5ZiswcUwweGQvSGRweSthYUpCbkpUWG52RDE0RWdJOTVOQ1Q5TWliOVRlOGNMZ2FHWjd6ZENnPT0K",
+      "url": "https://gh-proxy.com/https://github.com/kobejiasuoer/immersive-translator/releases/latest/download/ImmersiveTranslator_0.8.0_x64-setup.exe"
+    }
+  }
+}
