@@ -180,6 +180,7 @@ export function ReaderTopBar({
           className="pill-Ghost-btn"
           onClick={cycleTheme}
           title={`主题：${themeLabel[settings.theme]}（点击切换）`}
+          aria-label={`切换主题，当前${themeLabel[settings.theme]}（点击切换）`}
         >
           <span>主题：{themeLabel[settings.theme]}</span>
         </button>
@@ -268,6 +269,7 @@ export function ViewMenu({
           style={{ width: 24, height: 24 }}
           onClick={onClose}
           title="关闭菜单"
+          aria-label="关闭视图菜单"
         >
           <IconClose size={12} />
         </button>

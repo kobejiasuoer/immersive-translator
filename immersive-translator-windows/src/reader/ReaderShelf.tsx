@@ -8,6 +8,7 @@
  */
 
 import { IconTrash } from "../ui/icons";
+import { useEscapeClose } from "./useEscapeClose";
 import type { ArticleSummary, BookMeta } from "../core/readerTypes";
 import { bookChapterIndexOf, bookOverallPercent } from "../core/readerTypes";
 
@@ -40,8 +41,16 @@ export function FolioSheet({
 }: Props) {
   const currentBook = books.find((b) => b.id === activeBookId) ?? books[0] ?? null;
 
+  // Esc 关闭书架浮层（键盘用户不必先Tab 到关闭键）。
+  useEscapeClose(onClose);
+
   return (
-    <aside className="floating-folio-sheet open" role="dialog" aria-label="我的书架">
+    <aside
+      className="floating-folio-sheet open"
+      role="dialog"
+      aria-modal="true"
+      aria-label="我的书架"
+    >
       <div className="folio-sheet-head">
         <span className="folio-sheet-title">我的书架</span>
         <button

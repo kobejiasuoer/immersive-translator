@@ -190,6 +190,7 @@ export function PlayBar({ article, playback, settings, onPatchSettings, onOpenVi
         onClick={() => playback.step(-1)}
         disabled={total === 0 || idx <= 0}
         title="上一句 (L)"
+        aria-label="上一句（快捷键 L）"
       >
         <IconPrev size={15} />
       </button>
@@ -198,6 +199,7 @@ export function PlayBar({ article, playback, settings, onPatchSettings, onOpenVi
         onClick={playback.toggle}
         disabled={total === 0}
         title={playing ? "暂停 (Space)" : "播放 (Space)"}
+        aria-label={playing ? "暂停朗读（快捷键 空格）" : "开始朗读（快捷键 空格）"}
       >
         {playing ? <IconPause size={15} /> : <IconPlay size={15} style={{ marginLeft: 1 }} />}
       </button>
@@ -206,6 +208,7 @@ export function PlayBar({ article, playback, settings, onPatchSettings, onOpenVi
         onClick={() => playback.step(1)}
         disabled={total === 0 || idx >= total - 1}
         title="下一句 (J)"
+        aria-label="下一句（快捷键 J）"
       >
         <IconNext size={15} />
       </button>
@@ -218,11 +221,47 @@ export function PlayBar({ article, playback, settings, onPatchSettings, onOpenVi
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
         onPointerLeave={() => setHover(null)}
+        // 声明 role="slider" 就必须能键盘操作（WCAG 2.1.1）。原先只能拖拽，
+        // 补←/→ 逐句、PageUp/PageDown 跳 10 句、Home/End 到首尾。
+        tabIndex={total > 0 ? 0 : -1}
+        onKeyDown={(e) => {
+          if (total === 0) return;
+          const jump = (n: number) => {
+            e.preventDefault();
+            const next = Math.max(0, Math.min(total - 1, n));
+            playback.jumpTo(next);
+          };
+          switch (e.key) {
+            case "ArrowRight":
+            case "ArrowUp":
+              jump(idx + 1);
+              break;
+            case "ArrowLeft":
+            case "ArrowDown":
+              jump(idx - 1);
+              break;
+            case "PageUp":
+              jump(idx - 10);
+              break;
+            case "PageDown":
+              jump(idx + 10);
+              break;
+            case "Home":
+              jump(0);
+              break;
+            case "End":
+              jump(total - 1);
+              break;
+            default:
+              return;
+          }
+        }}
         role="slider"
         aria-valuemin={1}
-        aria-valuemax={total}
+        aria-valuemax={Math.max(1, total)}
         aria-valuenow={idx + 1}
-        aria-label="朗读进度"
+        aria-valuetext={`第 ${idx + 1} 句，共 ${total} 句`}
+        aria-label="朗读进度（左右方向键逐句切换）"
       >
         <div className="dock-scrubber-fill" style={{ width: `${percent}%` }} />
         {hover && previewText && (

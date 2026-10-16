@@ -117,7 +117,7 @@ export function DictColumn({
         </div>
         <span className="lens-ref-tag tabular">第 {activeIdx + 1} 句</span>
         {lensMode === "lex" && state.status !== "closed" && (
-          <button className="reader-tb-btn" onClick={() => onClose()} title="关闭查词结果">
+          <button className="reader-tb-btn" onClick={() => onClose()} title="关闭查词结果" aria-label="关闭查词结果">
             <IconClose size={14} />
           </button>
         )}
@@ -222,7 +222,7 @@ export function DictColumn({
                   {state.status === "ready" && state.entry.phonetic && (
                     <div className="phon-row">
                       <span>/{state.entry.phonetic.replace(/^\/|\/$/g, "")}/</span>
-                      <button className="reader-tb-btn" style={{ width: 24, height: 24 }} onClick={() => onSpeak(state.query)} title="发音">
+                      <button className="reader-tb-btn" style={{ width: 24, height: 24 }} onClick={() => onSpeak(state.query)} title="发音" aria-label={`朗读单词 ${state.query}`}>
                         <IconVolume size={13} />
                       </button>
                     </div>
@@ -230,7 +230,7 @@ export function DictColumn({
                   {state.status === "chunk" && (
                     <div className="phon-row">
                       <span className="chunk-type-badge">{CHUNK_TYPE_LABELS[state.chunk.chunkType]}</span>
-                      <button className="reader-tb-btn" style={{ width: 24, height: 24 }} onClick={() => onSpeak(state.chunk.text)} title="发音">
+                      <button className="reader-tb-btn" style={{ width: 24, height: 24 }} onClick={() => onSpeak(state.chunk.text)} title="发音" aria-label="朗读这个词块">
                         <IconVolume size={13} />
                       </button>
                     </div>

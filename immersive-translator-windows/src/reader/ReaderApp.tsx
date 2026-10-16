@@ -107,7 +107,6 @@ import { VocabListPanel } from "./VocabListPanel";
 import { ReadingView } from "./ReadingView";
 import { SettingsDrawer } from "./SettingsDrawer";
 import { DictColumn, type DictPanelState, type LensMode, type LensXrayState } from "./DictColumn";
-import { ReviewView } from "./ReviewView";
 import { NotesView } from "./NotesView";
 import { VaultPage, type VaultPlayMode } from "./VaultPage";
 import { speakListSessions } from "../lib/speakStore";
@@ -134,7 +133,16 @@ import { ShelfPage } from "./ShelfPage";
 import { coverageForText, type CoverageStats, type ExamGoal } from "../core/examCoverage";
 import { IconNext, IconPause, IconPlay, IconPrev } from "../ui/icons";
 
-type ViewRoute = "shelf" | "reading" | "review" | "speak" | "notes" | "vault";
+/**
+ * 视图路由。原先的 "review" / "notes" 两个成员已移除——它们没有任何 setView
+ * 入口，导致 7 处 `view === "review" || view === "notes"` 恒为假。
+ *
+ * 注意：ReviewView / NotesView 两个**组件**仍是活代码，不要跟着删：
+ *   - VaultPage.tsx:28-34 从 ./ReviewView 具名导入 ClozeCard/DictationCard 等卡片
+ *   - ReaderApp 的 notesPanel（见下）把 <NotesView/> 挂在 vault 的 md 档回看入口
+ * 删掉路由值即可，组件与其测试、预览页都要保留。
+ */
+type ViewRoute = "shelf" | "reading" | "speak" | "vault";
 
 /**
  * 章末小结卡数据（本章查词/收录生词/到期词/用时 + 下一章）。
@@ -1647,13 +1655,9 @@ export function ReaderApp() {
     },
     [goReading, goSpeak],
   );
-  /** 导航岛当前高亮档：shelf/reading→阅读、speak→口语、review/notes/vault→笔记与复习。 */
+  /** 导航岛当前高亮档：shelf/reading→阅读、speak→口语、vault→笔记与复习。 */
   const islandSurface: IslandSurface =
-    view === "speak"
-      ? "speak"
-      : view === "review" || view === "notes" || view === "vault"
-        ? "vault"
-        : "reading";
+    view === "speak" ? "speak" : view === "vault" ? "vault" : "reading";
 
   // ---- 笔记库 ----
   const replaySeqRef = useRef(0);
@@ -1797,7 +1801,7 @@ export function ReaderApp() {
   );
 
   useEffect(() => {
-    if ((view === "review" || view === "vault") && vocabWords.length > 0) {
+    if (view === "vault" && vocabWords.length > 0) {
       void loadSourceArticles(vocabWords.map((w) => w.source.articleId));
     }
   }, [view, vocabWords, loadSourceArticles]);
@@ -1805,7 +1809,7 @@ export function ReaderApp() {
   // 进入笔记库：刷新列表；没有打开的笔记时自动打开最近一篇。
   // v0.8：笔记库挂在 vault 的 Markdown 导出档（弹层回看），进 vault 即预载。
   useEffect(() => {
-    if (view !== "notes" && view !== "vault") return;
+    if (view !== "vault") return;
     let cancelled = false;
     void (async () => {
       const list = await refreshNotes();
@@ -1843,7 +1847,7 @@ export function ReaderApp() {
   const [reviewPos, setReviewPos] = useState(0);
   useEffect(() => {
     // 每次进入生词本/三合一页都从队首开始（离开即卸载，pos 归零防跨模式残留）
-    if (view === "review" || view === "vault") setReviewPos(0);
+    if (view === "vault") setReviewPos(0);
   }, [view]);
 
   const jumpToSentence = useCallback(
@@ -2018,10 +2022,6 @@ export function ReaderApp() {
       null,
     [chapterLabelById, sourceCache, articleList],
   );
-  const sourcePreview = useCallback(
-    (id: string, sentenceIdx: number) => sourceCache.get(id)?.sentences[sentenceIdx]?.en ?? null,
-    [sourceCache],
-  );
   /** 原句含译文（复习完形卡的中文提示行）。 */
   const sourceSentence = useCallback((id: string, sentenceIdx: number) => {
     const s = sourceCache.get(id)?.sentences[sentenceIdx];
@@ -2100,13 +2100,11 @@ export function ReaderApp() {
         articleName={
           view === "shelf"
             ? "书架"
-            : view === "vault" || view === "review"
+            : view === "vault"
               ? "笔记与复习"
               : view === "speak"
                 ? "口语陪练"
-                : view === "notes"
-                  ? "笔记库"
-                  : (article?.title ?? null)
+                : (article?.title ?? null)
         }
         onHome={goShelf}
         settings={effectiveSettings}
@@ -2152,7 +2150,7 @@ export function ReaderApp() {
       )}
 
       <div className="reader-body">
-        {(view === "vault" || view === "review") && (
+        {view === "vault" && (
           <VocabListPanel
             words={vocabWords}
             due={activeDue}
@@ -2332,28 +2330,7 @@ export function ReaderApp() {
             onGenerateNote={openNoteGenerator}
             notesPanel={notesPanel}
           />
-        ) : view === "notes" || view === "shelf" ? null : (
-          <ReviewView
-            words={vocabWords}
-            due={activeDue}
-            pos={reviewPos}
-            onSetPos={setReviewPos}
-            stats={stats}
-            reviewMode={effectiveSettings.reviewMode}
-            onReviewModeChange={(m) => patchReviewMode({ reviewMode: m })}
-            onGrade={focusIds ? gradeAndDrainFocus : gradeVocab}
-            onRecall={handleRecall}
-            onJumpToSentence={jumpToSentence}
-            onSpeakWord={speakWord}
-            onSpeakSentence={speakRecallSentence}
-            sourcePreview={sourcePreview}
-            sourceSentence={sourceSentence}
-            articleTitle={articleTitle}
-            onGenerateNote={openNoteGenerator}
-            onOpenNotes={goNotes}
-            onOpenReader={goReading}
-          />
-        )}
+        ) : null}
       </div>
 
       {view === "reading" && finishCard && article?.id === finishCard.articleId && !article.bookId && (
@@ -2584,7 +2561,14 @@ export function ReaderApp() {
         />
       )}
 
-      {toast && <div className="toast">{toast}</div>}
+      {toast && (
+        /* role="status" + aria-live="polite"：toast 是「已加入生词本」「已复制」
+           这类操作反馈的唯一通道，缺了它读屏用户完全收不到确认信息。
+           polite 而非 assertive：不必打断当前朗读。 */
+        <div className="toast" role="status" aria-live="polite">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

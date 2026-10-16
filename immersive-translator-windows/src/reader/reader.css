@@ -15,7 +15,10 @@
   color: var(--text-1);
   font-family: var(--font-ui);
   font-size: 13px;
-  overflow: hidden;
+  /* 原overflow: hidden 会把横向溢出静默裁掉——用户既看不到内容也滚不动。
+     改为只裁纵向，横向溢出可见可滚（窄窗兜底，正常宽度不触发）。 */
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 /* ---------- 顶栏：安静的一行字，压在底色上 ---------- */
@@ -95,13 +98,14 @@ button.reader-appname:hover {
 .reader-topbar .spacer {
   flex: 1;
 }
+/* 顶栏图标键热区 30 → 34（顶栏高 52，上下仍各留 9px，不撑破布局）。 */
 .reader-tb-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  height: 30px;
-  min-width: 30px;
+  height: 34px;
+  min-width: 34px;
   padding: 0 7px;
   border: none;
   border-radius: var(--radius-md);
@@ -769,9 +773,10 @@ button.reader-appname:hover {
 .reader-play-btn:active {
   transform: scale(0.94);
 }
+/* 走带跳句热区 34 → 38（走带高 62，装得下）。 */
 .reader-skip-btn {
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   border-radius: var(--radius-md);
   border: none;
   background: transparent;
@@ -958,27 +963,8 @@ button.reader-appname:hover {
   font-size: 12px;
   color: var(--text-2);
 }
-.reader-rate-menu .grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 4px;
-}
-.reader-rate-menu .grid button {
-  border: 1px solid var(--border);
-  background: var(--surface);
-  font-family: inherit;
-  font-size: 11.5px;
-  color: var(--text-2);
-  padding: 4px 0;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-.reader-rate-menu .grid button.active {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-soft);
-  font-weight: 600;
-}
+/* 已删 .reader-rate-menu .grid（原 961-981 行）：v0.8 语速菜单改走 .dock-rate-menu，
+   此块全项目 .tsx 零引用（含其 repeat(4,1fr) 网格）。 */
 .reader-help-pop {
   padding: 12px 14px;
   width: 280px;
@@ -3478,11 +3464,8 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
   line-height: 1.8;
   color: var(--text-3);
 }
-.speak-scenario-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
-}
+/* 已删 .speak-scenario-grid（原 3462-3466 行）：v0.8 场景中心改走
+   .scenario-daily-grid / .scenario-featured-grid，此块全项目 .tsx 零引用。 */
 .speak-scenario-card {
   display: flex;
   flex-direction: column;
@@ -6888,11 +6871,13 @@ button.notes-word:hover { color: var(--accent); }
   font-style: italic;
 }
 
-/* 透镜卡结构拆解悬停回标（优先级高于词块着色） */
+/* 透镜卡结构拆解悬停回标（优先级高于词块着色）
+   fallback 与本文件 7836 行（.s3 掌握度胶囊）保持同一写法：主题漏定义时
+   回退到accent-soft/accent，而不是掉回:root 的靛蓝。 */
 .reader-root .spatial-clause-mark {
-  background: var(--clause-indigo-soft);
-  color: var(--clause-indigo);
-  border-bottom: 2px solid var(--clause-indigo);
+  background: var(--clause-indigo-soft, var(--accent-soft));
+  color: var(--clause-indigo, var(--accent));
+  border-bottom: 2px solid var(--clause-indigo, var(--accent));
   border-radius: 3px;
   padding: 0 2px;
 }
@@ -7571,12 +7556,7 @@ button.notes-word:hover { color: var(--accent); }
   color: var(--ink-3);
 }
 
-/* 窄窗回落（原型 @media 980px） */
-@media (max-width: 980px) {
-  .reader-root .sonic-studio-grid,
-  .reader-root .scenario-featured-grid,
-  .reader-root .scenario-daily-grid { grid-template-columns: 1fr; }
-}
+/* 窄窗回落：已并入文件末尾的「响应式体系」1199px 档，此处删除避免两套断点并存。 */
 /* v0.8 口语场景中心段结束 */
 
 /* ==========================================================================
@@ -8115,10 +8095,90 @@ button.notes-word:hover { color: var(--accent); }
   margin-top: 6px;
 }
 
-/* 窄窗回落（原型 @media 980px） */
-@media (max-width: 980px) {
-  .reader-root .vault-studio-grid,
-  .reader-root .vault-notes-grid { grid-template-columns: 1fr; }
-  .reader-root .spatial-lens-card.vault-lens-card { width: 100%; }
-}
+/* 窄窗回落：已并入文件末尾的「响应式体系」1199/1019 两档，此处删除避免两套断点并存。 */
 /* v0.8 笔记与复习段结束 */
+
+/* ==========================================================================
+   响应式体系（2026-10-16 审查落地）
+
+   为什么需要：reader 窗口规格是 1200×800，minWidth 960 / minHeight 620
+   （src-tauri/tauri.conf.json:63-66）。此前全文件只有 2 处 @media
+   max-width:980px，而 980 > 窗口下限 960 → 只可能在 960–980 这 20px 缝隙里
+   触发，等于形同虚设。960–2560px 之间没有任何布局降级。
+
+   真正的痛点不是「窗口会变窄」（960→1200 只差 20%），而是**两端固定、
+   中间被挤**：左栏 232px + 右栏 370/410px 都是写死的像素宽，只有中间是弹性。
+   960px 下 vault 主列仅剩 334px、词典卡 380px 会把正文压到 580px。
+
+   断点约定：
+     ≥1440   增益层（大屏不浪费，纯加分）
+     1200-1439  保持现状（窗口默认宽度就是 1200，零风险）
+     ≤1199   降级层（两端收窄 + 卡片网格降列）
+     ≤1019   兜底层（双栏落下方，防左栏挤掉主列）
+   ========================================================================== */
+
+/* ---------- ≥1440：宽窗增益 ---------- */
+@media (min-width: 1440px) {
+  .reader-root .bookgrid { grid-template-columns: repeat(3, 1fr); }
+  .reader-root .scenario-daily-grid { grid-template-columns: repeat(5, 1fr); }
+  .reader-root .sonic-studio-grid { grid-template-columns: 1fr 460px; }
+  .reader-root .vault-studio-grid { grid-template-columns: 1fr 420px; }
+  .reader-root .reader-dict { width: 420px; }
+}
+
+/* ---------- ≤1199：窄窗降级 ---------- */
+@media (max-width: 1199px) {
+  /* 左栏 232 → 200。注意 .reader-shelf 同时服务书架页与 vault 的
+     VocabListPanel（VocabListPanel.tsx:81 复用同一 class），必须一起收。 */
+  .reader-root .reader-shelf { width: 200px; padding-left: 16px; }
+
+  /* 词典/透镜卡 380/386 → 330。两个来源都会作用到 DictColumn：
+     .reader-dict（裸类）与 .spatial-lens-card（.reader-root 前缀），
+     只改一个会漏。 */
+  .reader-root .reader-dict { width: 330px; }
+  .reader-root .spatial-lens-card.vault-lens-card { width: 330px; }
+
+  /* vault 工作台右栏 370 → 320，省下的 50px 回给主列 */
+  .reader-root .vault-studio-grid { grid-template-columns: 1fr 320px; gap: 16px; }
+
+  /* vault 笔记库左栏跟随 .reader-shelf 的 200（原写死 232） */
+  .reader-root .vault-notes-grid { grid-template-columns: 200px 1fr; }
+
+  /* 口语工作室右栏 410 → 340 */
+  .reader-root .sonic-studio-grid { grid-template-columns: 1fr 340px; gap: 16px; }
+
+  /* 场景中心：每日四卡 4→2 列，主打卡双栏→ 单栏 */
+  .reader-root .scenario-daily-grid { grid-template-columns: repeat(2, 1fr); }
+  .reader-root .scenario-featured-grid { grid-template-columns: 1fr; }
+
+  /* 双语对照双栏 → 单栏（否则每栏仅 ~240px，中英对照失去意义） */
+  .reader-root .parallel-spread-row { grid-template-columns: 1fr; gap: 12px; }
+
+  /* 评分四键 4→2 列（4 键时每键仅 ~78px，触控目标不足） */
+  .reader-root .grade-row { grid-template-columns: repeat(2, 1fr); }
+
+  /* 音素丸 4→3 列 */
+  .reader-root .phoneme-pill-grid { grid-template-columns: repeat(3, 1fr); }
+
+  /* 28 天热力图仍是 14 列（语义不能变），只收间距保可读 */
+  .reader-root .heatmap-grid { gap: 3px; }
+}
+
+/* ---------- ≤1019：极窄兜底（防左栏挤掉主列） ---------- */
+@media (max-width: 1019px) {
+  .reader-root .reader-shelf { width: 176px; }
+  .reader-root .vault-studio-grid,
+  .reader-root .sonic-studio-grid { grid-template-columns: 1fr; }
+}
+
+/* ---------- 书卡网格：改自适应，无需断点 ---------- */
+/* 任意宽度都成立，且省掉一个断点分支。 */
+@media (min-width: 1020px) {
+  .reader-root .bookgrid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+}
+
+/* ---------- 竖向：矮窗（minHeight 620）时压缩 chrome ---------- */
+@media (max-height: 700px) {
+  .reader-root .floating-top-stage { padding-top: 8px; padding-bottom: 6px; }
+  .reader-root .floating-sonic-dock { height: 54px; }
+}

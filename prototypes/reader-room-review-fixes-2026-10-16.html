@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>沉浸阅读室 · 改版原型对照</title>
+<style>
+:root{
+  --accent:#4c5ff0; --accent-soft:#eef0fe;
+  --bg:#f4f5f9; --surface:#fff; --surface-2:#f9fafc;
+  --border:#e4e7ee; --border-strong:#d6dae4;
+  --t1:#1c2029; --t2:#4b5261; --t3:#7c8494; --t4:#a6adbb;
+  --ok:#15803d; --err:#dc2626; --err-soft:#fdeaea;
+  --radius:8px;
+  --font:"Inter","Noto Sans SC","Microsoft YaHei UI",system-ui,sans-serif;
+  --serif:"Source Serif 4","Noto Serif SC",Georgia,serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);background:var(--bg);color:var(--t1);padding:32px 24px 80px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto}
+
+header.page{margin-bottom:36px}
+header.page h1{font-size:22px;font-weight:600;letter-spacing:-.01em;margin-bottom:8px}
+header.page p{color:var(--t2);font-size:14px;max-width:760px}
+
+.legend{display:flex;gap:20px;margin-top:16px;flex-wrap:wrap;font-size:13px;color:var(--t2)}
+.legend span{display:flex;align-items:center;gap:7px}
+.dot{width:11px;height:11px;border-radius:3px;flex:none}
+.dot.before{background:#fdeaea;border:1px solid #f5b8b8}
+.dot.after{background:#e8f7ee;border:1px solid #a7d9ba}
+
+/* ===== 区块 ===== */
+section{margin-bottom:44px;background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.sec-head{padding:20px 24px;border-bottom:1px solid var(--border);background:var(--surface-2)}
+.sec-head .num{display:inline-block;font-size:11px;font-weight:600;color:var(--accent);background:var(--accent-soft);padding:2px 8px;border-radius:5px;margin-bottom:9px;letter-spacing:.04em}
+.sec-head h2{font-size:16px;font-weight:600;margin-bottom:6px}
+.sec-head .why{font-size:13px;color:var(--t2)}
+.sec-head .why b{color:var(--t1);font-weight:600}
+.sec-body{padding:24px}
+
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:900px){.pair{grid-template-columns:1fr}}
+.pane{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--surface)}
+.pane-head{padding:9px 13px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--border)}
+.pane.before .pane-head{background:var(--err-soft,#fdeaea);color:#a12c2c}
+.pane.after .pane-head{background:#e8f7ee;color:#14663a}
+.pane-body{padding:0}
+.tag{font-size:10px;font-weight:500;padding:1px 6px;border-radius:4px;background:rgba(255,255,255,.65)}
+
+/* ===== 模拟窗口 ===== */
+.win{border:1px solid var(--border-strong);border-radius:8px;overflow:hidden;background:var(--bg);font-size:12px}
+.win-top{height:38px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;padding:0 12px}
+.win-title{font-size:11px;font-weight:600;color:var(--t2)}
+.win-body{display:flex;min-height:0}
+
+/* 栏 */
+.col-shelf{width:232px;flex:none;border-right:1px solid var(--border);background:var(--surface);padding:12px 10px}
+.col-shelf.narrow{width:200px}
+.col-shelf h4{font-size:10px;color:var(--t3);letter-spacing:.12em;margin-bottom:9px;font-weight:500}
+.vocab{padding:6px 8px;border-radius:6px;font-size:11.5px;color:var(--t2);display:flex;justify-content:space-between;gap:6px}
+.vocab.on{background:var(--accent-soft);color:var(--accent);font-weight:500}
+.col-main{flex:1;min-width:0;padding:14px 16px}
+.col-side{width:380px;flex:none;border-left:1px solid var(--border);background:var(--surface);padding:12px}
+.col-side.w330{width:330px}
+.col-side h4{font-size:10px;color:var(--t3);letter-spacing:.12em;margin-bottom:9px;font-weight:500}
+
+/* 正文句对 */
+.doc{max-width:640px;margin:0 auto;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px 20px}
+.doc-narrow{max-width:none}
+.sent{margin-bottom:12px}
+.en{font-family:var(--serif);font-size:14px;line-height:1.62;color:var(--t1)}
+.cn{font-family:var(--serif);font-size:12.5px;line-height:1.6;color:var(--t3);margin-top:3px}
+.chip{display:inline-block;font-size:10px;padding:1px 6px;border-radius:4px;background:var(--surface-2);color:var(--t2);border:1px solid var(--border)}
+
+/* 词典卡内容 */
+.dict-card{border:1px solid var(--border);border-radius:8px;padding:11px 12px;background:var(--surface-2)}
+.dict-word{font-family:var(--serif);font-size:15px;font-weight:600;margin-bottom:2px}
+.dict-ph{font-size:11px;color:var(--t3);margin-bottom:9px}
+.dict-sense{font-size:11.5px;color:var(--t2);padding:5px 0;border-top:1px solid var(--border)}
+.dict-sense b{color:var(--t1)}
+
+/* ===== sepia 回标对比 ===== */
+.sepia-demo{padding:18px 20px}
+.theme-sepia{background:#eef1ef}
+.sent-sepia{font-family:var(--serif);font-size:15px;line-height:1.7;color:#131b18;margin-bottom:14px}
+.clause-ink{padding:1px 3px;border-radius:3px}
+/* BEFORE：深色模式靛蓝泄漏 */
+.clause-old{background:rgba(128,147,255,.16);color:#8093ff;border-bottom:2px solid #8093ff}
+/* AFTER：sepia 墨绿 */
+.clause-new{background:rgba(27,107,88,.11);color:#1b6b58;border-bottom:2px solid #1b6b58}
+.ratio-row{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+.ratio-badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:4px 9px;border-radius:6px}
+.ratio-badge.fail{background:#fdeaea;color:#a12c2c}
+.ratio-badge.pass{background:#e8f7ee;color:#14663a}
+
+/* ===== 焦点环对比 ===== */
+.focus-demo{display:flex;gap:16px;align-items:center;padding:22px 20px;flex-wrap:wrap}
+.fbtn{padding:8px 16px;border-radius:7px;border:1px solid var(--border);background:var(--surface);font-size:12px;color:var(--t2);cursor:default}
+.fbtn-old{box-shadow:0 0 0 3px rgba(76,95,240,.18)}
+.fbtn-new{outline:2px solid var(--accent);outline-offset:2px}
+.note{font-size:11.5px;color:var(--t3);margin-top:14px;padding-top:12px;border-top:1px dashed var(--border)}
+
+/* ===== 路由表 ===== */
+.route-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.route-tbl th,.route-tbl td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)}
+.route-tbl th{background:var(--surface-2);font-weight:600;font-size:11px;color:var(--t2)}
+.route-tbl tr.dead td{background:#fdeaea;color:#a12c2c}
+.route-tbl tr.alive td{background:#e8f7ee;color:#14663a}
+.route-tbl tr.plain td{background:var(--surface)}
+code{font-family:"Cascadia Code",Consolas,monospace;font-size:11.5px;background:var(--surface-2);padding:1px 5px;border-radius:4px;border:1px solid var(--border)}
+.note-box{margin-top:16px;padding:13px 15px;background:var(--accent-soft);border-left:3px solid var(--accent);border-radius:0 7px 7px 0;font-size:12.5px;color:var(--t2)}
+.note-box b{color:var(--t1)}
+
+/* 尺寸标尺 */
+.ruler{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--t3);margin:10px 0 4px;font-family:"Cascadia Code",Consolas,monospace}
+.ruler .seg{height:17px;border-radius:3px;display:flex;align-items:center;justify-content:center;font-weight:600;color:#fff}
+.seg.shelf{background:#8b93a7}
+.seg.main{background:var(--accent)}
+.seg.side{background:#5f5e5a}
+.seg.main.tight{background:#dc2626}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="page">
+  <h1>沉浸阅读室 · 改版原型对照</h1>
+  <p>左边是<strong>现状</strong>，右边是<strong>改后</strong>。每一组下面都写了「改了什么」和「为什么这么改」。所有数值都来自实际代码与WCAG 对比度计算，不是估的。</p>
+  <div class="legend">
+    <span><i class="dot before"></i> 现状（当前代码的样子）</span>
+    <span><i class="dot after"></i> 改后（应用建议后的样子）</span>
+  </div>
+</header>
+
+<!-- ========== 1. sepia 回标 ========== -->
+<section>
+  <div class="sec-head">
+    <span class="num">改动 01 · P0</span>
+    <h2>护眼主题下，正文里的结构回标几乎看不见</h2>
+    <div class="why"><b>为什么改：</b>护眼主题的强调色是墨绿 <code>#1B6B58</code>，但样式表里漏了定义 <code>--clause-indigo</code>，浏览器就回退去用深色模式的值 —— 于是在浅色底上冒出一块亮靛蓝。对比度只有 <b>2.15:1</b>，远低于 AA 标准的 4.5:1。</div>
+  </div>
+  <div class="sec-body">
+    <div class="pair">
+      <div class="pane before">
+        <div class="pane-head"><span class="tag">现状</span> sepia 主题</div>
+        <div class="pane-body sepia-demo theme-sepia">
+          <div class="sent-sepia">
+            The committee <span class="clause-ink clause-old">reviewed the proposal</span> before the deadline.
+          </div>
+          <div class="ratio-row">
+            <span class="ratio-badge fail">对比度 2.15:1 · 不达标</span>
+          </div>
+        </div>
+      </div>
+      <div class="pane after">
+        <div class="pane-head"><span class="tag">改后</span> 补齐 sepia 令牌</div>
+        <div class="pane-body sepia-demo theme-sepia">
+          <div class="sent-sepia">
+            The committee <span class="clause-ink clause-new">reviewed the proposal</span> before the deadline.
+          </div>
+          <div class="ratio-row">
+            <span class="ratio-badge pass">对比度 4.81:1 · 达标</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="note-box">
+      <b>改法（2 行 CSS）：</b>在 <code>styles.css</code> 的 sepia 主题块里补上 <code>--clause-indigo</code> 与 <code>--clause-indigo-soft</code>，同时给使用处加 fallback。同文件第 7836 行本来就是这么写的，只有这一处漏了。<br>
+      <b>顺带修：</b>根容器 <code>.reader-root</code> 现在是 <code>overflow:hidden</code>，横向溢出会被静默裁掉 —— 用户既看不到也滚不动，应改成 <code>overflow-x:auto</code>。
+    </div>
+  </div>
+</section>
+
+<!-- ========== 2. 焦点环 ========== -->
+<section>
+  <div class="sec-head">
+    <span class="num">改动 02 · P0</span>
+    <h2>键盘 Tab 时的焦点框几乎看不见</h2>
+    <div class="why"><b>为什么改：</b>不是「没有焦点环」，而是环太弱 —— 现在是 3px、透明度只有 0.18 的软阴影，叠在白底上对比度<b>仅 1.28:1</b>（低于 3:1 就算不可见），还会被祖先的 <code>overflow</code> 裁掉。换成实色描边后是 <b>5.00:1</b>。</div>
+  </div>
+  <div class="sec-body">
+    <div class="pair">
+      <div class="pane before">
+        <div class="pane-head"><span class="tag">现状</span> 键盘聚焦时</div>
+        <div class="pane-body">
+          <div class="focus-demo">
+            <button class="fbtn fbtn-old">查词</button>
+            <button class="fbtn fbtn-old">加入生词本</button>
+          </div>
+        </div>
+      </div>
+      <div class="pane after">
+        <div class="pane-head"><span class="tag">改后</span> 键盘聚焦时</div>
+        <div class="pane-body">
+          <div class="focus-demo">
+            <button class="fbtn fbtn-new">查词</button>
+            <button class="fbtn fbtn-new">加入生词本</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="note-box">
+      <b>改法：</b>一条规则全站生效，<code>outline:2px solid var(--accent)</code> + <code>box-shadow:none</code>。<br>
+      <b>为什么用 outline 而不是加强 box-shadow：</b>代码里有两条 <code>button.on</code> 样式优先级更高，会把阴影吃掉；outline 抢不走。另外 Windows 高对比度模式下系统会抹掉 box-shadow，只有 outline 留得住，所以要额外加一段 <code>@media (forced-colors:active)</code>。
+    </div>
+  </div>
+</section>
+
+<!-- ========== 3. 响应式 ========== -->
+<section>
+  <div class="sec-head">
+    <span class="num">改动 03 · P0</span>
+    <h2>窗口拉窄时，右边的词典栏把正文挤没了</h2>
+    <div class="why"><b>为什么改：</b>左右两栏都是写死的像素宽（书架 232px + 词典栏 380px），只有中间是弹性。窗口缩到最小时的 960px，正文实际只剩 <b>580px</b>，而且没有任何规则会重新排布。</div>
+  </div>
+  <div class="sec-body">
+    <div class="pane before">
+      <div class="pane-head"><span class="tag">现状</span> 窗口 960px（最小宽度）</div>
+      <div class="pane-body" style="padding:14px">
+        <div class="win">
+          <div class="win-top"><span class="win-title">沉浸阅读室</span></div>
+          <div class="win-body">
+            <div class="col-shelf">
+              <h4>SHELF</h4>
+              <div class="vocab on">三体<span>·</span></div>
+              <div class="vocab">活着</div>
+              <div class="vocab">人类简史</div>
+            </div>
+            <div class="col-main">
+              <div class="doc doc-narrow">
+                <div class="sent">
+                  <div class="en">The empty desk was a reminder that the office had been abandoned for some time.</div>
+                  <div class="cn">空着的办公桌提醒着人们，这间办公室已经荒废了有些时日。</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-side">
+              <h4>DICTIONARY</h4>
+              <div class="dict-card">
+                <div class="dict-word">abandon</div>
+                <div class="dict-ph">/əˈbændən/</div>
+                <div class="dict-sense"><b>vt.</b> 遗弃，抛弃</div>
+                <div class="dict-sense"><b>n.</b> 放纵，放任</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="ruler">
+          <span class="seg shelf" style="width:232px">232</span>
+          <span class="seg main tight" style="width:250px">正文仅剩 250</span>
+          <span class="seg side" style="width:380px">词典 380</span>
+        </div>
+        <div class="note">正文被压到 250px，一行放不下几个英文单词，长句会挤成竖条。</div>
+      </div>
+    </div>
+
+    <div style="height:20px"></div>
+
+    <div class="pane after">
+      <div class="pane-head"><span class="tag">改后</span> 同样 960px 窗口，套用新断点规则</div>
+      <div class="pane-body" style="padding:14px">
+        <div class="win">
+          <div class="win-top"><span class="win-title">沉浸阅读室</span></div>
+          <div class="win-body">
+            <div class="col-shelf narrow">
+              <h4>SHELF</h4>
+              <div class="vocab on">三体<span>·</span></div>
+              <div class="vocab">活着</div>
+              <div class="vocab">人类简史</div>
+            </div>
+            <div class="col-main">
+              <div class="doc doc-narrow">
+                <div class="sent">
+                  <div class="en">The empty desk was a reminder that the office had been abandoned for some time.</div>
+                  <div class="cn">空着的办公桌提醒着人们，这间办公室已经荒废了有些时日。</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-side w330">
+              <h4>DICTIONARY</h4>
+              <div class="dict-card">
+                <div class="dict-word">abandon</div>
+                <div class="dict-ph">/əˈbændən/</div>
+                <div class="dict-sense"><b>vt.</b> 遗弃，抛弃</div>
+                <div class="dict-sense"><b>n.</b> 放纵，放任</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="ruler">
+          <span class="seg shelf" style="width:200px">200</span>
+          <span class="seg main" style="width:330px">正文 330 ↑</span>
+          <span class="seg side" style="width:330px">词典 330</span>
+        </div>
+        <div class="note">两端各收 50px，正文宽度增加 <b>32%</b>，句子不再挤成竖条。词典内容仍是同一条，不丢信息。</div>
+      </div>
+    </div>
+
+    <div class="note-box">
+      <b>改动清单（追加在样式表末尾即可，不动原有规则）：</b>
+      <br>· 窗口 ≥1440px：书卡三列、工作台右栏加宽到 420/460px（大屏不浪费）
+      <br>· 窗口 ≤1199px：左栏 232→200、词典 380→330、双语对照转单栏、评分四键转两列
+      <br>· 窗口 ≤1019px：工作台右栏落到下方一行
+      <br>· 书卡网格改成 <code>repeat(auto-fill,minmax(260px,1fr))</code>，任意宽度都成立，不用写断点
+      <br><b>为什么这样做：</b>≥1200px 保持原样零风险（默认值就是 1200），只往下收窄。书卡用自适应而不是断点，是因为它本来就不该由窗口宽度决定列数。
+    </div>
+  </div>
+</section>
+
+<!-- ========== 4. 死路由 ========== -->
+<section>
+  <div class="sec-head">
+    <span class="num">改动 04 · P0</span>
+    <h2>有 2 个页面永远打不开，但代码里有 7 处判断在等它</h2>
+    <div class="why"><b>为什么改：</b>不是删文件 —— 这两个页面是活的，被生词库复用着。<b>真正要清的是那2 个永远为假的路由值</b>，以及围着它们的 7 处恒假判断。改完代码变短，行为一点不变。</div>
+  </div>
+  <div class="sec-body">
+    <table class="route-tbl">
+      <tr><th>视图路由</th><th>声明了</th><th>能被 setView 到达</th><th>实际状态</th><th>处置</th></tr>
+      <tr class="alive"><td><code>shelf</code></td><td>是</td><td>是</td><td>正常，1 处调用</td><td>保留</td></tr>
+      <tr class="alive"><td><code>reading</code></td><td>是</td><td>是</td><td>正常，3 处调用</td><td>保留</td></tr>
+      <tr class="alive"><td><code>speak</code></td><td>是</td><td>是</td><td>正常，1 处调用</td><td>保留</td></tr>
+      <tr class="alive"><td><code>vault</code></td><td>是</td><td>是</td><td>正常，5 处调用</td><td>保留</td></tr>
+      <tr class="dead"><td><code>review</code></td><td>是</td><td><strong>否</strong></td><td>恒为假 · 7 处判断在等它</td><td><strong>删枚举值</strong></td></tr>
+      <tr class="dead"><td><code>notes</code></td><td>是</td><td><strong>否</strong></td><td>恒为假 · 7 处判断在等它</td><td><strong>删枚举值</strong></td></tr>
+    </table>
+    <div class="note-box">
+      <b>这里有个差点踩的坑：</b>初步审查时我判断这两个文件（合计 2379 行）是不可达的死代码、建议删除 —— <b>这是错的，删了会直接编译失败</b>。复核后发现：生词库页面从它们那里具名导入了卡片组件在渲染，笔记组件也挂在生词库的 md 档里当「笔记库回看」入口。<br>
+      <b>所以真正安全的做法是：</b>只删 2 个路由枚举值 + 把 7 处恒假判断收敛成一个，约 30 行；组件、测试、预览页全部保留。<b>净删约 30 行，零功能回归风险。</b><br>
+      <b>另有一个必须保留的：</b>托盘「生词本」菜单发出的事件是有响应的，会切到复习档 —— 它是活的正确入口，不要动。
+    </div>
+  </div>
+</section>
+
+<!-- ========== 5. 无障碍 ========== -->
+<section>
+  <div class="sec-head">
+    <span class="num">改动 05 · P1</span>
+    <h2>253 个按钮，读屏软件只认得出 67 个</h2>
+    <div class="why"><b>为什么改：</b>全站共 253 个按钮，只有 67 处写了 <code>aria-label</code>；另有 17 处用 <code>role="button"</code> 冒充按钮的 <code>div</code> —— 它们<b>拿不到键盘焦点</b>，Tab 键永远到不了。这一项对键盘用户的收益比调热区大得多。</div>
+  </div>
+  <div class="sec-body">
+    <table class="route-tbl">
+      <tr><th>文件</th><th>按钮数</th><th>有 title</th><th>有 aria-label</th><th>说明</th></tr>
+      <tr class="alive"><td>ReadingView</td><td>21</td><td>21</td><td>2</td><td>提示文案全覆盖，是标杆</td></tr>
+      <tr class="plain"><td>PlayBar</td><td>16</td><td>12</td><td>1</td><td>拖拽进度条无键盘操作</td></tr>
+      <tr class="dead"><td>VaultPage</td><td>14</td><td><strong>3</strong></td><td>2</td><td><strong>缺口最大</strong>：复制、关闭、胶带操作都是纯图标无标注</td></tr>
+      <tr class="dead"><td>NotesView</td><td>9</td><td>5</td><td><strong>0</strong></td><td>全文件零 aria</td></tr>
+      <tr class="dead"><td>ShelfPage</td><td>11</td><td>8</td><td><strong>0</strong></td><td>零 aria</td></tr>
+      <tr class="plain"><td>DictColumn</td><td>14</td><td>8</td><td>2</td><td>关闭按钮仅 title</td></tr>
+    </table>
+    <div class="note-box">
+      <b>优先补 VaultPage：</b>14 个按钮只有 3 个提示，纯图标的「复制」「关闭」在读屏下完全读不出是什么。<br>
+      <b>热区（次要）：</b>顶栏按钮 30×30、走带跳句 34×34 偏小，可统一提到 34–38px。但<b>导航岛胶囊建议不动</b> —— 它是显眼的胶囊，改高度会牵动整块顶栏布局。<br>
+      <b>提醒：</b>用 <code>::after</code> 外扩热区有副作用 —— 相邻按钮会重叠约 2px，且祖先的 <code>overflow:hidden</code> 会<strong>连点击区域一起裁掉</strong>（看着正常但点不到）。所以滚动容器里的按钮要靠真实提尺寸，不能只靠外扩。
+    </div>
+  </div>
+</section>
+
+<!-- ========== 6. 孤儿 CSS ========== -->
+<section>
+  <div class="sec-head">
+    <span class="num">改动 06 · P0</span>
+    <h2>两块样式表从来没人用过</h2>
+    <div class="why"><b>为什么改：</b>这两块 CSS 在全项目代码里搜不到任何引用，是改版过程中留下的残留。它们各含一处四列网格，会让「有6 处四列布局需要适配窄屏」这个判断虚高。删掉零风险。</div>
+  </div>
+  <div class="sec-body">
+    <table class="route-tbl">
+      <tr><th>孤儿样式</th><th>位置</th><th>内含</th><th>全项目引用</th><th>处置</th></tr>
+      <tr class="dead"><td><code>.reader-rate-menu</code></td><td>样式表 961–980 行</td><td>四列网格 ×1</td><td><strong>0 处</strong></td><td>整块删除</td></tr>
+      <tr class="dead"><td><code>.speak-scenario-grid</code></td><td>样式表 3481 行</td><td>四列网格 ×1</td><td><strong>0 处</strong></td><td>整块删除</td></tr>
+      <tr class="alive"><td colspan="5" style="text-align:center;color:var(--t3);background:var(--surface-2)">删完后，需要适配窄屏的四列布局从 6 处降到 4 处 —— 改动量比看起来小</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ========== 7. 保留点 ========== -->
+<section>
+  <div class="sec-head">
+    <span class="num">附带产出</span>
+    <h2>这几处做得好，建议明确列为「不要动」</h2>
+    <div class="why">审查时如果只提问题，很容易在后续迭代里把这些优点顺手改坏。以下是团队一致认为应当保留的决策：</div>
+  </div>
+  <div class="sec-body">
+    <table class="route-tbl">
+      <tr><th>决策</th><th>为什么好</th></tr>
+      <tr class="alive"><td>句对主从排版（一句原文 + 紧随其下译文）</td><td>避免了双栏对照时段落内部句子横向错位的问题</td></tr>
+      <tr class="alive"><td>正文列固定 640px 居中</td><td>英文行长控制在约 65 字符的舒适区，不要改成撑满</td></tr>
+      <tr class="alive"><td>译文遮罩双模式（留白显影 / 毛玻璃）</td><td>遮罩时用占位保留版面高度，朗读高亮不会上下跳动，是全页最精细的一处</td></tr>
+      <tr class="alive"><td>批语与正文的三重区分（字族 + 色相 + 线型）</td><td>楷体批注 + 朱红 + 虚线，颜色之外还有形状线索，色弱用户也能分辨</td></tr>
+      <tr class="alive"><td>设置抽屉管「怎么显示」/ 视图菜单管「显示什么」</td><td>职责划分清晰，不要合并</td></tr>
+      <tr class="alive"><td>术语统一（生词本 / 书架 / 笔记）</td><td>已实测无混用，务必保持</td></tr>
+      <tr class="alive"><td>空状态六视图全覆盖</td><td>都是「图标 + 标题 + 说明 + 引导按钮」四件套，不是干巴巴一句「暂无」</td></tr>
+    </table>
+  </div>
+</section>
+
+<div style="margin-top:36px;padding:18px 20px;background:#fff;border:1px solid var(--border);border-radius:12px;font-size:13px;color:var(--t2)">
+  <strong style="color:var(--t1)">工作量合计：</strong>P0 约 4.5 小时，P0+P1 约 18 小时。分三批落地，批次一（死代码与主题缺陷）与批次二（无障碍）无耦合可并行；响应式那批必须真机把窗口拖到 960 / 1200 / 1440 三个宽度截图核对，代码上看不出来。
+</div>
+
+</div>
+</body>
+</html>

@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useEscapeClose } from "./useEscapeClose";
 import {
   DEFAULT_READER_SETTINGS,
   READER_ASSESS_SILENCE_MAX,
@@ -136,13 +137,21 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
   }
 
+  // 键盘用户可Esc 直接退出，不必 Tab 到关闭按钮。
+  useEscapeClose(onClose);
+
   return (
     <>
       <div className="reader-drawer-overlay" onClick={onClose} />
-      <aside className="reader-drawer" role="dialog" aria-label="阅读设置">
+      <aside
+        className="reader-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label="阅读设置"
+      >
         <div className="reader-drawer-header">
           <span className="title">阅读设置</span>
-          <button className="reader-tb-btn" onClick={onClose} title="关闭">
+          <button className="reader-tb-btn" onClick={onClose} title="关闭" aria-label="关闭阅读设置">
             ✕
           </button>
         </div>

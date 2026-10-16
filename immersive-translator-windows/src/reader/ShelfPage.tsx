@@ -330,8 +330,22 @@ export function ShelfPage({
               <div className="today-sub">
                 {dueNow > 0 ? `还差 ${dueNow} 个清空今天到期` : todayTotal > 0 ? "今天的到期已清空 ✓" : "今天没有到期生词"}
               </div>
-              <button className="btn btn-primary btn-sm" style={{ marginTop: 8 }} onClick={onGoReview}>
-                继续复习
+              <button
+                className="btn btn-primary btn-sm"
+                style={{ marginTop: 8 }}
+                onClick={onGoReview}
+                /* 无到期词时点了只会进空队列，体验上像「点了没反应」。
+                   禁用并把原因写进 title，让用户知道该等明天或先去加生词。 */
+                disabled={dueNow === 0}
+                title={
+                  dueNow > 0
+                    ? `去复习 ${dueNow} 个到期生词`
+                    : todayTotal > 0
+                      ? "今天的到期已清空，明天再来"
+                      : "暂无到期生词。先在阅读里查词收藏，明天会出现在这里"
+                }
+              >
+                {dueNow > 0 ? "继续复习" : "今日已清空"}
               </button>
             </div>
           </div>
