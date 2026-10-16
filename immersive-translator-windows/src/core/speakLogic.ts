@@ -86,6 +86,44 @@ export interface ShadowAttempt {
   words: WordScore[];
 }
 
+/** 表达改进对比的一个片段：keep=保留 / del=用户原话里删掉 / ins=地道改写新加。 */
+export interface CoachSeg {
+  t: "keep" | "del" | "ins";
+  v: string;
+}
+
+/** 用户一轮发言的表达改进建议（BETTER 改写的词级增删对比 + TIP 点评）。 */
+export interface CoachDiff {
+  segs: CoachSeg[];
+  note?: string;
+}
+
+/**
+ * 会话语境（v0.8 场景中心）：book=聊刚读的章节，vocab=生词造句闯关。
+ * 场景枚举 SpeakScenarioId 保持四值不动（Rust 闭枚举整文件兼容），新场景
+ * 由这个可选字段承载，老会话无 context 原样可读。
+ */
+export type SpeakSessionContext =
+  | {
+      kind: "book";
+      bookTitle: string;
+      chapterArticleId: string;
+      chapterIdx: number;
+      /** 章节开头摘要（前几句英文），注入系统提示给 LLM 当剧情上下文。 */
+      excerpt: string[];
+    }
+  | {
+      kind: "vocab";
+      /** 待复习生词 id 列表（词面由调用方随 targets 传给提示构造）。 */
+      wordIds: string[];
+    };
+
+/** 送进系统提示的目标词（词面 + 一句中文义）。 */
+export interface SpeakContextTarget {
+  word: string;
+  zh: string;
+}
+
 /** 一轮对话。user.text 是 ASR 转写；assistant.text 是英文回复。 */
 export interface SpeakTurn {
   role: "user" | "assistant";
@@ -96,6 +134,10 @@ export interface SpeakTurn {
   shadowScore?: number;
   /** 跟读报告历史（最新在末尾）；旧会话无此字段。 */
   shadowAttempts?: ShadowAttempt[];
+  /** user 轮：本轮发言的发音评测（同一录音送 ISE；凭据缺失/失败时缺省）。 */
+  pron?: ShadowAttempt;
+  /** user 轮：表达改进建议（LLM 的 BETTER/TIP 两行落盘）；旧会话无此字段。 */
+  coachDiff?: CoachDiff;
   at: number;
 }
 
@@ -107,6 +149,8 @@ export interface SpeakSession {
   turns: SpeakTurn[];
   createdAt: number;
   updatedAt: number;
+  /** 会话语境（v0.8）：book/vocab 场景的额外上下文；老会话无此字段。 */
+  context?: SpeakSessionContext;
 }
 
 export interface SpeakSessionsFile {
@@ -122,6 +166,7 @@ export function newSpeakSession(
   scenario: SpeakScenarioId,
   difficulty: SpeakDifficulty,
   now = Date.now(),
+  context?: SpeakSessionContext,
 ): SpeakSession {
   return {
     id: newSpeakSessionId(now),
@@ -137,24 +182,52 @@ export function newSpeakSession(
     ],
     createdAt: now,
     updatedAt: now,
+    ...(context ? { context } : {}),
   };
 }
 
 // ---------- LLM 对话 ----------
 
-/** 送 LLM 的系统提示：场景角色 + 严格的 EN/ZH 两行格式。 */
-export function buildSpeakSystemPrompt(scenario: SpeakScenarioId, difficulty: SpeakDifficulty): string {
+/** 送 LLM 的系统提示：场景角色 + 严格的 EN/ZH/BETTER/TIP 四行格式 + 可选会话语境。 */
+export function buildSpeakSystemPrompt(
+  scenario: SpeakScenarioId,
+  difficulty: SpeakDifficulty,
+  context?: SpeakSessionContext,
+  targets?: SpeakContextTarget[],
+): string {
   const sc = scenarioOf(scenario);
   const diff = difficultyOf(difficulty);
-  return [
+  const lines = [
     `你是用户的英语口语陪练伙伴。场景：${sc.brief}。难度：${diff.note}。`,
+  ];
+  if (context?.kind === "book") {
+    const excerpt = context.excerpt.join(" ").trim();
+    lines.push(
+      `本次对话语境：用户刚读完《${context.bookTitle}》第 ${context.chapterIdx + 1} 章。` +
+        (excerpt ? `章节开头摘要：${excerpt}` : ""),
+    );
+    lines.push("围绕这一章的情节、人物或主题与用户讨论，提问时自然引导用户用出下面这些目标词块。");
+    if (targets && targets.length > 0) {
+      lines.push(`目标词块（诱导用户在回答中自然用出）：${targets.map((t) => `${t.word}（${t.zh}）`).join("、")}。`);
+    }
+  } else if (context?.kind === "vocab") {
+    lines.push("本次对话语境：生词造句闯关。");
+    if (targets && targets.length > 0) {
+      lines.push(
+        `待复习词表：${targets.map((t) => `${t.word}（${t.zh}）`).join("、")}。` +
+          "出生活化情境的提问，诱导用户在回答里用出这些词；用户用对就算过关，及时给正面反馈。",
+      );
+    }
+  }
+  lines.push(
     "",
     "对话规则：",
     "- 每轮回复 1–3 句地道口语英文，像真人一样自然推进场景，结尾尽量给用户留出接话的空间（提问或等待回应）。",
-    `- 回复格式必须严格两行：第一行以 "EN: " 开头，是你的英文回复；第二行以 "ZH: " 开头，是一句简短中文提示（你这句的意思 + 用户可以怎么接）。`,
+    `- 回复格式必须严格四行：第一行以 "EN: " 开头，是你的英文回复；第二行以 "ZH: " 开头，是一句简短中文提示（你这句的意思 + 用户可以怎么接）；第三行以 "BETTER: " 开头，把用户刚才的发言改写成一个更地道的完整英文句子（保留用户原意，用户已说得地道时可在其基础上小幅润色）；第四行以 "TIP: " 开头，是一句中文点评（点出改写的关键点）。`,
     "- 用户的话来自语音识别，可能有错词，结合上下文善意理解；用户说了中文时，用简单英语温和提醒 TA 试着用英语说。",
-    "- 不要输出这两行以外的任何内容（不要代码块、不要解释）。",
-  ].join("\n");
+    "- 不要输出这四行以外的任何内容（不要代码块、不要解释）。",
+  );
+  return lines.join("\n");
 }
 
 /** 送 LLM 的用户消息：近几轮对话记录 + 本轮用户发言。 */
@@ -164,24 +237,141 @@ export function buildSpeakUserInput(turns: SpeakTurn[], userText: string): strin
     t.role === "user" ? `我: ${t.text}` : `你: ${t.text}`,
   );
   lines.push(`我: ${userText}`);
-  return ["对话记录（最新在下）：", ...lines, "", "请给出你的下一轮回复（EN: + ZH: 两行）。"].join("\n");
+  return ["对话记录（最新在下）：", ...lines, "", "请给出你的下一轮回复（EN: / ZH: / BETTER: / TIP: 四行）。"].join("\n");
+}
+
+/** parseAssistantReply 的返回：better/tip 缺行时为 undefined（旧两行回复完全兼容）。 */
+export interface ParsedAssistantReply {
+  en: string;
+  zh: string;
+  /** 用户发言的地道改写（BETTER 行）；模型没给时 undefined。 */
+  better?: string;
+  /** 一句中文点评（TIP 行）；模型没给时 undefined。 */
+  tip?: string;
 }
 
 /**
- * 解析模型回复为 { en, zh }。宽容处理：剥代码块围栏；找不到 "ZH:" 时
- * 中文提示置空；整段没有 EN: 标记时把全文当英文回复（不丢内容）。
+ * 解析模型回复为 { en, zh, better?, tip? }。宽容处理：剥代码块围栏；找不到
+ * "ZH:" 时中文提示置空；整段没有 EN: 标记时把全文当英文回复（不丢内容）。
+ * BETTER/TIP 行缺失时置 undefined（老两行格式的回复照常解析）。
  */
-export function parseAssistantReply(raw: string): { en: string; zh: string } {
+export function parseAssistantReply(raw: string): ParsedAssistantReply {
   let text = raw.trim();
   // 剥 ``` 围栏（模型偶尔手滑）
   text = text.replace(/^```[a-zA-Z]*\s*/, "").replace(/\s*```\s*$/, "").trim();
-  const enMatch = text.match(/(?:^|\n)\s*EN[:：]\s*([\s\S]*?)(?=\n\s*ZH[:：]|$)/i);
-  const zhMatch = text.match(/(?:^|\n)\s*ZH[:：]\s*([\s\S]*)$/i);
-  const en = (enMatch ? enMatch[1] : text.replace(/(?:^|\n)\s*ZH[:：][\s\S]*$/i, ""))
+  const enMatch = text.match(/(?:^|\n)\s*EN[:：]\s*([\s\S]*?)(?=\n\s*(?:ZH|BETTER|TIP)[:：]|$)/i);
+  const zhMatch = text.match(/(?:^|\n)\s*ZH[:：]\s*([\s\S]*?)(?=\n\s*(?:BETTER|TIP)[:：]|$)/i);
+  const betterMatch = text.match(/(?:^|\n)\s*BETTER[:：]\s*([\s\S]*?)(?=\n\s*(?:ZH|TIP)[:：]|$)/i);
+  const tipMatch = text.match(/(?:^|\n)\s*TIP[:：]\s*([\s\S]*?)$/i);
+  const en = (enMatch ? enMatch[1] : text.replace(/(?:^|\n)\s*(?:ZH|BETTER|TIP)[:：][\s\S]*$/i, ""))
     .replace(/\s+/g, " ")
     .trim();
   const zh = (zhMatch ? zhMatch[1] : "").replace(/\s+/g, " ").trim();
-  return { en, zh };
+  const better = betterMatch ? betterMatch[1].replace(/\s+/g, " ").trim() : undefined;
+  const tip = tipMatch ? tipMatch[1].replace(/\s+/g, " ").trim() : undefined;
+  const out: ParsedAssistantReply = { en, zh };
+  if (better) out.better = better;
+  if (tip) out.tip = tip;
+  return out;
+}
+
+/** 表达改进对比的词级 token 化（对齐 recallJudge.wordDiff 的切词思路）：
+ * 单词（含词中撇号/连字符，don't / long-term 不拆）与标点各算一个 token。 */
+function diffTokens(s: string): string[] {
+  return s.match(/[A-Za-z0-9'’-]+|[.,!?;:()"]/g) ?? [];
+}
+
+/**
+ * 用户原话与地道改写的词级增删对比（LCS 对齐）：
+ * keep=两边都有；del=只出现在用户原话（建议删掉）；ins=只出现在改写（建议这样说）。
+ * 保持两边各自的词序，相邻同状态片段合并。
+ */
+export function computeCoachDiff(original: string, better: string): CoachSeg[] {
+  const a = diffTokens(original);
+  const b = diffTokens(better);
+  const m = a.length;
+  const n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+  for (let i = 1; i <= m; i += 1) {
+    for (let j = 1; j <= n; j += 1) {
+      dp[i][j] =
+        a[i - 1].toLowerCase() === b[j - 1].toLowerCase()
+          ? dp[i - 1][j - 1] + 1
+          : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  const rev: CoachSeg[] = [];
+  let i = m;
+  let j = n;
+  const push = (t: CoachSeg["t"], v: string) => {
+    const last = rev[0];
+    if (last && last.t === t) last.v = `${v} ${last.v}`;
+    else rev.unshift({ t, v });
+  };
+  while (i > 0 && j > 0) {
+    if (a[i - 1].toLowerCase() === b[j - 1].toLowerCase()) {
+      push("keep", b[j - 1]);
+      i -= 1;
+      j -= 1;
+    } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+      push("del", a[i - 1]);
+      i -= 1;
+    } else {
+      push("ins", b[j - 1]);
+      j -= 1;
+    }
+  }
+  while (i > 0) {
+    push("del", a[i - 1]);
+    i -= 1;
+  }
+  while (j > 0) {
+    push("ins", b[j - 1]);
+    j -= 1;
+  }
+  return rev;
+}
+
+/**
+ * 用户发言是否命中目标词/词块（归一化判定）：大小写不敏感、忽略标点；
+ * 目标末词容忍常见屈折后缀（unwind → unwinding/unwinds、rule → ruled 等），
+ * 供 SRS 自动过关与目标 chips 打勾。
+ */
+export function textHitsTarget(userText: string, targetWord: string): boolean {
+  const norm = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9'\-\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const textTokens = norm(userText).split(" ").filter(Boolean);
+  const targetTokens = norm(targetWord).split(" ").filter(Boolean);
+  if (textTokens.length === 0 || targetTokens.length === 0) return false;
+  const SUFFIXES = ["s", "es", "ed", "d", "ing", "ings"];
+  const isInflected = (word: string, base: string) => {
+    if (word === base) return true;
+    for (const suf of SUFFIXES) {
+      if (word === base + suf) return true;
+    }
+    // 去 e 加 ing（make → making）等
+    if (base.endsWith("e") && word === base.slice(0, -1) + "ing") return true;
+    return false;
+  };
+  const n = targetTokens.length;
+  for (let i = 0; i + n <= textTokens.length; i += 1) {
+    let ok = true;
+    for (let j = 0; j < n; j += 1) {
+      const base = targetTokens[j];
+      const word = textTokens[i + j];
+      // 中间的词须原样（大小写/标点已归一）；只有末词容忍屈折
+      if (j === n - 1 ? !isInflected(word, base) : word !== base) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) return true;
+  }
+  return false;
 }
 
 /** 会话最近的 assistant 英文（跟读参考文本用）。 */

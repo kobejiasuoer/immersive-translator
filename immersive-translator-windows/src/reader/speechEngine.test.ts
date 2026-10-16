@@ -6,6 +6,7 @@ vi.mock("../lib/tauriBridge", () => ({}));
 vi.mock("../core/xfyunTts", () => ({
   DEFAULT_TTS_VCN: "xiaoyan",
   DEFAULT_TTS_VCN_EN: "catherine",
+  speedFromRatePercent: (p: string) => (p === "-25%" ? 38 : 50),
   synthesizeXfyunTts: vi.fn(),
 }));
 
@@ -131,6 +132,27 @@ describe("云朗读失败契约", () => {
 
     expect(audio.play).not.toHaveBeenCalled();
     expect(ended).not.toHaveBeenCalled();
+  });
+
+  it("缺省不带 nativeRate：合成请求与现有路径完全一致（opts 无 rate 字段）", async () => {
+    const engine = createXfyunEngine(() => cfg);
+    await engine.speak("hello", false, { track: "word", rate: 1 });
+    expect(vi.mocked(synthesizeXfyunTts)).toHaveBeenCalledWith(
+      "hello",
+      { vcn: "catherine" },
+      cfg.creds,
+    );
+  });
+
+  it("opts.nativeRate 透传到合成器（SSML 百分比 → business.speed），播放仍按 opts.rate", async () => {
+    const engine = createXfyunEngine(() => cfg);
+    await engine.speak("world", false, { track: "word", rate: 1, nativeRate: "-25%" });
+    expect(vi.mocked(synthesizeXfyunTts)).toHaveBeenCalledWith(
+      "world",
+      { vcn: "catherine", rate: 38 },
+      cfg.creds,
+    );
+    expect(audio.playbackRate).toBe(1); // 播放变速不叠加原生慢速
   });
 
   it("乱序完成：慢的旧合成不顶掉正在播的新句", async () => {

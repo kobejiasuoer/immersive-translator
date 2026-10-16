@@ -8,7 +8,7 @@
  * 文案由规则拼装，不调 LLM；展示层（SpeakView 报告卡）只管排版。
  */
 
-import { isPass, type PronunciationResult, type WordMark } from "./pronunciation";
+import { isPass, type PronunciationResult, type WordMark, type WordScore } from "./pronunciation";
 
 /** 过关阈值（5 分制）；与阅读室跟读评测的默认门槛一致。 */
 export const SHADOW_PASS_SCORE = 4.2;
@@ -175,6 +175,14 @@ const PHONE_TIPS: Record<string, string> = {
   ay: "双元音『爱』，从 a 滑到 i",
   aw: "双元音『奥』，从 a 滑到 u",
   ow: "双元音『欧』，从 o 滑到 u",
+  ao: "长元音『奥』：舌后部抬一点、嘴拢圆，喉咙里共鸣（thought 的元音）",
+  ey: "双元音：从『诶』滑向『衣』，前重后轻，下巴逐渐收拢（late 的元音）",
+  uh: "中央松元音（schwa）：舌头放松平放口中，轻而短促，不要读成饱满的『啊』",
+  b: "浊塞音：双唇先闭紧，声带先振动再爆破放开，几乎不送气",
+  d: "浊塞音：舌尖抵上齿龈，声带先振动再弹开；词尾不要多出一个『特』",
+  g: "浊塞音：舌后部抵住软腭，声带先振动再放开，不送气",
+  s: "舌尖接近上齿龈，气流细而平地摩擦出来；不要把整个舌面抬起来",
+  sh: "舌面稍抬、双唇略撮圆，摩擦比『斯』更宽更闷（ship 的开头）",
   z: "声带振动的 s；词尾不要读成『斯』",
 };
 
@@ -200,4 +208,46 @@ export function worstPhoneOf(
     }
   }
   return worst && worst.gwpp <= -0.4 ? worst : null;
+}
+
+// ---------- 逐词得分曲线（真实数据，替代原型写死的语调演示路径） ----------
+
+/** 逐词得分 SVG 的画布尺寸（对照原型「语调对比」viewBox 0 0 272 64）。 */
+export const WORD_SCORE_PATH_WIDTH = 272;
+export const WORD_SCORE_PATH_HEIGHT = 64;
+
+export interface WordScorePoint {
+  x: number;
+  y: number;
+}
+
+export interface WordScorePath {
+  width: number;
+  height: number;
+  /** 逐词 totalScore 连线点列（SVG polyline 坐标，已含左右留边）。 */
+  points: WordScorePoint[];
+  /** 5 分基准虚线的 y 坐标（满分参考线，x 覆盖整个宽度）。 */
+  baselineY: number;
+}
+
+/**
+ * 把 ISE 的 words[].totalScore（0–5）变成 SVG 折线点列：分数越高 y 越小，
+ * 等距横排在 [12, width-12] 区间；单词只有 1 个时居中。讯飞 ISE 不返回音高
+ * F0 曲线，这里用真实逐词得分当「语调对比」的替代曲线。
+ */
+export function wordScorePath(words: WordScore[]): WordScorePath {
+  const w = WORD_SCORE_PATH_WIDTH;
+  const h = WORD_SCORE_PATH_HEIGHT;
+  const padX = 12;
+  const padY = 10;
+  const innerW = w - padX * 2;
+  const innerH = h - padY * 2;
+  const n = words.length;
+  const points = words.map((word, i) => {
+    const score = Math.min(5, Math.max(0, word.totalScore));
+    const x = n <= 1 ? w / 2 : padX + (innerW * i) / (n - 1);
+    const y = padY + innerH * (1 - score / 5);
+    return { x, y };
+  });
+  return { width: w, height: h, points, baselineY: padY };
 }

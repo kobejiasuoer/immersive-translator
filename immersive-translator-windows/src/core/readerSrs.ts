@@ -171,3 +171,50 @@ export function recordReview(log: ReviewLogFile, now = Date.now()): ReviewLogFil
   const cutoff = dayKeyOffset(now, -365);
   return { schemaVersion: log.schemaVersion, days: days.filter((d) => d.day >= cutoff) };
 }
+
+// ---------- v0.8 内化看板派生（Phase 4） ----------
+
+/**
+ * 词块内化三阶段（交接语义）：
+ * - s1 刚收集（intervalDays < 1 且从未在口语中用出）
+ * - s2 眼熟能认（intervalDays ≥ 1，阅读遇到能懂）
+ * - s3 已变成口语表达（spokenAt 存在即升 s3——「在对话中说出」优先于间隔）
+ *
+ * 与 reviewStats.distribution 是两套口径：distribution 按纯间隔分桶（复习闭环
+ * 用），masteryStage 把「口语中用出」视为最高阶。计数一律由本函数统一派生，
+ * 不得另立口径。
+ */
+export type MasteryStage = "s1" | "s2" | "s3";
+
+export function masteryStage(word: VocabWord): MasteryStage {
+  if (word.spokenAt) return "s3";
+  return word.srs.intervalDays >= 1 ? "s2" : "s1";
+}
+
+/** 热力格档位：0 无记录 / 1 少（<3 次）/ 2 中（3-6 次）/ 3 多（>6 次）。 */
+export interface HeatBucket {
+  /** 本地日期键（YYYY-MM-DD）。 */
+  dayKey: string;
+  level: 0 | 1 | 2 | 3;
+  /** 当日复习次数（title 提示用）。 */
+  count: number;
+  /** 是否今天这一格。 */
+  today: boolean;
+}
+
+/**
+ * 近 28 天（含今天）每日复习次数分桶，旧 → 新排列（14 列 × 2 行矩阵）。
+ * 数据源是复习日志 reviewLog.days（即交接说的 stats.days 口径）。
+ */
+export function heatBuckets(log: ReviewLogFile, now = Date.now()): HeatBucket[] {
+  const byDay = new Map(log.days.map((d) => [d.day, d.count]));
+  const today = dayKey(now);
+  const out: HeatBucket[] = [];
+  for (let offset = 27; offset >= 0; offset -= 1) {
+    const key = dayKeyOffset(now, -offset);
+    const count = byDay.get(key) ?? 0;
+    const level: HeatBucket["level"] = count === 0 ? 0 : count < 3 ? 1 : count <= 6 ? 2 : 3;
+    out.push({ dayKey: key, level, count, today: key === today });
+  }
+  return out;
+}

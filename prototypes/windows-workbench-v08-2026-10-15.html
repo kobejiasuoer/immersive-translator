@@ -1,0 +1,2791 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ImmersiveTranslator v0.8 · 阅读、口语与记忆手账原型</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Serif+SC:wght@400;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --canvas-bg: #F6F3EC;
+      --canvas-aura-1: rgba(208, 90, 63, 0.07);
+      --canvas-aura-2: rgba(31, 110, 92, 0.06);
+
+      --glass-surface: rgba(252, 250, 245, 0.78);
+      --glass-elevated: rgba(255, 255, 255, 0.90);
+      --glass-pill: rgba(247, 244, 236, 0.86);
+      --glass-border: rgba(28, 27, 24, 0.09);
+      --glass-border-strong: rgba(28, 27, 24, 0.16);
+      --glass-highlight: rgba(255, 255, 255, 0.7);
+
+      --ink-1: #171614;
+      --ink-2: #4A4740;
+      --ink-3: #7A756C;
+      --ink-4: #ACA69B;
+
+      --accent: #C84B31;
+      --accent-soft: rgba(200, 75, 49, 0.11);
+      --accent-glow: rgba(200, 75, 49, 0.22);
+
+      --sonic-teal: #1B6B58;
+      --sonic-teal-soft: rgba(27, 107, 88, 0.11);
+
+      --clause-indigo: #3649C4;
+      --clause-indigo-soft: rgba(54, 73, 196, 0.11);
+
+      --tape-bg: #E9DEC8;
+      --tape-border: #D5C5A5;
+      --tape-ink: #6E5D43;
+
+      --warn: #B45309;
+      --warn-soft: rgba(180, 83, 9, 0.11);
+      --err: #B91C1C;
+      --err-soft: rgba(185, 28, 28, 0.10);
+
+      --shadow-spatial: 0 20px 50px -12px rgba(23, 22, 20, 0.09), 0 4px 14px -2px rgba(23, 22, 20, 0.04);
+      --shadow-pill: 0 12px 32px -6px rgba(23, 22, 20, 0.11), 0 2px 8px -1px rgba(23, 22, 20, 0.05);
+
+      --font-sans: "Inter", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
+      --font-serif: "Source Serif 4", "Noto Serif SC", Georgia, serif;
+      --font-display: "Instrument Serif", "Source Serif 4", "Noto Serif SC", serif;
+      --font-mono: "JetBrains Mono", Consolas, monospace;
+
+      --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    [data-theme="obsidian-sonic"] {
+      --canvas-bg: #0E1014;
+      --canvas-aura-1: rgba(224, 109, 83, 0.11);
+      --canvas-aura-2: rgba(52, 168, 142, 0.09);
+
+      --glass-surface: rgba(22, 24, 30, 0.76);
+      --glass-elevated: rgba(29, 32, 40, 0.88);
+      --glass-pill: rgba(24, 27, 34, 0.84);
+      --glass-border: rgba(255, 255, 255, 0.09);
+      --glass-border-strong: rgba(255, 255, 255, 0.17);
+      --glass-highlight: rgba(255, 255, 255, 0.06);
+
+      --ink-1: #F4F2ED;
+      --ink-2: #B9B5AC;
+      --ink-3: #7E7B73;
+      --ink-4: #4D4B45;
+
+      --accent: #E26D52;
+      --accent-soft: rgba(226, 109, 82, 0.16);
+      --accent-glow: rgba(226, 109, 82, 0.30);
+
+      --sonic-teal: #38B296;
+      --sonic-teal-soft: rgba(56, 178, 150, 0.16);
+
+      --clause-indigo: #8093FF;
+      --clause-indigo-soft: rgba(128, 147, 255, 0.16);
+
+      --tape-bg: #2B2824;
+      --tape-border: #4A4339;
+      --tape-ink: #C8B9A2;
+
+      --warn: #E59A3C;
+      --warn-soft: rgba(229, 154, 60, 0.16);
+      --err: #F06868;
+      --err-soft: rgba(240, 104, 104, 0.16);
+
+      --shadow-spatial: 0 24px 60px -12px rgba(0, 0, 0, 0.55), 0 4px 16px rgba(0, 0, 0, 0.35);
+      --shadow-pill: 0 14px 36px -4px rgba(0, 0, 0, 0.6);
+    }
+
+    [data-theme="nordic-mist"] {
+      --canvas-bg: #EEF1EF;
+      --canvas-aura-1: rgba(31, 110, 92, 0.08);
+      --canvas-aura-2: rgba(54, 73, 196, 0.06);
+
+      --glass-surface: rgba(247, 249, 248, 0.80);
+      --glass-elevated: rgba(255, 255, 255, 0.92);
+      --glass-pill: rgba(244, 247, 245, 0.88);
+      --glass-border: rgba(20, 30, 26, 0.09);
+      --glass-border-strong: rgba(20, 30, 26, 0.16);
+      --glass-highlight: rgba(255, 255, 255, 0.75);
+
+      --ink-1: #131B18;
+      --ink-2: #3D4A45;
+      --ink-3: #6C7A74;
+      --ink-4: #9CA9A3;
+
+      --accent: #1B6B58;
+      --accent-soft: rgba(27, 107, 88, 0.12);
+      --accent-glow: rgba(27, 107, 88, 0.24);
+
+      --sonic-teal: #C84B31;
+      --sonic-teal-soft: rgba(200, 75, 49, 0.11);
+
+      --tape-bg: #D7E2DC;
+      --tape-border: #B6C8BE;
+      --tape-ink: #385247;
+    }
+
+    * { box-sizing: border-box; }
+    ::selection {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--glass-border-strong); border-radius: 99px; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: var(--font-sans);
+      background: var(--canvas-bg);
+      color: var(--ink-1);
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .tabular { font-variant-numeric: tabular-nums; }
+
+    .spatial-universe {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      background-color: var(--canvas-bg);
+      background-image:
+        radial-gradient(circle at 14% 18%, var(--canvas-aura-1), transparent 48%),
+        radial-gradient(circle at 86% 82%, var(--canvas-aura-2), transparent 52%);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      transition: background-color 350ms var(--ease-spring), color 250ms var(--ease-spring);
+    }
+
+    .editorial-grid-lines {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      display: grid;
+      grid-template-columns: 76px 1fr 410px;
+      z-index: 0;
+    }
+    .editorial-grid-lines > div {
+      border-right: 1px solid var(--glass-border);
+      opacity: 0.55;
+    }
+
+    /* 顶部悬浮导航栏 */
+    .floating-top-stage {
+      position: relative;
+      z-index: 30;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 28px 10px;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+
+    .brand-folio-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 5px 12px 5px 6px;
+      border-radius: 999px;
+      background: var(--glass-pill);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--glass-border);
+      box-shadow: var(--shadow-pill), inset 0 1px 0 var(--glass-highlight);
+    }
+    .monogram-seal {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--ink-1);
+      color: var(--canvas-bg);
+      font-family: var(--font-display);
+      font-style: italic;
+      font-size: 17px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .folio-drawer-trigger {
+      border: none;
+      background: transparent;
+      color: var(--ink-1);
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 3px 6px;
+      border-radius: 99px;
+      transition: background 150ms;
+    }
+    .folio-drawer-trigger:hover { background: var(--glass-border); }
+    .folio-drawer-trigger svg {
+      width: 14px;
+      height: 14px;
+      stroke: currentColor;
+      stroke-width: 1.7;
+      fill: none;
+    }
+
+    .center-nav-island {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px;
+      border-radius: 999px;
+      background: var(--glass-pill);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid var(--glass-border);
+      box-shadow: var(--shadow-pill), inset 0 1px 0 var(--glass-highlight);
+    }
+    .island-tab {
+      border: none;
+      background: transparent;
+      color: var(--ink-2);
+      height: 32px;
+      padding: 0 14px;
+      border-radius: 999px;
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      transition: all 200ms var(--ease-spring);
+    }
+    .island-tab svg {
+      width: 14px;
+      height: 14px;
+      stroke: currentColor;
+      stroke-width: 1.75;
+      fill: none;
+    }
+    .island-tab:hover { color: var(--ink-1); }
+    .island-tab.active {
+      background: var(--ink-1);
+      color: var(--canvas-bg);
+      font-weight: 600;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.14);
+    }
+    .island-counter {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      padding: 1px 6px;
+      border-radius: 99px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .island-tab.active .island-counter {
+      background: var(--accent);
+      color: #FFFFFF;
+    }
+
+    .right-controls-island {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px;
+      border-radius: 999px;
+      background: var(--glass-pill);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--glass-border);
+      box-shadow: var(--shadow-pill), inset 0 1px 0 var(--glass-highlight);
+    }
+    .pill-Ghost-btn {
+      border: none;
+      background: transparent;
+      color: var(--ink-2);
+      height: 28px;
+      padding: 0 10px;
+      border-radius: 99px;
+      font-size: 11.5px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 150ms;
+    }
+    .pill-Ghost-btn:hover {
+      background: var(--glass-border);
+      color: var(--ink-1);
+    }
+    .pill-Ghost-btn.active-lens {
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .cloud-pulse {
+      width: 6.5px;
+      height: 6.5px;
+      border-radius: 50%;
+      background: var(--sonic-teal);
+      box-shadow: 0 0 0 3px var(--sonic-teal-soft);
+    }
+
+    /* 书架弹出浮层 */
+    .floating-folio-sheet {
+      position: absolute;
+      top: 66px;
+      left: 28px;
+      width: 310px;
+      background: var(--glass-elevated);
+      backdrop-filter: blur(28px);
+      -webkit-backdrop-filter: blur(28px);
+      border: 1px solid var(--glass-border-strong);
+      border-radius: 18px;
+      box-shadow: var(--shadow-spatial), inset 0 1px 0 var(--glass-highlight);
+      padding: 18px;
+      z-index: 45;
+      opacity: 0;
+      transform: translateY(-8px) scale(0.98);
+      pointer-events: none;
+      transition: all 220ms var(--ease-spring);
+    }
+    .floating-folio-sheet.open {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
+    .folio-book-hero {
+      padding: 14px;
+      border-radius: 12px;
+      background: var(--canvas-bg);
+      border: 1px solid var(--glass-border);
+      margin-bottom: 14px;
+      cursor: pointer;
+    }
+
+    .v07-audit-ribbon {
+      margin: 0 28px 8px;
+      padding: 8px 16px;
+      border-radius: 10px;
+      background: var(--warn-soft);
+      border: 1px solid rgba(180, 83, 9, 0.25);
+      color: var(--warn);
+      font-size: 12px;
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 25;
+    }
+
+    /* 主舞台布局 */
+    .spatial-stage {
+      position: relative;
+      z-index: 10;
+      flex: 1;
+      display: flex;
+      min-height: 0;
+      padding: 0 28px 84px;
+      gap: 28px;
+    }
+
+    .editorial-spine-col {
+      width: 56px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 20px 0 12px;
+      flex-shrink: 0;
+      user-select: none;
+    }
+    .oversized-folio-num {
+      font-family: var(--font-display);
+      font-size: 44px;
+      line-height: 0.9;
+      color: var(--ink-1);
+      opacity: 0.18;
+      font-style: italic;
+    }
+    .spine-vertical-label {
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      letter-spacing: 0.12em;
+      color: var(--ink-3);
+      transform: rotate(180deg);
+    }
+
+    .literary-spread-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 24px 60px 12px;
+      scroll-behavior: smooth;
+    }
+    .literary-sheet {
+      max-width: 65ch;
+      margin: 0 auto;
+    }
+
+    .masthead-top-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--ink-3);
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--glass-border-strong);
+      margin-bottom: 22px;
+    }
+    .masthead-display-title {
+      font-family: var(--font-display);
+      font-size: 54px;
+      font-weight: 400;
+      line-height: 1.04;
+      letter-spacing: -0.025em;
+      margin: 0 0 10px;
+      color: var(--ink-1);
+    }
+    .masthead-cn-sub {
+      font-family: var(--font-serif);
+      font-size: 16px;
+      color: var(--ink-2);
+      margin: 0 0 28px;
+      font-weight: 400;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .prose-body {
+      font-family: var(--font-serif);
+      font-size: 20.5px;
+      line-height: 1.86;
+      color: var(--ink-1);
+      transition: opacity 250ms;
+    }
+    .prose-sentence {
+      padding: 3px 5px;
+      margin: 0 -5px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 220ms var(--ease-spring);
+      display: inline;
+    }
+    .spotlight-active .prose-sentence:not(.is-current) {
+      opacity: 0.36;
+      filter: blur(0.2px);
+    }
+    .spotlight-active .prose-sentence:not(.is-current):hover {
+      opacity: 0.78;
+      filter: none;
+    }
+    .prose-sentence.is-current {
+      background: var(--accent-soft);
+      box-shadow: inset 0 -1.5px 0 var(--accent);
+    }
+    .drop-cap {
+      float: left;
+      font-family: var(--font-display);
+      font-size: 64px;
+      line-height: 0.82;
+      padding: 4px 12px 0 0;
+      color: var(--accent);
+      font-style: italic;
+    }
+
+    .spatial-clause-mark {
+      background: var(--clause-indigo-soft);
+      color: var(--clause-indigo);
+      border-bottom: 2px solid var(--clause-indigo);
+      border-radius: 3px;
+      padding: 0 2px;
+    }
+
+    .token-vocab {
+      border-bottom: 1.5px solid var(--accent);
+      padding-bottom: 1px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .token-chunk {
+      border-bottom: 1.5px dashed var(--ink-3);
+      padding-bottom: 1px;
+      cursor: pointer;
+    }
+
+    .interlinear-fold {
+      display: block;
+      margin: 12px 0 22px;
+      padding: 12px 18px;
+      border-radius: 12px;
+      background: var(--glass-surface);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--glass-border-strong);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--ink-2);
+      box-shadow: var(--shadow-pill);
+    }
+    .interlinear-fold.masked .fold-zh {
+      filter: blur(5px);
+      cursor: pointer;
+      user-select: none;
+      transition: filter 180ms;
+    }
+    .fold-actions {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--glass-border);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 12px;
+    }
+    .text-action-btn {
+      border: none;
+      background: none;
+      padding: 0;
+      color: var(--ink-2);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: color 150ms;
+    }
+    .text-action-btn:hover { color: var(--accent); }
+
+    .parallel-spread-row {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 28px;
+      padding: 20px 16px;
+      border-bottom: 1px solid var(--glass-border);
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 180ms;
+    }
+    .parallel-spread-row.is-current {
+      background: var(--glass-surface);
+      border: 1px solid var(--glass-border-strong);
+      box-shadow: var(--shadow-pill);
+    }
+
+    /* 右侧悬浮面板 */
+    .spatial-lens-card {
+      width: 386px;
+      align-self: stretch;
+      margin: 8px 0;
+      background: var(--glass-surface);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid var(--glass-border-strong);
+      border-radius: 22px;
+      box-shadow: var(--shadow-spatial), inset 0 1px 0 var(--glass-highlight);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .lens-header {
+      padding: 14px 18px 12px;
+      border-bottom: 1px solid var(--glass-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .lens-mode-switch {
+      display: inline-flex;
+      background: var(--canvas-bg);
+      padding: 3px;
+      border-radius: 99px;
+      border: 1px solid var(--glass-border);
+    }
+    .lens-mode-btn {
+      border: none;
+      background: transparent;
+      color: var(--ink-3);
+      padding: 4px 12px;
+      border-radius: 99px;
+      font-size: 11.5px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 150ms;
+    }
+    .lens-mode-btn.active {
+      background: var(--glass-elevated);
+      color: var(--ink-1);
+      font-weight: 600;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+    }
+    .lens-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 18px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .lens-section {
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--glass-border);
+    }
+    .lens-section:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    .lens-kicker {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--ink-3);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .clause-step-item {
+      padding: 9px 12px;
+      border-radius: 10px;
+      margin-bottom: 6px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: all 150ms var(--ease-spring);
+    }
+    .clause-step-item:hover {
+      background: var(--glass-elevated);
+      border-color: var(--glass-border-strong);
+      transform: translateX(2px);
+    }
+
+    /* 底部悬浮播放条 */
+    .floating-sonic-dock {
+      position: absolute;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 35;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 7px 14px 7px 10px;
+      border-radius: 999px;
+      background: var(--glass-elevated);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid var(--glass-border-strong);
+      box-shadow: var(--shadow-spatial), inset 0 1px 0 var(--glass-highlight);
+    }
+    .sonic-play-orb {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: none;
+      background: var(--ink-1);
+      color: var(--canvas-bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: transform 150ms;
+    }
+    .sonic-play-orb:hover { transform: scale(1.05); }
+    .sonic-play-orb svg { width: 15px; height: 15px; fill: currentColor; }
+    .dock-scrubber {
+      width: 160px;
+      height: 4px;
+      background: var(--glass-border-strong);
+      border-radius: 99px;
+      cursor: pointer;
+      overflow: hidden;
+    }
+    .dock-scrubber-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 99px;
+      transition: width 200ms var(--ease-spring);
+    }
+
+    /* 口语模块 */
+    .scenario-hub-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px 40px;
+      max-width: 980px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    .scenario-group-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ink-3);
+      margin: 22px 0 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .scenario-featured-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 16px;
+    }
+    .scenario-daily-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+    }
+    .scenario-card {
+      padding: 20px 22px;
+      border-radius: 20px;
+      background: var(--glass-surface);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--glass-border-strong);
+      box-shadow: var(--shadow-pill), inset 0 1px 0 var(--glass-highlight);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 12px;
+      transition: all 200ms var(--ease-spring);
+      text-align: left;
+    }
+    .scenario-card:hover {
+      transform: translateY(-2px);
+      background: var(--glass-elevated);
+      border-color: var(--ink-2);
+      box-shadow: var(--shadow-spatial);
+    }
+    .scenario-card.active-choice {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow-spatial);
+    }
+    .sc-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 9px;
+      border-radius: 99px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      width: fit-content;
+    }
+    .sc-tag.teal { background: var(--sonic-teal-soft); color: var(--sonic-teal); }
+    .sc-tag.neutral {
+      background: var(--canvas-bg);
+      color: var(--ink-2);
+      border: 1px solid var(--glass-border);
+    }
+    .sc-title {
+      font-family: var(--font-serif);
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--ink-1);
+      margin: 4px 0 4px;
+    }
+    .sc-desc {
+      font-size: 13px;
+      line-height: 1.55;
+      color: var(--ink-2);
+      margin: 0;
+    }
+    .sc-opener-preview {
+      font-family: var(--font-serif);
+      font-style: italic;
+      font-size: 13px;
+      color: var(--ink-3);
+      padding-top: 10px;
+      border-top: 1px solid var(--glass-border);
+    }
+    .recent-session-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-radius: 14px;
+      background: var(--glass-surface);
+      border: 1px solid var(--glass-border);
+      margin-bottom: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 150ms;
+    }
+    .recent-session-row:hover {
+      background: var(--glass-elevated);
+      border-color: var(--glass-border-strong);
+    }
+
+    .sonic-studio-grid {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 410px;
+      gap: 24px;
+      min-height: 0;
+      width: 100%;
+    }
+    .sonic-dialogue-well {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .harmonic-stage-card {
+      position: relative;
+      height: 122px;
+      border-radius: 20px;
+      background: var(--glass-surface);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--glass-border-strong);
+      box-shadow: var(--shadow-pill), inset 0 1px 0 var(--glass-highlight);
+      overflow: hidden;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 22px;
+      flex-shrink: 0;
+    }
+    #harmonicCanvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      opacity: 0.72;
+    }
+    .harmonic-overlay-left, .harmonic-overlay-right {
+      position: relative;
+      z-index: 2;
+    }
+
+    .target-chip-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .lex-target-chip {
+      padding: 4px 11px;
+      border-radius: 99px;
+      background: var(--glass-elevated);
+      border: 1px solid var(--glass-border-strong);
+      font-size: 12px;
+      color: var(--ink-2);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      transition: all 180ms;
+    }
+    .lex-target-chip.done {
+      background: var(--sonic-teal-soft);
+      border-color: var(--sonic-teal);
+      color: var(--sonic-teal);
+      font-weight: 600;
+    }
+
+    .sonic-turns-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 8px 20px 2px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .dialogue-turn { max-width: 60ch; }
+    .dialogue-turn.mine {
+      align-self: flex-end;
+      width: 100%;
+      max-width: 58ch;
+      padding: 18px 20px;
+      border-radius: 18px;
+      background: var(--glass-elevated);
+      border: 1px solid var(--glass-border-strong);
+      box-shadow: var(--shadow-pill);
+    }
+    .turn-speaker-line {
+      font-size: 11.5px;
+      color: var(--ink-3);
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .turn-prose-en {
+      font-family: var(--font-serif);
+      font-size: 19px;
+      line-height: 1.58;
+      color: var(--ink-1);
+    }
+    .turn-prose-zh {
+      font-size: 13.5px;
+      color: var(--ink-3);
+      margin-top: 5px;
+    }
+
+    .editorial-diff-block {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--glass-border);
+    }
+    .diff-del-span {
+      color: var(--err);
+      text-decoration: line-through;
+      opacity: 0.75;
+      margin-right: 4px;
+    }
+    .diff-ins-span {
+      color: var(--sonic-teal);
+      background: var(--sonic-teal-soft);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+
+    .phoneme-pill-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin: 10px 0 14px;
+    }
+    .phoneme-node {
+      padding: 10px 6px;
+      border-radius: 12px;
+      background: var(--canvas-bg);
+      border: 1px solid var(--glass-border);
+      text-align: center;
+      cursor: pointer;
+      transition: all 150ms;
+    }
+    .phoneme-node.bad { background: var(--err-soft); border-color: var(--err); }
+    .phoneme-node.warn { background: var(--warn-soft); border-color: var(--warn); }
+    .phoneme-node.selected {
+      box-shadow: 0 0 0 2px var(--ink-1);
+      transform: translateY(-1px);
+    }
+
+    /* ==========================================================================
+       模块 3：全新「笔记与复习」高留存交互系统
+       - 玩法 1：记忆胶带手账 (Interactive Memory Tape Notebook — 点按刮开自测)
+       - 玩法 2：3 分钟多模态快刷闯关 (原句首字母拼写 / 听音抓词 / 开口说一句秒过)
+       - 玩法 3：Markdown 笔记预览与一键复制 + 右侧 28 天热力格与三阶内化雷达
+       ========================================================================== */
+    .vault-studio-grid {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 370px;
+      gap: 24px;
+      min-height: 0;
+      width: 100%;
+    }
+    .vault-main-scroll {
+      overflow-y: auto;
+      padding: 4px 10px 40px 2px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .vault-top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--glass-border-strong);
+    }
+
+    /* 记忆胶带手账条目 */
+    .notebook-sheet-card {
+      padding: 24px 28px;
+      border-radius: 22px;
+      background: var(--glass-surface);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--glass-border-strong);
+      box-shadow: var(--shadow-spatial), inset 0 1px 0 var(--glass-highlight);
+    }
+    .tape-entry-row {
+      padding: 16px 0;
+      border-bottom: 1px solid var(--glass-border);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .tape-entry-row:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    /* 核心微交互：琥珀色记忆胶带 (点击前遮盖英文，点击后丝滑掀开显影) */
+    .memory-tape {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 10px;
+      margin: 0 3px;
+      border-radius: 6px;
+      background: var(--tape-bg);
+      border: 1px dashed var(--tape-border);
+      color: transparent;
+      cursor: pointer;
+      user-select: none;
+      position: relative;
+      transition: all 220ms var(--ease-spring);
+      font-family: var(--font-serif);
+      font-weight: 600;
+    }
+    .memory-tape::after {
+      content: "点击揭开 · " attr(data-hint);
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-sans);
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--tape-ink);
+      letter-spacing: 0.02em;
+    }
+    .memory-tape.peeled {
+      background: var(--accent-soft);
+      border: 1px solid transparent;
+      color: var(--accent);
+      user-select: auto;
+    }
+    .memory-tape.peeled::after {
+      display: none;
+    }
+
+    /* 三阶掌握状态胶囊 */
+    .stage-pill {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 99px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .stage-pill.s1 { background: var(--warn-soft); color: var(--warn); }
+    .stage-pill.s2 { background: var(--clause-indigo-soft); color: var(--clause-indigo); }
+    .stage-pill.s3 { background: var(--sonic-teal-soft); color: var(--sonic-teal); }
+
+    /* 3 分钟快刷闯关大卡 */
+    .challenge-stage-box {
+      padding: 28px 30px;
+      border-radius: 22px;
+      background: var(--glass-elevated);
+      border: 1px solid var(--glass-border-strong);
+      box-shadow: var(--shadow-spatial);
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .cloze-input-field {
+      font-family: var(--font-serif);
+      font-size: 21px;
+      font-weight: 600;
+      color: var(--accent);
+      background: var(--canvas-bg);
+      border: none;
+      border-bottom: 2px solid var(--accent);
+      border-radius: 6px 6px 0 0;
+      padding: 2px 10px;
+      width: 190px;
+      text-align: center;
+      outline: none;
+    }
+
+    /* 28 天热力图矩阵 */
+    .heatmap-grid {
+      display: grid;
+      grid-template-columns: repeat(14, 1fr);
+      gap: 4px;
+      margin-top: 8px;
+    }
+    .heat-cell {
+      aspect-ratio: 1;
+      border-radius: 3px;
+      background: var(--glass-border);
+    }
+    .heat-cell.l1 { background: rgba(27, 107, 88, 0.25); }
+    .heat-cell.l2 { background: rgba(27, 107, 88, 0.52); }
+    .heat-cell.l3 { background: var(--sonic-teal); }
+    .heat-cell.today { outline: 1.5px solid var(--accent); outline-offset: 1px; }
+
+    .toast-pill {
+      position: fixed;
+      top: 68px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-10px);
+      background: var(--ink-1);
+      color: var(--canvas-bg);
+      padding: 8px 18px;
+      border-radius: 999px;
+      font-size: 12.5px;
+      font-weight: 500;
+      box-shadow: var(--shadow-spatial);
+      z-index: 90;
+      opacity: 0;
+      pointer-events: none;
+      transition: all 200ms var(--ease-spring);
+    }
+    .toast-pill.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    @media (max-width: 980px) {
+      .editorial-spine-col { display: none; }
+      .spatial-lens-card { width: 320px; }
+      .sonic-studio-grid, .vault-studio-grid, .scenario-featured-grid, .scenario-daily-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="spatial-universe" id="spatialUniverse" data-theme="warm-archival">
+    <div class="editorial-grid-lines" aria-hidden="true">
+      <div></div><div></div><div></div>
+    </div>
+
+    <!-- ======================================================================
+         顶部悬浮导航栏
+         ====================================================================== -->
+    <header class="floating-top-stage">
+      <div class="brand-folio-pill">
+        <div class="monogram-seal" title="ImmersiveTranslator">I</div>
+        <button class="folio-drawer-trigger" onclick="toggleFolioSheet(event)">
+          <svg viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
+          <span>书架 · The Call of the Wild</span>
+          <span style="opacity:0.45">▾</span>
+        </button>
+      </div>
+
+      <nav class="center-nav-island" id="centerNavIsland" aria-label="主导航">
+        <button class="island-tab active" data-surface="reading" onclick="switchSurface('reading')">
+          <svg viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+          <span>阅读</span>
+        </button>
+        <button class="island-tab" data-surface="speak" onclick="switchSurface('speak')">
+          <svg viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
+          <span>口语</span>
+          <span class="island-counter tabular" id="navSpeakCount">2</span>
+        </button>
+        <button class="island-tab" data-surface="vault" onclick="switchSurface('vault')">
+          <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span>笔记与复习</span>
+          <span class="island-counter tabular" id="navVaultCount">4</span>
+        </button>
+      </nav>
+
+      <div class="right-controls-island">
+        <button class="pill-Ghost-btn" onclick="showGatewayModal()" title="官方语音与翻译服务已连接">
+          <span class="cloud-pulse"></span>
+          <span>服务已连接</span>
+        </button>
+        <button class="pill-Ghost-btn" id="btnAtmosphere" onclick="cycleAtmosphere()">
+          <span>主题：纸书</span>
+        </button>
+        <button class="pill-Ghost-btn" id="btnCompareV07" onclick="toggleV07Comparison()">
+          <span>旧版对比</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- 书架弹出面板 -->
+    <aside class="floating-folio-sheet" id="folioSheet" onclick="event.stopPropagation()">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span style="font-size:12px;font-weight:600;color:var(--ink-3)">我的书架</span>
+        <button class="pill-Ghost-btn" style="background:var(--accent-soft);color:var(--accent)" onclick="toast('支持导入 EPUB / PDF / DOCX / 网页链接')">＋ 导入文件</button>
+      </div>
+      <div class="folio-book-hero" onclick="toggleFolioSheet();toast('已继续《The Call of the Wild》第 1 章')">
+        <div style="font-family:var(--font-display);font-size:22px;color:var(--ink-1)">The Call of the Wild</div>
+        <div class="tabular" style="font-size:12px;color:var(--ink-3);margin:4px 0 10px">Jack London · 第 1 / 7 章 · 已读 38%</div>
+        <div style="height:3px;background:var(--glass-border-strong);border-radius:99px;overflow:hidden">
+          <div style="width:38%;height:100%;background:var(--accent)"></div>
+        </div>
+      </div>
+      <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:6px">短文</div>
+      <div style="display:flex;justify-content:space-between;padding:7px 8px;border-radius:8px;font-size:12.5px;cursor:pointer" onclick="toggleFolioSheet();toast('已切换：Why Deep Reading Matters')">
+        <span>Why Deep Reading Matters</span>
+        <span class="tabular" style="color:var(--ink-3)">82%</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:7px 8px;border-radius:8px;font-size:12.5px;cursor:pointer" onclick="toggleFolioSheet();toast('已切换：The Happy Prince')">
+        <span>The Happy Prince (O. Wilde)</span>
+        <span class="tabular" style="color:var(--sonic-teal)">读完</span>
+      </div>
+    </aside>
+
+    <!-- 旧版对比横幅 -->
+    <div class="v07-audit-ribbon" id="v07Ribbon">
+      <span>
+        <strong>当前为旧版 (v0.7) 布局对比：</strong>生词复习是孤立背单词卡，笔记是死板的静态文档，两边割裂且缺乏互动回馈。
+      </span>
+      <button class="pill-Ghost-btn active-lens" onclick="toggleV07Comparison()">返回新版设计 →</button>
+    </div>
+
+    <!-- ======================================================================
+         模块 1：阅读 (P2)
+         ====================================================================== -->
+    <main class="spatial-stage" id="stageReading">
+      <div class="editorial-spine-col">
+        <div>
+          <div class="oversized-folio-num tabular" id="spineSentenceNum">02</div>
+          <div class="tabular" style="font-family:var(--font-mono);font-size:10.5px;color:var(--ink-3);margin-top:4px">当前句</div>
+        </div>
+        <div class="spine-vertical-label">THE CALL OF THE WILD · CHAPTER 1</div>
+        <div class="tabular" style="font-family:var(--font-mono);font-size:11px;color:var(--accent);font-weight:600">38%</div>
+      </div>
+
+      <div class="literary-spread-scroll" id="literaryScroll" onclick="closeFolioSheet()">
+        <article class="literary-sheet">
+          <div class="masthead-top-meta tabular">
+            <span>CHAPTER 1 · 约 4 分钟读完</span>
+            <div style="display:flex;gap:14px;align-items:center">
+              <button class="text-action-btn" id="btnSpotlight" onclick="toggleSpotlightMode()">
+                <span>专注模式：开</span>
+              </button>
+              <button class="text-action-btn" id="btnLayoutSpread" onclick="toggleSpreadLayout()">
+                <span>排版：段落</span>
+              </button>
+              <button class="text-action-btn" id="btnMaskWhisper" onclick="toggleMaskWhisper()">
+                <span>译文：显示</span>
+              </button>
+            </div>
+          </div>
+
+          <h1 class="masthead-display-title">Into the Primitive</h1>
+          <div class="masthead-cn-sub">
+            <span>第一章：步入原始</span>
+            <button class="pill-Ghost-btn active-lens" onclick="enterScenarioConversation('book')">围绕本章练口语 →</button>
+          </div>
+
+          <div id="proseMount" class="prose-body spotlight-active"></div>
+        </article>
+      </div>
+
+      <aside class="spatial-lens-card">
+        <div class="lens-header">
+          <div class="lens-mode-switch" role="tablist">
+            <button class="lens-mode-btn active" id="lensTabXray" onclick="setLensMode('xray')">句子解析</button>
+            <button class="lens-mode-btn" id="lensTabLex" onclick="setLensMode('lex')">查词</button>
+          </div>
+          <span class="tabular" style="font-family:var(--font-mono);font-size:11px;color:var(--ink-3)" id="lensRefTag">第 2 句</span>
+        </div>
+        <div class="lens-body" id="lensBody"></div>
+      </aside>
+
+      <div class="floating-sonic-dock">
+        <button class="pill-Ghost-btn" onclick="stepSentence(-1)" title="上一句 (L)">⏮</button>
+        <button class="sonic-play-orb" id="btnSonicPlay" onclick="toggleChapterAudio()" title="播放/暂停 (Space)">
+          <svg viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+        </button>
+        <button class="pill-Ghost-btn" onclick="stepSentence(1)" title="下一句 (J)">⏭</button>
+
+        <div class="dock-scrubber" onclick="scrubSentence(event)">
+          <div class="dock-scrubber-fill" id="dockScrubberFill" style="width:66.6%"></div>
+        </div>
+
+        <span class="tabular" style="font-family:var(--font-mono);font-size:11px;color:var(--ink-2)" id="dockSentCounter">02 / 03</span>
+
+        <button class="pill-Ghost-btn tabular" id="btnDockProsody" onclick="cycleProsodySpeed()" title="切换朗读语速">
+          1.0×
+        </button>
+      </div>
+    </main>
+
+    <!-- ======================================================================
+         模块 2：口语 (含「选择场景页」与「正在对话页」)
+         ====================================================================== -->
+    <main class="spatial-stage" id="stageSpeak" style="display:none;padding-bottom:24px">
+      <div class="scenario-hub-scroll" id="speakHubView" style="display:none">
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:16px;padding-bottom:16px;border-bottom:1px solid var(--glass-border-strong)">
+          <div>
+            <h2 style="font-family:var(--font-serif);font-size:32px;margin:0 0 6px;color:var(--ink-1)">选择口语练习场景</h2>
+            <p style="font-size:13.5px;color:var(--ink-2);margin:0">可以围绕你刚读完的章节和生词开口练习，也可以任选日常或职场话题模拟对话</p>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:12px;color:var(--ink-3)">对话难度：</span>
+            <div class="lens-mode-switch" role="group" aria-label="对话难度">
+              <button class="lens-mode-btn" id="diffEasy" onclick="setSpeakDifficulty('easy')">轻松</button>
+              <button class="lens-mode-btn active" id="diffMedium" onclick="setSpeakDifficulty('medium')">日常</button>
+              <button class="lens-mode-btn" id="diffHard" onclick="setSpeakDifficulty('hard')">进阶</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="scenario-group-label">
+          <span>结合正在读的内容（推荐 · 用出来自动完成复习）</span>
+          <span>今日已收 3 个词块</span>
+        </div>
+        <div class="scenario-featured-grid">
+          <div class="scenario-card active-choice" onclick="enterScenarioConversation('book')">
+            <div>
+              <span class="sc-tag">正在共读 · 第 1 章</span>
+              <div class="sc-title">聊刚读的《The Call of the Wild》</div>
+              <p class="sc-desc">AI 围绕第一章剧情与你互动讨论，引导你在回答中自然用出 <strong>nomadic longing</strong>、<strong>chafing against</strong> 等刚查过的词块。</p>
+            </div>
+            <div class="sc-opener-preview">
+              开场白：“In Chapter 1, Buck rules Judge Miller's estate in comfort, yet the north wind stirs a 'nomadic longing' inside him...”
+            </div>
+          </div>
+
+          <div class="scenario-card" onclick="enterScenarioConversation('vocab')">
+            <div>
+              <span class="sc-tag teal">生词本联动 · 3 词待用</span>
+              <div class="sc-title">今日生词造句闯关</div>
+              <p class="sc-desc">不用死背单词卡——AI 出生活化情境提问，你只要在回答里用对今天待复习的生词，即算复习过关。</p>
+            </div>
+            <div class="sc-opener-preview">
+              开场白：“Let's practice your 3 target phrases in real sentences today. First, have you ever felt 'chafing against' a strict rule?”
+            </div>
+          </div>
+        </div>
+
+        <div class="scenario-group-label">
+          <span>日常与职场模拟场景</span>
+          <span>点击即可开始</span>
+        </div>
+        <div class="scenario-daily-grid">
+          <div class="scenario-card" onclick="enterScenarioConversation('interview')">
+            <div>
+              <span class="sc-tag neutral">职场高频</span>
+              <div class="sc-title">英文面试</div>
+              <p class="sc-desc">扮演温和的面试官，围绕自我介绍、项目经历、优缺点逐轮提问并帮你润色回答。</p>
+            </div>
+            <div class="sc-opener-preview">“Good morning! Could you start by telling me a little about yourself?”</div>
+          </div>
+
+          <div class="scenario-card" onclick="enterScenarioConversation('ordering')">
+            <div>
+              <span class="sc-tag neutral">生活实用</span>
+              <div class="sc-title">餐厅点餐</div>
+              <p class="sc-desc">在英文餐厅点单、询问今日特色菜、表达忌口偏好与结账沟通。</p>
+            </div>
+            <div class="sc-opener-preview">“Hi there! Welcome in. What can I get started for you today?”</div>
+          </div>
+
+          <div class="scenario-card" onclick="enterScenarioConversation('travel')">
+            <div>
+              <span class="sc-tag neutral">出行必备</span>
+              <div class="sc-title">旅行问路与入住</div>
+              <p class="sc-desc">涵盖机场值机、酒店前台办理入住、在陌生城市向当地人问路。</p>
+            </div>
+            <div class="sc-opener-preview">“Good afternoon! You look a little lost — is there anything I can help you with?”</div>
+          </div>
+
+          <div class="scenario-card" onclick="enterScenarioConversation('smalltalk')">
+            <div>
+              <span class="sc-tag neutral">轻松开口</span>
+              <div class="sc-title">日常闲聊寒暄</div>
+              <p class="sc-desc">像老朋友一样聊聊这周过得怎么样、周末计划、天气或最近看的一本书。</p>
+            </div>
+            <div class="sc-opener-preview">“Hey! Long time no see. How has your week been going?”</div>
+          </div>
+        </div>
+
+        <div class="scenario-group-label"><span>继续上次的对话</span></div>
+        <div class="recent-session-row" onclick="enterScenarioConversation('book')">
+          <div>
+            <strong>《The Call of the Wild》第 1 章讨论</strong>
+            <span style="color:var(--ink-3);margin-left:8px">日常难度 · 已聊 3 轮 · 发音均分 3.9</span>
+          </div>
+          <span style="color:var(--accent);font-weight:600">继续对话 →</span>
+        </div>
+      </div>
+
+      <div class="sonic-studio-grid" id="speakActiveView">
+        <div class="sonic-dialogue-well">
+          <div class="harmonic-stage-card">
+            <canvas id="harmonicCanvas" width="760" height="122"></canvas>
+            <div class="harmonic-overlay-left">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <button class="pill-Ghost-btn" style="background:var(--glass-elevated);border:1px solid var(--glass-border-strong);font-weight:600;color:var(--ink-1)" onclick="openScenarioHub()">
+                  ← 切换场景
+                </button>
+                <span class="cloud-pulse"></span>
+                <span style="font-size:13px;font-weight:600;color:var(--ink-1)" id="sonicStageStatus">
+                  当前场景：聊刚读的《The Call of the Wild》第 1 章
+                </span>
+                <span class="tabular" style="font-size:11.5px;color:var(--ink-3)" id="activeDifficultyBadge">（日常难度）</span>
+              </div>
+              <div class="target-chip-row" id="targetChipMount"></div>
+            </div>
+            <div class="harmonic-overlay-right" style="display:flex;gap:8px;align-items:center">
+              <button class="pill-Ghost-btn" id="btnQuickSampleSpeak" style="background:var(--glass-elevated);border:1px solid var(--glass-border-strong)" onclick="simulateLiveSpeech('chafing')">
+                试说一句回答
+              </button>
+              <button class="sonic-play-orb" id="btnMicPulse" style="width:44px;height:44px;background:var(--accent);color:#FFF" onclick="simulateLiveSpeech('custom')" title="点击开始说话，停顿自动发送">
+                <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="sonic-turns-scroll" id="sonicTurnsMount"></div>
+        </div>
+
+        <aside class="spatial-lens-card" style="width:100%;margin:0">
+          <div class="lens-header">
+            <span style="font-size:12.5px;font-weight:600">发音详情</span>
+            <span class="tabular" style="font-family:var(--font-mono);font-size:11px;color:var(--accent);font-weight:600">逐音标打分</span>
+          </div>
+          <div class="lens-body" id="phonemeLensMount"></div>
+        </aside>
+      </div>
+    </main>
+
+    <!-- ======================================================================
+         模块 3：全新重构「笔记与复习」—— 记忆胶带手账 + 3 分钟快刷闯关 + 表达成长雷达
+         ====================================================================== -->
+    <main class="spatial-stage" id="stageVault" style="display:none;padding-bottom:24px">
+      <div class="vault-studio-grid">
+        <!-- 左/中主列：三种高粘性互动模式切换 -->
+        <div class="vault-main-scroll">
+          <div class="vault-top-bar">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <div class="lens-mode-switch" role="tablist" aria-label="笔记与复习玩法切换">
+                <button class="lens-mode-btn active" id="vaultModeTape" onclick="setVaultPlayMode('tape')">
+                  记忆胶带手账（点按自测）
+                </button>
+                <button class="lens-mode-btn" id="vaultModeChallenge" onclick="setVaultPlayMode('challenge')">
+                  3 分钟快刷闯关（填空 / 听音 / 开口）
+                </button>
+                <button class="lens-mode-btn" id="vaultModeMd" onclick="setVaultPlayMode('md')">
+                  Markdown 笔记导出
+                </button>
+              </div>
+              <span style="font-size:12px;color:var(--ink-3)" id="vaultFilterLabel">按书本归档：《The Call of the Wild》+ 口语纠偏</span>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:8px" id="tapeGlobalActions">
+              <button class="pill-Ghost-btn" style="border:1px solid var(--glass-border-strong)" onclick="toggleAllMemoryTapes(false)">
+                全部盖上胶带自测
+              </button>
+              <button class="pill-Ghost-btn" style="border:1px solid var(--glass-border-strong)" onclick="toggleAllMemoryTapes(true)">
+                全部揭开
+              </button>
+            </div>
+          </div>
+
+          <!-- 动态挂载区：根据 vaultPlayMode 渲染 -->
+          <div id="vaultPrimaryMount"></div>
+        </div>
+
+        <!-- 右侧悬浮面板：今日进度环 + 三阶内化漏斗 + 28天热力格 + 弱项直通车 -->
+        <aside class="spatial-lens-card" style="width:100%;margin:0">
+          <div class="lens-header">
+            <span style="font-size:12.5px;font-weight:600">我的内化看板</span>
+            <span class="tabular" style="font-family:var(--font-mono);font-size:11px;color:var(--sonic-teal);font-weight:600">连续 12 天</span>
+          </div>
+          <div class="lens-body" id="vaultRadarMount"></div>
+        </aside>
+      </div>
+    </main>
+
+    <div class="toast-pill" id="toastPill">操作已生效</div>
+  </div>
+
+  <script>
+    const SCENARIO_PRESETS = {
+      book: {
+        title: "当前场景：聊刚读的《The Call of the Wild》第 1 章",
+        targets: [
+          { key: "nomadic longing", zh: "对远方的向往", done: true },
+          { key: "chafing against", zh: "因束缚而焦躁挣扎", done: false },
+          { key: "primitive law", zh: "原始生存法则", done: true }
+        ],
+        turns: [
+          {
+            role: "assistant",
+            speaker: "AI 陪练 · Ava",
+            en: "In Chapter 1, Buck rules Judge Miller's estate in comfort, yet the north wind stirs a 'nomadic longing' inside him. Why couldn't comfort completely tame him?",
+            zh: "在第一章里，巴克在庄园里生活得很安逸，但北风却唤醒了他心里的「nomadic longing」。你觉得为什么安逸没能彻底驯服他？"
+          },
+          {
+            role: "user",
+            en: "Because deep inside his blood, he still have the primitive law from his wild ancestors in the world.",
+            score: 3.9,
+            diff: [
+              { t: "keep", v: "Because deep " },
+              { t: "del", v: "inside his blood, he still have" },
+              { t: "ins", v: "in his veins, he still carried" },
+              { t: "keep", v: " a " },
+              { t: "ins", v: "nomadic longing" },
+              { t: "keep", v: " and the primitive instincts of his wild ancestors." }
+            ],
+            note: "用 deep in his veins, he still carried 替代原句的中式表达，同时自然用上本章词块 nomadic longing。"
+          },
+          {
+            role: "assistant",
+            speaker: "AI 陪练 · Ava",
+            en: "Spot on! That ancestral memory was only sleeping. When Manuel sold him and the rope tightened around his neck, how did Buck react?",
+            zh: "说得很准！那种本能只是在沉睡。当曼纽尔把他卖掉、绳子勒紧脖子时，巴克是什么反应？（试试用上 chafing against）"
+          }
+        ]
+      },
+      vocab: {
+        title: "当前场景：今日生词造句闯关",
+        targets: [
+          { key: "chafing against", zh: "对束缚感到憋屈", done: false },
+          { key: "ruled serenely", zh: "从容统御", done: false },
+          { key: "civilized calm", zh: "温和克制的外表", done: true }
+        ],
+        turns: [
+          {
+            role: "assistant",
+            speaker: "AI 陪练 · Ava",
+            en: "Let's activate your vocabulary in real life! Have you ever felt 'chafing against' a strict rule at school or work?",
+            zh: "我们来把刚收集的词块用进真实生活！你在学校或工作中有没有对某条死板规定感到「chafing against（憋屈不耐烦）」？"
+          }
+        ]
+      },
+      interview: {
+        title: "当前场景：英文面试模拟",
+        targets: [
+          { key: "spearheaded", zh: "主导推进", done: true },
+          { key: "cross-functional", zh: "跨部门协作的", done: false }
+        ],
+        turns: [
+          {
+            role: "assistant",
+            speaker: "面试官 · Ava",
+            en: "Good morning, thanks for coming in. Could you start by telling me a little about yourself and a project you're proud of?",
+            zh: "早上好，感谢来参加面试。可以先做个简短的自我介绍，并聊聊一个你最有成就感的项目吗？"
+          },
+          {
+            role: "user",
+            en: "I am a software engineer for three years, and I make a translation app in the world.",
+            score: 4.1,
+            diff: [
+              { t: "del", v: "I am a software engineer for three years, and I make" },
+              { t: "ins", v: "I've been a software engineer for three years, and I recently built" },
+              { t: "keep", v: " an immersive desktop learning app." }
+            ],
+            note: "持续三年应当使用现在完成时 I've been... for three years；制作软件用 built 或 developed 比 make 更专业。"
+          }
+        ]
+      },
+      ordering: {
+        title: "当前场景：餐厅点餐",
+        targets: [
+          { key: "on the side", zh: "（酱汁等）单独另附", done: false },
+          { key: "chef's special", zh: "主厨招牌菜", done: false }
+        ],
+        turns: [
+          {
+            role: "assistant",
+            speaker: "服务员 · Ava",
+            en: "Hi there! Welcome in. What can I get started for you today? Would you like to hear today's specials?",
+            zh: "你好，欢迎光临！今天想先点些什么？需要我介绍一下今天的招牌菜吗？"
+          }
+        ]
+      },
+      travel: {
+        title: "当前场景：旅行问路与入住",
+        targets: [
+          { key: "within walking distance", zh: "步行可达", done: false },
+          { key: "early check-in", zh: "提前办理入住", done: false }
+        ],
+        turns: [
+          {
+            role: "assistant",
+            speaker: "当地向导 · Ava",
+            en: "Good afternoon! Welcome to Osaka. Is there a station or landmark I can help you find?",
+            zh: "下午好！欢迎来到大阪。有什么车站或景点需要我帮你指路吗？"
+          }
+        ]
+      },
+      smalltalk: {
+        title: "当前场景：日常闲聊寒暄",
+        targets: [
+          { key: "catch up on", zh: "补上（落下的书/剧）", done: false },
+          { key: "unwind", zh: "放松解压", done: false }
+        ],
+        turns: [
+          {
+            role: "assistant",
+            speaker: "老朋友 · Ava",
+            en: "Hey! Long time no see. How has your week been going? Doing anything fun to unwind this weekend?",
+            zh: "嘿，好久不见！这周过得怎么样？周末有什么放松的安排吗？"
+          }
+        ]
+      }
+    };
+
+    // 记忆胶带手账条目（把阅读查词 + 口语润色 + 易错发音合成为一份好玩的可刮开手账）
+    const NOTEBOOK_ITEMS = [
+      {
+        id: "nb1",
+        category: "《The Call of the Wild》第 1 章 · 核心词块",
+        target: "chafing against",
+        hint: "因束缚而焦躁挣扎 (c... a...)",
+        peeled: false,
+        stage: "s1",
+        stageLabel: "待巩固 · 还没在口语中用过",
+        pre: "He did not know that Manuel's debt would hurl him into the primitive law, leaving him ",
+        post: " the rope.",
+        zh: "他不知道曼纽尔的赌债很快会将他抛入原始法则，让他在绳索下摩擦生痛、焦躁反抗。",
+        tip: "常搭配 rules / routine，表达“对死板规定感到憋屈不耐烦”。"
+      },
+      {
+        id: "nb2",
+        category: "《The Call of the Wild》第 1 章 · 核心词块",
+        target: "nomadic longing",
+        hint: "漂泊的远方渴望 (n... l...)",
+        peeled: true,
+        stage: "s3",
+        stageLabel: "已内化 · 今天在口语中用出 ✨",
+        pre: "Yet beneath his civilized calm, a vague ",
+        post: " sometimes stirred when the cold north wind swept through the orchards.",
+        zh: "然而在他驯化已久的平静之下，每当冷冽北风掠过果园，一种模糊的对远方的渴望便会悄然涌动。",
+        tip: "指被现代生活驯化后，骨子里依然存留的对自由旷野的向往。"
+      },
+      {
+        id: "nb3",
+        category: "口语表达改进记录 · 10月15日",
+        target: "deep in his veins, he still carried",
+        hint: "骨子里依然流淌着 (d... in his v...)",
+        peeled: false,
+        stage: "s2",
+        stageLabel: "熟悉中 · 替代中式表达",
+        pre: "你原本说：Because deep inside his blood, he still have... → 地道说法：Because ",
+        post: " the primitive instincts of his wild ancestors.",
+        zh: "因为在他的血脉深处，依然承载着野性祖先的原始本能。",
+        tip: "用 deep in one's veins + carried 替代中式的 inside his blood + have。"
+      }
+    ];
+
+    // 3 分钟多模态闯关队列（原句填空 / 听音辨词 / 开口造句）
+    const CHALLENGE_CARDS = [
+      {
+        type: "cloze",
+        typeBadge: "第 1 / 3 关 · 原句首字母填空",
+        source: "来自《The Call of the Wild》第 1 章",
+        pre: "Leaving him ",
+        answer: "chafing against",
+        firstHint: "c______ a______",
+        post: " the rope.",
+        zh: "让他在绳索的束缚下【摩擦生痛、焦躁挣扎】。",
+        note: "提示：两个词，第一个词以 c 开头（7个字母），第二个词是 against。"
+      },
+      {
+        type: "listen",
+        typeBadge: "第 2 / 3 关 · 听原著例句抓词块",
+        source: "来自《The Call of the Wild》第 1 章原声",
+        audioText: "Yet beneath his civilized calm, a vague nomadic longing sometimes stirred.",
+        question: "点击播放原著朗读，句中表达「漂泊的远方渴望」用的是哪个词块？",
+        options: ["nomadic longing", "wandering desire", "primitive law", "civilized calm"],
+        correct: "nomadic longing",
+        note: "nomadic longing 是第一章的核心意象，你在今天的口语中也成功用过一次！"
+      },
+      {
+        type: "speak",
+        typeBadge: "第 3 / 3 关 · 开口说一句直接过关（1 次顶 3 次死背）",
+        source: "来自今日口语表达改进",
+        promptZh: "试着用「deep in one's veins（在某人血脉深处）」或「chafing against（不甘受束缚）」随口说一句话：",
+        sampleEn: "He found himself chafing against the strict office routine.",
+        note: "点击下方麦克风读出示例句或自己造一句，识别通过即直接升级为「已内化 ✨」！"
+      }
+    ];
+
+    const state = {
+      surface: "reading",
+      atmosphere: "warm-archival",
+      v07Compare: false,
+      folioOpen: false,
+      spotlight: true,
+      spreadLayout: "prose",
+      maskWhisper: false,
+      activeIdx: 1,
+      hoveredClause: null,
+      lensMode: "xray",
+      activeLexKey: "nomadic longing",
+      playingAudio: false,
+      prosodyIdx: 1,
+      prosodyList: ["0.75× 慢速", "1.0×", "1.2×"],
+      speakSubView: "active",
+      speakScenarioKey: "book",
+      speakDifficulty: "medium",
+      listeningMic: false,
+      waveAmplitude: 0.18,
+      activeWordDiag: "world",
+      activePhoneIdx: 1,
+      // 笔记与复习专属状态
+      vaultPlayMode: "tape", // 'tape' (记忆胶带手账) | 'challenge' (3分钟闯关) | 'md' (Markdown导出)
+      vaultDoneToday: 5,
+      vaultTotalToday: 8,
+      vaultDue: 3,
+      challengeIdx: 0,
+      clozeDraft: "",
+      challengeVerdict: null, // null | 'pass' | 'retry'
+      notebookItems: JSON.parse(JSON.stringify(NOTEBOOK_ITEMS)),
+      targets: JSON.parse(JSON.stringify(SCENARIO_PRESETS.book.targets)),
+      turns: JSON.parse(JSON.stringify(SCENARIO_PRESETS.book.turns))
+    };
+
+    const SENTENCES = [
+      {
+        idx: 0,
+        en: "Across the sunlit Santa Clara Valley, Judge Miller's place stood back from the road, where Buck ruled serenely over the vast domain.",
+        zh: "穿过阳光明媚的圣克拉拉山谷，米勒法官的庄园隐在路旁深处，巴克曾在这片广阔领地上从容统御。",
+        lex: [{ text: "ruled serenely", key: "ruled serenely", type: "chunk" }],
+        xray: {
+          spine: "Judge Miller's place stood back from the road.",
+          clauses: [
+            { tag: "地点状语", snippet: "Across the sunlit Santa Clara Valley,", desc: "先交代阳光山谷的大环境" },
+            { tag: "句子主干", snippet: "Judge Miller's place stood back from the road,", desc: "stand back from 表示房屋离马路有一段距离、深藏不露" },
+            { tag: "定语从句", snippet: "where Buck ruled serenely over the vast domain.", desc: "补充说明巴克在庄园里像领主一样自在生活" }
+          ],
+          pattern: "Across [地点], [主体] stood back from..., where [某人]..."
+        }
+      },
+      {
+        idx: 1,
+        en: "Yet beneath his civilized calm, a vague nomadic longing sometimes stirred when the cold north wind swept through the orchards.",
+        zh: "然而在他驯化已久的平静之下，每当凛冽的北风掠过果园，一种模糊的游牧般的远方渴望便会悄然涌动。",
+        lex: [
+          { text: "civilized calm", key: "civilized calm", type: "chunk" },
+          { text: "nomadic longing", key: "nomadic longing", type: "vocab" }
+        ],
+        xray: {
+          spine: "A vague nomadic longing sometimes stirred.",
+          clauses: [
+            { tag: "介词短语", snippet: "Yet beneath his civilized calm,", desc: "beneath + 抽象名词：在……的外表之下" },
+            { tag: "句子主干", snippet: "a vague nomadic longing sometimes stirred", desc: "stir 在这里表示情绪或本能“悄然涌动、苏醒”" },
+            { tag: "时间状语从句", snippet: "when the cold north wind swept through the orchards.", desc: "每当冷冽北风吹过果园时触发" }
+          ],
+          pattern: "Beneath one's [表面情绪], a vague [内心想法] stirred when..."
+        }
+      },
+      {
+        idx: 2,
+        en: "He did not know that Manuel's gambling debt would soon hurl him from this gentle world into the primitive law of club and fang, leaving him chafing against the rope.",
+        zh: "他并不知道，曼纽尔的赌债很快就会将他从这温柔的世界抛入棍棒与獠牙的原始法则之中，让他在绳索下焦躁挣扎。",
+        lex: [
+          { text: "primitive law", key: "primitive law", type: "vocab" },
+          { text: "chafing against", key: "chafing against", type: "vocab" }
+        ],
+        xray: {
+          spine: "He did not know that Manuel's debt would hurl him into the primitive law.",
+          clauses: [
+            { tag: "主句 + 宾语从句", snippet: "He did not know that Manuel's gambling debt would soon hurl him", desc: "hurl sb. from A into B：把某人从 A 猛地推入 B" },
+            { tag: "介词短语", snippet: "from this gentle world into the primitive law of club and fang,", desc: "从温和的文明世界落入弱肉强食的原始法则" },
+            { tag: "伴随状语", snippet: "leaving him chafing against the rope.", desc: "chafe against：因被绳索束缚而磨痛、焦躁反抗" }
+          ],
+          pattern: "hurl sb. from [旧环境] into [新处境], leaving sb. chafing against..."
+        }
+      }
+    ];
+
+    const LEX_DICT = {
+      "nomadic longing": {
+        head: "nomadic longing",
+        ipa: "/noʊˈmædɪk ˈlɔːŋɪŋ/",
+        badge: "生词本词块",
+        zh: "漂泊的渴望；对远方旷野的向往",
+        trap: "不用死译成“游牧民族的渴望”。这里指被驯化的动物（或都市人）心底对旷野和自由的向往。",
+        example: "Even after ten years in the city, a nomadic longing kept pulling her toward the mountains."
+      },
+      "chafing against": {
+        head: "chafing against",
+        ipa: "/ˈtʃeɪfɪŋ əˈɡenst/",
+        badge: "重点动词短语",
+        zh: "（因束缚而）磨痛；对束缚或规则感到烦躁不安",
+        trap: "本义是绳子把皮毛磨破，常引申为 chafe against rules/routine（对死板规定感到憋屈）。",
+        example: "He soon found himself chafing against the strict routine of the office."
+      },
+      "primitive law": {
+        head: "primitive law",
+        ipa: "/ˈprɪmətɪv lɔː/",
+        badge: "核心词块",
+        zh: "原始法则；弱肉强食的生存规律",
+        trap: "注意 primitive 第一个音节发短音 /ˈprɪ/，不要读成 /praɪ/。",
+        example: "In the frozen north, only the primitive law of survival mattered."
+      },
+      "ruled serenely": {
+        head: "ruled serenely",
+        ipa: "/ruːld səˈriːnli/",
+        badge: "常用搭配",
+        zh: "从容统御、安然掌管",
+        trap: "serenely 表示平静从容，与后文突然被拐卖形成反差。",
+        example: "For four sunlit years, Buck ruled serenely over Judge Miller's estate."
+      },
+      "civilized calm": {
+        head: "civilized calm",
+        ipa: "/ˈsɪvəlaɪzd kɑːm/",
+        badge: "常用搭配",
+        zh: "驯化后的平静；文明温和的外表",
+        trap: "与后文的 primitive instinct（原始本能）相对应。",
+        example: "Beneath his civilized calm lay an untamed spirit."
+      }
+    };
+
+    const PHONEME_LAB = {
+      "world": {
+        word: "world",
+        ipa: "/wɜːrld/",
+        score: 2.6,
+        nativePath: "M12,44 C50,14 98,12 145,26 C185,38 220,44 260,48",
+        userPath:   "M12,45 C50,34 98,36 145,42 C185,46 220,48 260,50",
+        phones: [
+          { sym: "w", val: 4.5, st: "ok", tip: "双唇微圆前突自然，起音准确。" },
+          { sym: "ɜːr", val: 2.1, st: "bad", tip: "舌尖没有卷起，听起来像中文的「沃」。发 /ɜːr/ 时舌身稍往后缩，舌尖向上卷起。" },
+          { sym: "l", val: 2.3, st: "bad", tip: "漏掉了中间的 /l/ 音：卷舌音结束后，舌尖要抬起轻碰一下上牙床。" },
+          { sym: "d", val: 3.2, st: "warn", tip: "词尾的 /d/ 轻碰上牙床收尾即可。" }
+        ]
+      },
+      "primitive": {
+        word: "primitive",
+        ipa: "/ˈprɪmətɪv/",
+        score: 3.4,
+        nativePath: "M12,16 C58,12 102,38 150,42 C195,44 228,46 260,48",
+        userPath:   "M12,28 C58,26 102,33 150,38 C195,42 228,45 260,49",
+        phones: [
+          { sym: "pr", val: 4.4, st: "ok", tip: "开头辅音连读很清晰。" },
+          { sym: "ɪ", val: 3.0, st: "warn", tip: "嘴巴张得偏大（像 /e/）。嘴型稍微收一点，短促有力地重读第一音节。" },
+          { sym: "mə", val: 4.3, st: "ok", tip: "中间弱读自然。" },
+          { sym: "tɪv", val: 3.1, st: "warn", tip: "结尾 /v/ 用上牙轻触下唇发声，不要读成 /f/。" }
+        ]
+      },
+      "ancestors": {
+        word: "ancestors",
+        ipa: "/ˈænsestərz/",
+        score: 4.6,
+        nativePath: "M12,14 C62,12 115,34 170,38 C210,42 235,45 260,47",
+        userPath:   "M12,16 C62,15 115,33 170,39 C210,43 235,46 260,48",
+        phones: [
+          { sym: "æn", val: 4.7, st: "ok", tip: "开头 /æ/ 音饱满准确。" },
+          { sym: "ses", val: 4.5, st: "ok", tip: "中间音节清晰。" },
+          { sym: "tərz", val: 4.6, st: "ok", tip: "词尾卷舌与 /-z/ 衔接自然。" }
+        ]
+      }
+    };
+
+    let audioCtx = null;
+    function chime(type) {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === "suspended") audioCtx.resume();
+        const now = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        if (type === "chord") {
+          osc.type = "triangle";
+          osc.frequency.setValueAtTime(440, now);
+          osc.frequency.setValueAtTime(554.37, now + 0.08);
+          gain.gain.setValueAtTime(0.05, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+          osc.start(now);
+          osc.stop(now + 0.29);
+        } else {
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(329.63, now);
+          gain.gain.setValueAtTime(0.035, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+          osc.start(now);
+          osc.stop(now + 0.15);
+        }
+      } catch (e) {}
+    }
+
+    let wavePhase = 0;
+    function animateHarmonicWave() {
+      const canvas = document.getElementById("harmonicCanvas");
+      if (canvas && state.surface === "speak" && state.speakSubView === "active") {
+        const ctx = canvas.getContext("2d");
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+
+        const targetAmp = state.listeningMic ? 0.78 : state.playingAudio ? 0.52 : 0.16;
+        state.waveAmplitude += (targetAmp - state.waveAmplitude) * 0.08;
+        wavePhase += state.listeningMic ? 0.09 : 0.03;
+
+        const waves = [
+          { color: "rgba(200, 75, 49, 0.45)", freq: 0.014, speed: 1.0, amp: 28 },
+          { color: "rgba(27, 107, 88, 0.38)", freq: 0.021, speed: -0.7, amp: 22 },
+          { color: "rgba(54, 73, 196, 0.25)", freq: 0.010, speed: 1.4, amp: 16 }
+        ];
+
+        waves.forEach((wv) => {
+          ctx.beginPath();
+          ctx.strokeStyle = wv.color;
+          ctx.lineWidth = 2;
+          for (let x = 0; x <= w; x += 6) {
+            const envelope = Math.sin((x / w) * Math.PI);
+            const y =
+              h / 2 +
+              Math.sin(x * wv.freq + wavePhase * wv.speed) *
+                wv.amp *
+                state.waveAmplitude *
+                envelope;
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        });
+      }
+      requestAnimationFrame(animateHarmonicWave);
+    }
+
+    function renderEditorialProse() {
+      const mount = document.getElementById("proseMount");
+      mount.classList.toggle("spotlight-active", state.spotlight && !state.v07Compare);
+
+      if (state.v07Compare) {
+        mount.innerHTML = SENTENCES.map(
+          (s) => `
+          <div style="display:grid;grid-template-columns:28px 1fr auto;gap:10px;padding:12px;border:1px solid var(--glass-border-strong);background:var(--glass-elevated);border-radius:8px;margin-bottom:10px" onclick="selectSentence(${s.idx})">
+            <span class="tabular" style="font-size:11px;color:var(--ink-3)">${s.idx + 1}</span>
+            <div>
+              <div style="font-size:17.5px;line-height:1.55;margin-bottom:4px">${decorateSentence(s, false)}</div>
+              <div style="font-family:var(--font-sans);font-size:13.5px;color:var(--ink-2)">${s.zh}</div>
+            </div>
+            <div style="display:flex;gap:4px">
+              <button class="pill-Ghost-btn" style="border:1px solid var(--glass-border)">朗读</button>
+              <button class="pill-Ghost-btn" style="border:1px solid var(--glass-border)">修改</button>
+            </div>
+          </div>
+        `
+        ).join("");
+        return;
+      }
+
+      if (state.spreadLayout === "prose") {
+        let html = "";
+        SENTENCES.forEach((s, i) => {
+          const isCur = s.idx === state.activeIdx;
+          html += `
+            <span class="prose-sentence ${isCur ? "is-current" : ""}" onclick="selectSentence(${s.idx})">
+              ${decorateSentence(s, i === 0)}
+            </span>
+          `;
+          if (isCur) {
+            html += `
+              <span class="interlinear-fold ${state.maskWhisper ? "masked" : ""}" onclick="event.stopPropagation()">
+                <div class="fold-zh" onclick="this.parentElement.classList.toggle('masked')" title="点击显示或隐藏译文">${s.zh}</div>
+                <div class="fold-actions">
+                  <button class="text-action-btn" onclick="chime('normal');toast('正在朗读第 ' + (${s.idx}+1) + ' 句')">
+                    🔊 朗读本句
+                  </button>
+                  <button class="text-action-btn" onclick="setLensMode('xray')">
+                    句子解析
+                  </button>
+                  <button class="text-action-btn" onclick="jumpToSpeakWithSentence(${s.idx})">
+                    🎙️ 用这句练口语 →
+                  </button>
+                </div>
+              </span>
+            `;
+          }
+        });
+        mount.innerHTML = html;
+      } else {
+        mount.innerHTML = SENTENCES.map((s, i) => {
+          const isCur = s.idx === state.activeIdx;
+          return `
+            <div class="parallel-spread-row ${isCur ? "is-current" : ""}" onclick="selectSentence(${s.idx})">
+              <div style="font-size:18.5px;line-height:1.7">${decorateSentence(s, i === 0)}</div>
+              <div style="font-family:var(--font-sans);font-size:14.5px;line-height:1.7;color:var(--ink-2)" class="${state.maskWhisper ? "masked" : ""}">${s.zh}</div>
+            </div>
+          `;
+        }).join("");
+      }
+    }
+
+    function decorateSentence(sent, withDropCap) {
+      let text = sent.en;
+      if (state.hoveredClause && text.includes(state.hoveredClause)) {
+        text = text.replace(
+          state.hoveredClause,
+          `<mark class="spatial-clause-mark">${state.hoveredClause}</mark>`
+        );
+        return text;
+      }
+      sent.lex.forEach((lx) => {
+        const cls = lx.type === "vocab" ? "token-vocab" : "token-chunk";
+        text = text.replace(
+          lx.text,
+          `<span class="${cls}" onclick="event.stopPropagation();openLexemeInLens('${lx.key}', ${sent.idx})" title="点击查看释义">${lx.text}</span>`
+        );
+      });
+      if (withDropCap) {
+        return `<span class="drop-cap">${text.charAt(0)}</span>${text.slice(1)}`;
+      }
+      return text;
+    }
+
+    function renderSpatialLens() {
+      document.getElementById("lensTabXray").classList.toggle("active", state.lensMode === "xray");
+      document.getElementById("lensTabLex").classList.toggle("active", state.lensMode === "lex");
+      document.getElementById("lensRefTag").textContent = `第 ${state.activeIdx + 1} 句`;
+      const body = document.getElementById("lensBody");
+
+      if (state.lensMode === "xray") {
+        const s = SENTENCES[state.activeIdx] || SENTENCES[1];
+        const x = s.xray;
+        body.innerHTML = `
+          <div class="lens-section">
+            <div class="lens-kicker">
+              <span>句子主干</span>
+              <span>第 ${s.idx + 1} 句</span>
+            </div>
+            <div style="font-family:var(--font-serif);font-size:17px;font-weight:600;line-height:1.45;color:var(--ink-1)">
+              “${x.spine}”
+            </div>
+          </div>
+
+          <div class="lens-section">
+            <div class="lens-kicker">
+              <span>结构拆解（悬停可高亮左侧原文）</span>
+            </div>
+            ${x.clauses
+              .map(
+                (c, i) => `
+              <div class="clause-step-item"
+                   style="margin-left:${i * 8}px"
+                   onmouseenter="setHoveredClause(${JSON.stringify(c.snippet).replace(/"/g, '&quot;')})"
+                   onmouseleave="setHoveredClause(null)">
+                <div style="font-size:11px;color:var(--accent);font-weight:600;margin-bottom:2px">
+                  ${c.tag}
+                </div>
+                <div style="font-family:var(--font-serif);font-size:14.5px;font-weight:600;color:var(--ink-1)">
+                  ${c.snippet}
+                </div>
+                <div style="font-size:12px;color:var(--ink-3);margin-top:3px;line-height:1.45">
+                  ${c.desc}
+                </div>
+              </div>
+            `
+              )
+              .join("")}
+          </div>
+
+          <div class="lens-section">
+            <div class="lens-kicker"><span>常用句型</span></div>
+            <div style="font-family:var(--font-mono);font-size:11.5px;line-height:1.55;padding:10px 12px;border-radius:10px;background:var(--canvas-bg);border:1px solid var(--glass-border)">
+              ${x.pattern}
+            </div>
+            <button class="island-tab active" style="width:100%;justify-content:center;margin-top:12px" onclick="jumpToSpeakWithSentence(${s.idx})">
+              用这个句型练口语 →
+            </button>
+          </div>
+        `;
+      } else {
+        const d = LEX_DICT[state.activeLexKey] || LEX_DICT["nomadic longing"];
+        body.innerHTML = `
+          <div class="lens-section">
+            <div class="lens-kicker">
+              <span>${d.badge}</span>
+              <button class="text-action-btn" onclick="chime('normal');toast('正在朗读：' + '${d.head}')">🔊 发音</button>
+            </div>
+            <div style="font-family:var(--font-display);font-size:32px;line-height:1.1;color:var(--ink-1)">${d.head}</div>
+            <div style="font-family:var(--font-mono);font-size:12px;color:var(--ink-3);margin-top:4px">${d.ipa}</div>
+            <div style="font-size:14.5px;font-weight:600;color:var(--ink-1);margin-top:12px;line-height:1.5">${d.zh}</div>
+          </div>
+
+          <div class="lens-section">
+            <div class="lens-kicker"><span>用法提示</span></div>
+            <p style="font-size:13px;line-height:1.65;color:var(--ink-2);margin:0">${d.trap}</p>
+          </div>
+
+          <div class="lens-section">
+            <div class="lens-kicker"><span>例句</span></div>
+            <p style="font-family:var(--font-serif);font-size:15.5px;line-height:1.6;color:var(--ink-1);margin:0 0 14px">“${d.example}”</p>
+            <button class="island-tab active" style="width:100%;justify-content:center" onclick="addTargetLexeme('${d.head}')">
+              ＋ 加入今日口语练习
+            </button>
+          </div>
+        `;
+      }
+    }
+
+    function openScenarioHub() {
+      state.speakSubView = "hub";
+      document.getElementById("speakHubView").style.display = "block";
+      document.getElementById("speakActiveView").style.display = "none";
+    }
+
+    function enterScenarioConversation(scenarioKey) {
+      const preset = SCENARIO_PRESETS[scenarioKey] || SCENARIO_PRESETS.book;
+      state.speakScenarioKey = scenarioKey;
+      state.speakSubView = "active";
+      state.targets = JSON.parse(JSON.stringify(preset.targets));
+      state.turns = JSON.parse(JSON.stringify(preset.turns));
+
+      if (state.surface !== "speak") {
+        switchSurface("speak");
+      }
+      document.getElementById("speakHubView").style.display = "none";
+      document.getElementById("speakActiveView").style.display = "grid";
+      document.getElementById("sonicStageStatus").textContent = preset.title;
+      renderSonicStudio();
+      chime("chord");
+      toast(`已进入「${preset.title.replace("当前场景：", "")}」`);
+    }
+
+    function setSpeakDifficulty(diff) {
+      state.speakDifficulty = diff;
+      const labels = { easy: "（轻松难度）", medium: "（日常难度）", hard: "（进阶难度）" };
+      document.getElementById("diffEasy").classList.toggle("active", diff === "easy");
+      document.getElementById("diffMedium").classList.toggle("active", diff === "medium");
+      document.getElementById("diffHard").classList.toggle("active", diff === "hard");
+      document.getElementById("activeDifficultyBadge").textContent = labels[diff];
+      toast(`已切换对话难度为：${labels[diff].replace(/[（）]/g, "")}`);
+    }
+
+    function renderSonicStudio() {
+      document.getElementById("speakHubView").style.display = state.speakSubView === "hub" ? "block" : "none";
+      document.getElementById("speakActiveView").style.display = state.speakSubView === "active" ? "grid" : "none";
+
+      const chipMount = document.getElementById("targetChipMount");
+      chipMount.innerHTML = state.targets
+        .map(
+          (t) => `
+        <span class="lex-target-chip ${t.done ? "done" : ""}" onclick="toast('今日练习词块：' + '${t.key} — 在对话中自然说出即可完成')">
+          <span>${t.done ? "✓ 已用上" : "○ 待练习"}</span>
+          <strong>${t.key}</strong>
+          <span style="opacity:0.75">${t.zh}</span>
+        </span>
+      `
+        )
+        .join("");
+
+      const turnsMount = document.getElementById("sonicTurnsMount");
+      turnsMount.innerHTML = state.turns
+        .map((t) => {
+          if (t.role === "assistant") {
+            return `
+              <div class="dialogue-turn">
+                <div class="turn-speaker-line">
+                  <span>${t.speaker}</span>
+                  <button class="text-action-btn" onclick="chime('normal');toast('正在播放 AI 提问')">🔊 重听</button>
+                </div>
+                <div class="turn-prose-en">${t.en}</div>
+                <div class="turn-prose-zh">${t.zh}</div>
+              </div>
+            `;
+          } else {
+            return `
+              <div class="dialogue-turn mine">
+                <div class="turn-speaker-line tabular">
+                  <span>我的回答 · 点击右侧单词查看发音细节</span>
+                  <span style="color:var(--accent);font-weight:600">发音得分 ${t.score.toFixed(1)} / 5.0</span>
+                </div>
+                <div class="turn-prose-en">${t.en}</div>
+                <div class="editorial-diff-block">
+                  <div style="display:flex;justify-content:space-between;align-items:center;font-size:11.5px;font-weight:600;color:var(--sonic-teal);margin-bottom:4px">
+                    <span>表达改进建议</span>
+                    <button class="text-action-btn" onclick="chime('chord');toast('已存入笔记')">＋ 存为笔记</button>
+                  </div>
+                  <div style="font-family:var(--font-serif);font-size:16px;line-height:1.55;color:var(--ink-1)">
+                    ${t.diff
+                      .map((seg) =>
+                        seg.t === "del"
+                          ? `<span class="diff-del-span">${seg.v}</span>`
+                          : seg.t === "ins"
+                          ? `<span class="diff-ins-span">${seg.v}</span>`
+                          : `<span>${seg.v}</span>`
+                      )
+                      .join("")}
+                  </div>
+                  <div style="font-size:12px;color:var(--ink-3);margin-top:5px">${t.note}</div>
+                </div>
+              </div>
+            `;
+          }
+        })
+        .join("");
+
+      renderPhonemeLens();
+    }
+
+    function renderPhonemeLens() {
+      const mount = document.getElementById("phonemeLensMount");
+      const d = PHONEME_LAB[state.activeWordDiag] || PHONEME_LAB["world"];
+      const p = d.phones[state.activePhoneIdx] || d.phones[0];
+
+      mount.innerHTML = `
+        <div class="lens-section">
+          <div class="lens-kicker"><span>点选单词查看发音细节</span></div>
+          <div style="line-height:2;font-family:var(--font-serif);font-size:17px">
+            <span>Because deep inside his blood, he still have the </span>
+            <span style="padding:2px 6px;border-radius:6px;background:var(--warn-soft);color:var(--warn);cursor:pointer;${state.activeWordDiag === "primitive" ? "outline:1.5px solid var(--ink-1)" : ""}" onclick="pickWordDiag('primitive', 1)">primitive (3.4)</span>
+            <span> law from his wild </span>
+            <span style="padding:2px 6px;border-radius:6px;background:var(--sonic-teal-soft);color:var(--sonic-teal);cursor:pointer;${state.activeWordDiag === "ancestors" ? "outline:1.5px solid var(--ink-1)" : ""}" onclick="pickWordDiag('ancestors', 0)">ancestors (4.6)</span>
+            <span> in the </span>
+            <span style="padding:2px 6px;border-radius:6px;background:var(--err-soft);color:var(--err);font-weight:600;cursor:pointer;${state.activeWordDiag === "world" ? "outline:1.5px solid var(--ink-1)" : ""}" onclick="pickWordDiag('world', 1)">world (2.6)</span>
+          </div>
+        </div>
+
+        <div class="lens-section">
+          <div class="lens-kicker tabular">
+            <span>音标拆解 · ${d.word} ${d.ipa}</span>
+            <span style="color:var(--accent);font-weight:600">${d.score} / 5.0</span>
+          </div>
+          <div class="phoneme-pill-grid">
+            ${d.phones
+              .map(
+                (ph, idx) => `
+              <div class="phoneme-node ${ph.st} ${idx === state.activePhoneIdx ? "selected" : ""}" onclick="pickPhoneSlice(${idx})">
+                <div style="font-family:var(--font-mono);font-size:14px;font-weight:600">/${ph.sym}/</div>
+                <div class="tabular" style="font-family:var(--font-mono);font-size:11px;color:var(--ink-3);margin-top:2px">${ph.val.toFixed(1)}</div>
+              </div>
+            `
+              )
+              .join("")}
+          </div>
+          <div style="font-size:12.5px;font-weight:600;color:var(--ink-1);margin-bottom:4px">
+            发音建议（/${p.sym}/）：
+          </div>
+          <p style="font-size:13px;line-height:1.6;color:var(--ink-2);margin:0 0 12px">${p.tip}</p>
+          <div style="display:flex;gap:8px">
+            <button class="island-tab active" style="flex:1;justify-content:center" onclick="chime('normal');toast('正在慢速播放：' + '${d.word}')">
+              慢速示范 (0.75×)
+            </button>
+            <button class="pill-Ghost-btn" style="border:1px solid var(--glass-border-strong)" onclick="chime('normal');toast('请跟读单词：' + '${d.word}')">
+              重读这个词
+            </button>
+          </div>
+        </div>
+
+        <div class="lens-section">
+          <div class="lens-kicker">
+            <span>语调对比</span>
+            <button class="text-action-btn" onclick="chime('chord');toast('正在交替播放：示范发音 → 我的录音')">🔊 对比我的录音</button>
+          </div>
+          <svg viewBox="0 0 272 64" style="width:100%;height:68px;background:var(--canvas-bg);border:1px solid var(--glass-border);border-radius:12px;padding:6px">
+            <line x1="12" y1="32" x2="260" y2="32" stroke="var(--glass-border-strong)" stroke-dasharray="3 3" stroke-width="1"/>
+            <path d="${d.nativePath}" fill="none" stroke="var(--sonic-teal)" stroke-width="2.4" stroke-linecap="round"/>
+            <path d="${d.userPath}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="4 3" stroke-linecap="round"/>
+          </svg>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-3);margin-top:6px">
+            <span style="color:var(--sonic-teal)">● 实线：标准发音语调</span>
+            <span style="color:var(--accent)">● 虚线：我的录音语调</span>
+          </div>
+        </div>
+      `;
+    }
+
+    // ========================================================================
+    // 模块 3：全新「笔记与复习」渲染引擎
+    // ========================================================================
+    function setVaultPlayMode(mode) {
+      state.vaultPlayMode = mode;
+      document.getElementById("vaultModeTape").classList.toggle("active", mode === "tape");
+      document.getElementById("vaultModeChallenge").classList.toggle("active", mode === "challenge");
+      document.getElementById("vaultModeMd").classList.toggle("active", mode === "md");
+      document.getElementById("tapeGlobalActions").style.display = mode === "tape" ? "flex" : "none";
+      renderVaultSurface();
+    }
+
+    function toggleAllMemoryTapes(peel) {
+      state.notebookItems.forEach((item) => {
+        item.peeled = peel;
+      });
+      chime("normal");
+      renderVaultSurface();
+      toast(peel ? "已揭开全部记忆胶带" : "已贴上记忆胶带，看着中文提示在脑海里想出英文后再点开！");
+    }
+
+    function toggleSingleTape(id) {
+      const target = state.notebookItems.find((x) => x.id === id);
+      if (target) {
+        target.peeled = !target.peeled;
+        chime("normal");
+        renderVaultSurface();
+      }
+    }
+
+    function markTapeItemMastered(id, actionLabel) {
+      const target = state.notebookItems.find((x) => x.id === id);
+      if (target) {
+        target.peeled = true;
+        target.stage = "s3";
+        target.stageLabel = "已掌握 · 7 天后复现 ✓";
+      }
+      state.vaultDoneToday = Math.min(state.vaultTotalToday, state.vaultDoneToday + 1);
+      state.vaultDue = Math.max(0, state.vaultDue - 1);
+      document.getElementById("navVaultCount").textContent = String(state.vaultDue);
+      chime("chord");
+      renderVaultSurface();
+      toast(`已记录：${actionLabel}`);
+    }
+
+    function submitChallengeStep(passed, msg) {
+      state.challengeVerdict = passed ? "pass" : "retry";
+      if (passed) {
+        state.vaultDoneToday = Math.min(state.vaultTotalToday, state.vaultDoneToday + 1);
+        state.vaultDue = Math.max(0, state.vaultDue - 1);
+        document.getElementById("navVaultCount").textContent = String(state.vaultDue);
+        chime("chord");
+      } else {
+        chime("normal");
+      }
+      toast(msg);
+      renderVaultSurface();
+    }
+
+    function nextChallengeCard() {
+      state.challengeIdx = (state.challengeIdx + 1) % CHALLENGE_CARDS.length;
+      state.challengeVerdict = null;
+      state.clozeDraft = "";
+      renderVaultSurface();
+    }
+
+    function renderVaultSurface() {
+      const primary = document.getElementById("vaultPrimaryMount");
+      const radar = document.getElementById("vaultRadarMount");
+
+      // 1. 渲染主区（三种模式）
+      if (state.vaultPlayMode === "tape") {
+        primary.innerHTML = `
+          <div class="notebook-sheet-card">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--glass-border-strong)">
+              <div>
+                <div style="font-size:12px;color:var(--accent);font-weight:600;margin-bottom:4px">1 分钟遮罩自测手账 · 告别死板背单词卡</div>
+                <h3 style="font-family:var(--font-serif);font-size:26px;margin:0;color:var(--ink-1)">《The Call of the Wild》第 1 章 & 口语纠偏手账</h3>
+              </div>
+              <span class="tabular" style="font-size:12px;color:var(--ink-3)">点击琥珀色胶带即可刮开自测</span>
+            </div>
+
+            ${state.notebookItems
+              .map(
+                (item) => `
+              <div class="tape-entry-row">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+                  <span style="font-size:11.5px;color:var(--ink-3);font-weight:600">${item.category}</span>
+                  <span class="stage-pill ${item.stage}">${item.stageLabel}</span>
+                </div>
+
+                <div style="font-family:var(--font-serif);font-size:19.5px;line-height:1.7;color:var(--ink-1)">
+                  ${item.pre}
+                  <span class="memory-tape ${item.peeled ? "peeled" : ""}"
+                        data-hint="${item.hint}"
+                        onclick="toggleSingleTape('${item.id}')"
+                        title="点击揭开或重新贴上胶带">
+                    ${item.target}
+                  </span>
+                  ${item.post}
+                </div>
+
+                <div style="font-size:13.5px;color:var(--ink-2)">${item.zh}</div>
+
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;flex-wrap:wrap;gap:8px">
+                  <span style="font-size:12px;color:var(--ink-3)">💡 ${item.tip}</span>
+                  <div style="display:flex;gap:8px">
+                    <button class="text-action-btn" onclick="chime('normal');toast('正在播放原句发音')">🔊 听原句</button>
+                    <button class="pill-Ghost-btn" style="border:1px solid var(--glass-border-strong)" onclick="markTapeItemMastered('${item.id}', '想起来了 · 7天后复现')">✓ 秒懂过关</button>
+                    <button class="pill-Ghost-btn" style="border:1px solid var(--glass-border)" onclick="enterScenarioConversation('vocab')">去口语里用一次 →</button>
+                  </div>
+                </div>
+              </div>
+            `
+              )
+              .join("")}
+          </div>
+        `;
+      } else if (state.vaultPlayMode === "challenge") {
+        const card = CHALLENGE_CARDS[state.challengeIdx];
+        let bodyHtml = "";
+
+        if (card.type === "cloze") {
+          bodyHtml = `
+            <p style="font-family:var(--font-serif);font-size:23px;line-height:1.65;color:var(--ink-1);margin:8px 0">
+              “He did not know that Manuel's gambling debt would soon hurl him into the primitive law, ${card.pre}
+              <input class="cloze-input-field" id="clozeInputBox" value="${state.clozeDraft}" placeholder="${card.firstHint}" oninput="state.clozeDraft = this.value" />
+              ${card.post}”
+            </p>
+            <div style="font-size:14.5px;color:var(--ink-2)">${card.zh}</div>
+            <div style="font-size:12.5px;color:var(--ink-3)">${card.note}</div>
+            <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap">
+              <button class="island-tab active" onclick="state.clozeDraft='chafing against';submitChallengeStep(true, '拼写完全正确！chafing against 熟练度 +1')">
+                ✓ 填入答案并判分
+              </button>
+              <button class="pill-Ghost-btn" style="border:1px solid var(--glass-border-strong)" onclick="toast('首字母提示：c h a f i n g   a g a i n s t')">
+                给一点提示
+              </button>
+              <button class="pill-Ghost-btn" style="margin-left:auto" onclick="nextChallengeCard()">
+                下一关 (听音抓词) →
+              </button>
+            </div>
+          `;
+        } else if (card.type === "listen") {
+          bodyHtml = `
+            <div style="display:flex;align-items:center;gap:14px;padding:16px 20px;border-radius:16px;background:var(--canvas-bg);border:1px solid var(--glass-border-strong)">
+              <button class="sonic-play-orb" onclick="chime('normal');toast('🔊 正在播放原著句子：Yet beneath his civilized calm, a vague nomadic longing sometimes stirred.')">
+                <svg viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+              </button>
+              <div>
+                <div style="font-weight:600;font-size:14px;color:var(--ink-1)">点击播放原著语音 · 盲听抓词</div>
+                <div style="font-size:12.5px;color:var(--ink-3)">${card.question}</div>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px">
+              ${card.options
+                .map(
+                  (opt) => `
+                <button class="scenario-card" style="padding:14px 16px;border-radius:14px" onclick="submitChallengeStep('${opt}' === '${card.correct}', '${opt}' === '${card.correct}' ? '听音辨词准确！nomadic longing 已巩固' : '再听一遍试试，注意听 vague 后面的词块')">
+                  <span style="font-family:var(--font-serif);font-size:18px;font-weight:600">${opt}</span>
+                </button>
+              `
+                )
+                .join("")}
+            </div>
+            <div style="display:flex;justify-content:flex-end;margin-top:6px">
+              <button class="pill-Ghost-btn" onclick="nextChallengeCard()">下一关 (开口造句秒过) →</button>
+            </div>
+          `;
+        } else {
+          bodyHtml = `
+            <div style="font-size:15px;color:var(--ink-1);font-weight:600">${card.promptZh}</div>
+            <div style="padding:16px 20px;border-radius:16px;background:var(--canvas-bg);border:1px solid var(--glass-border)">
+              <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:4px">参考造句（可直接跟读或自由发挥）：</div>
+              <div style="font-family:var(--font-serif);font-size:20px;color:var(--ink-1)">“${card.sampleEn}”</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;margin-top:6px;flex-wrap:wrap">
+              <button class="island-tab active" style="background:var(--accent);color:#FFF" onclick="submitChallengeStep(true, '🎙️ 语音造句通过！该词块已直接晋升为「已内化 ✨」')">
+                🎤 点击开口说一句（说对直接升满级）
+              </button>
+              <button class="pill-Ghost-btn" style="margin-left:auto" onclick="nextChallengeCard()">回到第 1 关 ↻</button>
+            </div>
+          `;
+        }
+
+        primary.innerHTML = `
+          <div class="challenge-stage-box">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span class="sc-tag">${card.typeBadge}</span>
+              <span style="font-size:12px;color:var(--ink-3)">${card.source}</span>
+            </div>
+            ${bodyHtml}
+            ${
+              state.challengeVerdict === "pass"
+                ? `<div style="padding:12px 16px;border-radius:12px;background:var(--sonic-teal-soft);color:var(--sonic-teal);font-size:13px;font-weight:600;display:flex;justify-content:space-between;align-items:center">
+                    <span>✓ 本关通过！${card.note}</span>
+                    <button class="pill-Ghost-btn" style="color:var(--sonic-teal);font-weight:700" onclick="nextChallengeCard()">继续下一关 →</button>
+                   </div>`
+                : ""
+            }
+          </div>
+        `;
+      } else {
+        // Markdown 视图（契合种子用户最喜欢的 GPT Markdown 复习笔记整理工作流）
+        primary.innerHTML = `
+          <div class="notebook-sheet-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+              <div>
+                <h3 style="font-family:var(--font-serif);font-size:22px;margin:0">Markdown 结构化学习笔记（可直接复制进 Notion / Obsidian）</h3>
+                <p style="font-size:12.5px;color:var(--ink-3);margin:4px 0 0">自动汇总自今日阅读查词、口语表达改进与发音诊断</p>
+              </div>
+              <button class="island-tab active" onclick="chime('chord');toast('已复制整篇 Markdown 笔记到剪贴板')">复制 Markdown</button>
+            </div>
+            <pre style="font-family:var(--font-mono);font-size:12.5px;line-height:1.7;padding:18px;border-radius:14px;background:var(--canvas-bg);border:1px solid var(--glass-border);overflow-x:auto;color:var(--ink-1);margin:0"># 📚 2026-10-16 英语精读与口语内化笔记
+> 来源：《The Call of the Wild》Ch.1 + 今日口语对话
+
+## 一、核心词块（带原句与用法提示）
+1. **nomadic longing** \`/noʊˈmædɪk ˈlɔːŋɪŋ/\` — 漂泊的远方渴望 [✨已在口语中用出]
+   - **原句**：Yet beneath his civilized calm, a vague *nomadic longing* sometimes stirred.
+   - **提示**：指被现代规则驯化后，心底依然存留的对自由旷野的向往。
+
+2. **chafing against** \`/ˈtʃeɪfɪŋ əˈɡenst/\` — 因束缚而摩擦生痛；对死板规则感到憋屈
+   - **原句**：...leaving him *chafing against* the rope.
+   - **迁移造句**：He soon found himself *chafing against* the strict office routine.
+
+## 二、口语地道表达升级（Before → After）
+- ❌ **我的原话**：Because deep inside his blood, he still have the primitive instinct.
+- ✅ **地道改写**：Because **deep in his veins, he still carried** the primitive instincts of his wild ancestors.
+
+## 三、发音重点复盘
+- **world** \`/wɜːrld/\`（2.6 → 4.5分）：注意 \`/ɜːr/\` 卷舌与结尾暗音 \`/ld/\` 舌尖抵上牙床。</pre>
+          </div>
+        `;
+      }
+
+      // 2. 渲染右侧看板（今日进度 + 三阶内化漏斗 + 28天热力图 + 易错词直通车）
+      const heatCells = [
+        "l1","l2","l1","l3","l2","l3","l2","l1","l2","l3","l3","l2","l1","l2",
+        "l2","l3","l1","l2","l3","l2","l3","l3","l2","l3","l2","l3","l3","today"
+      ];
+      radar.innerHTML = `
+        <div class="lens-section">
+          <div class="lens-kicker tabular">
+            <span>今日内化进度</span>
+            <span style="color:var(--accent);font-weight:700">${state.vaultDoneToday} / ${state.vaultTotalToday} 项已完成</span>
+          </div>
+          <div style="height:6px;background:var(--glass-border-strong);border-radius:99px;overflow:hidden;margin:8px 0">
+            <div style="width:${(state.vaultDoneToday / state.vaultTotalToday) * 100}%;height:100%;background:var(--sonic-teal);transition:width 250ms"></div>
+          </div>
+          <div style="font-size:12px;color:var(--ink-2)">
+            剩余 <strong>${state.vaultDue}</strong> 项待过关 · 其中 <strong>2</strong> 项已在口语对谈中免考激活
+          </div>
+        </div>
+
+        <div class="lens-section">
+          <div class="lens-kicker"><span>词块内化三阶段（看见自己的积累）</span></div>
+          <div style="display:flex;flex-direction:column;gap:8px;font-size:12.5px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span>🌱 刚收集（待认熟）</span>
+              <span class="tabular" style="font-weight:600;color:var(--warn)">4 词</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span>👀 眼熟能认（阅读遇到能懂）</span>
+              <span class="tabular" style="font-weight:600;color:var(--clause-indigo)">19 词</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span>✨ 已变成我的口语表达（在对话中说出）</span>
+              <span class="tabular" style="font-weight:600;color:var(--sonic-teal)">11 词</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="lens-section">
+          <div class="lens-kicker">
+            <span>近 28 天学习足迹</span>
+            <span>出勤 26 天</span>
+          </div>
+          <div class="heatmap-grid">
+            ${heatCells.map((c) => `<span class="heat-cell ${c}" title="当日已完成阅读与复习"></span>`).join("")}
+          </div>
+        </div>
+
+        <div class="lens-section">
+          <div class="lens-kicker"><span>易错项靶向加练</span></div>
+          <div style="font-size:12.5px;color:var(--ink-2);line-height:1.6;margin-bottom:10px">
+            • <strong>chafing against</strong>（完形拼写错 1 次）<br>
+            • <strong>world /wɜːrld/</strong>（卷舌音素偏弱）
+          </div>
+          <button class="island-tab active" style="width:100%;justify-content:center" onclick="setVaultPlayMode('challenge');toast('已为你开启 2 个弱项词的 1 分钟专项闯关')">
+            ⚡ 1 分钟只练这 2 个易错项
+          </button>
+        </div>
+      `;
+    }
+
+    function switchSurface(target) {
+      state.surface = target;
+      closeFolioSheet();
+      document.querySelectorAll(".island-tab[data-surface]").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.surface === target);
+      });
+      document.getElementById("stageReading").style.display = target === "reading" ? "flex" : "none";
+      document.getElementById("stageSpeak").style.display = target === "speak" ? "flex" : "none";
+      document.getElementById("stageVault").style.display = target === "vault" ? "flex" : "none";
+
+      if (target === "reading") {
+        renderEditorialProse();
+        renderSpatialLens();
+      } else if (target === "speak") {
+        state.speakSubView = "hub";
+        renderSonicStudio();
+      } else if (target === "vault") {
+        renderVaultSurface();
+      }
+    }
+
+    function toggleFolioSheet(ev) {
+      if (ev) ev.stopPropagation();
+      state.folioOpen = !state.folioOpen;
+      document.getElementById("folioSheet").classList.toggle("open", state.folioOpen);
+    }
+
+    function closeFolioSheet() {
+      if (state.folioOpen) {
+        state.folioOpen = false;
+        document.getElementById("folioSheet").classList.remove("open");
+      }
+    }
+
+    function toggleSpotlightMode() {
+      state.spotlight = !state.spotlight;
+      document.getElementById("btnSpotlight").innerHTML = `<span>专注模式：${state.spotlight ? "开" : "关"}</span>`;
+      renderEditorialProse();
+    }
+
+    function toggleSpreadLayout() {
+      state.spreadLayout = state.spreadLayout === "prose" ? "parallel" : "prose";
+      document.getElementById("btnLayoutSpread").innerHTML = `<span>排版：${state.spreadLayout === "prose" ? "段落" : "双语对照"}</span>`;
+      renderEditorialProse();
+    }
+
+    function toggleMaskWhisper() {
+      state.maskWhisper = !state.maskWhisper;
+      document.getElementById("btnMaskWhisper").innerHTML = `<span>译文：${state.maskWhisper ? "隐藏" : "显示"}</span>`;
+      renderEditorialProse();
+    }
+
+    function selectSentence(idx) {
+      state.activeIdx = idx;
+      document.getElementById("spineSentenceNum").textContent = `0${idx + 1}`;
+      document.getElementById("dockSentCounter").textContent = `0${idx + 1} / 0${SENTENCES.length}`;
+      document.getElementById("dockScrubberFill").style.width = `${((idx + 1) / SENTENCES.length) * 100}%`;
+      renderEditorialProse();
+      renderSpatialLens();
+    }
+
+    function stepSentence(delta) {
+      const next = Math.max(0, Math.min(SENTENCES.length - 1, state.activeIdx + delta));
+      selectSentence(next);
+    }
+
+    function scrubSentence(ev) {
+      const rect = ev.currentTarget.getBoundingClientRect();
+      const ratio = (ev.clientX - rect.left) / rect.width;
+      const idx = Math.min(SENTENCES.length - 1, Math.max(0, Math.floor(ratio * SENTENCES.length)));
+      selectSentence(idx);
+    }
+
+    function setHoveredClause(snippet) {
+      state.hoveredClause = snippet;
+      renderEditorialProse();
+    }
+
+    function setLensMode(mode) {
+      state.lensMode = mode;
+      renderSpatialLens();
+    }
+
+    function openLexemeInLens(key, sentIdx) {
+      state.activeLexKey = key;
+      state.activeIdx = sentIdx;
+      state.lensMode = "lex";
+      renderEditorialProse();
+      renderSpatialLens();
+    }
+
+    function addTargetLexeme(head) {
+      if (!state.targets.some((t) => t.key === head)) {
+        state.targets.push({ key: head, zh: "新加词块", done: false });
+      }
+      chime("chord");
+      toast(`已将「${head}」加入今日口语练习`);
+    }
+
+    function jumpToSpeakWithSentence(idx) {
+      state.activeIdx = idx;
+      enterScenarioConversation("book");
+      toast(`已带入第 ${idx + 1} 句进入口语对话`);
+    }
+
+    function toggleChapterAudio() {
+      state.playingAudio = !state.playingAudio;
+      chime("normal");
+      toast(state.playingAudio ? "正在朗读当前章节…" : "已暂停朗读");
+    }
+
+    function cycleProsodySpeed() {
+      state.prosodyIdx = (state.prosodyIdx + 1) % state.prosodyList.length;
+      const label = state.prosodyList[state.prosodyIdx];
+      document.getElementById("btnDockProsody").textContent = label;
+      chime("normal");
+      toast(`已切换语速：${label}`);
+    }
+
+    function pickWordDiag(word, phoneIdx) {
+      state.activeWordDiag = word;
+      state.activePhoneIdx = phoneIdx || 0;
+      renderPhonemeLens();
+    }
+
+    function pickPhoneSlice(idx) {
+      state.activePhoneIdx = idx;
+      renderPhonemeLens();
+    }
+
+    function simulateLiveSpeech(mode) {
+      if (state.listeningMic) return;
+      state.listeningMic = true;
+      const statusEl = document.getElementById("sonicStageStatus");
+      const prevTitle = statusEl.textContent;
+      statusEl.textContent = "🔴 正在听你说话（说完停顿即可自动发送）";
+      chime("normal");
+
+      setTimeout(() => {
+        state.listeningMic = false;
+        statusEl.textContent = prevTitle;
+
+        state.targets.forEach((t, i) => {
+          if (i === 0 || t.key === "chafing against") t.done = true;
+        });
+        document.getElementById("navSpeakCount").textContent = "0";
+
+        state.turns.push({
+          role: "user",
+          en: "At first Buck trusted men, but soon he was chafing against the rope and fighting for survival.",
+          score: 4.5,
+          diff: [
+            { t: "keep", v: "At first Buck trusted the men he knew, " },
+            { t: "del", v: "but soon he was" },
+            { t: "ins", v: "only to find himself" },
+            { t: "keep", v: " chafing fiercely against the rope." }
+          ],
+          note: "自然用上了目标词块！把 but soon he was 换成 only to find himself 会更地道。"
+        });
+
+        state.turns.push({
+          role: "assistant",
+          speaker: "AI 陪练 · Ava",
+          en: "Brilliant! You used that phrase very naturally. Want to keep going or switch to another scenario?",
+          zh: "用得很自然！要继续聊下去，还是点左上角「切换场景」试试别的话题？"
+        });
+
+        chime("chord");
+        renderSonicStudio();
+        const box = document.getElementById("sonicTurnsMount");
+        box.scrollTop = box.scrollHeight;
+        toast("已完成本轮回答，表达建议与发音详情已更新");
+      }, 1150);
+    }
+
+    function cycleAtmosphere() {
+      const order = ["warm-archival", "obsidian-sonic", "nordic-mist"];
+      const labels = {
+        "warm-archival": "主题：纸书",
+        "obsidian-sonic": "主题：深色",
+        "nordic-mist": "主题：护眼"
+      };
+      const next = order[(order.indexOf(state.atmosphere) + 1) % order.length];
+      state.atmosphere = next;
+      document.getElementById("spatialUniverse").setAttribute("data-theme", next);
+      document.getElementById("btnAtmosphere").querySelector("span").textContent = labels[next];
+    }
+
+    function toggleV07Comparison() {
+      state.v07Compare = !state.v07Compare;
+      document.getElementById("v07Ribbon").style.display = state.v07Compare ? "flex" : "none";
+      const btn = document.getElementById("btnCompareV07");
+      btn.classList.toggle("active-lens", state.v07Compare);
+      btn.querySelector("span").textContent = state.v07Compare ? "退出旧版对比" : "旧版对比";
+      renderEditorialProse();
+    }
+
+    function showGatewayModal() {
+      chime("chord");
+      toast("官方翻译与语音服务已连接，无需手动配置 API Key");
+    }
+
+    let toastTimer = null;
+    function toast(msg) {
+      const el = document.getElementById("toastPill");
+      el.textContent = msg;
+      el.classList.add("show");
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+    }
+
+    renderEditorialProse();
+    renderSpatialLens();
+    renderSonicStudio();
+    renderVaultSurface();
+    requestAnimationFrame(animateHarmonicWave);
+  </script>
+</body>
+</html>

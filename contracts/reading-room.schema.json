@@ -261,6 +261,18 @@
             "dictation"
           ],
           "description": "复习模式：smart 按卡路由到识别/完形/听写；只入全局默认，不进文章覆盖"
+        },
+        "spotlightMode": {
+          "type": "boolean",
+          "description": "专注模式（v0.8）：非当前句降透明度聚光；缺省 false，老数据免迁移"
+        },
+        "spreadLayout": {
+          "type": "string",
+          "enum": [
+            "prose",
+            "parallel"
+          ],
+          "description": "画报排版（v0.8）：prose=段落英文流+行间译文折叠，parallel=双语对照双栏；缺省 prose"
         }
       }
     },
@@ -513,6 +525,10 @@
             }
           ],
           "description": "累计错题记录；缺省 = 无记录（老数据无需迁移）。"
+        },
+        "spokenAt": {
+          "type": "integer",
+          "description": "最近一次在口语对话中真实用出的时间（Unix 毫秒）；缺省 = 从未用出（老数据无需迁移）。内化看板「已变成口语表达」的数据来源。"
         }
       }
     },
@@ -745,11 +761,102 @@
             "$ref": "#/$defs/speakShadowAttempt"
           }
         },
+        "pron": {
+          "$ref": "#/$defs/speakShadowAttempt",
+          "description": "user 轮：本轮发言的发音评测（同一录音送 ISE；at 必填由 speakShadowAttempt 的 required 覆盖）。凭据缺失/评测失败时缺省。"
+        },
+        "coachDiff": {
+          "$ref": "#/$defs/coachDiff"
+        },
         "at": {
           "type": "integer",
           "description": "Unix 毫秒"
         }
       }
+    },
+    "coachDiff": {
+      "type": "object",
+      "description": "user 轮的表达改进建议（BETTER 改写的词级增删对比 + TIP 中文点评）；旧会话无此字段。",
+      "required": [
+        "segs"
+      ],
+      "properties": {
+        "segs": {
+          "type": "array",
+          "description": "词级对比片段（按原文顺序，相邻同状态已合并）",
+          "items": {
+            "type": "object",
+            "required": [
+              "t",
+              "v"
+            ],
+            "properties": {
+              "t": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "del",
+                  "ins"
+                ],
+                "description": "keep=两边都有 / del=只出现在用户原话 / ins=只出现在地道改写"
+              },
+              "v": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "note": {
+          "type": "string",
+          "description": "一句中文点评（模型 TIP 行）"
+        }
+      }
+    },
+    "speakSessionContext": {
+      "type": "object",
+      "description": "会话语境（v0.8 场景中心）：book=聊刚读的章节，vocab=生词造句闯关。场景枚举 speakScenarioId 保持四值不动，新场景由此可选字段承载；会话级字段全可选。",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "book"
+            },
+            "bookTitle": {
+              "type": "string"
+            },
+            "chapterArticleId": {
+              "type": "string"
+            },
+            "chapterIdx": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "excerpt": {
+              "type": "array",
+              "description": "章节开头摘要（前几句英文）",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "vocab"
+            },
+            "wordIds": {
+              "type": "array",
+              "description": "待复习生词 id 列表",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
     },
     "speakSession": {
       "type": "object",
@@ -784,6 +891,9 @@
         "updatedAt": {
           "type": "integer",
           "description": "Unix 毫秒"
+        },
+        "context": {
+          "$ref": "#/$defs/speakSessionContext"
         }
       }
     },

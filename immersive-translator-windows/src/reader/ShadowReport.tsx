@@ -18,7 +18,7 @@ import {
   type DiagSegment,
   type ShadowDiagnosis,
 } from "../core/shadowDiagnose";
-import type { PronunciationResult, WordMark } from "../core/pronunciation";
+import type { PhoneScore, PronunciationResult, WordMark } from "../core/pronunciation";
 
 export interface DrillEntry {
   /** 原文里的词（保留原大小写）。 */
@@ -199,7 +199,7 @@ export function ShadowReport(props: Props) {
       <div className="rc-diag">{diag.segments.map((s, i) => <DiagSpan key={i} seg={s} />)}</div>
 
       <div className="rc-words">
-        {renderMarked(target, marks, (mark, el) => openPop(mark, el))}
+        <MarkedWords target={target} marks={marks} onClick={(mark, el) => openPop(mark, el)} />
       </div>
 
       <div className="rc-actions">
@@ -251,11 +251,19 @@ function removeSpacer(log: Element) {
   log.querySelectorAll(".pop-spacer").forEach((e) => e.remove());
 }
 
-function renderMarked(
-  target: string,
-  marks: WordMark[],
-  onClick: (mark: WordMark, el: HTMLElement) => void,
-) {
+/**
+ * 原句按四档着色（good/ok/bad/missed）；非 good 词可点（弹层/发音详情共用）。
+ * v0.8 从本文件抽出导出：SpeakView 的「发音详情」面板复用同一渲染。
+ */
+export function MarkedWords({
+  target,
+  marks,
+  onClick,
+}: {
+  target: string;
+  marks: WordMark[];
+  onClick: (mark: WordMark, el: HTMLElement) => void;
+}) {
   const out: React.ReactNode[] = [];
   let pos = 0;
   marks.forEach((m, i) => {
@@ -274,7 +282,7 @@ function renderMarked(
     pos = m.end;
   });
   if (pos < target.length) out.push(target.slice(pos));
-  return out;
+  return <>{out}</>;
 }
 
 /** 差词 + 漏词（按出现序，最多 4 个）作为逐词练习清单。 */
@@ -283,6 +291,65 @@ function drillEntries(target: string, marks: WordMark[]): DrillEntry[] {
     .filter((m) => m.quality === "bad" || m.quality === "missed")
     .slice(0, 4)
     .map((m) => ({ text: target.slice(m.start, m.end), mark: m }));
+}
+
+// ---------- 音素渲染（弹层与 SpeakView 发音详情共用） ----------
+
+/** gwpp 惩罚 → 状态档（阈值语义与 worstPhoneOf 的 -0.4 一致；≤ -1.0 点红）。 */
+export function phoneStatusOf(gwpp: number): "ok" | "warn" | "bad" {
+  if (gwpp <= -1.0) return "bad";
+  if (gwpp <= -0.4) return "warn";
+  return "ok";
+}
+
+export interface PhonemeRowProps {
+  phones: PhoneScore[];
+  /** chips 形态（默认，弹层用）：worstPhoneOf 命中的音素高亮 err。 */
+  worst?: { content: string; gwpp: number } | null;
+  /** pills 形态（v0.8 SpeakView 发音详情用）：四列药丸网格 + 状态着色 + 可点选。 */
+  variant?: "chips" | "pills";
+  /** pills 形态：当前选中的音素下标。 */
+  selectedIdx?: number | null;
+  /** pills 形态：点选音素回调。 */
+  onSelect?: (idx: number) => void;
+}
+
+/** 一个词的音素序列渲染：弹层里是一行小 chips（worst 高亮），口语「发音详情」
+ * 里是 .phoneme-pill-grid 药丸网格（gwpp→ok/warn/bad 着色、可点选看建议）。 */
+export function PhonemeRow({ phones, worst, variant = "chips", selectedIdx, onSelect }: PhonemeRowProps) {
+  if (variant === "pills") {
+    return (
+      <div className="phoneme-pill-grid">
+        {phones.map((p, i) => {
+          const st = phoneStatusOf(p.gwpp);
+          return (
+            <div
+              key={i}
+              className={`phoneme-node ${st}${selectedIdx === i ? " selected" : ""}`}
+              onClick={onSelect ? () => onSelect(i) : undefined}
+              title={onSelect ? "点击查看这个音素的发音建议" : undefined}
+            >
+              <div className="pn-sym">/{p.content}/</div>
+              <div className="pn-status">{st === "bad" ? "需多练" : st === "warn" ? "偏弱" : "还行"}</div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+  return (
+    <div className="ph-row">
+      {phones.map((p, i) => {
+        // worstPhoneOf 返回拷贝；按内容+惩罚值对位高亮同一音素
+        const isWorst = (worst ?? null) !== null && p.content === worst!.content && p.gwpp === worst!.gwpp;
+        return (
+          <span key={i} className={`ph${isWorst ? " err" : ""}`}>
+            {p.content}
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 // ---------- 音素弹层 ----------
@@ -323,19 +390,7 @@ function WordPopover({ mark, left, top, onClose, onSpeakWord, onDrillWord }: Pop
         </div>
       ) : (
         <>
-          {phones.length > 0 && (
-            <div className="ph-row">
-              {phones.map((p, i) => {
-                // worstPhoneOf 返回拷贝；按内容+惩罚值对位高亮同一音素
-                const isWorst = worst !== null && p.content === worst.content && p.gwpp === worst.gwpp;
-                return (
-                  <span key={i} className={`ph${isWorst ? " err" : ""}`}>
-                    {p.content}
-                  </span>
-                );
-              })}
-            </div>
-          )}
+          {phones.length > 0 && <PhonemeRow phones={phones} worst={worst} />}
           <div className="po-tip">{tip ?? "这个词没有明显出错的音素，整体含糊了一点——对照领读放慢再读一遍。"}</div>
         </>
       )}

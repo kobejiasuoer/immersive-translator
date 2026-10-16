@@ -89,6 +89,11 @@ import {
   parseReaderDictResponse,
 } from "../core/readerDict";
 import {
+  buildSentenceXrayInput,
+  buildSentenceXraySystemPrompt,
+  parseSentenceXrayResponse,
+} from "../core/sentenceXray";
+import {
   buildChunkAnnotateSystemPrompt,
   buildChunkBatchInput,
   chunkBatches,
@@ -96,14 +101,17 @@ import {
   parseChunkResponse,
 } from "../core/chunkAnnotate";
 import "./reader.css";
-import { ReaderTopBar, ViewMenu } from "./ReaderTopBar";
-import { ReaderShelf } from "./ReaderShelf";
+import { ReaderTopBar, ViewMenu, type IslandSurface } from "./ReaderTopBar";
+import { FolioSheet } from "./ReaderShelf";
 import { VocabListPanel } from "./VocabListPanel";
 import { ReadingView } from "./ReadingView";
 import { SettingsDrawer } from "./SettingsDrawer";
-import { DictColumn, type DictPanelState } from "./DictColumn";
+import { DictColumn, type DictPanelState, type LensMode, type LensXrayState } from "./DictColumn";
 import { ReviewView } from "./ReviewView";
 import { NotesView } from "./NotesView";
+import { VaultPage, type VaultPlayMode } from "./VaultPage";
+import { speakListSessions } from "../lib/speakStore";
+import type { SpeakSession } from "../core/speakLogic";
 import { VocabNoteDialog } from "./VocabNoteDialog";
 import { ImportDialog, type ImportMeta } from "./ImportDialog";
 import { usePlayback } from "./usePlayback";
@@ -122,9 +130,11 @@ import type { XfyunTtsCredentials } from "../core/xfyunTts";
 import { AssessStrip, PlayBar } from "./PlayBar";
 import { SpeakView } from "./SpeakView";
 import { BookTocModal } from "./BookTocModal";
+import { ShelfPage } from "./ShelfPage";
+import { coverageForText, type CoverageStats, type ExamGoal } from "../core/examCoverage";
 import { IconNext, IconPause, IconPlay, IconPrev } from "../ui/icons";
 
-type ViewRoute = "reading" | "review" | "speak" | "notes";
+type ViewRoute = "shelf" | "reading" | "review" | "speak" | "notes" | "vault";
 
 /**
  * 章末小结卡数据（本章查词/收录生词/到期词/用时 + 下一章）。
@@ -166,6 +176,17 @@ interface PendingTranslate {
   onCancelled: (partial: string) => void;
 }
 
+/**
+ * 「带着语境进口语」的带入意图（v0.8）。
+ * Phase 2 只落 book/sentence 形态（正文行间「用这句练口语」、透镜卡
+ * 「用这个句型练口语」、刊头「围绕本章练口语」）；vocab 形态是 Phase 3/4
+ * 生词造句闯关的槽位，形状在此一次定死，后续阶段不再改形状。
+ */
+type PendingSpeak =
+  | { kind: "book"; articleId: string; sentenceIdx: number }
+  | { kind: "vocab" }
+  | null;
+
 export function ReaderApp() {
   // ---- 数据 ----
   const [globalSettings, setGlobalSettings] = useState<ReaderSettings>(DEFAULT_READER_SETTINGS);
@@ -173,8 +194,11 @@ export function ReaderApp() {
   const [article, setArticle] = useState<Article | null>(null);
   const [vocabWords, setVocabWords] = useState<VocabWord[]>([]);
   const [reviewLog, setReviewLog] = useState<ReviewLogFile>({ schemaVersion: 1, days: [] });
-  const [view, setView] = useState<ViewRoute>("reading");
+  // 书架是首页（对齐原型）：应用打开落在整页书架，点书卡/短文进阅读。
+  const [view, setView] = useState<ViewRoute>("shelf");
   const [toast, setToast] = useState("");
+  // 弹出式书架浮层（v0.8）：由导航岛左上「书架 · 书名」触发，挂在根节点顶层。
+  const [folioOpen, setFolioOpen] = useState(false);
   // ---- 笔记库 ----
   const [notes, setNotes] = useState<NoteMeta[]>([]);
   const [activeNote, setActiveNote] = useState<{ meta: NoteMeta; parsed: ReturnType<typeof parseNoteMarkdown> } | null>(null);
@@ -189,12 +213,26 @@ export function ReaderApp() {
   const [importOpen, setImportOpen] = useState(false);
   const [viewMenuAnchor, setViewMenuAnchor] = useState<{ top: number; right: number } | null>(null);
   const [dict, setDict] = useState<DictPanelState>({ status: "closed" });
+  // ---- v0.8 阅读画报：透镜卡双模 + 句子解析 + 口语带入 ----
+  /** 右栏透镜卡当前 Tab（查词动作发生时切到 lex，句子解析请求切回 xray）。 */
+  const [lensMode, setLensMode] = useState<LensMode>("xray");
+  /** 句子解析数据（translateStream，tag 前缀 rx；null = 本窗口还没请求过）。 */
+  const [xray, setXray] = useState<LensXrayState | null>(null);
+  /** 透镜卡结构拆解悬停中的片段（回标正文原文，null = 未悬停）。 */
+  const [hoveredClause, setHoveredClause] = useState<string | null>(null);
+  /** 带入口语的语境（见 PendingSpeak；Phase 3 在口语侧消费）。 */
+  const [pendingSpeak, setPendingSpeak] = useState<PendingSpeak>(null);
   const [peekAll, setPeekAll] = useState(false);
   const [searchMatchIdx, setSearchMatchIdx] = useState<number | null>(null);
   const [sourceCache, setSourceCache] = useState<Map<string, Article>>(new Map());
   // ---- 整本书阅读室（书级载体） ----
   const [bookList, setBookList] = useState<BookMeta[]>([]);
-  const [tocOpen, setTocOpen] = useState(false);
+  const [tocBookId, setTocBookId] = useState<string | null>(null);
+  // ---- v0.8「笔记与复习」三合一（Phase 4） ----
+  /** 当前玩法档（tape/challenge/md）：goReview/托盘入口带 challenge，导览默认 tape。 */
+  const [vaultMode, setVaultMode] = useState<VaultPlayMode>("tape");
+  /** 口语会话缓存（speak_list_sessions；进 vault 视图时拉取，手账/导出的数据源）。 */
+  const [speakSessions, setSpeakSessions] = useState<SpeakSession[]>([]);
   /** 今日已读秒数 / 每日阅读目标分钟（辅助增强二）。 */
   const [readSecondsToday, setReadSecondsToday] = useState(0);
   const [readGoalMin, setReadGoalMin] = useState(0);
@@ -231,6 +269,23 @@ export function ReaderApp() {
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(""), 3200);
   }, []);
+  /** 回整页书架（首页）。声明在前：删除文章/书等早于导航区的地方也要用。 */
+  const goShelf = useCallback(() => {
+    setFocusIds(null);
+    setView("shelf");
+  }, []);
+
+  /** 书架浮层外点关闭（左上触发胶囊不算「外」——它自己走 onToggleFolio）。 */
+  useEffect(() => {
+    if (!folioOpen) return;
+    function onDown(e: MouseEvent) {
+      const el = e.target as Element | null;
+      if (el && el.closest(".floating-folio-sheet, .brand-folio-pill")) return;
+      setFolioOpen(false);
+    }
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [folioOpen]);
 
   const effectiveSettings = useMemo(
     () => mergeReaderSettings(globalSettings, article?.settings),
@@ -463,6 +518,21 @@ export function ReaderApp() {
   useEffect(() => {
     articleRef.current = article;
   }, [article]);
+
+  /** 带入句过期清理：切到别的文章后旧 pendingSpeak 不再有效（Phase 3 消费前保证新鲜）。
+   * vocab 形态一次性消费：离开口语视图即清（Phase 4「去口语里用一次」每次点击重新置值，
+   * 避免再次进口语视图时重开旧造句会话）。 */
+  useEffect(() => {
+    if (!pendingSpeak) return;
+    const a = articleRef.current;
+    if (pendingSpeak.kind === "book" && a && pendingSpeak.articleId !== a.id) {
+      setPendingSpeak(null);
+    }
+    if (pendingSpeak.kind === "vocab" && view !== "speak") {
+      setPendingSpeak(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSpeak, article?.id, view]);
 
   const scheduleSave = useCallback((next: Article) => {
     articleRef.current = next;
@@ -802,10 +872,13 @@ export function ReaderApp() {
   }, [playback.activeIdx, article?.id]);
 
   // ---- 每日阅读时长（辅助增强二）：朗读播放与停留阅读均计入，15s 批量落盘 ----
+  // 双重闸门：document.hidden 之外再加 hasFocus —— 阅读室窗口是点 ✕ 隐藏而非
+  // 销毁，WebView2 里隐藏窗口的 document.hidden 不一定为 true，只看它会把
+  // 挂在后台的整天都计成阅读时长（2026-09-27 实测一天被记满 86400s）。
   useEffect(() => {
     const timer = window.setInterval(() => {
       const a = articleRef.current;
-      if (view !== "reading" || !a || document.hidden) return;
+      if (view !== "reading" || !a || document.hidden || !document.hasFocus()) return;
       secondsBufferRef.current += 1;
       if (secondsBufferRef.current < 15) return;
       const chunk = secondsBufferRef.current;
@@ -928,7 +1001,11 @@ export function ReaderApp() {
         setView("reading");
         setDict({ status: "closed" });
         setSearchMatchIdx(null);
-        setTocOpen(false);
+        // 换文章：句子解析/悬停标记/透镜卡 Tab 归位（解析结果属于旧句，不带走）。
+        setXray(null);
+        setHoveredClause(null);
+        setLensMode("xray");
+        setTocBookId(null);
         setChapterEnd(null);
         setFinishCard(null);
         setArticle(full);
@@ -1032,10 +1109,11 @@ export function ReaderApp() {
       } catch (error) {
         console.error("[reader] take pending import failed", error);
       }
-      // 托盘「生词本」路径：窗口重建时取走「打开复习页」请求。
+      // 托盘「生词本」路径：窗口重建时取走「打开复习页」请求（v0.8 落地 vault 挑战模式）。
       try {
         if (await takePendingOpenReview()) {
-          setView("review");
+          setVaultMode("challenge");
+          setView("vault");
           return;
         }
       } catch (error) {
@@ -1051,12 +1129,9 @@ export function ReaderApp() {
       } catch (error) {
         console.error("[reader] take pending open book failed", error);
       }
-      if (list.length > 0) {
-        void openArticle(list[0].id);
-      } else if (books.length > 0) {
-        // 只有书没有短文：打开最近读的那本（断点章）。
-        void openBookAtBreakpoint(books[0].id);
-      }
+      // 默认落在整页书架（书架是首页）；只有外部推入（热键导入/继续阅读）才直接进阅读。
+      void list;
+      void books;
     })();
 
     // 浮窗「发送到阅读室」时，若本窗口已打开则切换到新文章
@@ -1082,11 +1157,12 @@ export function ReaderApp() {
       else u();
     });
 
-    // 托盘「生词本」（窗口已存在时）：切到复习页
+    // 托盘「生词本」（窗口已存在时）：切到复习页（v0.8 = vault 挑战模式）
     let unlistenOpenReview: (() => void) | undefined;
     listen("reader:open-review", () => {
       setFocusIds(null);
-      setView("review");
+      setVaultMode("challenge");
+      setView("vault");
     }).then((u) => {
       if (active) unlistenOpenReview = u;
       else u();
@@ -1194,12 +1270,12 @@ export function ReaderApp() {
     (id: string) => {
       void readerDeleteArticle(id)
         .then(async () => {
-          const list = await refreshArticleList();
+          await refreshArticleList();
           if (articleRef.current?.id === id) {
             setArticle(null);
             articleRef.current = null;
             playback.reset(0);
-            if (list.length > 0) void openArticle(list[0].id);
+            goShelf();
           }
           showToast("文章已删除");
         })
@@ -1208,7 +1284,7 @@ export function ReaderApp() {
           showToast("删除失败");
         });
     },
-    [refreshArticleList, openArticle, playback, showToast],
+    [refreshArticleList, goShelf, playback, showToast],
   );
 
   /** 整本入库（EPUB/长书 tab 确认导入）：章文本 → 章 Article（sourceType="epub"）。 */
@@ -1272,14 +1348,12 @@ export function ReaderApp() {
       void readerDeleteBook(bookId)
         .then(async (removed) => {
           if (!removed) return;
-          const books = await refreshBooks();
+          await refreshBooks();
           if (articleRef.current?.bookId === bookId) {
             setArticle(null);
             articleRef.current = null;
             playback.reset(0);
-            const list = await refreshArticleList();
-            if (list.length > 0) void openArticle(list[0].id);
-            else if (books.length > 0) void openBookAtBreakpoint(books[0].id);
+            goShelf();
           }
           showToast("这本书已删除（生词保留）");
         })
@@ -1288,7 +1362,7 @@ export function ReaderApp() {
           showToast("删除书籍失败");
         });
     },
-    [refreshBooks, refreshArticleList, openArticle, openBookAtBreakpoint, playback, showToast],
+    [refreshBooks, goShelf, playback, showToast],
   );
 
   // ---- 词典（屏 C） ----
@@ -1297,6 +1371,7 @@ export function ReaderApp() {
       const articleId = articleRef.current?.id ?? "";
       const sourceSentence = articleRef.current?.sentences[sentenceIdx]?.en ?? "";
       dictCountRef.current.set(articleId, (dictCountRef.current.get(articleId) ?? 0) + 1);
+      setLensMode("lex"); // 查词发生 → 透镜卡切到「查词」Tab
       setDict({ status: "loading", query, sentenceIdx, sourceSentence });
       const s = await loadSettingsAsync().catch(() => null);
       if (!s || !hasValidSettings(s)) {
@@ -1343,6 +1418,49 @@ export function ReaderApp() {
         .catch((error) => console.error("[reader] word tts failed", error));
     },
     [speechEngine],
+  );
+
+  /**
+   * 句子解析（v0.8 透镜卡「句子解析」Tab）：当前句 en 走 translateStream
+   * （tag 前缀 rx，不与 rt/rp/rd/rc/replay 冲突），拿到主干/结构拆解/句型。
+   * 失败只提示不阻塞阅读；解析结果不落盘（句子没变就不用重查，Phase 2 先
+   * 以会话内 state 承载）。
+   */
+  const lookupXray = useCallback(
+    async (idx: number) => {
+      const a = articleRef.current;
+      const en = a?.sentences[idx]?.en;
+      if (!en) return;
+      setLensMode("xray");
+      setXray({ status: "loading", sentenceIdx: idx, data: null });
+      const s = await loadSettingsAsync().catch(() => null);
+      if (!s || !hasValidSettings(s)) {
+        setXray({ status: "error", sentenceIdx: idx, data: null });
+        showToast("先在设置里配置翻译接口，才能解析句子");
+        return;
+      }
+      const target = resolveTargetLanguage(en, { mode: s.translationMode, fixed: s.fixedTarget });
+      const tag = `rx${++translateSeqRef.current}`;
+      const res = await requestTranslate(
+        buildSentenceXrayInput(en),
+        buildSentenceXraySystemPrompt(target),
+        tag,
+      );
+      if (articleRef.current?.id !== a.id) return; // 请求期间已切文章，作废
+      if (res.status !== "done") {
+        setXray({ status: "error", sentenceIdx: idx, data: null });
+        showToast("句子解析失败，稍后再试");
+        return;
+      }
+      const parsed = parseSentenceXrayResponse(res.text, en);
+      if (!parsed) {
+        setXray({ status: "error", sentenceIdx: idx, data: null });
+        showToast("句子解析结果无法解析，请重试");
+        return;
+      }
+      setXray({ status: "ready", sentenceIdx: idx, data: parsed });
+    },
+    [requestTranslate, showToast],
   );
 
   /** 点正文词块下划线 → 即时卡（无 LLM 调用）。 */
@@ -1459,7 +1577,7 @@ export function ReaderApp() {
     [gradeVocab],
   );
 
-  /** 笔记复盘区「开始复习 / 只测仍错的词」：只排这批词，不等到期。 */
+  /** 笔记复盘区「开始复习 / 只测仍错的词」：只排这批词，不等到期（v0.8 落地 vault 闯关）。 */
   const startFocusReview = useCallback(
     (ids: string[]) => {
       if (ids.length === 0) {
@@ -1468,7 +1586,8 @@ export function ReaderApp() {
       }
       setFocusIds(ids);
       setReviewPos(0);
-      setView("review");
+      setVaultMode("challenge");
+      setView("vault");
     },
     [showToast],
   );
@@ -1479,18 +1598,62 @@ export function ReaderApp() {
     setFocusIds(null);
     setView("reading");
   }, []);
+  /** 生词复习（v0.8：vault 三合一的闯关模式）。 */
   const goReview = useCallback(() => {
     setFocusIds(null);
-    setView("review");
+    setVaultMode("challenge");
+    setView("vault");
   }, []);
+  /** 笔记库（v0.8：vault 的 Markdown 导出档，内嵌笔记库回看弹层）。 */
   const goNotes = useCallback(() => {
     setFocusIds(null);
-    setView("notes");
+    setVaultMode("md");
+    setView("vault");
   }, []);
   const goSpeak = useCallback(() => {
     setFocusIds(null);
     setView("speak");
   }, []);
+  /** 「用这句练口语」：带入句记进 pendingSpeak 再进口语（Phase 3 消费）。 */
+  const practiceSentence = useCallback(
+    (idx: number) => {
+      const a = articleRef.current;
+      if (!a) return;
+      setPendingSpeak({ kind: "book", articleId: a.id, sentenceIdx: idx });
+      goSpeak();
+      showToast(`已带入第 ${idx + 1} 句进入口语对话`);
+    },
+    [goSpeak, showToast],
+  );
+  /** 刊头「围绕本章练口语」：以当前光标句为锚带入本章语境。 */
+  const practiceChapter = useCallback(
+    (idx: number) => {
+      const a = articleRef.current;
+      if (!a) return;
+      setPendingSpeak({ kind: "book", articleId: a.id, sentenceIdx: idx });
+      goSpeak();
+      showToast("已带入本章进入口语对话");
+    },
+    [goSpeak, showToast],
+  );
+  /** 导航岛三档路由（v0.8）：阅读 / 口语 / 笔记与复习。
+   * vault 档落在三合一页（Phase 4）：已在 vault 内不重置玩法档，跨视图进入保留上次档位。 */
+  const navigateSurface = useCallback(
+    (surface: IslandSurface) => {
+      setFolioOpen(false);
+      if (surface === "reading") goReading();
+      else if (surface === "speak") goSpeak();
+      else setView("vault");
+    },
+    [goReading, goSpeak],
+  );
+  /** 导航岛当前高亮档：shelf/reading→阅读、speak→口语、review/notes/vault→笔记与复习。 */
+  const islandSurface: IslandSurface =
+    view === "speak"
+      ? "speak"
+      : view === "review" || view === "notes" || view === "vault"
+        ? "vault"
+        : "reading";
 
   // ---- 笔记库 ----
   const replaySeqRef = useRef(0);
@@ -1634,14 +1797,15 @@ export function ReaderApp() {
   );
 
   useEffect(() => {
-    if (view === "review" && vocabWords.length > 0) {
+    if ((view === "review" || view === "vault") && vocabWords.length > 0) {
       void loadSourceArticles(vocabWords.map((w) => w.source.articleId));
     }
   }, [view, vocabWords, loadSourceArticles]);
 
   // 进入笔记库：刷新列表；没有打开的笔记时自动打开最近一篇。
+  // v0.8：笔记库挂在 vault 的 Markdown 导出档（弹层回看），进 vault 即预载。
   useEffect(() => {
-    if (view !== "notes") return;
+    if (view !== "notes" && view !== "vault") return;
     let cancelled = false;
     void (async () => {
       const list = await refreshNotes();
@@ -1652,6 +1816,15 @@ export function ReaderApp() {
       cancelled = true;
     };
   }, [view, refreshNotes, openNote, activeNote]);
+
+  // 进 vault 视图：拉取口语会话（手账口语条目与 Markdown 导出的数据源；
+  // 从口语视图回来也会经过这里刷新，覆盖最新一轮的 coachDiff/pron）。
+  useEffect(() => {
+    if (view !== "vault") return;
+    void speakListSessions()
+      .then((list) => setSpeakSessions(list.slice(0, 20)))
+      .catch((error) => console.error("[reader] list speak sessions failed", error));
+  }, [view]);
 
   const stats = useMemo(() => reviewStats(vocabWords, reviewLog), [vocabWords, reviewLog]);
   const dueNow = useMemo(() => dueVocab(vocabWords).length, [vocabWords]);
@@ -1669,8 +1842,8 @@ export function ReaderApp() {
   }, [vocabWords, notes]);
   const [reviewPos, setReviewPos] = useState(0);
   useEffect(() => {
-    // 每次进入生词本都从队首开始（离开即卸载，results 随之清零）
-    if (view === "review") setReviewPos(0);
+    // 每次进入生词本/三合一页都从队首开始（离开即卸载，pos 归零防跨模式残留）
+    if (view === "review" || view === "vault") setReviewPos(0);
   }, [view]);
 
   const jumpToSentence = useCallback(
@@ -1723,7 +1896,6 @@ export function ReaderApp() {
   }, [view, playback, effectiveSettings.maskTranslation]);
 
   // ---- 渲染 ----
-  const showChrome = !effectiveSettings.zenMode;
   /** 光标已停在末句（自然播完/跳读/滚动到底都会到这）且还没确认读完。 */
   const atArticleEnd =
     !!article && article.sentences.length > 0 && playback.activeIdx >= article.sentences.length - 1;
@@ -1749,6 +1921,55 @@ export function ReaderApp() {
     }
     return map;
   }, [bookList]);
+  /**
+   * 口语场景中心「聊刚读的章节」卡的语境（v0.8 Phase 3）：只有书章给出
+   * （短文无章节概念，避免「第 1 章」的假上下文）。pendingSpeak 带 sentenceIdx
+   * 时（阅读室「用这句练口语」）把那句放进摘要首位——口语侧的开场白与系统
+   * 提示自然从这句聊起。
+   */
+  const speakBookContext = useMemo(() => {
+    if (!article?.bookId || !currentBook) return null;
+    const chapterIdx = article.chapterIdx ?? bookChapterIndexOf(currentBook, article.id);
+    const ens = article.sentences.map((s) => s.en);
+    const pending =
+      pendingSpeak?.kind === "book" && pendingSpeak.articleId === article.id ? pendingSpeak : null;
+    const focus = pending ? ens[pending.sentenceIdx] : undefined;
+    const excerpt = [focus, ...ens].filter((s): s is string => Boolean(s)).slice(0, 3);
+    return {
+      articleId: article.id,
+      title: currentBook.title,
+      chapterIdx,
+      excerpt: excerpt.length > 0 ? excerpt : [article.title],
+    };
+  }, [article, currentBook, pendingSpeak]);
+  /** 口语「生词造句闯关」：今日待复习词（最多 8 个，与 pendingSpeak vocab 通道共用）。 */
+  const speakDueWords = useMemo(() => dueWords.slice(0, 8), [dueWords]);
+  /** 口语里用出目标词：按 easy 档记 SRS 并落 spokenAt（内化看板「已变成口语表达」）。 */
+  const gradeSpokenVocab = useCallback(
+    (word: VocabWord, g: "easy") => {
+      gradeVocab(g === "easy" ? { ...word, spokenAt: Date.now() } : word, g);
+    },
+    [gradeVocab],
+  );
+  /** 加练队列里开口命中：同样按 easy+spokenAt 落盘，并把词移出队列。 */
+  const gradeSpokenAndDrainFocus = useCallback(
+    (word: VocabWord, g: "easy") => {
+      gradeSpokenVocab(word, g);
+      setFocusIds((f) => (f ? f.filter((id) => id !== word.id) : f));
+    },
+    [gradeSpokenVocab],
+  );
+  /** 手账/看板「去口语里用一次」：pendingSpeak 置 vocab 形态再进口语造句闯关
+   * （Phase 2 定形状、Phase 3 消费的同一通道，不新增传参）。 */
+  const practiceVocabSpeak = useCallback(() => {
+    setPendingSpeak({ kind: "vocab" });
+    goSpeak();
+  }, [goSpeak]);
+  /** 发音详情「慢速示范 0.75×」：word 轨 + 云引擎原生 -25% 合成（SAPI 走普通朗读）。 */
+  const speakWordSlowly = useCallback(
+    (text: string) => speechEngine.speak(text, false, { track: "word", target: "reader", rate: 1, nativeRate: "-25%" }),
+    [speechEngine],
+  );
   /** 每章已收藏生词数（目录面板）。 */
   const vocabCountByChapter = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -1757,6 +1978,37 @@ export function ReaderApp() {
     }
     return counts;
   }, [vocabWords]);
+
+  /** 书架页考试目标（与导入弹窗同一 localStorage 键）。 */
+  const shelfExamGoal: ExamGoal = useMemo(() => {
+    const saved = localStorage.getItem("intake-exam-goal");
+    return saved && ["kaoyan", "cet4", "cet6"].includes(saved) ? (saved as ExamGoal) : "kaoyan";
+  }, []);
+
+  // 书架页短文覆盖：懒加载全文到 sourceCache 后本地词表现算（书架页才拉）。
+  useEffect(() => {
+    if (view === "shelf" && articleList.length > 0) {
+      void loadSourceArticles(articleList.map((a) => a.id));
+    }
+  }, [view, articleList, loadSourceArticles]);
+
+  const articleCoverage = useMemo(() => {
+    const map: Record<string, CoverageStats> = {};
+    if (view !== "shelf") return map;
+    for (const a of articleList) {
+      const full = sourceCache.get(a.id);
+      if (!full) continue;
+      const text = full.sentences.map((s) => s.en).join(" ");
+      map[a.id] = coverageForText(text, shelfExamGoal, vocabWords);
+    }
+    return map;
+  }, [view, articleList, sourceCache, vocabWords, shelfExamGoal]);
+
+  /** 目录面板当前展示的书（阅读页章节栏 / 书架「查看目录」共用）。 */
+  const tocBook = useMemo(
+    () => (tocBookId ? bookList.find((b) => b.id === tocBookId) ?? null : null),
+    [tocBookId, bookList],
+  );
 
   const articleTitle = useCallback(
     (id: string) =>
@@ -1816,13 +2068,47 @@ export function ReaderApp() {
     "--read-cn-lh-cur": `${Math.round((effectiveSettings.fontSize / 19) * 24 * effectiveSettings.lineHeight)}px`,
   } as CSSProperties;
 
+  /** 笔记库渲染内核（Props 不变，由本组件继续喂数据）：vault 的 md 档弹层回看入口。 */
+  const notesPanel = (
+    <NotesView
+      notes={notes}
+      activeId={activeNote?.meta.file ?? null}
+      active={activeNote}
+      words={vocabWords}
+      reviewedToday={stats.reviewedToday}
+      streak={stats.streak}
+      dueNow={dueNow}
+      newWords={unnotedCount}
+      replayBusy={replayBusy}
+      onSelect={selectNote}
+      onDelete={deleteNote}
+      onOpenReader={goReading}
+      onOpenReview={goReview}
+      onStartFocusReview={startFocusReview}
+      onGenerate={openNoteGenerator}
+      onGenerateReplay={(meta) => void generateReplay(meta)}
+      onRollIntoNote={rollIntoNote}
+      onSpeakWord={speakWord}
+      readMinutesToday={Math.round(readSecondsToday / 60)}
+      readGoalMin={readGoalMin}
+    />
+  );
+
   return (
     <div className="reader-root" data-theme={effectiveSettings.theme} data-font={effectiveSettings.fontPair} style={rootStyle}>
       <ReaderTopBar
         articleName={
-          view === "review" ? "生词本" : view === "speak" ? "口语陪练" : view === "notes" ? "笔记库" : (article?.title ?? null)
+          view === "shelf"
+            ? "书架"
+            : view === "vault" || view === "review"
+              ? "笔记与复习"
+              : view === "speak"
+                ? "口语陪练"
+                : view === "notes"
+                  ? "笔记库"
+                  : (article?.title ?? null)
         }
-        onBackToReading={view !== "reading" ? goReading : undefined}
+        onHome={goShelf}
         settings={effectiveSettings}
         onPatchSettings={patchSettings}
         onOpenDrawer={() => setDrawerOpen(true)}
@@ -1838,7 +2124,26 @@ export function ReaderApp() {
             showToast(`本文没有包含「${q}」的句子`);
           }
         }}
+        view={islandSurface}
+        dueNow={dueNow}
+        unnotedCount={unnotedCount}
+        onNavigate={navigateSurface}
+        onToggleFolio={() => setFolioOpen((v) => !v)}
       />
+
+      {folioOpen && (
+        <FolioSheet
+          articles={articleList}
+          books={bookList}
+          activeBookId={currentBook?.id ?? null}
+          onSelect={(id) => void openArticle(id)}
+          onContinueBook={(b) => void openBookAtBreakpoint(b.id)}
+          onDelete={deleteArticle}
+          onDeleteBook={deleteBook}
+          onOpenImport={() => setImportOpen(true)}
+          onClose={() => setFolioOpen(false)}
+        />
+      )}
 
       {view === "reading" && effectiveSettings.showProgress && article && (
         <div className="reader-inkline" aria-hidden>
@@ -1847,29 +2152,7 @@ export function ReaderApp() {
       )}
 
       <div className="reader-body">
-        {showChrome && view === "reading" && (
-          <ReaderShelf
-            articles={articleList}
-            books={bookList}
-            activeId={article?.id ?? null}
-            activeBookId={currentBook?.id ?? null}
-            dueNow={dueNow}
-            reviewedToday={stats.reviewedToday}
-            streak={stats.streak}
-            newToNote={unnotedCount}
-            readMinutesToday={Math.round(readSecondsToday / 60)}
-            readGoalMin={readGoalMin}
-            onSelect={(id) => void openArticle(id)}
-            onContinueBook={(b) => void openBookAtBreakpoint(b.id)}
-            onOpenReview={goReview}
-            onOpenSpeak={goSpeak}
-            onOpenNotes={goNotes}
-            onDelete={deleteArticle}
-            onDeleteBook={deleteBook}
-            onOpenImport={() => setImportOpen(true)}
-          />
-        )}
-        {view === "review" && (
+        {(view === "vault" || view === "review") && (
           <VocabListPanel
             words={vocabWords}
             due={activeDue}
@@ -1889,28 +2172,24 @@ export function ReaderApp() {
             readGoalMin={readGoalMin}
           />
         )}
-        {view === "notes" && (
-          <NotesView
-            notes={notes}
-            activeId={activeNote?.meta.file ?? null}
-            active={activeNote}
-            words={vocabWords}
-            reviewedToday={stats.reviewedToday}
-            streak={stats.streak}
-            dueNow={dueNow}
-            newWords={unnotedCount}
-            replayBusy={replayBusy}
-            onSelect={selectNote}
-            onDelete={deleteNote}
-            onOpenReader={goReading}
-            onOpenReview={goReview}
-            onStartFocusReview={startFocusReview}
-            onGenerate={openNoteGenerator}
-            onGenerateReplay={(meta) => void generateReplay(meta)}
-            onRollIntoNote={rollIntoNote}
-            onSpeakWord={speakWord}
+        {view === "shelf" && (
+          <ShelfPage
+            books={bookList}
+            articles={articleList}
+            articleCoverage={articleCoverage}
+            examGoal={shelfExamGoal}
             readMinutesToday={Math.round(readSecondsToday / 60)}
             readGoalMin={readGoalMin}
+            reviewedToday={stats.reviewedToday}
+            dueNow={dueNow}
+            streak={stats.streak}
+            onContinueBook={(b) => void openBookAtBreakpoint(b.id)}
+            onOpenBookToc={(b) => setTocBookId(b.id)}
+            onSelectArticle={(id) => void openArticle(id)}
+            onDeleteArticle={deleteArticle}
+            onDeleteBook={deleteBook}
+            onOpenImport={() => setImportOpen(true)}
+            onGoReview={goReview}
           />
         )}
 
@@ -1978,7 +2257,12 @@ export function ReaderApp() {
                     }
                   : null
               }
-              onOpenToc={currentBook ? () => setTocOpen(true) : undefined}
+              onOpenToc={currentBook ? () => setTocBookId(currentBook.id) : undefined}
+              onPatchSettings={patchSettings}
+              onOpenXray={(idx) => void lookupXray(idx)}
+              onPracticeSentence={practiceSentence}
+              onPracticeChapter={article ? () => practiceChapter(playback.activeIdx) : undefined}
+              hoveredClause={hoveredClause}
             />
             <DictColumn
               state={dict}
@@ -1990,13 +2274,25 @@ export function ReaderApp() {
               onAddCollVocab={addCollVocab}
               onLocate={(idx) => playback.jumpTo(idx)}
               onLookup={(text, idx) => void lookup(text, idx)}
-              onClose={() => setDict({ status: "closed" })}
+              onClose={() => {
+                setDict({ status: "closed" });
+                setLensMode("xray");
+              }}
+              lensMode={lensMode}
+              onLensMode={setLensMode}
+              activeIdx={playback.activeIdx}
+              xray={xray}
+              xrayBusy={xray?.status === "loading"}
+              onOpenXray={(idx) => void lookupXray(idx)}
+              onHoverClause={setHoveredClause}
+              onPracticeSentence={practiceSentence}
             />
           </>
         ) : view === "speak" ? (
           <SpeakView
             requestTranslate={requestTranslate}
             speakEn={speakEnToView}
+            speakWordSlow={speakWordSlowly}
             subscribeSpeakEnded={speechEngine.onEnded}
             stopSpeak={stopSpeakTrack}
             micDeviceId={micDeviceId}
@@ -2006,8 +2302,37 @@ export function ReaderApp() {
             onVocabSaved={() => refreshVocab()}
             onGenerateNote={openNoteGeneratorWith}
             onGoReview={goReview}
+            bookContext={speakBookContext}
+            dueVocabWords={speakDueWords}
+            pendingSpeak={pendingSpeak}
+            onGradeVocab={gradeSpokenVocab}
           />
-        ) : view === "notes" ? null : (
+        ) : view === "vault" ? (
+          <VaultPage
+            words={vocabWords}
+            due={activeDue}
+            stats={stats}
+            reviewLog={reviewLog}
+            sourceSentence={sourceSentence}
+            articleTitle={articleTitle}
+            speakSessions={speakSessions}
+            mode={vaultMode}
+            onModeChange={setVaultMode}
+            pos={reviewPos}
+            onSetPos={setReviewPos}
+            onGrade={focusIds ? gradeAndDrainFocus : gradeVocab}
+            onSpokenGrade={focusIds ? gradeSpokenAndDrainFocus : gradeSpokenVocab}
+            onRecall={handleRecall}
+            onJumpToSentence={jumpToSentence}
+            onSpeakWord={speakWord}
+            onSpeakSentence={speakRecallSentence}
+            micDeviceId={micDeviceId}
+            onPracticeVocabSpeak={practiceVocabSpeak}
+            onStartFocusReview={startFocusReview}
+            onGenerateNote={openNoteGenerator}
+            notesPanel={notesPanel}
+          />
+        ) : view === "notes" || view === "shelf" ? null : (
           <ReviewView
             words={vocabWords}
             due={activeDue}
@@ -2143,13 +2468,16 @@ export function ReaderApp() {
         />
       )}
 
-      {tocOpen && currentBook && (
+      {tocBook && (
         <BookTocModal
-          book={currentBook}
-          currentChapterId={article?.id ?? null}
+          book={tocBook}
+          currentChapterId={tocBook.id === currentBook?.id ? (article?.id ?? null) : null}
           vocabCountByChapter={vocabCountByChapter}
-          onSelect={(chapterId) => void openArticle(chapterId)}
-          onClose={() => setTocOpen(false)}
+          onSelect={(chapterId) => {
+            setTocBookId(null);
+            void openArticle(chapterId);
+          }}
+          onClose={() => setTocBookId(null)}
         />
       )}
 

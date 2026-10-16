@@ -375,3 +375,11 @@ export const IconNotebook = (p: IconProps) => (
     <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
   </svg>
 );
+
+/** 用户（账号登录，windows-auth 设置页 tab） */
+export const IconUser = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+    <circle cx="12" cy="7" r="4" />
+  </svg>
+);

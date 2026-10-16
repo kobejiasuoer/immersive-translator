@@ -148,6 +148,13 @@ pub struct ReaderSettingsOverride {
     /// 这里透传只为契约对齐，不解释语义。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_mode: Option<String>,
+    /// 专注模式（v0.8）：rename_all=camelCase 下序列化为 spotlightMode，
+    /// 与 TS/schema 字段名逐字一致，改名会被 serde 静默剥离。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spotlight_mode: Option<bool>,
+    /// 画报排版（v0.8）：prose=段落英文流 / parallel=双语对照。序列化为 spreadLayout。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spread_layout: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -390,6 +397,9 @@ pub struct VocabWord {
     /// 累计错题记录（每次复习判分后累加；老数据缺省 = 无记录）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recall: Option<RecallStat>,
+    /// 最近一次在口语对话中真实用出的时间（Unix 毫秒）；缺省 = 从未用出。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spoken_at: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -1336,7 +1346,29 @@ mod tests {
             added_at: 1000,
             example,
             recall: None,
+            spoken_at: None,
         }
+    }
+
+    #[test]
+    fn vocab_spoken_at_optional_roundtrip() {
+        // 老数据（无 spokenAt）加载后为 None；写入后 roundtrip 保留
+        let legacy: VocabWord = serde_json::from_str(
+            r#"{
+                "id": "w1", "word": "unwind", "senses": [],
+                "source": { "articleId": "a1", "sentenceIdx": 0 },
+                "srs": { "ease": 2.5, "intervalDays": 0, "reps": 0, "dueAt": 1, "lapses": 0 },
+                "addedAt": 1000
+            }"#,
+        )
+        .expect("老生词可加载");
+        assert_eq!(legacy.spoken_at, None);
+        let out = serde_json::to_value(&legacy).unwrap();
+        assert!(out.get("spokenAt").is_none());
+
+        let spoken = VocabWord { spoken_at: Some(1_728_000_000_000), ..legacy };
+        let back: VocabWord = serde_json::from_value(serde_json::to_value(&spoken).unwrap()).unwrap();
+        assert_eq!(back.spoken_at, Some(1_728_000_000_000));
     }
 
     #[test]
@@ -1524,6 +1556,56 @@ mod tests {
     }
 
     #[test]
+    fn settings_spotlight_fields_roundtrip_camel_case() {
+        // v0.8 新增设置（专注模式/画报排版）：前端写 camelCase 键，Rust 读进
+        // Option 字段、写回时键名逐字一致且字段不丢（preserve 第 3 条）。
+        let article: Article = serde_json::from_str(
+            r#"{
+                "id": "a1", "title": "T", "titleCnState": "done", "sourceType": "paste",
+                "wordCount": 1, "createdAt": 0, "lastReadAt": 0,
+                "progress": { "sentenceIdx": 0, "percent": 0, "secondsListened": 0 },
+                "sentences": [],
+                "settings": { "spotlightMode": true, "spreadLayout": "parallel" }
+            }"#,
+        )
+        .expect("camelCase 新设置可读");
+        let settings = article.settings.as_ref().unwrap();
+        assert_eq!(settings.spotlight_mode, Some(true));
+        assert_eq!(settings.spread_layout.as_deref(), Some("parallel"));
+
+        // 序列化键名必须是 camelCase（TS mergeReaderSettings 按同名合并）。
+        let out = serde_json::to_value(&article).unwrap();
+        assert_eq!(out["settings"]["spotlightMode"], true);
+        assert_eq!(out["settings"]["spreadLayout"], "parallel");
+
+        // 走真实落盘/读盘路径（与 reader_save_article 同一 serde 管线）。
+        let file = ArticlesFile {
+            schema_version: READER_SCHEMA_VERSION,
+            articles: vec![article],
+        };
+        let path = temporary_path("settings-roundtrip.json");
+        std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
+        let loaded = load_articles_from_path(&path).unwrap();
+        let s = loaded.articles[0].settings.as_ref().unwrap();
+        assert_eq!(s.spotlight_mode, Some(true));
+        assert_eq!(s.spread_layout.as_deref(), Some("parallel"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn legacy_settings_without_spotlight_fields_load_as_none() {
+        // 老数据没有新字段：缺省 None、序列化不携带空键，免迁移可读（红线 2）。
+        let settings: ReaderSettingsOverride =
+            serde_json::from_str(r#"{ "maskTranslation": true }"#).unwrap();
+        assert_eq!(settings.mask_translation, Some(true));
+        assert_eq!(settings.spotlight_mode, None);
+        assert_eq!(settings.spread_layout, None);
+        let out = serde_json::to_string(&settings).unwrap();
+        assert!(!out.contains("spotlightMode"), "{out}");
+        assert!(!out.contains("spreadLayout"), "{out}");
+    }
+
+    #[test]
     fn save_article_into_book_file_replaces_and_persists() {
         let path = temporary_path("book-b1.json");
         let _ = std::fs::remove_file(&path);
@@ -1647,6 +1729,7 @@ mod tests {
             added_at: 0,
             example: None,
             recall: None,
+            spoken_at: None,
         }
     }
 }

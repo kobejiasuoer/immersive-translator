@@ -6,8 +6,11 @@ import { describe, expect, it } from "vitest";
 import {
   DIM_LABELS,
   SHADOW_PASS_SCORE,
+  WORD_SCORE_PATH_HEIGHT,
+  WORD_SCORE_PATH_WIDTH,
   diagnoseShadow,
   phoneTip,
+  wordScorePath,
   worstPhoneOf,
 } from "./shadowDiagnose";
 import { mapWordsToText, type PronunciationResult, type WordScore } from "./pronunciation";
@@ -130,5 +133,41 @@ describe("音素提示", () => {
     expect(phoneTip("dh")).toContain("齿");
     expect(phoneTip("ih")).toContain("短");
     expect(phoneTip("xx")).toContain("领读");
+  });
+
+  it("v0.8 新增音素：双元音滑动 / 中央松元音 / 浊塞音 / 舌位区分", () => {
+    expect(phoneTip("ao")).toContain("拢圆");
+    expect(phoneTip("ey")).toContain("滑向");
+    expect(phoneTip("uh")).toContain("放松");
+    expect(phoneTip("b")).toContain("声带先振动");
+    expect(phoneTip("d")).toContain("声带先振动");
+    expect(phoneTip("g")).toContain("声带先振动");
+    expect(phoneTip("s")).toContain("舌尖");
+    expect(phoneTip("sh")).toContain("撮圆");
+  });
+});
+
+describe("wordScorePath（逐词得分曲线，真实数据）", () => {
+  it("点列等距横排、分数越高 y 越小，5 分基准线在顶部", () => {
+    const path = wordScorePath([word("a", 5), word("b", 2.5), word("c", 0)]);
+    expect(path.width).toBe(WORD_SCORE_PATH_WIDTH);
+    expect(path.height).toBe(WORD_SCORE_PATH_HEIGHT);
+    expect(path.points).toHaveLength(3);
+    // 横向等距：首点贴左留边、末点贴右留边
+    expect(path.points[0].x).toBeCloseTo(12, 6);
+    expect(path.points[2].x).toBeCloseTo(WORD_SCORE_PATH_WIDTH - 12, 6);
+    expect(path.points[1].x).toBeCloseTo((path.points[0].x + path.points[2].x) / 2, 6);
+    // 纵向：5 分在最上（y=基准线），0 分在最下
+    expect(path.points[0].y).toBeCloseTo(path.baselineY, 6);
+    expect(path.points[1].y).toBeGreaterThan(path.points[0].y);
+    expect(path.points[2].y).toBeGreaterThan(path.points[1].y);
+  });
+
+  it("超界分数 clamp 到 0–5；单词居中", () => {
+    const clamped = wordScorePath([word("a", 9), word("b", -1)]);
+    expect(clamped.points[0].y).toBeCloseTo(clamped.baselineY, 6);
+    const single = wordScorePath([word("only", 3)]);
+    expect(single.points).toHaveLength(1);
+    expect(single.points[0].x).toBeCloseTo(WORD_SCORE_PATH_WIDTH / 2, 6);
   });
 });

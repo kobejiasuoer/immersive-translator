@@ -12,6 +12,7 @@ import {
   DEFAULT_TTS_VCN,
   buildTtsRequestFrame,
   friendlyTtsError,
+  speedFromRatePercent,
   synthesizeXfyunTts,
   ttsCacheGet,
   ttsCacheKey,
@@ -43,6 +44,34 @@ describe("buildTtsRequestFrame", () => {
     expect(frame.business.vcn).toBe("catherine");
     expect(frame.business.speed).toBe(50);
     expect(frame.business.volume).toBe(80);
+  });
+
+  it("传 rate 才映射进 business.speed；缺省帧与旧帧逐字节一致（speed 恒 50）", () => {
+    const legacy = buildTtsRequestFrame("a", "x", { vcn: "catherine" });
+    expect(buildTtsRequestFrame("a", "x", { vcn: "catherine", rate: undefined })).toBe(legacy);
+    expect(JSON.parse(legacy).business.speed).toBe(50);
+    const slow = JSON.parse(buildTtsRequestFrame("a", "x", { vcn: "catherine", rate: 38 }));
+    expect(slow.business.speed).toBe(38);
+    // 越界 clamp 到 0–100
+    expect(JSON.parse(buildTtsRequestFrame("a", "x", { vcn: "c", rate: 300 })).business.speed).toBe(100);
+  });
+});
+
+describe("speedFromRatePercent", () => {
+  it("SSML 百分比映射 business.speed（50=1×），非法值回落 50", () => {
+    expect(speedFromRatePercent("-25%")).toBe(38); // 0.75× 慢速示范
+    expect(speedFromRatePercent("+0%")).toBe(50);
+    expect(speedFromRatePercent("+50%")).toBe(75);
+    expect(speedFromRatePercent("abc")).toBe(50);
+  });
+});
+
+describe("ttsCacheKey 语速兼容", () => {
+  it("缺省语速 key 与旧 key 完全一致；传 rate 才纳入 key", () => {
+    expect(ttsCacheKey("hi", { vcn: "xiaoyan" })).toBe("xiaoyan|50|hi");
+    expect(ttsCacheKey("hi", { vcn: "xiaoyan", rate: undefined })).toBe("xiaoyan|50|hi");
+    expect(ttsCacheKey("hi", { vcn: "xiaoyan", rate: 38 })).toBe("xiaoyan|50|r38|hi");
+    expect(ttsCacheKey("hi", { vcn: "xiaoyan", rate: 38 })).not.toBe(ttsCacheKey("hi", { vcn: "xiaoyan" }));
   });
 });
 

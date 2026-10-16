@@ -80,4 +80,28 @@ describe("mergeReaderSettings", () => {
     expect(clamped.shadowingSilenceMs).toBe(800); // 收紧到下限
     expect(clamped.shadowingAutoMic).toBe(true); // 非法类型拒绝回落
   });
+
+  it("v0.8 画报设置：spotlightMode/spreadLayout 缺省回落、合法覆盖、非法值忽略（字段名与 Rust camelCase 序列化一致）", () => {
+    // 默认：专注模式关、段落排版。
+    expect(DEFAULT_READER_SETTINGS.spotlightMode).toBe(false);
+    expect(DEFAULT_READER_SETTINGS.spreadLayout).toBe("prose");
+    // 缺省回落：老文章 settings 没有这两个字段。
+    const fallback = mergeReaderSettings(DEFAULT_READER_SETTINGS, { fontSize: 20 });
+    expect(fallback.spotlightMode).toBe(false);
+    expect(fallback.spreadLayout).toBe("prose");
+    // 合法覆盖（键名必须是 spotlightMode/spreadLayout——serde 按名剥离，改名即静默丢设置）。
+    const merged = mergeReaderSettings(DEFAULT_READER_SETTINGS, {
+      spotlightMode: true,
+      spreadLayout: "parallel",
+    });
+    expect(merged.spotlightMode).toBe(true);
+    expect(merged.spreadLayout).toBe("parallel");
+    // 非法值忽略：布尔给字符串、排版给未契约枚举都回落全局。
+    const bad = mergeReaderSettings({ ...DEFAULT_READER_SETTINGS, spotlightMode: true }, {
+      spotlightMode: "on" as never,
+      spreadLayout: "magazine" as never,
+    });
+    expect(bad.spotlightMode).toBe(true);
+    expect(bad.spreadLayout).toBe("prose");
+  });
 });

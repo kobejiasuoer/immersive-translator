@@ -103,6 +103,30 @@ describe("edgeTts 帧构造与解析", () => {
     expect(msg).not.toContain("a<b");
   });
 
+  it("ssml 帧缺省语速 +0%（与旧请求字符串逐字节一致）；传 '-25%' 注入 prosody rate", async () => {
+    const mod = await freshModule();
+    const legacy =
+      `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>` +
+      `<voice name='en-US-AvaNeural'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>world</prosody></voice></speak>`;
+    const def = mod.buildSsmlMessage("en-US-AvaNeural", "world", "req", "ts");
+    expect(def).toContain(legacy);
+    expect(mod.buildSsmlMessage("en-US-AvaNeural", "world", "req", "ts", "+0%")).toBe(def);
+    const slow = mod.buildSsmlMessage("en-US-AvaNeural", "world", "req", "ts", "-25%");
+    expect(slow).toContain("rate='-25%'");
+    expect(slow).not.toContain("rate='+0%'");
+  });
+
+  it("edgeTtsCacheKey：缺省语速 key 与旧 key 完全一致；非缺省纳入 key", async () => {
+    const mod = await freshModule();
+    expect(mod.edgeTtsCacheKey("hi", { voice: "en-US-AvaNeural" })).toBe("edge:en-US-AvaNeural|hi");
+    expect(mod.edgeTtsCacheKey("hi", { voice: "en-US-AvaNeural", ratePercent: "+0%" })).toBe(
+      "edge:en-US-AvaNeural|hi",
+    );
+    expect(mod.edgeTtsCacheKey("hi", { voice: "en-US-AvaNeural", ratePercent: "-25%" })).toBe(
+      "edge:en-US-AvaNeural|r-25%|hi",
+    );
+  });
+
   it("二进制帧：取 Path:audio 净荷，非音频帧/坏帧返回 null", async () => {
     const mod = await freshModule();
     const payload = new Uint8Array([1, 2, 3, 4]);
