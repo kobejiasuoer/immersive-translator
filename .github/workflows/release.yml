@@ -389,80 +389,39 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # ⚠️ Windows runner 两个坑：
-          # ① gh release upload 会把 CJK 文件名剥成 ASCII（v0.9.0 实测：
-          #   沉浸口语_0.9.0_x64-setup.exe 传成了 _0.9.0_x64-setup.exe）；
-          # ② curl 直接读 CJK 路径文件可能因 codepage 失败。
-          # 对策：exe 先复制成 ASCII 临时名，再走 uploads API，name 参数
-          # 百分号编码（RELEASE-CHECKLIST §5 验证过的路径）。
-          exe_name="$(basename "$EXE_PATH")"
-          tmp_exe="$RUNNER_TEMP/setup-upload.exe"
-          cp "$EXE_PATH" "$tmp_exe"
+          # ⚠️ GitHub Release 资产 API 只认 ASCII 资产名：中文名实测被服务端剥字符
+          # （gh 上传成 _0.9.0_x64-setup.exe；REST 百分号编码上传返回 422）。
+          # 资产文件名沿用英文产品名（自动更新链路全部 ASCII，v0.1.0–v0.8.1 验证过），
+          # 应用内 productName 已更名「沉浸口语」，不受资产名影响。
+          asset="ImmersiveTranslator_${RELEASE_VERSION}_x64-setup.exe"
+          cp "$EXE_PATH" "$RUNNER_TEMP/$asset"
+          if [[ -f "$EXE_PATH.sig" ]]; then
+            cp "$EXE_PATH.sig" "$RUNNER_TEMP/$asset.sig"
+          fi
 
-          echo "等待 release（mac job 创建）……"
-          rid=""
           for i in $(seq 1 40); do
-            rid="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" -q '.id' 2>/dev/null || true)"
-            if [[ -n "$rid" ]]; then break; fi
+            if gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              break
+            fi
             sleep 30
           done
-          if [[ -z "$rid" ]]; then
-            echo "等待 20 分钟未见 release，由本 job 直接创建。"
-            gh release create "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" \
+
+          # 清掉此前中文名资产被服务端剥坏的残留（如 _0.9.0_x64-setup.exe）
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --paginate \
+            --jq ".assets[] | select(.name == \"_${RELEASE_VERSION}_x64-setup.exe\") | .id" \
+            | while read -r aid; do
+                gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$aid"
+                echo "已删除残留资产 id=$aid"
+              done
+
+          if gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" "$RUNNER_TEMP/$asset" --clobber
+            if [[ -f "$RUNNER_TEMP/$asset.sig" ]]; then
+              gh release upload "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" "$RUNNER_TEMP/$asset.sig" --clobber
+            fi
+          else
+            gh release create "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" "$RUNNER_TEMP/$asset" \
               --title "$APP_NAME $RELEASE_VERSION" --target "$GITHUB_SHA"
-            rid="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" -q '.id')"
-          fi
-          echo "release id=$rid"
-
-          api_base="https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$rid/assets"
-
-          delete_asset() {
-            gh api "repos/$GITHUB_REPOSITORY/releases/$rid/assets" \
-              | jq -r --arg want "$1" '.[] | select(.name == $want) | .id' \
-              | while read -r aid; do
-                  curl -s -o /dev/null -X DELETE \
-                    -H "Authorization: token $GH_TOKEN" \
-                    "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$aid" || true
-                  echo "已删除旧资产 $1 (id=$aid)"
-                done
-          }
-
-          upload_asset() {
-            local file="$1" name="$2" enc code
-            enc="$(jq -rn --arg v "$name" '$v|@uri')"
-            echo "上传资产 $name ……"
-            code="$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Content-Type: application/octet-stream" \
-              --data-binary @"$file" \
-              "$api_base?name=$enc" || echo 000)"
-            if [[ "$code" != "201" ]]; then
-              echo "首次上传 HTTP $code，清理重名后重试"
-              delete_asset "$name"
-              code="$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-                -H "Authorization: token $GH_TOKEN" \
-                -H "Content-Type: application/octet-stream" \
-                --data-binary @"$file" \
-                "$api_base?name=$enc" || echo 000)"
-            fi
-            echo "上传 $name -> HTTP $code"
-            if [[ "$code" != "201" ]]; then
-              echo "::error::上传资产 $name 失败（HTTP $code）"
-              exit 1
-            fi
-          }
-
-          # 清掉 gh 剥 CJK 后的历史残留（如 _0.9.0_x64-setup.exe）
-          mangled="_${RELEASE_VERSION}_x64-setup.exe"
-          if [[ "$mangled" != "$exe_name" ]]; then
-            delete_asset "$mangled"
-          fi
-
-          upload_asset "$tmp_exe" "$exe_name"
-          if [[ -f "$EXE_PATH.sig" ]]; then
-            tmp_sig="$RUNNER_TEMP/setup-upload.exe.sig"
-            cp "$EXE_PATH.sig" "$tmp_sig"
-            upload_asset "$tmp_sig" "$exe_name.sig"
           fi
 
           notes="$GITHUB_WORKSPACE/release-notes/v${RELEASE_VERSION}.md"
