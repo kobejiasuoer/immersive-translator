@@ -65,7 +65,9 @@ pub(crate) static SECRETS_IO_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new
 /// 读取并解密命名条目（内部经 SECRETS_IO_MUTEX 串行化）。
 /// 条目不存在返回 Ok(None)。path 版便于 cargo 单测注入临时文件。
 pub(crate) fn secrets_get_raw(path: &Path, key: &str) -> Result<Option<String>, String> {
-    let _guard = SECRETS_IO_MUTEX.lock().map_err(|_| "secrets IO 锁不可用".to_string())?;
+    let _guard = SECRETS_IO_MUTEX
+        .lock()
+        .map_err(|_| "secrets IO 锁不可用".to_string())?;
     let secrets = load_secrets_from_path(path)?;
     match secrets.entries.get(key) {
         Some(encrypted) => decrypt(encrypted)
@@ -78,7 +80,9 @@ pub(crate) fn secrets_get_raw(path: &Path, key: &str) -> Result<Option<String>, 
 /// 加密并写入命名条目（内部经 SECRETS_IO_MUTEX 串行化）。
 /// 空串不允许：条目删除走 secrets_clear_raw（对齐既有命令语义）。
 pub(crate) fn secrets_set_raw(path: &Path, key: &str, plaintext: &str) -> Result<(), String> {
-    let _guard = SECRETS_IO_MUTEX.lock().map_err(|_| "secrets IO 锁不可用".to_string())?;
+    let _guard = SECRETS_IO_MUTEX
+        .lock()
+        .map_err(|_| "secrets IO 锁不可用".to_string())?;
     let mut secrets = load_secrets_from_path(path)?;
     let b64 = encrypt(plaintext)?;
     secrets.entries.insert(key.to_string(), b64);
@@ -87,7 +91,9 @@ pub(crate) fn secrets_set_raw(path: &Path, key: &str, plaintext: &str) -> Result
 
 /// 删除命名条目（内部经 SECRETS_IO_MUTEX 串行化；条目不存在也成功）。
 pub(crate) fn secrets_clear_raw(path: &Path, key: &str) -> Result<(), String> {
-    let _guard = SECRETS_IO_MUTEX.lock().map_err(|_| "secrets IO 锁不可用".to_string())?;
+    let _guard = SECRETS_IO_MUTEX
+        .lock()
+        .map_err(|_| "secrets IO 锁不可用".to_string())?;
     let mut secrets = load_secrets_from_path(path)?;
     secrets.entries.remove(key);
     save_secrets_to_path(path, &secrets)
@@ -264,7 +270,9 @@ pub fn secret_set(app: AppHandle, name: Option<String>, value: String) -> Result
 pub fn secret_exists(app: AppHandle, name: Option<String>) -> Result<bool, String> {
     let key = normalize_name(name.as_deref())?;
     let path = secrets_path(&app)?;
-    let _guard = SECRETS_IO_MUTEX.lock().map_err(|_| "secrets IO 锁不可用".to_string())?;
+    let _guard = SECRETS_IO_MUTEX
+        .lock()
+        .map_err(|_| "secrets IO 锁不可用".to_string())?;
     Ok(load_secrets_from_path(&path)?.entries.contains_key(&key))
 }
 
