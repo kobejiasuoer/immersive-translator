@@ -6,7 +6,9 @@
 
 ## ⭐ v0.6.0 起的标准发布流程（免 PAT、免手动上传）
 
-> 2026-09-21 发布 v0.6.0 全程实跑验证。适用前提：本机无 GitHub PAT、未装 gh CLI、
+> 2026-09-21 发布 v0.6.0 全程实跑验证；2026-10-18 发布 v0.9.0 复验并补充
+> （资产名 ASCII 化、工具链同步、若干新坑，详见文末踩坑记录 8–14）。
+> 适用前提：本机无 GitHub PAT、未装 gh CLI、
 > 不想弹「Connect to GitHub」登录窗，只用 SSH push 完成一切。
 > 涉及文件锚点：`.github/workflows/release.yml`（windows job 云端构建）、
 > `.github/workflows/updater-assets.yml`（签名产物补传）、`release-notes/`（中文发布说明）、
@@ -26,6 +28,7 @@ Release 的创建与资产上传全部由 Actions 内置 token 完成；updater 
 | updater 私钥 | `ls ~/.tauri/immersive-translator-updater.key` 存在 |
 | 无残留进程 | 任务管理器无 immersive-translator-windows.exe；1420 端口空闲 |
 | 工作区 | `git status`：所有改动已归入模块 commit，无计划外文件会被顺带提交 |
+| 无设计工具注入 | `git diff index.html` 里不得有第三方采集脚本（v0.9.0 曾混入 Figma MCP 的 `mcp.figma.com/.../capture.js`，见踩坑 14） |
 
 ### 第 1 步 · 收尾门禁（全绿才许打 tag）
 
@@ -38,6 +41,17 @@ cd src-tauri && cargo test && cargo fmt --all -- --check
 cd .. && npm audit --audit-level=high --registry=https://registry.npmjs.org
 pnpm install --frozen-lockfile             # pnpm-lock.yaml 与 package.json 同步校验
 ```
+
+⚠️ **本机 rustfmt 必须与 CI 同版**（v0.9.0 踩坑 9）：CI 用 `dtolnay/rust-toolchain@stable`
+滚动最新，本机落后会误报/漏报格式差异。同步方式（默认源国内会卡死，走 rsproxy 镜像）：
+`export RUSTUP_DIST_SERVER=https://rsproxy.cn RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup && rustup update stable`。
+2026-10 起 rustfmt 1.10 对含中文的行按「两列宽」计数，历史代码大量超 100 列——
+v0.9.0 已全量格式化入库，此后只要工具链同步就稳定。
+
+⚠️ **audit 会因新通告突然红**（与代码改动无关，v0.9.0 踩坑 10）：修复方式是
+package.json `overrides` 钉修复版 + `npx -y npm@11 install` 重建 package-lock.json。
+注意 **pnpm 不读 npm 的 `overrides` 字段**（它用自己的 `pnpm.overrides`），本地
+pnpm 装的不受钉版影响——CI 门禁走 `npm ci` 所以只看 package-lock，两者不冲突。
 
 ⚠️ **本次加过依赖就必须重建 package-lock.json**（CI 前端门禁走 `npm ci`，lockfile
 落后直接红）：`npx -y npm@11 install --registry=https://registry.npmjs.org`，
@@ -87,6 +101,13 @@ curl -s "https://api.github.com/repos/kobejiasuoer/immersive-translator/releases
   （⚠️ GitHub 资产 API 只认 ASCII 名，本地的中文名产物上传时自动改名，见 §2 注），
   再用 `release-notes/vX.Y.Z.md` 覆盖自动生成的英文说明。
 - **CI** 工作流：mac swift / 前端 audit+test+build / Rust fmt+test(--locked) 三组门禁。
+  **CI 红不拦发布**（Release 工作流独立触发、独立权限）：v0.8.0/v0.8.1 都是带红 CI
+  发出去的。但门禁红=下次发布的隐患，应尽快修（v0.9.0 修好了 fmt 与 audit 两项，
+  仅剩 mac swift 老问题）。
+- **Release 工作流挂了怎么办**（v0.9.0 三轮实测）：无 token 看不了日志，用公开
+  annotations 定位——`curl -s ".../commits/<sha>/check-runs" 拿 id → .../check-runs/<id>/annotations`，
+  自己脚本里的 `::error::` 输出会出现在里面。修复后 `git tag -f vX.Y.Z && git push -f origin vX.Y.Z`
+  重跑全程（mac 会 --clobber 重传，windows job 已内置清理剥坏资产），每轮约 7 分钟。
 
 ### 第 7 步 · updater 签名补传（仓库未配 TAURI secret 时必做）
 
@@ -94,6 +115,8 @@ curl -s "https://api.github.com/repos/kobejiasuoer/immersive-translator/releases
 # ① 下载 CI 产物 —— ⚠️ 字节与本机构建不同，.sig 必须对 CI 产物签！
 curl -sL -o ci.exe "https://github.com/kobejiasuoer/immersive-translator/releases/download/vX.Y.Z/ImmersiveTranslator_X.Y.Z_x64-setup.exe"
 # ② 签名：-k 传 base64 后的私钥全文（不是文件路径！），密码是空串
+#    ⚠️ 别把文件放 /tmp 再用绝对路径传给 npx/python——Git Bash 的 /tmp 是 MSYS 虚拟
+#    路径，原生程序(npx/python)解析会错位（v0.9.0 踩坑 12）。放项目目录、cd 进去用相对路径。
 npx tauri signer sign -k "$(base64 -w0 ~/.tauri/immersive-translator-updater.key)" --password "" ci.exe
 # ③ 按 §3 ① 验 keynum == 723b366356af3935
 # ④ 按 §4 生成 latest.json：signature = 新 .sig 全文；url 用
@@ -103,7 +126,8 @@ mkdir -p release-updater/vX.Y.Z
 cp ci.exe.sig release-updater/vX.Y.Z/ImmersiveTranslator_X.Y.Z_x64-setup.exe.sig
 cp latest.json  release-updater/vX.Y.Z/latest.json
 git add release-updater && git commit -m "chore(release): vX.Y.Z updater 签名与 latest.json" && git push
-#    推送后 updater-assets.yml 自动把两者附件到对应 tag 的 release
+#    推送后 updater-assets.yml 自动把两者附件到对应 tag 的 release（Linux runner，
+#    ASCII 文件名，可靠）
 ```
 
 若仓库日后配置 `TAURI_SIGNING_PRIVATE_KEY` secret（base64 私钥全文 + 空密码），
@@ -113,13 +137,24 @@ windows job 构建时就会直接产出并上传 .sig，**本步整段跳过**�
 
 - §6 验证照旧：`releases/latest/download/latest.json` 返回新版本号且 signature
   与本地 .sig 全文一致；`--noproxy '*'` 走 gh-proxy 镜像验一遍；tag 上 CI/Release 全绿。
+  ⚠️ 比对签名时把 live JSON 存文件再比（同目录相对路径），别在 curl 管道里拼 /tmp 绝对路径。
+  线上 latest.json 与本地文件字节数差一点（git 对 JSON 文本做 CRLF→LF 归一化）是正常的，
+  只要 JSON 解析出的 signature 字符串逐字节相等即可（v0.9.0 实测 724→714 字节，内容不变）。
 - 归档 `release-builds/vX.Y.Z/`：exe **从 release 重新下载**（与本地产物字节不同），
-  连同 .sig、latest-vX.Y.Z.json，保证归档与线上一致。
+  连同 .sig、latest-vX.Y.Z.json，保证归档与线上一致；`sha256sum` 对一遍签名的 ci.exe。
 
 ### 实测节奏（v0.6.0，2026-09-21）
 
 门禁 + 分模块提交约 30 分钟 → 本地烟囱构建 5 分钟 → push tag 后 windows job
 约 12 分钟出包上传 → 签名补传约 3 分钟。全程无人值守、零登录。
+
+### 实测节奏（v0.9.0，2026-10-18）
+
+门禁约 1 小时（含 rustup 镜像同步工具链 + fmt 全量格式化 + audit 钉版重建 lockfile）
+→ 分模块提交 8 个 → push tag 后第一轮 Release 即出包，但资产名问题三轮返工
+（中文名被剥 → REST 编码 422 → 资产名改回 ASCII 成功），每轮约 7 分钟 →
+签名补传 + 验证 + 归档约 15 分钟。**若一开始就用 ASCII 资产名，全程可控制在 1.5 小时内。**
+本地烟囱构建因会话中断跑丢（不影响发布，CI 产物为准）。
 
 以下 §0–§6 为 v0.5.x 及之前的「本机构建 + PAT 上传」流程，留作参考
 （重新存好 PAT 且网络畅通时仍可用）。
@@ -325,3 +360,31 @@ curl -s -H "Authorization: token $TOKEN" \
    窗口可能静默创建失败（表现为进程在、无窗口）。再启动一次即可。lib.rs 内有同款注释。
 7. **cargo fmt 门禁**：`examples/` 下的探针脚本也在 `cargo fmt --all --check` 范围内，
    提交前 `cargo fmt --all` 一下省得 CI 红。
+8. **GitHub Release 资产名只认 ASCII**（v0.9.0 三轮实测）：中文名资产经 gh CLI 上传
+   被服务端剥字符（`沉浸口语_0.9.0_x64-setup.exe` → `_0.9.0_x64-setup.exe`），
+   走 REST + 百分号编码 `?name=` 也 422。结论：**release 资产文件名必须全 ASCII**
+   （现固定 `ImmersiveTranslator_X.Y.Z_x64-setup.exe`，release.yml 上传时从本地
+   中文名产物自动改名）；应用内 productName 中文不受影响。曾因此双装的升级
+   自救见 §2 的 v0.9.0 注。
+9. **rustfmt 版本漂移**：CI 的 `dtolnay/rust-toolchain@stable` 滚动最新，本机
+   rustfmt 落后数月后判定会与 CI 分叉（2026-10 起 rustfmt 1.10 对中文按两列宽计列，
+   CI fmt 门禁无代码改动也突然红，v0.8.0/v0.8.1 均带红 CI 发布）。发布前
+   `rustup update stable`（国内走 rsproxy 镜像，默认源会卡死）与 CI 对齐再跑 fmt。
+10. **npm audit 通告漂移**：新安全通告会让 audit 门禁在零改动时转红（v0.9.0 的
+    source-map-js GHSA-68fv-2mgg-jv7q）。修法：`overrides` 钉修复版 + `npx -y npm@11
+    install` 重建 package-lock.json。注意 pnpm 不读 npm 的 `overrides`（本地
+    pnpm 安装不受钉版影响，CI 走 npm ci 只看 package-lock，不冲突）。
+11. **CI 红不拦发布**：Release 工作流独立于 CI，token/权限自成体系。门禁红是债
+    不是路障——但要尽快还（v0.9.0 已修 fmt/audit，mac swift 仍红待查）。
+12. **Git Bash 的 /tmp 是 MSYS 虚拟路径**：传给原生程序（npx tauri signer、python）
+    会错位——签名成功但 .sig 落在别处、python 报 FileNotFoundError。签名/验证
+    工作目录放项目内，cd 进去全用相对路径。
+13. **workflow 里 `gh release view --json databaseId` 会报错**（字段无效）且
+    `set -e` 下 2 秒静默退出、annotations 无细节。release id 一律用
+    `gh api repos/$GITHUB_REPOSITORY/releases/tags/<tag> -q '.id'`。自定义脚本
+    多写 `echo` 进度和 `::error::`（后者会出现在公开 annotations 里，无 token
+    也能定位失败原因）。
+14. **设计工具会往 index.html 注入采集脚本**：Figma MCP 的
+    `<script src="https://mcp.figma.com/mcp/html-to-design/capture.js">` 混进了
+    v0.9.0 的工作区（打进安装包=所有用户启动即请求第三方域）。发布前
+    `git diff index.html` 必查第 0 步表格已加此栏。
