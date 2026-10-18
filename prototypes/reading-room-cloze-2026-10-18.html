@@ -1,0 +1,1247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>沉浸阅读室 · 随读抽查（行内挖空微测）交互原型</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=Noto+Serif+SC:wght@400;600&family=Inter:wght@400;500;600&family=Noto+Sans+SC:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   随读抽查（Inline Micro-Cloze）交互原型 · 2026-10-18
+   视觉 1:1 对齐 immersive-translator-windows 现行 v0.8 阅读画报
+   （warm-archival 纸书主题），令牌摘自 styles.css 2820-2898 与
+   reader.css 6700-7100。仅新增 .cloze* / .quiz-* / .stamp* 三组样式。
+   ============================================================ */
+
+/* ---------- 令牌（= app .reader-root warm-archival） ---------- */
+/* 原型为单页，令牌同时挂 :root，避免 body 背景取值失败露出系统画布色 */
+:root, .reader-root {
+  --canvas-bg: #F6F3EC;
+  --canvas-aura-1: rgba(208, 90, 63, 0.07);
+  --canvas-aura-2: rgba(31, 110, 92, 0.06);
+
+  --glass-surface: rgba(252, 250, 245, 0.78);
+  --glass-elevated: rgba(255, 255, 255, 0.90);
+  --glass-pill: rgba(247, 244, 236, 0.86);
+  --glass-border: rgba(28, 27, 24, 0.09);
+  --glass-border-strong: rgba(28, 27, 24, 0.16);
+  --glass-highlight: rgba(255, 255, 255, 0.7);
+
+  --ink-1: #171614;
+  --ink-2: #4A4740;
+  --ink-3: #7A756C;
+  --ink-4: #ACA69B;
+
+  --accent: #C84B31;
+  --accent-hover: #B03E26;
+  --accent-soft: rgba(200, 75, 49, 0.11);
+  --accent-softer: rgba(200, 75, 49, 0.06);
+  --accent-glow: rgba(200, 75, 49, 0.22);
+
+  --ok: #1B6B58;
+  --ok-soft: rgba(27, 107, 88, 0.11);
+  --sonic-teal: #1B6B58;
+  --sonic-teal-soft: rgba(27, 107, 88, 0.11);
+
+  --clause-indigo: #3649C4;
+  --clause-indigo-soft: rgba(54, 73, 196, 0.11);
+
+  --tape-bg: #E9DEC8;
+  --tape-border: #D5C5A5;
+  --tape-ink: #6E5D43;
+
+  --warn: #B45309;
+  --warn-soft: rgba(180, 83, 9, 0.11);
+  --err: #B91C1C;
+  --err-soft: rgba(185, 28, 28, 0.10);
+
+  --shadow-spatial: 0 20px 50px -12px rgba(23, 22, 20, 0.09), 0 4px 14px -2px rgba(23, 22, 20, 0.04);
+  --shadow-pill: 0 12px 32px -6px rgba(23, 22, 20, 0.11), 0 2px 8px -1px rgba(23, 22, 20, 0.05);
+
+  --font-display: "Instrument Serif", "Source Serif 4", "Noto Serif SC", Georgia, serif;
+  --font-serif: "Source Serif 4", "Noto Serif SC", Georgia, serif;
+  --font-sans: "Inter", "Noto Sans SC", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --read-en-size: 20.5px;
+  --read-en-lh: 34px;
+  --read-cn-size: 14px;
+}
+
+/* ---------- 基底 ---------- */
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: var(--font-sans);
+  font-size: 13.5px; line-height: 1.6;
+  color: var(--ink-1);
+  background: var(--canvas-bg);
+  background-image:
+    radial-gradient(1100px 520px at 12% -6%, var(--canvas-aura-1), transparent 62%),
+    radial-gradient(900px 480px at 96% 108%, var(--canvas-aura-2), transparent 60%);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+::selection { background: rgba(200, 75, 49, 0.2); }
+button { font-family: inherit; color: inherit; }
+button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px;
+}
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* ---------- 舞台骨架（书脊列 + 纸张 + 透镜卡） ---------- */
+.reader-root { height: 100vh; position: relative; }
+.reader-stage { height: 100%; display: flex; }
+
+.editorial-spine-col {
+  width: 56px; flex-shrink: 0;
+  display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start;
+  padding: 20px 0 12px; user-select: none;
+}
+.oversized-folio-num {
+  font-family: var(--font-display); font-size: 44px; line-height: 0.9;
+  color: var(--ink-1); opacity: 0.18; font-style: italic;
+}
+.spine-col-cap { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-3); margin-top: 4px; }
+.spine-vertical-label {
+  writing-mode: vertical-rl; text-orientation: mixed;
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.12em;
+  color: var(--ink-3); transform: rotate(180deg);
+  max-height: 40vh; overflow: hidden; text-transform: uppercase;
+}
+.spine-col-pct { font-family: var(--font-mono); font-size: 11px; color: var(--accent); font-weight: 600; }
+
+.literary-spread-scroll {
+  flex: 1; overflow-y: auto; min-width: 0;
+  padding: 16px 24px 110px 12px;
+  scroll-behavior: smooth;
+}
+.literary-sheet { max-width: 65ch; margin: 0 auto; }
+
+/* ---------- 刊头 ---------- */
+.masthead-top-meta {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--ink-3);
+  padding-bottom: 12px; border-bottom: 1px solid var(--glass-border-strong);
+  margin-bottom: 22px;
+}
+.masthead-meta-line { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.masthead-switches { display: flex; gap: 14px; align-items: center; flex: none; }
+.chip {
+  padding: 1px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 500;
+  border: 1px solid var(--glass-border-strong); color: var(--ink-2);
+}
+.chip-blue { background: var(--clause-indigo-soft); color: var(--clause-indigo); border-color: transparent; }
+
+.text-action-btn {
+  border: none; background: none; padding: 0;
+  color: var(--ink-2); font-size: 12px; font-weight: 500; font-family: inherit;
+  cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+  transition: color 150ms;
+}
+.text-action-btn:hover { color: var(--accent); }
+
+/* 新开关：随读抽查。开启时给一枚安静的胶带底，文字用墨色保对比度 */
+.text-action-btn.quiz-on {
+  color: var(--ink-1);
+  font-weight: 600;
+  background: var(--tape-bg);
+  padding: 2px 9px; margin: -2px -9px;
+  border-radius: 3px;
+  box-shadow: 0 1px 0 var(--tape-border);
+}
+.text-action-btn.quiz-on::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); flex: none;
+}
+.text-action-btn.quiz-on:hover { color: var(--ink-1); }
+
+.masthead-display-title {
+  font-family: var(--font-display);
+  font-size: 54px; font-weight: 400; line-height: 1.04; letter-spacing: -0.025em;
+  margin: 0 0 10px; color: var(--ink-1);
+  overflow-wrap: break-word;
+}
+.masthead-cn-sub {
+  font-family: var(--font-serif); font-size: 16px; color: var(--ink-2);
+  margin: 0 0 28px; font-weight: 400;
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+}
+.masthead-cn-text { min-width: 0; overflow-wrap: break-word; }
+
+/* 抽查计数器：只在开关开启时出现 */
+.quiz-meter {
+  flex: none; font-family: var(--font-mono); font-size: 11px; color: var(--ink-3);
+  display: none; align-items: center; gap: 8px; white-space: nowrap;
+}
+.quiz-meter.show { display: inline-flex; }
+.quiz-meter b { color: var(--ink-1); font-weight: 500; }
+.quiz-meter .m-ok { color: var(--ok); }
+.quiz-meter .m-warn { color: var(--warn); }
+.quiz-meter .m-err { color: var(--err); }
+
+/* ---------- 画报正文 ---------- */
+.prose-body { font-family: var(--font-serif); color: var(--ink-1); }
+.para { margin: 0; }
+.prose-sentence {
+  padding: 3px 5px; margin: 0 -5px; border-radius: 6px;
+  cursor: pointer; transition: all 220ms var(--ease-spring);
+  display: inline; font-family: var(--font-serif);
+  font-size: var(--read-en-size);
+  line-height: calc(var(--read-en-lh) * 1.2);
+  overflow-wrap: break-word;
+}
+.prose-sentence.is-current { background: var(--accent-soft); box-shadow: inset 0 -1.5px 0 var(--accent); }
+.spotlight-active .prose-sentence:not(.is-current) { opacity: 0.36; filter: blur(0.2px); }
+.spotlight-active .prose-sentence:not(.is-current):hover { opacity: 0.78; filter: none; }
+.drop-cap {
+  float: left; font-family: var(--font-display);
+  font-size: 64px; line-height: 0.82; padding: 4px 12px 0 0;
+  color: var(--accent); font-style: italic;
+}
+
+/* 词块标注（现行样式）：克制点线 */
+.chunk-hl {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  cursor: pointer; border-radius: 3px;
+  transition: background-color 0.12s ease;
+}
+.chunk-hl:hover { background: var(--accent-soft); }
+.chunk-hl.known { text-decoration-color: var(--ok); }
+.chunk-hl.known:hover { background: var(--ok-soft); }
+
+/* 朗读中词 */
+.word.speaking { background: var(--clause-indigo-soft); color: var(--clause-indigo); border-radius: 3px; }
+
+/* ============================================================
+   新增 · 行内挖空槽（cloze）
+   隐喻：词块被从铅字里「揭」下来，留下一小条胶带；
+   读者把词亲手贴回去，判完落一枚印章。
+   ============================================================ */
+.cloze {
+  position: relative;
+  display: inline-block;
+  vertical-align: baseline;
+  margin: 0 2px;
+}
+.cloze input {
+  font-family: var(--font-serif);
+  font-style: italic;              /* 手写感：你的作答是「手迹」 */
+  font-size: 0.92em;
+  color: var(--ink-1);
+  background: var(--tape-bg);
+  border: none;
+  border-bottom: 2px dashed var(--tape-ink);
+  border-radius: 3px 3px 0 0;
+  padding: 0 7px 1px;
+  height: 1.32em;
+  min-width: 6ch;
+  text-align: center;
+  vertical-align: -3px;
+  caret-color: var(--accent);
+  transition: background 180ms, border-color 180ms, box-shadow 180ms;
+}
+.cloze input::placeholder { color: var(--ink-4); font-style: italic; }
+.cloze input:hover { background: #EFE5CF; }
+.cloze input:focus {
+  outline: none;
+  background: var(--glass-elevated);
+  border-bottom-color: var(--accent);
+  border-bottom-style: solid;
+  box-shadow: 0 2px 0 var(--accent-soft);
+  font-style: normal;
+}
+/* 悬停/聚焦时浮现的「?」提示钮：揭示首字母 */
+.cloze .hint-btn {
+  position: absolute; top: -14px; right: -16px;
+  width: 16px; height: 16px;
+  border: 1px solid var(--tape-border); border-radius: 50%;
+  background: var(--glass-elevated);
+  color: var(--ink-3); font-family: var(--font-mono); font-size: 10px; line-height: 1;
+  display: none; place-items: center; cursor: pointer; padding: 0;
+}
+.cloze:hover .hint-btn, .cloze:focus-within .hint-btn { display: grid; }
+.cloze .hint-btn:hover { color: var(--accent); border-color: var(--accent); }
+.cloze.used-hint input { color: var(--ink-2); }
+
+/* 判定后：词「印刷」回正文 */
+.cloze-done {
+  font-style: normal;
+  border-radius: 3px;
+  padding: 0 2px;
+  background: var(--tape-bg);
+  transition: background 900ms ease 1.1s;
+}
+.cloze-done.verdict-perfect { text-decoration: underline; text-decoration-style: dotted; text-decoration-color: var(--ok); text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
+.cloze-done.verdict-close { text-decoration: underline; text-decoration-style: dotted; text-decoration-color: var(--warn); text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
+.cloze-done.verdict-trap, .cloze-done.verdict-wrong { text-decoration: underline; text-decoration-style: dotted; text-decoration-color: var(--err); text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
+.cloze-done.settled { background: transparent; }
+.cloze-done .ans-show { color: var(--err); text-decoration: line-through; text-decoration-thickness: 1px; margin-right: 4px; }
+
+/* 印章：判定落章，右上角微旋 */
+.stamp {
+  position: absolute; top: -0.72em; right: -10px; z-index: 3;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 500; letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border: 1.5px solid currentColor; border-radius: 4px;
+  transform: rotate(-7deg);
+  background: var(--glass-elevated);
+  animation: stamp-in 420ms var(--ease-spring);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.stamp.s-perfect { color: var(--ok); background: var(--ok-soft); }
+.stamp.s-close { color: var(--warn); background: var(--warn-soft); }
+.stamp.s-trap { color: var(--err); background: var(--err-soft); }
+.stamp.s-wrong { color: var(--ink-3); background: var(--surface-2, rgba(28,27,24,0.045)); }
+@keyframes stamp-in {
+  0% { opacity: 0; transform: rotate(-16deg) scale(1.9); }
+  60% { opacity: 1; transform: rotate(-5deg) scale(0.94); }
+  100% { opacity: 1; transform: rotate(-7deg) scale(1); }
+}
+
+/* 朱批：陷阱讲解 / 纠正行，挂在判定词下方的小块（呼应折叠卡） */
+.cloze-note {
+  display: block;
+  margin: 2px 0 8px 26px;
+  font-family: var(--font-serif); font-style: italic;
+  font-size: 13px; line-height: 1.5; color: var(--accent);
+}
+.cloze-note .note-ans { color: var(--ink-1); font-style: normal; font-weight: 600; }
+.cloze-actions { display: inline-flex; gap: 10px; margin-left: 10px; }
+.cloze-actions .text-action-btn { font-size: 11.5px; }
+
+/* 按住 H 全局显影：所有未答槽位透出答案 */
+.cloze.peeked input { color: transparent; }
+.cloze.peeked::after {
+  content: attr(data-answer);
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  font-family: var(--font-serif); font-style: italic; font-size: 0.92em;
+  color: var(--ink-3);
+  pointer-events: none;
+}
+
+/* ---------- 行间译文折叠卡 ---------- */
+.interlinear-fold {
+  display: block;
+  margin: 12px 0 22px; padding: 12px 18px;
+  border-radius: 12px;
+  background: var(--glass-surface);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border-strong);
+  font-family: var(--font-sans); font-size: 14px; line-height: 1.6;
+  color: var(--ink-2);
+  box-shadow: var(--shadow-pill);
+}
+.interlinear-fold .fold-zh { font-size: var(--read-cn-size); overflow-wrap: break-word; }
+.interlinear-fold.masked .fold-zh { filter: blur(5px); cursor: pointer; user-select: none; transition: filter 180ms; }
+.interlinear-fold.masked .fold-zh.revealed { filter: none; user-select: auto; }
+.fold-actions {
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--glass-border);
+  display: flex; align-items: center; gap: 16px;
+  font-size: 12px; flex-wrap: wrap;
+}
+
+/* ---------- 右侧透镜卡 ---------- */
+.spatial-lens-card {
+  width: 386px; flex: none; align-self: stretch; margin: 8px 0;
+  background: var(--glass-surface);
+  backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--glass-border-strong); border-left: none;
+  border-radius: 22px;
+  box-shadow: var(--shadow-spatial), inset 0 1px 0 var(--glass-highlight);
+  display: flex; flex-direction: column;
+  overflow: hidden; padding: 0;
+}
+.lens-header {
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--glass-border);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: none;
+}
+.lens-mode-switch {
+  display: inline-flex; background: var(--canvas-bg);
+  padding: 3px; border-radius: 99px; border: 1px solid var(--glass-border);
+}
+.lens-mode-btn {
+  border: none; background: transparent; color: var(--ink-3);
+  padding: 4px 12px; border-radius: 99px;
+  font-size: 11.5px; font-weight: 500; cursor: pointer; transition: all 150ms;
+}
+.lens-mode-btn.active { background: var(--glass-elevated); color: var(--ink-1); font-weight: 600; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }
+.lens-ref-tag { font-family: var(--font-mono); font-size: 11px; color: var(--ink-3); }
+.lens-body {
+  flex: 1; overflow-y: auto; min-height: 0;
+  padding: 18px 20px;
+  display: flex; flex-direction: column; gap: 18px;
+}
+.lens-section { padding-bottom: 16px; border-bottom: 1px solid var(--glass-border); }
+.lens-section:last-child { border-bottom: none; padding-bottom: 0; }
+.lens-kicker {
+  font-size: 11.5px; font-weight: 600; color: var(--ink-3); margin-bottom: 8px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.xray-spine {
+  font-family: var(--font-serif); font-size: 15px; font-weight: 600; color: var(--ink-1);
+  background: var(--accent-softer); border-left: 3px solid var(--accent);
+  padding: 7px 12px; border-radius: 0 8px 8px 0; margin-bottom: 10px; line-height: 1.5;
+}
+.clause-step-item {
+  padding: 9px 12px; border-radius: 10px; margin-bottom: 6px;
+  border: 1px solid transparent; cursor: pointer;
+  transition: all 150ms var(--ease-spring);
+}
+.clause-step-item:hover { background: var(--glass-elevated); border-color: var(--glass-border-strong); transform: translateX(2px); }
+.clause-tag { font-size: 11px; color: var(--clause-indigo); font-weight: 600; margin-bottom: 2px; }
+.clause-snippet { font-family: var(--font-serif); font-size: 14.5px; font-weight: 600; color: var(--ink-1); }
+.clause-desc { font-size: 12px; color: var(--ink-3); margin-top: 3px; line-height: 1.45; }
+.xray-pattern {
+  font-size: 12.5px; color: var(--ink-2); line-height: 1.55;
+  background: var(--clause-indigo-soft); border-radius: 8px; padding: 8px 12px;
+}
+.xray-pattern b { color: var(--clause-indigo); font-weight: 600; }
+
+/* 透镜卡 · 查词页签 */
+.vocab-item {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 8px 10px; margin-bottom: 4px; border-radius: 9px; cursor: pointer;
+  transition: background 150ms;
+}
+.vocab-item:hover { background: var(--glass-elevated); }
+.vocab-item.active { background: var(--accent-softer); }
+.vocab-word { font-family: var(--font-serif); font-size: 14.5px; font-weight: 600; color: var(--ink-1); flex: none; }
+.vocab-gloss { font-size: 12px; color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vocab-badge {
+  margin-left: auto; flex: none; font-family: var(--font-mono); font-size: 9.5px;
+  padding: 1px 7px; border-radius: 999px;
+}
+.vocab-badge.due { background: var(--warn-soft); color: var(--warn); }
+.vocab-badge.done { background: var(--ok-soft); color: var(--ok); }
+.vocab-badge.fresh { background: rgba(28,27,24,0.05); color: var(--ink-3); }
+.word-card {
+  border: 1px solid var(--glass-border-strong); border-radius: 12px;
+  padding: 12px 14px; background: var(--glass-elevated);
+}
+.word-card .w-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.word-card .w-name { font-family: var(--font-serif); font-size: 19px; font-weight: 600; }
+.word-card .w-pos { font-size: 11px; color: var(--ink-3); font-family: var(--font-mono); }
+.word-card .w-gloss { font-size: 13px; color: var(--ink-2); margin-bottom: 8px; }
+.word-card .w-trap {
+  font-size: 12px; line-height: 1.55; color: var(--accent);
+  border-top: 1px dashed var(--glass-border-strong); padding-top: 8px; margin-top: 8px;
+}
+.word-card .w-trap b { font-weight: 600; }
+
+/* ---------- 悬浮走带 ---------- */
+.floating-sonic-dock {
+  position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+  z-index: 35;
+  display: flex; align-items: center; gap: 14px;
+  padding: 7px 14px 7px 10px;
+  border-radius: 999px;
+  background: var(--glass-elevated);
+  backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--glass-border-strong);
+  box-shadow: var(--shadow-spatial), inset 0 1px 0 var(--glass-highlight);
+}
+.sonic-play-orb {
+  width: 36px; height: 36px; border-radius: 50%; border: none;
+  background: var(--ink-1); color: var(--canvas-bg);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: transform 150ms; flex: none; padding: 0;
+}
+.sonic-play-orb:hover { transform: scale(1.05); }
+.sonic-play-orb svg { width: 15px; height: 15px; fill: currentColor; }
+.dock-step {
+  width: 26px; height: 26px; border: none; border-radius: 50%;
+  background: transparent; color: var(--ink-3);
+  display: grid; place-items: center; cursor: pointer; flex: none; padding: 0;
+}
+.dock-step:hover { color: var(--ink-1); background: var(--canvas-bg); }
+.dock-step svg { width: 12px; height: 12px; fill: currentColor; }
+.dock-scrubber {
+  position: relative; width: 160px; height: 4px;
+  background: var(--glass-border-strong); border-radius: 99px; cursor: pointer; flex: none;
+}
+.dock-scrubber-fill { height: 100%; background: var(--accent); border-radius: 99px; transition: width 200ms var(--ease-spring); }
+.dock-code { font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); flex: none; }
+
+/* ---------- SRS 胶带小条（左下角反馈） ---------- */
+.toast-layer {
+  position: absolute; left: 68px; bottom: 24px; z-index: 40;
+  display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none;
+}
+.toast-tape {
+  display: flex; align-items: center; gap: 9px;
+  background: var(--tape-bg);
+  border: 1px solid var(--tape-border);
+  border-radius: 3px;
+  box-shadow: var(--shadow-pill);
+  padding: 7px 14px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--tape-ink);
+  transform: rotate(-1.2deg);
+  animation: tape-in 360ms var(--ease-spring);
+}
+.toast-tape .t-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.toast-tape .t-word { font-family: var(--font-serif); font-style: italic; font-size: 13px; color: var(--ink-1); }
+.toast-tape.leaving { transition: opacity 400ms, transform 400ms; opacity: 0; transform: rotate(-1.2deg) translateY(8px); }
+@keyframes tape-in {
+  from { opacity: 0; transform: rotate(-4deg) translateY(14px); }
+  to { opacity: 1; transform: rotate(-1.2deg) translateY(0); }
+}
+
+/* 原型角标 */
+.proto-tag {
+  position: absolute; right: 16px; bottom: 14px; z-index: 30;
+  font-family: var(--font-mono); font-size: 10px; color: var(--ink-4);
+  user-select: none;
+}
+
+/* ---------- 键盘提示（首次出现槽位时短暂展示） ---------- */
+.kbd-hint {
+  position: absolute; left: 50%; bottom: 78px; transform: translateX(-50%);
+  z-index: 45;
+  background: var(--glass-elevated); border: 1px solid var(--glass-border-strong);
+  border-radius: 999px; box-shadow: var(--shadow-pill);
+  padding: 6px 16px; font-size: 12px; color: var(--ink-2);
+  display: flex; align-items: center; gap: 8px; white-space: nowrap;
+  transition: opacity 500ms;
+}
+.kbd-hint kbd {
+  font-family: var(--font-mono); font-size: 10.5px;
+  background: var(--canvas-bg); border: 1px solid var(--glass-border-strong);
+  border-bottom-width: 2px; border-radius: 4px; padding: 0 5px;
+}
+.kbd-hint.gone { opacity: 0; pointer-events: none; }
+
+/* ---------- 窄窗 ---------- */
+@media (max-width: 1080px) {
+  .spatial-lens-card { display: none; }
+  .kbd-hint { display: none; }
+  .editorial-spine-col { display: none; }
+  .toast-layer { left: 16px; }
+}
+@media (max-width: 900px) {
+  .masthead-display-title { font-size: 34px; }
+  .floating-sonic-dock { bottom: 12px; }
+}
+@media (max-width: 480px) {
+  .masthead-display-title { font-size: 28px; }
+  .masthead-top-meta { flex-wrap: wrap; }
+}
+
+/* ---------- 入场（只作用于静态容器，正文重绘不重播） ---------- */
+@keyframes boot-rise {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes dock-rise {
+  from { opacity: 0; transform: translate(-50%, 18px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.bootrise { animation: boot-rise 700ms var(--ease-spring) both; }
+.bootrise-dock { animation: dock-rise 700ms var(--ease-spring) 260ms both; }
+@media (prefers-reduced-motion: reduce) {
+  .bootrise, .bootrise-dock { animation: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stamp, .toast-tape { animation: none; }
+  .literary-spread-scroll { scroll-behavior: auto; }
+}
+</style>
+</head>
+<body>
+<div class="reader-root" data-theme="light" data-ui>
+  <div class="reader-stage">
+
+    <aside class="editorial-spine-col bootrise" style="animation-delay:80ms">
+      <div>
+        <div class="oversized-folio-num">04</div>
+        <div class="spine-col-cap tabular">FOLIO</div>
+      </div>
+      <div class="spine-vertical-label">THE TOWN THAT REFUSED TO SILT AWAY</div>
+      <div class="spine-col-pct tabular" id="spinePct">38%</div>
+    </aside>
+
+    <div class="literary-spread-scroll" id="scroll">
+      <div class="literary-sheet">
+        <header class="masthead bootrise">
+          <div class="masthead-top-meta tabular">
+            <span class="masthead-meta-line">
+              CHAPTER 3 · 182 词 · 约 4 分钟读完
+              <span class="chip chip-blue">B2</span>
+            </span>
+            <span class="masthead-switches">
+              <button class="text-action-btn" id="swSpot" title="开启后非当前句变淡，注意力聚焦当前句">专注模式：关</button>
+              <button class="text-action-btn" id="swLayout" title="段落 = 行内英文流 + 当前句行间译文">排版：段落</button>
+              <button class="text-action-btn" id="swMask" title="遮住译文先读原文，需要时再点开">译文：显示</button>
+              <button class="text-action-btn quiz-on" id="swQuiz" title="把已标注词块与到期生词变成行内填空，边读边默写，本地毫秒判分">随读抽查：开</button>
+            </span>
+          </div>
+          <h1 class="masthead-display-title">The Town That Refused to Silt Away</h1>
+          <div class="masthead-cn-sub">
+            <span class="masthead-cn-text">拒绝淤塞的小镇：一条运河、三个冬天与一位不肯罢休的教师</span>
+            <span class="quiz-meter tabular" id="quizMeter"></span>
+          </div>
+        </header>
+        <div class="prose-body bootrise" id="prose" style="animation-delay:120ms"></div>
+      </div>
+    </div>
+
+    <aside class="spatial-lens-card bootrise" style="animation-delay:160ms">
+      <div class="lens-header">
+        <span class="lens-ref-tag tabular" id="lensRef">S4 / 6</span>
+        <div class="lens-mode-switch">
+          <button class="lens-mode-btn active" id="tabXray">句子解析</button>
+          <button class="lens-mode-btn" id="tabVocab">查词</button>
+        </div>
+      </div>
+      <div class="lens-body" id="lensBody"></div>
+    </aside>
+
+  </div>
+
+  <div class="floating-sonic-dock bootrise-dock">
+    <button class="sonic-play-orb" id="playOrb" title="连播（空格）">
+      <svg id="orbIcon" viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5-9-5.5z"/></svg>
+    </button>
+    <button class="dock-step" id="prevBtn" title="上一句（J）">
+      <svg viewBox="0 0 16 16"><path d="M11 3v10L4 8l7-5zM3 3h1.6v10H3z"/></svg>
+    </button>
+    <div class="dock-scrubber" id="scrubber" title="点按跳句">
+      <div class="dock-scrubber-fill" id="scrubFill"></div>
+    </div>
+    <button class="dock-step" id="nextBtn" title="下一句（L）">
+      <svg viewBox="0 0 16 16"><path d="M5 3v10l7-5-7-5zM11.4 3H13v10h-1.6z"/></svg>
+    </button>
+    <span class="dock-code tabular" id="dockCode">S4 / 6</span>
+  </div>
+
+  <div class="toast-layer" id="toasts"></div>
+
+  <div class="kbd-hint" id="kbdHint">
+    <span>在胶带上打出你记得的词块</span>
+    <kbd>Enter</kbd><span>判分</span>
+    <kbd>?</kbd><span>首字母</span>
+    <kbd>按住 H</kbd><span>全显</span>
+    <kbd>空格</kbd><span>连播</span>
+  </div>
+
+  <div class="proto-tag">交互原型 · 随读抽查 v1 · 2026-10-18</div>
+</div>
+
+<script>
+/* ============================================================
+   数据：6 句正文。segment 模型与 chunkAnnotate 的 ChunkSpan 对齐：
+   { t:'txt' } 纯文本 | { t:'chunk' } 词块标注 | { t:'slot' } 挖空槽
+   ============================================================ */
+const SENTENCES = [
+  {
+    para: 0,
+    segs: [
+      { t: "txt", s: "The train pulls into Dreadmouth just after dawn, when the tide is still " },
+      { t: "slot", id: "s1", s: "making up its mind", kind: "idiom", gloss: "犹豫不决；拿不定主意",
+        trap: "making its mind",
+        trapNote: "漏了 up——make up one\u2019s mind 是「下定决心」；直译成 make its mind 正是这一格的陷阱。" },
+      { t: "txt", s: "." },
+    ],
+    zh: "黎明刚过，火车驶入德雷德茅斯，潮水仍在犹豫不决。",
+    xray: {
+      spine: "the tide is making up its mind",
+      clauses: [
+        { tag: "时间状语从句", snippet: "when the tide is still making up its mind", desc: "when 引导，后置补充主句动作发生的时间背景。" },
+        { tag: "习语", snippet: "making up its mind", desc: "拟人：潮水像人一样「拿主意」，写活涨落不定。" },
+      ],
+      pattern: "<b>…, when …</b> — 主句先给画面，when 从句补时间；新闻特写最常用的开场节奏。",
+    },
+  },
+  {
+    para: 0,
+    segs: [
+      { t: "txt", s: "For forty years the town " },
+      { t: "slot", id: "s2", s: "slumbered", kind: "srs", gloss: "v. 沉睡；蛰伏（文学化）",
+        trapNote: "作者不用 slept 而用 slumbered——带「安详长眠」的文学色彩，与 forty years 的漫长呼应。" },
+      { t: "txt", s: " between the hills and the sea, its canals " },
+      { t: "chunk", s: "silting up", gloss: "淤塞" },
+      { t: "txt", s: " in silence." },
+    ],
+    zh: "四十年来，小镇在群山与大海之间沉睡，运河在寂静中淤塞。",
+    xray: {
+      spine: "the town slumbered",
+      clauses: [
+        { tag: "独立主格", snippet: "its canals silting up in silence", desc: "名词 + doing 作伴随状语，补写「沉睡」期间同时发生的事。" },
+        { tag: "介词短语", snippet: "between the hills and the sea", desc: "地点状语，把小镇夹在两景之间。" },
+      ],
+      pattern: "<b>… did …, its … doing …</b> — 独立主格让一句话同时推进两条画面线。",
+    },
+  },
+  {
+    para: 0,
+    segs: [
+      { t: "txt", s: "Now cranes swing over the locks again, and the old boathouses wear " },
+      { t: "chunk", s: "a fresh coat of paint", gloss: "一层新漆（coat 量词用法）" },
+      { t: "txt", s: " like Sunday suits." },
+    ],
+    zh: "如今吊臂又在船闸上空转动，老船屋们像穿上礼拜天的西装，漆面簇新。",
+    xray: {
+      spine: "cranes swing, boathouses wear a coat of paint",
+      clauses: [
+        { tag: "明喻", snippet: "like Sunday suits", desc: "把新漆比作节日正装，复兴的喜悦全在比喻里。" },
+      ],
+      pattern: "<b>Now … again, and …</b> — 「如今 + 再度」句式，一句话完成今昔对比。",
+    },
+  },
+  {
+    para: 1,
+    segs: [
+      { t: "txt", s: "Nobody in Dreadmouth will tell you the revival was " },
+      { t: "slot", id: "s4", s: "engineered from above", kind: "collocation", gloss: "自上而下策划；一手促成",
+        trapNote: "engineer 在这里是动词「策划、精密促成」，与「工程师」无关；from above 指「上级/高层」。" },
+      { t: "txt", s: "." },
+    ],
+    zh: "德雷德茅斯没有人会告诉你，这场复兴是被上层一手策划出来的。",
+    xray: {
+      spine: "Nobody will tell you …",
+      clauses: [
+        { tag: "省略 that 的宾语从句", snippet: "the revival was engineered from above", desc: "tell you (that)…，省略引导词。" },
+        { tag: "被动语态", snippet: "was engineered from above", desc: "engineer 作动词的被动式，隐去策划者。" },
+      ],
+      pattern: "<b>Nobody will tell you …</b> — 双重否定式开场，为下文的反转蓄力。",
+    },
+  },
+  {
+    para: 1,
+    segs: [
+      { t: "txt", s: "It began, they say, with a single act of " },
+      { t: "slot", id: "s5", s: "stubbornness", kind: "srs", gloss: "n. 固执；倔强",
+        trap: "stubborn",
+        trapNote: "这里要名词：of stubbornness——stubborn 是形容词，冠词 act of 后面必须接名词。" },
+      { t: "txt", s: ": a schoolteacher who refused to let the last lock " },
+      { t: "chunk", s: "fall apart", gloss: "散架；分崩离析" },
+      { t: "txt", s: "." },
+    ],
+    zh: "他们说，这一切始于一次固执：一位女教师，不肯让最后一道船闸散了架。",
+    xray: {
+      spine: "It began with a single act of stubbornness",
+      clauses: [
+        { tag: "插入语", snippet: ", they say,", desc: "传闻标记，作者不背书。" },
+        { tag: "定语从句", snippet: "who refused to let the last lock fall apart", desc: "修饰 a schoolteacher；let sb/sth do 接原形。" },
+      ],
+      pattern: "<b>It began with …: a … who …</b> — 先抛抽象名词，冒号后落到具体的人。",
+    },
+  },
+  {
+    para: 1,
+    segs: [
+      { t: "txt", s: "She spent three winters asking the council for paint, for timber, for time — and would not " },
+      { t: "chunk", s: "take no for an answer", gloss: "不接受拒绝" },
+      { t: "txt", s: "." },
+    ],
+    zh: "她花了三个冬天向议会要油漆、要木料、要时间——从不接受一个「不」字。",
+    xray: {
+      spine: "She spent three winters asking …",
+      clauses: [
+        { tag: "排比", snippet: "for paint, for timber, for time", desc: "三个 for 短语递进，节奏由实到虚。" },
+      ],
+      pattern: "<b>spend … doing …, and would not …</b> — 「耗时做某事 + 意志补语」的人物定型句。",
+    },
+  },
+];
+
+/* 透镜卡 · 查词页签的生词表（slumbered / stubbornness 到期） */
+const VOCAB = [
+  { word: "slumbered", pos: "v.", gloss: "沉睡；蛰伏", badge: "due", from: "s2" },
+  { word: "stubbornness", pos: "n.", gloss: "固执；倔强", badge: "due", from: "s5" },
+  { word: "silt", pos: "v./n.", gloss: "淤塞；淤泥", badge: "fresh" },
+  { word: "lock", pos: "n.", gloss: "船闸", badge: "fresh" },
+  { word: "council", pos: "n.", gloss: "议会；政务委员会", badge: "later", due: "3 天后" },
+];
+
+const PARA_SPLIT = [0, 3]; // 每段首句下标
+const state = {
+  current: 3,                    // 「上次读到第 4 句」
+  visited: new Set([0, 1, 2, 3]),
+  playing: false,
+  spotlight: false,
+  maskOn: false,
+  quizOn: true,
+  lensTab: "xray",
+  lensWord: null,
+  slots: {},                     // id -> {verdict, usedHint, retrying, answer}
+  tallies: { hit: 0, close: 0, trap: 0 },
+};
+SENTENCES.forEach((sn, snIdx) =>
+  sn.segs.forEach((seg) => {
+    if (seg.t === "slot") state.slots[seg.id] = { verdict: null, usedHint: false };
+  })
+);
+const slotSegs = {};
+SENTENCES.forEach((sn, snIdx) => sn.segs.forEach((seg) => {
+  if (seg.t === "slot") slotSegs[seg.id] = Object.assign({}, seg, { snIdx });
+}));
+const TODO_TOTAL = Object.keys(state.slots).length;
+
+/* ---------- 判分：对齐 recallJudge.judgeCloze 的本地规则 ---------- */
+function normalize(s) {
+  return s.toLowerCase().replace(/[\u2019\u2018`]/g, "'").replace(/[^a-z0-9' ]/g, " ")
+    .replace(/\s+/g, " ").trim().replace(/^(a|an|the) /, "");
+}
+function lev(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+function judgeCloze(input, answer, trap) {
+  const gi = normalize(input), ga = normalize(answer);
+  if (!gi) return null;
+  if (gi === ga) return "perfect";
+  if (trap && gi === normalize(trap)) return "trap";
+  const loose = (w) => w.replace(/'s$/, "");
+  const giL = gi.split(" ").map(loose).join(" ");
+  const gaL = ga.split(" ").map(loose).join(" ");
+  if (giL === gaL) return "close";
+  if (lev(gi, ga) <= Math.max(1, Math.floor(ga.length / 6))) return "close";
+  return "wrong";
+}
+
+/* ---------- 渲染 ---------- */
+const proseEl = document.getElementById("prose");
+const foldEl = document.createElement("div");
+foldEl.className = "interlinear-fold";
+
+function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+
+/* 槽位是否已激活（quizOn + 句子读过 + 尚未判定） */
+function slotPending(id) {
+  return state.quizOn && state.visited.has(slotSegs[id].snIdx) && !state.slots[id].verdict;
+}
+
+function segHtml(seg, snIdx, firstOfFirst) {
+  if (seg.t === "txt") {
+    if (firstOfFirst) {
+      const m = seg.s.match(/^(\w)([\s\S]*)$/);
+      return `<span class="drop-cap">${m[1]}</span>${esc(m[2])}`;
+    }
+    return esc(seg.s);
+  }
+  if (seg.t === "chunk") {
+    return `<span class="chunk-hl" data-word="${esc(seg.s)}" title="${esc(seg.gloss)}">${esc(seg.s)}</span>`;
+  }
+  // slot：已判定 → 印章结果；未激活 → 退回普通词块；否则渲染输入槽
+  const st = state.slots[seg.id];
+  if (st.verdict) {
+    const stampText = { perfect: "命中", close: "接近", trap: "陷阱", wrong: "未中" }[st.verdict];
+    const inner = (st.verdict === "wrong" || st.verdict === "trap")
+      ? `<span class="ans-show">${esc(st.lastInput || "")}</span>${esc(seg.s)}`
+      : esc(seg.s);
+    let note = "";
+    if (st.verdict === "trap") note = `<span class="cloze-note">${esc(seg.trapNote)}</span>`;
+    if (st.verdict === "close") note = `<span class="cloze-note">就差一点：规范写法 <span class="note-ans">${esc(seg.s)}</span></span>`;
+    if (st.verdict === "wrong") note = `<span class="cloze-note">正确答案 <span class="note-ans">${esc(seg.s)}</span>${seg.trapNote ? "——" + esc(seg.trapNote) : ""}</span>`;
+    // 朱批作为槽位的兄弟块挂在词下，不撑宽槽位容器（与折叠卡同级行为）
+    return `<span class="cloze" data-slot="${seg.id}" data-answer="${esc(seg.s)}">` +
+      `<span class="cloze-done verdict-${st.verdict}">${inner}</span>` +
+      `<span class="stamp s-${st.verdict}">${stampText}</span></span>${note}`;
+  }
+  // 未激活（开关关闭或句子未读到）→ 退回普通词块标注
+  if (!slotPending(seg.id)) {
+    return `<span class="chunk-hl" data-word="${esc(seg.s)}" title="${esc(seg.gloss)}">${esc(seg.s)}</span>`;
+  }
+  // 待作答输入槽
+  const width = `calc(${Math.max(seg.s.length, 5)}ch * 0.52 + 22px)`;
+  return `<span class="cloze" data-slot="${seg.id}" data-answer="${esc(seg.s)}">` +
+    `<input type="text" autocomplete="off" spellcheck="false" data-slot="${seg.id}" ` +
+    `style="width:${width}" aria-label="填入被挖空的词块" placeholder="">` +
+    `<button class="hint-btn" data-hint="${seg.id}" title="首字母提示（会计入提示次数）" aria-label="首字母提示">?</button>` +
+    `</span>`;
+}
+
+function sentenceHtml(snIdx) {
+  const sn = SENTENCES[snIdx];
+  const firstOfFirst = snIdx === 0;
+  const isCur = state.current === snIdx;
+  const inner = sn.segs.map((seg, i) => segHtml(seg, snIdx, firstOfFirst && i === 0 && seg.t === "txt")).join("");
+  const cur = isCur ? " is-current" : "";
+  return `<span class="prose-sentence${cur}" data-idx="${snIdx}">${inner}</span> `;
+}
+
+function renderProse() {
+  // 重绘前记住正在输入的槽位，重绘后归还焦点，避免朗读推进打断作答
+  const activeEl = document.activeElement;
+  const focusId = restoreFocusSlot ||
+    (activeEl && activeEl.matches && activeEl.matches("input[data-slot]") ? activeEl.dataset.slot : null);
+  const foldPos = state.current;
+  let html = "";
+  SENTENCES.forEach((sn, i) => {
+    const paraStart = PARA_SPLIT[sn.para] === i;
+    if (paraStart && i > 0) html += `</div><div class="para">`;
+    if (paraStart && i === 0) html += `<div class="para">`;
+    html += sentenceHtml(i);
+    if (i === foldPos) html += foldHtml(sn);
+    if (i === SENTENCES.length - 1) html += `</div>`;
+  });
+  proseEl.innerHTML = html;
+  proseEl.classList.toggle("spotlight-active", state.spotlight);
+  if (focusId) {
+    const inp = proseEl.querySelector(`input[data-slot="${focusId}"]`);
+    if (inp) inp.focus();
+  }
+  restoreFocusSlot = null;
+}
+
+function foldHtml(sn) {
+  const masked = state.maskOn ? " masked" : "";
+  const revealed = state.maskOn && foldRevealed ? " revealed" : "";
+  const slotHere = sn.segs.some((sg) => sg.t === "slot" && slotPending(sg.id));
+  const slotTip = slotHere
+    ? `<button class="text-action-btn" data-act="peek" title="按住 H 也可全篇显影">看一眼答案</button>` : "";
+  return (
+    `<div class="interlinear-fold${masked}">` +
+    `<span class="fold-zh${revealed}">${esc(sn.zh)}</span>` +
+    `<div class="fold-actions">` +
+    `<button class="text-action-btn" data-act="speak">朗读本句</button>` +
+    `<button class="text-action-btn" data-act="xray">句子解析</button>` +
+    slotTip +
+    `</div></div>`
+  );
+}
+
+let foldRevealed = false;
+let restoreFocusSlot = null;
+
+/* ---------- 透镜卡 ---------- */
+const lensBody = document.getElementById("lensBody");
+function renderLens() {
+  document.getElementById("lensRef").textContent = `S${state.current + 1} / ${SENTENCES.length}`;
+  document.getElementById("tabXray").classList.toggle("active", state.lensTab === "xray");
+  document.getElementById("tabVocab").classList.toggle("active", state.lensTab === "vocab");
+  if (state.lensTab === "xray") {
+    const x = SENTENCES[state.current].xray;
+    lensBody.innerHTML =
+      `<div class="lens-section"><div class="lens-kicker"><span>句子主干</span></div>` +
+      `<div class="xray-spine">${esc(x.spine)}</div>` +
+      x.clauses.map((c) =>
+        `<div class="clause-step-item"><div class="clause-tag">${esc(c.tag)}</div>` +
+        `<div class="clause-snippet">${esc(c.snippet)}</div>` +
+        `<div class="clause-desc">${esc(c.desc)}</div></div>`).join("") +
+      `</div>` +
+      `<div class="lens-section"><div class="lens-kicker"><span>常用句型</span></div>` +
+      `<div class="xray-pattern">${x.pattern}</div></div>`;
+  } else {
+    const due = VOCAB.filter((v) => v.badge === "due").length;
+    const badgeHtml = (v) => {
+      if (v.badge === "due") return `<span class="vocab-badge due">到期</span>`;
+      if (v.badge === "done") return `<span class="vocab-badge done">今日已复</span>`;
+      if (v.badge === "later") return `<span class="vocab-badge fresh">${v.due}</span>`;
+      return `<span class="vocab-badge fresh">新词</span>`;
+    };
+    let wordCard = "";
+    if (state.lensWord) {
+      const v = VOCAB.find((x) => x.word === state.lensWord);
+      const seg = Object.values(slotSegs).find((sg) => sg.s === v.word);
+      wordCard =
+        `<div class="lens-section"><div class="lens-kicker"><span>词卡</span></div>` +
+        `<div class="word-card"><div class="w-head"><span class="w-name">${esc(v.word)}</span>` +
+        `<span class="w-pos">${esc(v.pos)}</span></div>` +
+        `<div class="w-gloss">${esc(v.gloss)}</div>` +
+        (seg && seg.trapNote ? `<div class="w-trap"><b>直译陷阱</b> · ${esc(seg.trapNote)}</div>` : "") +
+        `</div></div>`;
+    }
+    lensBody.innerHTML =
+      `<div class="lens-section"><div class="lens-kicker"><span>本章生词</span><span class="tabular">${due} 个到期</span></div>` +
+      VOCAB.map((v) =>
+        `<div class="vocab-item${state.lensWord === v.word ? " active" : ""}" data-vocab="${v.word}">` +
+        `<span class="vocab-word">${esc(v.word)}</span>` +
+        `<span class="vocab-gloss">${esc(v.gloss)}</span>${badgeHtml(v)}</div>`).join("") +
+      `</div>` + wordCard;
+  }
+}
+
+/* ---------- 计数器 / 走带 / 收尾 ---------- */
+function renderMeter() {
+  const m = document.getElementById("quizMeter");
+  m.classList.toggle("show", state.quizOn);
+  if (!state.quizOn) return;
+  const done = Object.values(state.slots).filter((s) => s.verdict).length;
+  const todo = TODO_TOTAL - done;
+  m.innerHTML =
+    `随读抽查 · <b class="m-ok">${state.tallies.hit} 命中</b> · ` +
+    `<b class="m-warn">${state.tallies.close} 接近</b> · ` +
+    `<b class="m-err">${state.tallies.trap} 陷阱</b> · ` +
+    `<b>剩 ${todo}</b>`;
+}
+function renderDock() {
+  document.getElementById("scrubFill").style.width = `${((state.current + 1) / SENTENCES.length) * 100}%`;
+  document.getElementById("dockCode").textContent = `S${state.current + 1} / ${SENTENCES.length}`;
+  document.getElementById("spinePct").textContent = `${Math.round(((state.current + 1) / SENTENCES.length) * 100)}%`;
+}
+function renderAll(focusSlotId) {
+  restoreFocusSlot = focusSlotId || null;
+  renderProse(); renderMeter(); renderDock(); renderLens();
+}
+
+/* ---------- 朗读模拟 ---------- */
+let playToken = 0;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function wordUnits(sn) {
+  const units = [];
+  sn.segs.forEach((seg) => {
+    if (seg.t === "txt") seg.s.split(/\s+/).filter(Boolean).forEach((w) => units.push({ text: w }));
+    else units.push({ text: seg.s, whole: true });
+  });
+  return units;
+}
+async function playLoop(token) {
+  while (state.playing && token === playToken) {
+    const idx = state.current;
+    const sn = SENTENCES[idx];
+    renderAll();
+    scrollCurrent();
+    const units = wordUnits(sn);
+    const sentEl = proseEl.querySelector(`.prose-sentence[data-idx="${idx}"]`);
+    const words = sentEl ? collectWordEls(sentEl) : [];
+    for (let i = 0; i < units.length; i++) {
+      if (!state.playing || token !== playToken) return;
+      if (words[i]) {
+        words[i].classList.add("speaking");
+        if (i > 0 && words[i - 1]) words[i - 1].classList.remove("speaking");
+      }
+      await sleep(230);
+    }
+    if (!state.playing || token !== playToken) return;
+    await sleep(430);
+    if (!state.playing || token !== playToken) return;
+    if (idx >= SENTENCES.length - 1) { setPlaying(false); return; }
+    setCurrent(idx + 1);
+  }
+}
+/* 将句内文本段切成 word span，供朗读着色（槽位/词块整段计一步） */
+function collectWordEls(sentEl) {
+  const out = [];
+  const walker = document.createTreeWalker(sentEl, NodeFilter.SHOW_TEXT);
+  const textNodes = [];
+  while (walker.nextNode()) {
+    const p = walker.currentNode.parentElement;
+    if (p && p.closest(".cloze")) continue;
+    textNodes.push(walker.currentNode);
+  }
+  textNodes.forEach((node) => {
+    const frag = document.createDocumentFragment();
+    const parts = node.textContent.split(/(\s+)/);
+    parts.forEach((pt) => {
+      if (/^\s+$/.test(pt) || pt === "") { frag.appendChild(document.createTextNode(pt)); return; }
+      const sp = document.createElement("span");
+      sp.className = "word"; sp.textContent = pt;
+      frag.appendChild(sp); out.push(sp);
+    });
+    node.parentNode.replaceChild(frag, node);
+  });
+  return out;
+}
+
+function setCurrent(idx) {
+  state.current = idx;
+  state.visited.add(idx);
+  foldRevealed = false;
+  renderAll();
+  scrollCurrent();
+}
+function scrollCurrent() {
+  const el = proseEl.querySelector(`.prose-sentence[data-idx="${state.current}"]`);
+  if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+function setPlaying(on) {
+  state.playing = on;
+  document.getElementById("orbIcon").innerHTML = on
+    ? `<path d="M3.5 2.5h3v11h-3zM9.5 2.5h3v11h-3z"/>`
+    : `<path d="M4 2.5v11l9-5.5-9-5.5z"/>`;
+  document.getElementById("playOrb").title = on ? "暂停（空格）" : "连播（空格）";
+  if (on) playLoop(++playToken);
+  else {
+    playToken++;
+    proseEl.querySelectorAll(".word.speaking").forEach((w) => w.classList.remove("speaking"));
+  }
+}
+
+/* ---------- 判定流 ---------- */
+function judgeSlot(id, raw) {
+  const seg = slotSegs[id];
+  const verdict = judgeCloze(raw, seg.s, seg.trap);
+  if (!verdict) return;
+  const st = state.slots[id];
+  st.lastInput = raw.trim();
+  st.verdict = st.usedHint && verdict === "perfect" ? "close" : verdict; // 用过提示压为「接近」
+  if (st.verdict === "perfect") state.tallies.hit++;
+  else if (st.verdict === "close") state.tallies.close++;
+  else if (st.verdict === "trap") state.tallies.trap++;
+  // SRS 小条：perfect/close → 良好；trap/wrong → 需复习
+  const grade = st.verdict === "perfect" || st.verdict === "close" ? "良好" : "需复习";
+  toast(grade, seg.s, st.verdict);
+  // 生词表联动
+  const v = VOCAB.find((x) => x.from === id);
+  if (v && (st.verdict === "perfect" || st.verdict === "close")) v.badge = "done";
+  renderAll();
+  // 胶带底色在印章落定后退去，只留点线下划线
+  setTimeout(() => proseEl.querySelectorAll(".cloze-done:not(.settled)").forEach((el) => el.classList.add("settled")), 1300);
+}
+function toast(grade, word, verdict) {
+  const layer = document.getElementById("toasts");
+  const colors = { perfect: "var(--ok)", close: "var(--warn)", trap: "var(--err)", wrong: "var(--ink-3)" };
+  const el = document.createElement("div");
+  el.className = "toast-tape";
+  el.innerHTML = `<span class="t-dot" style="background:${colors[verdict]}"></span>` +
+    `<span>已记入复习</span><span class="t-word">${esc(word)}</span><span>· ${grade}</span>`;
+  layer.appendChild(el);
+  while (layer.children.length > 3) layer.firstChild.remove();
+  setTimeout(() => { el.classList.add("leaving"); setTimeout(() => el.remove(), 420); }, 3200);
+}
+
+/* ---------- 事件 ---------- */
+proseEl.addEventListener("keydown", (e) => {
+  const inp = e.target.closest("input[data-slot]");
+  if (!inp) return;
+  e.stopPropagation(); // 输入时全局键让路：空格不再触发连播
+  if (e.key === "Enter") {
+    judgeSlot(inp.dataset.slot, inp.value);
+  } else if (e.key === "Escape") {
+    inp.blur();
+  }
+});
+proseEl.addEventListener("input", (e) => {
+  const inp = e.target.closest("input[data-slot]");
+  if (inp && /\?|\?/.test(inp.value)) { // 输入 ? 直接给首字母
+    const id = inp.dataset.slot;
+    const seg = slotSegs[id];
+    inp.value = firstLetters(seg.s);
+    state.slots[id].usedHint = true;
+  }
+});
+proseEl.addEventListener("click", (e) => {
+  const hintBtn = e.target.closest("[data-hint]");
+  if (hintBtn) {
+    e.stopPropagation();
+    const id = hintBtn.dataset.hint;
+    const inp = proseEl.querySelector(`input[data-slot="${id}"]`);
+    inp.value = firstLetters(slotSegs[id].s);
+    state.slots[id].usedHint = true;
+    inp.focus();
+    return;
+  }
+  const vocab = e.target.closest("[data-vocab]");
+  if (vocab) { state.lensWord = vocab.dataset.vocab; renderLens(); return; }
+  const chunk = e.target.closest(".chunk-hl");
+  if (chunk) {
+    e.stopPropagation(); // 对齐 .chunk-hl 自接管的隔离先例
+    const w = VOCAB.find((v) => v.word === chunk.dataset.word.split(" ")[0].replace(/[^a-zA-Z]/g, ""));
+    state.lensTab = "vocab";
+    state.lensWord = w ? w.word : "silt";
+    renderLens();
+    return;
+  }
+  const sent = e.target.closest(".prose-sentence");
+  if (sent && !e.target.closest("input")) {
+    setCurrent(Number(sent.dataset.idx));
+  }
+});
+proseEl.addEventListener("focusin", (e) => {
+  const inp = e.target.closest("input[data-slot]");
+  if (inp) document.getElementById("kbdHint").classList.add("gone");
+});
+function firstLetters(answer) {
+  return answer.split(/\s+/).map((w) => {
+    const m = w.match(/[a-zA-Z]/);
+    return m ? m[0] + "\u00b7".repeat(Math.max(w.replace(/[^a-zA-Z]/g, "").length - 1, 0)) : "";
+  }).join(" ");
+}
+
+/* 开关 */
+document.getElementById("swQuiz").addEventListener("click", function () {
+  state.quizOn = !state.quizOn;
+  this.classList.toggle("quiz-on", state.quizOn);
+  this.textContent = `随读抽查：${state.quizOn ? "开" : "关"}`;
+  renderAll();
+});
+document.getElementById("swSpot").addEventListener("click", function () {
+  state.spotlight = !state.spotlight;
+  this.textContent = `专注模式：${state.spotlight ? "开" : "关"}`;
+  renderProse();
+});
+document.getElementById("swMask").addEventListener("click", function () {
+  state.maskOn = !state.maskOn;
+  foldRevealed = false;
+  this.textContent = `译文：${state.maskOn ? "隐藏" : "显示"}`;
+  renderProse();
+});
+foldElClick();
+
+function foldElClick() {
+  proseEl.addEventListener("click", (e) => {
+    const zh = e.target.closest(".fold-zh");
+    if (zh && zh.closest(".masked")) { foldRevealed = !foldRevealed; renderProse(); return; }
+    const act = e.target.closest("[data-act]");
+    if (act) {
+      e.stopPropagation();
+      if (act.dataset.act === "speak") { setPlaying(false); setTimeout(() => { setPlaying(true); }, 60); }
+      if (act.dataset.act === "xray") { state.lensTab = "xray"; renderLens(); }
+      if (act.dataset.act === "peek") { document.body.classList.add("peeking-body"); flashPeek(); }
+    }
+  });
+}
+function flashPeek() {
+  proseEl.querySelectorAll(".cloze:not(:has(.cloze-done))").forEach((c) => c.classList.add("peeked"));
+  setTimeout(() => proseEl.querySelectorAll(".cloze.peeked").forEach((c) => c.classList.remove("peeked")), 900);
+}
+
+/* 走带 */
+document.getElementById("playOrb").addEventListener("click", () => setPlaying(!state.playing));
+document.getElementById("prevBtn").addEventListener("click", () => { setPlaying(false); setCurrent(Math.max(0, state.current - 1)); });
+document.getElementById("nextBtn").addEventListener("click", () => { setPlaying(false); setCurrent(Math.min(SENTENCES.length - 1, state.current + 1)); });
+document.getElementById("scrubber").addEventListener("click", (e) => {
+  const r = e.currentTarget.getBoundingClientRect();
+  const p = (e.clientX - r.left) / r.width;
+  setPlaying(false);
+  setCurrent(Math.min(SENTENCES.length - 1, Math.max(0, Math.round(p * (SENTENCES.length - 1)))));
+});
+document.getElementById("tabXray").addEventListener("click", () => { state.lensTab = "xray"; renderLens(); });
+document.getElementById("tabVocab").addEventListener("click", () => { state.lensTab = "vocab"; renderLens(); });
+
+/* 全局键：输入框聚焦时全部让路 */
+document.addEventListener("keydown", (e) => {
+  if (e.target.closest("input, textarea")) return;
+  if (e.code === "Space") { e.preventDefault(); setPlaying(!state.playing); }
+  else if (e.key === "j" || e.key === "ArrowLeft") { setPlaying(false); setCurrent(Math.max(0, state.current - 1)); }
+  else if (e.key === "l" || e.key === "ArrowRight") { setPlaying(false); setCurrent(Math.min(SENTENCES.length - 1, state.current + 1)); }
+  else if (e.key === "h" || e.key === "H") {
+    proseEl.querySelectorAll(".cloze").forEach((c) => {
+      if (!c.querySelector(".cloze-done")) c.classList.add("peeked");
+    });
+  }
+});
+document.addEventListener("keyup", (e) => {
+  if (e.key === "h" || e.key === "H") proseEl.querySelectorAll(".cloze.peeked").forEach((c) => c.classList.remove("peeked"));
+});
+
+/* ---------- 启动 ---------- */
+renderAll();
+setTimeout(() => document.getElementById("kbdHint").classList.add("gone"), 9000);
+</script>
+</body>
+</html>
