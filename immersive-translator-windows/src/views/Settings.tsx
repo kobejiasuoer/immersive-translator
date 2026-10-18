@@ -94,6 +94,11 @@ export function Settings() {
   /** 按服务商分桶的密钥库（内存副本），切换服务商时 Key 跟着切换。 */
   const [vault, setVault] = useState<KeyVault>({});
   const [activeTab, setActiveTab] = useState<SettingsTab>("provider");
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (contentRef.current) contentRef.current.scrollTop = 0;
+  }, [activeTab]);
   const [saved, setSaved] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false);
   const [appVersion, setAppVersion] = useState("");
@@ -383,6 +388,21 @@ export function Settings() {
   }
 
   const configured = hasValidSettings(settings);
+  const currentTabLabel = TABS.find((tab) => tab.id === activeTab)?.label ?? "模型服务";
+
+  function renderTab(t: (typeof TABS)[number]) {
+    const Icon = t.icon;
+    return (
+      <button
+        key={t.id}
+        className={`set-nav-item${activeTab === t.id ? " active" : ""}`}
+        onClick={() => setActiveTab(t.id)}
+      >
+        <Icon size={16} />
+        <span>{t.label}</span>
+      </button>
+    );
+  }
 
   return (
     <div className="set-shell">
@@ -392,22 +412,16 @@ export function Settings() {
           <span className="set-brand-mark">
             <IconTranslate size={13} />
           </span>
-          设置
+          <span className="set-brand-copy">
+            <strong>沉浸口语</strong>
+            <small>设置中心</small>
+          </span>
         </div>
         <nav className="set-nav" aria-label="设置分类">
-          {TABS.map((t) => {
-            const Icon = t.icon;
-            return (
-              <button
-                key={t.id}
-                className={`set-nav-item${activeTab === t.id ? " active" : ""}`}
-                onClick={() => setActiveTab(t.id)}
-              >
-                <Icon size={15} />
-                {t.label}
-              </button>
-            );
-          })}
+          <span className="set-nav-caption">翻译与工具</span>
+          {TABS.slice(0, 5).map(renderTab)}
+          <span className="set-nav-caption set-nav-caption-account">账号与应用</span>
+          {TABS.slice(5).map(renderTab)}
         </nav>
         <div className="set-side-foot">
           <span className={`conn-chip ${configured ? "ok" : "off"}`}>
@@ -424,6 +438,12 @@ export function Settings() {
 
       {/* 右侧内容 */}
       <main className="set-main">
+        <div className="set-topbar">
+          <span>应用设置</span>
+          <span className="set-topbar-divider" aria-hidden>／</span>
+          <strong>{currentTabLabel}</strong>
+        </div>
+        <div className="set-content" ref={contentRef}>
         {activeTab === "provider" && (
           <>
             <header className="set-pagehead">
@@ -455,29 +475,46 @@ export function Settings() {
               </div>
             )}
 
-            <div className="provider-list" role="radiogroup" aria-label="服务商">
-              {PROVIDER_PRESETS.map((p) => (
-                <ProviderItem
-                  key={p.id}
-                  preset={p}
-                  active={activeProviderId === p.id}
-                  hasKey={(vault[p.id]?.trim() ?? "") !== "" || (p.allowEmptyApiKey ?? false)}
-                  onApply={() => applyPreset(p)}
-                />
-              ))}
-            </div>
+            <div className="provider-workspace">
+              <section className="provider-selection">
+                <div className="settings-section-heading">
+                  <div>
+                    <h3>选择服务商</h3>
+                    <p>切换时会保留各自的密钥与模型配置</p>
+                  </div>
+                  <span className="provider-count">{PROVIDER_PRESETS.length} 个</span>
+                </div>
+                <div className="provider-list" role="radiogroup" aria-label="服务商">
+                  {PROVIDER_PRESETS.map((p) => (
+                    <ProviderItem
+                      key={p.id}
+                      preset={p}
+                      active={activeProviderId === p.id}
+                      hasKey={(vault[p.id]?.trim() ?? "") !== "" || (p.allowEmptyApiKey ?? false)}
+                      onApply={() => applyPreset(p)}
+                    />
+                  ))}
+                </div>
+              </section>
 
-            <p className="provider-caption">
-              {activePreset ? (
-                <>
-                  <strong>{activePreset.displayName}</strong> · {activePreset.hint}
-                </>
-              ) : (
-                <>使用自定义接口地址，可在下方「高级」里修改。</>
-              )}
-            </p>
-
-            <div className="group-card">
+              <section className="provider-configuration">
+                <div className="settings-section-heading">
+                  <div>
+                    <h3>连接配置</h3>
+                    <p>{activePreset ? activePreset.displayName : "自定义 OpenAI 兼容接口"}</p>
+                  </div>
+                  {currentIsLocal ? (
+                    <span className="chip chip-green">本机服务</span>
+                  ) : (
+                    <span className={`chip ${settings.apiKey.trim() ? "chip-green" : "chip-amber"}`}>
+                      {settings.apiKey.trim() ? "密钥已保存" : "等待密钥"}
+                    </span>
+                  )}
+                </div>
+                <p className="provider-caption">
+                  {activePreset ? activePreset.hint : "可在高级设置中填写接口地址。"}
+                </p>
+                <div className="group-card">
               <div className="field-block">
                 <div className="field-block-head">
                   <span className="field-label-v2">API Key</span>
@@ -538,67 +575,69 @@ export function Settings() {
                 </datalist>
                 <span className="field-hint">下拉里是 {activePreset ? activePreset.displayName : "该服务商"} 的常用模型，也可自由输入</span>
               </div>
-            </div>
+                </div>
 
-            <div className="provider-actions">
-              <button className="btn btn-secondary" disabled={testing} onClick={() => void handleTest()}>
-                <IconRetry size={14} />
-                {testing ? "测试中…" : "测试连接"}
-              </button>
-            </div>
-            {testMsg && <StatusBar msg={testMsg} />}
-
-            <details className="settings-advanced">
-              <summary>高级：接口地址与诊断</summary>
-              <div className="settings-advanced-body">
-                <label className="field-label" style={{ display: "block" }}>
-                  接口地址（OpenAI 兼容）
-                  <input
-                    className="input mono"
-                    value={settings.endpoint}
-                    onChange={(e) => update("endpoint", e.target.value)}
-                    placeholder="https://api.openai.com/v1/chat/completions"
-                    spellCheck={false}
-                  />
-                </label>
-                <p className="hint">
-                  实际请求：<code>{normalizeEndpointPreview(settings.endpoint) || "（未填写）"}</code>
-                  <br />
-                  地址会自动补全 /v1/chat/completions；支持任意 OpenAI 兼容接口。
-                </p>
-                <div className="toolbar-row" style={{ padding: 0 }}>
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => {
-                      const curl = buildSanitizedCurl(settings.endpoint, settings.apiKey, settings.model, "hello");
-                      void navigator.clipboard.writeText(curl);
-                      setTestMsg({ text: "脱敏 curl 已复制到剪贴板", ok: true });
-                    }}
-                  >
-                    <IconCopy size={13} />
-                    复制脱敏 curl
-                  </button>
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => {
-                      const report = buildDiagnosticReport({
-                        endpoint: settings.endpoint,
-                        apiKey: settings.apiKey,
-                        model: settings.model,
-                        stream: settings.stream,
-                        translationMode: settings.translationMode,
-                        fixedTarget: settings.fixedTarget,
-                        appVersion: appVersion || "0.2.0",
-                      });
-                      void navigator.clipboard.writeText(report);
-                      setTestMsg({ text: "诊断报告已复制（已脱敏，可安全分享）", ok: true });
-                    }}
-                  >
-                    生成诊断报告
+                <div className="provider-actions">
+                  <button className="btn btn-secondary" disabled={testing} onClick={() => void handleTest()}>
+                    <IconRetry size={14} />
+                    {testing ? "测试中…" : "测试连接"}
                   </button>
                 </div>
-              </div>
-            </details>
+                {testMsg && <StatusBar msg={testMsg} />}
+
+                <details className="settings-advanced">
+                  <summary>高级：接口地址与诊断</summary>
+                  <div className="settings-advanced-body">
+                    <label className="field-label" style={{ display: "block" }}>
+                      接口地址（OpenAI 兼容）
+                      <input
+                        className="input mono"
+                        value={settings.endpoint}
+                        onChange={(e) => update("endpoint", e.target.value)}
+                        placeholder="https://api.openai.com/v1/chat/completions"
+                        spellCheck={false}
+                      />
+                    </label>
+                    <p className="hint">
+                      实际请求：<code>{normalizeEndpointPreview(settings.endpoint) || "（未填写）"}</code>
+                      <br />
+                      地址会自动补全 /v1/chat/completions；支持任意 OpenAI 兼容接口。
+                    </p>
+                    <div className="toolbar-row" style={{ padding: 0 }}>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => {
+                          const curl = buildSanitizedCurl(settings.endpoint, settings.apiKey, settings.model, "hello");
+                          void navigator.clipboard.writeText(curl);
+                          setTestMsg({ text: "脱敏 curl 已复制到剪贴板", ok: true });
+                        }}
+                      >
+                        <IconCopy size={13} />
+                        复制脱敏 curl
+                      </button>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => {
+                          const report = buildDiagnosticReport({
+                            endpoint: settings.endpoint,
+                            apiKey: settings.apiKey,
+                            model: settings.model,
+                            stream: settings.stream,
+                            translationMode: settings.translationMode,
+                            fixedTarget: settings.fixedTarget,
+                            appVersion: appVersion || "0.2.0",
+                          });
+                          void navigator.clipboard.writeText(report);
+                          setTestMsg({ text: "诊断报告已复制（已脱敏，可安全分享）", ok: true });
+                        }}
+                      >
+                        生成诊断报告
+                      </button>
+                    </div>
+                  </div>
+                </details>
+              </section>
+            </div>
           </>
         )}
 
@@ -610,87 +649,123 @@ export function Settings() {
                 <p>目标语言与翻译浮窗的行为。</p>
               </div>
             </header>
-            <div className="group-card">
-              <div className="field-row">
-                <div className="field-text">
-                  <span className="field-label-v2">翻译模式</span>
-                  <span className="field-hint">
-                    {settings.translationMode === "auto"
-                      ? "中文 → English，其他语言 → 简体中文"
-                      : "始终翻译为指定的目标语言"}
-                  </span>
-                </div>
-                <div className="field-ctrl">
-                  <div className="seg">
-                    <button
-                      className={settings.translationMode === "auto" ? "active" : ""}
-                      onClick={() => update("translationMode", "auto" as TranslationMode)}
-                    >
-                      自动识别
-                    </button>
-                    <button
-                      className={settings.translationMode === "fixed" ? "active" : ""}
-                      onClick={() => update("translationMode", "fixed" as TranslationMode)}
-                    >
-                      固定目标语言
-                    </button>
+            <div className="translation-route" aria-label="翻译语言方向">
+              <div className="translation-route-endpoint">
+                <span className="translation-route-label">原文</span>
+                <strong>自动识别</strong>
+              </div>
+              <span className="translation-route-arrow" aria-hidden="true">→</span>
+              <div className="translation-route-endpoint translation-route-target">
+                <span className="translation-route-label">译文</span>
+                <strong>
+                  {settings.translationMode === "auto" ? "English / 简体中文" : settings.fixedTarget || "选择目标语言"}
+                </strong>
+              </div>
+              <span className="translation-route-mode">
+                {settings.translationMode === "auto" ? "自动切换" : "固定目标"}
+              </span>
+            </div>
+            <div className="translation-grid">
+              <section className="group-card translation-card">
+                <div className="settings-section-heading">
+                  <div>
+                    <h3>译文目标</h3>
+                    <p>决定翻译结果使用的语言</p>
                   </div>
                 </div>
-              </div>
-              {settings.translationMode === "fixed" && (
                 <div className="field-row">
                   <div className="field-text">
-                    <span className="field-label-v2">目标语言</span>
+                    <span className="field-label-v2">翻译模式</span>
+                    <span className="field-hint">
+                      {settings.translationMode === "auto"
+                        ? "中文 → English，其他语言 → 简体中文"
+                        : "始终翻译为指定的目标语言"}
+                    </span>
                   </div>
                   <div className="field-ctrl">
-                    <input
-                      className="input target-input"
-                      value={settings.fixedTarget}
-                      onChange={(e) => update("fixedTarget", e.target.value)}
-                      placeholder="如：日本語、English、简体中文"
+                    <div className="seg">
+                      <button
+                        className={settings.translationMode === "auto" ? "active" : ""}
+                        onClick={() => update("translationMode", "auto" as TranslationMode)}
+                      >
+                        自动识别
+                      </button>
+                      <button
+                        className={settings.translationMode === "fixed" ? "active" : ""}
+                        onClick={() => update("translationMode", "fixed" as TranslationMode)}
+                      >
+                        固定目标语言
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                {settings.translationMode === "fixed" && (
+                  <div className="field-row">
+                    <div className="field-text">
+                      <span className="field-label-v2">目标语言</span>
+                    </div>
+                    <div className="field-ctrl">
+                      <input
+                        className="input target-input"
+                        value={settings.fixedTarget}
+                        onChange={(e) => update("fixedTarget", e.target.value)}
+                        placeholder="如：日本語、English、简体中文"
+                      />
+                    </div>
+                  </div>
+                )}
+              </section>
+
+              <section className="group-card translation-card">
+                <div className="settings-section-heading">
+                  <div>
+                    <h3>输出行为</h3>
+                    <p>选择划词浮窗呈现结果的方式</p>
+                  </div>
+                </div>
+                <div className="field-row">
+                  <div className="field-text">
+                    <span className="field-label-v2">流式输出</span>
+                    <span className="field-hint">边翻译边显示；关闭则等全部完成再显示</span>
+                  </div>
+                  <div className="field-ctrl">
+                    <Switch
+                      checked={settings.stream}
+                      onChange={(v) => update("stream", v)}
+                      label="流式输出"
                     />
                   </div>
                 </div>
-              )}
-              <div className="field-row">
-                <div className="field-text">
-                  <span className="field-label-v2">流式输出</span>
-                  <span className="field-hint">边翻译边显示；关闭则等全部完成再显示</span>
+                <div className="field-row">
+                  <div className="field-text">
+                    <span className="field-label-v2">词典卡片</span>
+                    <span className="field-hint">
+                      划选单个单词或短语时，浮窗自动切换为词典卡片（音标、多义项释义、例句）
+                    </span>
+                  </div>
+                  <div className="field-ctrl">
+                    <Switch
+                      checked={settings.dictCard === "auto"}
+                      onChange={(v) => update("dictCard", v ? "auto" : "off")}
+                      label="词典卡片"
+                    />
+                  </div>
                 </div>
-                <div className="field-ctrl">
-                  <Switch
-                    checked={settings.stream}
-                    onChange={(v) => update("stream", v)}
-                    label="流式输出"
+              </section>
+
+              <section className="group-card translation-card translation-style-card">
+                <div className="field-block">
+                  <span className="field-label-v2">自定义翻译风格</span>
+                  <span className="field-hint">可选项，追加到系统提示词</span>
+                  <textarea
+                    className="textarea"
+                    style={{ minHeight: 78 }}
+                    value={settings.customStyle}
+                    onChange={(e) => update("customStyle", e.target.value)}
+                    placeholder="例如：使用自然口语化的风格；保留专有名词不翻译"
                   />
                 </div>
-              </div>
-              <div className="field-row">
-                <div className="field-text">
-                  <span className="field-label-v2">词典卡片</span>
-                  <span className="field-hint">
-                    划选单个单词或短语时，浮窗自动切换为词典卡片（音标、多义项释义、例句）
-                  </span>
-                </div>
-                <div className="field-ctrl">
-                  <Switch
-                    checked={settings.dictCard === "auto"}
-                    onChange={(v) => update("dictCard", v ? "auto" : "off")}
-                    label="词典卡片"
-                  />
-                </div>
-              </div>
-              <div className="field-block">
-                <span className="field-label-v2">自定义翻译风格</span>
-                <span className="field-hint">可选项，追加到系统提示词</span>
-                <textarea
-                  className="textarea"
-                  style={{ minHeight: 54 }}
-                  value={settings.customStyle}
-                  onChange={(e) => update("customStyle", e.target.value)}
-                  placeholder="例如：使用自然口语化的风格；保留专有名词不翻译"
-                />
-              </div>
+              </section>
             </div>
           </>
         )}
@@ -703,7 +778,9 @@ export function Settings() {
                 <p>填一组讯飞凭据，跟读打分、云端朗读、口语识别三个服务共用（需在讯飞控制台为应用开通对应服务）。经 DPAPI 加密存储。</p>
               </div>
             </header>
-            <XfyunVoiceSection />
+            <div className="voice-layout">
+              <XfyunVoiceSection />
+            </div>
             <p className="provider-caption">
               之前在阅读室设置抽屉、口语陪练、录音直译里填过的凭据仍然有效（同一套加密存储），无需重复填写。
             </p>
@@ -723,18 +800,23 @@ export function Settings() {
                 {glossStats.overLimit > 0 && ` · 超出 80 条 ${glossStats.overLimit} 条`}
               </span>
             </header>
-            <div className="group-card">
-              <div className="field-block">
-                <textarea
-                  className="textarea mono"
-                  style={{ minHeight: 150 }}
-                  value={settings.glossaryText}
-                  onChange={(e) => update("glossaryText", e.target.value)}
-                  placeholder={"hello = 你好\nworld -> 世界\n# 注释行会被忽略\n\n支持 原词 = 译法、->、全角冒号，以及 CSV/TSV 前两列"}
-                  spellCheck={false}
-                />
-              </div>
-              <div className="toolbar-row">
+            <div className="glossary-workspace">
+              <section className="group-card glossary-editor">
+                <div className="glossary-editor-head">
+                  <span className="field-label-v2">译法条目</span>
+                  <span className="field-hint">一行一组原词与译法</span>
+                </div>
+                <div className="field-block">
+                  <textarea
+                    className="textarea mono"
+                    style={{ minHeight: 150 }}
+                    value={settings.glossaryText}
+                    onChange={(e) => update("glossaryText", e.target.value)}
+                    placeholder={"hello = 你好\nworld -> 世界\n# 注释行会被忽略\n\n支持 原词 = 译法、->、全角冒号，以及 CSV/TSV 前两列"}
+                    spellCheck={false}
+                  />
+                </div>
+                <div className="toolbar-row glossary-toolbar">
                 <button className="btn btn-secondary btn-sm" onClick={() => glossaryFileRef.current?.click()}>
                   <IconUpload size={13} />
                   导入文件
@@ -771,7 +853,39 @@ export function Settings() {
                 >
                   导出到剪贴板
                 </button>
-              </div>
+                </div>
+              </section>
+              <aside className="glossary-guide">
+                <section className="glossary-usage">
+                  <div className="glossary-usage-count">
+                    <strong>{glossStats.valid}</strong>
+                    <span>/ 80 条已启用</span>
+                  </div>
+                  <div
+                    className="glossary-progress"
+                    role="progressbar"
+                    aria-label="术语表发送条数"
+                    aria-valuemin={0}
+                    aria-valuemax={80}
+                    aria-valuenow={Math.min(glossStats.valid, 80)}
+                  >
+                    <span style={{ width: `${Math.min(100, Math.round((glossStats.valid / 80) * 100))}%` }} />
+                  </div>
+                  <p>每次翻译最多附带 80 条有效术语。</p>
+                  {glossStats.invalid > 0 && (
+                    <div className="glossary-warning">{glossStats.invalid} 行无法识别，请检查分隔符。</div>
+                  )}
+                  {glossStats.overLimit > 0 && (
+                    <div className="glossary-warning">有 {glossStats.overLimit} 条超出发送上限。</div>
+                  )}
+                </section>
+                <section className="glossary-format">
+                  <h3>格式示例</h3>
+                  <code>原词 = 译法</code>
+                  <code>source → target</code>
+                  <p>也支持 CSV / TSV 的前两列，井号开头的行会忽略。</p>
+                </section>
+              </aside>
             </div>
             {glossaryMsg && <StatusBar msg={glossaryMsg} />}
 
@@ -800,36 +914,38 @@ export function Settings() {
                 <p>任意界面下全局生效；改完点「立即生效」或保存设置。</p>
               </div>
             </header>
-            <HotkeyField
-              label="翻译热键"
-              hint="读取当前选中文字并弹出翻译浮窗"
-              value={settings.hotkey}
-              onChange={(v) => {
-                update("hotkey", v);
-                setHotkeyErrMsg(null);
-              }}
-              onApply={() => void registerAllHotkeys()}
-            />
-            <HotkeyField
-              label="截图 OCR 热键"
-              hint="进入截图模式，框选区域后自动识别并翻译"
-              value={settings.ocrHotkey}
-              onChange={(v) => {
-                update("ocrHotkey", v);
-                setHotkeyErrMsg(null);
-              }}
-              onApply={() => void registerAllHotkeys()}
-            />
-            <HotkeyField
-              label="阅读室热键"
-              hint="把选中的内容送进沉浸阅读室精读"
-              value={settings.readerHotkey}
-              onChange={(v) => {
-                update("readerHotkey", v);
-                setHotkeyErrMsg(null);
-              }}
-              onApply={() => void registerAllHotkeys()}
-            />
+            <div className="hotkey-list">
+              <HotkeyField
+                label="翻译热键"
+                hint="读取当前选中文字并弹出翻译浮窗"
+                value={settings.hotkey}
+                onChange={(v) => {
+                  update("hotkey", v);
+                  setHotkeyErrMsg(null);
+                }}
+                onApply={() => void registerAllHotkeys()}
+              />
+              <HotkeyField
+                label="截图 OCR 热键"
+                hint="进入截图模式，框选区域后自动识别并翻译"
+                value={settings.ocrHotkey}
+                onChange={(v) => {
+                  update("ocrHotkey", v);
+                  setHotkeyErrMsg(null);
+                }}
+                onApply={() => void registerAllHotkeys()}
+              />
+              <HotkeyField
+                label="阅读室热键"
+                hint="把选中的内容送进沉浸阅读室精读"
+                value={settings.readerHotkey}
+                onChange={(v) => {
+                  update("readerHotkey", v);
+                  setHotkeyErrMsg(null);
+                }}
+                onApply={() => void registerAllHotkeys()}
+              />
+            </div>
             {hotkeyErrMsg && (
               <p className="msg-bar warn">
                 <IconAlert size={14} />
@@ -851,14 +967,16 @@ export function Settings() {
                 <p>版本更新与离线模型管理。</p>
               </div>
             </header>
-            <div className="group-card">
-              <div className="field-row">
-                <div className="field-text">
-                  <span className="field-label-v2">版本</span>
-                  <span className="field-hint">更新从 GitHub Releases 拉取，下载后自动校验签名再安装</span>
-                </div>
-                <div className="field-ctrl">
+            <div className="about-grid">
+              <section className="group-card about-release">
+                <div className="settings-section-heading">
+                  <div>
+                    <h3>应用更新</h3>
+                    <p>下载后自动校验签名再安装</p>
+                  </div>
                   <code className="version-code">v{appVersion || "…"}</code>
+                </div>
+                <div className="about-release-actions">
                   {updateAvailable && updateStage !== "downloading" && updateStage !== "installing" && (
                     <button className="btn btn-primary btn-sm" onClick={() => void handleDownloadUpdate()}>
                       <IconDownload size={13} />
@@ -877,87 +995,100 @@ export function Settings() {
                     {updateStage === "checking" ? "检查中…" : "检查更新"}
                   </button>
                 </div>
-              </div>
-              {updateStage === "downloading" && updateProgress !== undefined && (
-                <div className="progress">
-                  <div style={{ width: `${Math.max(4, Math.round(updateProgress * 100))}%` }} />
-                </div>
-              )}
-              {updateMsg && <StatusBar msg={{ text: updateMsg, ok: updateStage !== "error" }} />}
+                {updateStage === "downloading" && updateProgress !== undefined && (
+                  <div className="progress">
+                    <div style={{ width: `${Math.max(4, Math.round(updateProgress * 100))}%` }} />
+                  </div>
+                )}
+                {updateMsg && <StatusBar msg={{ text: updateMsg, ok: updateStage !== "error" }} />}
+              </section>
 
-              <div className="field-row">
-                <div className="field-text">
-                  <span className="field-label-v2">开机自启</span>
-                  <span className="field-hint">
-                    开机后自动驻留托盘，复习提醒与托盘角标才不会因为没启动而漏掉
-                  </span>
+              <section className="group-card about-preferences">
+                <div className="settings-section-heading">
+                  <div>
+                    <h3>启动与引导</h3>
+                    <p>控制后台驻留与功能介绍</p>
+                  </div>
                 </div>
-                <div className="field-ctrl">
-                  {autoStart === null ? (
-                    <span className="field-hint">查询中…</span>
-                  ) : (
-                    <Switch checked={autoStart} onChange={toggleAutostart} label="开机自启" />
-                  )}
-                </div>
-              </div>
-              {autoStartErr && (
-                <StatusBar msg={{ text: `设置开机自启失败：${autoStartErr}`, ok: false }} />
-              )}
-
-              <div className="field-row">
-                <div className="field-text">
-                  <span className="field-label-v2">功能引导</span>
-                  <span className="field-hint">再看一次三大能力与快捷键介绍</span>
-                </div>
-                <div className="field-ctrl">
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => void openOnboarding().catch((e) => console.error("[onboarding] open failed", e))}
-                  >
-                    查看引导
-                  </button>
-                </div>
-              </div>
-
-              <div className="field-row">
-                <div className="field-text">
-                  <span className="field-label-v2">截图翻译模型</span>
-                  <span className="field-hint">
-                    框选屏幕区域自动识别并翻译。基于 PaddleOCR，离线运行，支持中英日韩等。
-                  </span>
-                </div>
-                <div className="field-ctrl">
-                  {ocrReady === null ? (
-                    <span className="field-hint">检查模型状态…</span>
-                  ) : ocrReady ? (
-                    <span className="chip chip-green">
-                      <IconCheck size={11} />
-                      已就绪
+                <div className="field-row">
+                  <div className="field-text">
+                    <span className="field-label-v2">开机自启</span>
+                    <span className="field-hint">
+                      开机后驻留托盘，确保提醒和角标正常工作
                     </span>
-                  ) : (
-                    <>
-                      <span className="chip chip-amber">
-                        <IconAlert size={11} />
-                        未下载（约 16MB）
+                  </div>
+                  <div className="field-ctrl">
+                    {autoStart === null ? (
+                      <span className="field-hint">查询中…</span>
+                    ) : (
+                      <Switch checked={autoStart} onChange={toggleAutostart} label="开机自启" />
+                    )}
+                  </div>
+                </div>
+                {autoStartErr && (
+                  <StatusBar msg={{ text: `设置开机自启失败：${autoStartErr}`, ok: false }} />
+                )}
+                <div className="field-row">
+                  <div className="field-text">
+                    <span className="field-label-v2">功能引导</span>
+                    <span className="field-hint">重新查看主要功能与快捷键</span>
+                  </div>
+                  <div className="field-ctrl">
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => void openOnboarding().catch((e) => console.error("[onboarding] open failed", e))}
+                    >
+                      查看引导
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              <section className="group-card about-local-model">
+                <div className="settings-section-heading">
+                  <div>
+                    <h3>离线能力</h3>
+                    <p>截图翻译使用本地 OCR 模型，无需联网</p>
+                  </div>
+                </div>
+                <div className="about-model-status">
+                  <div className="about-model-copy">
+                    <span className="field-label-v2">截图翻译模型</span>
+                    <span className="field-hint">PaddleOCR，支持中英日韩等</span>
+                  </div>
+                  <div className="field-ctrl">
+                    {ocrReady === null ? (
+                      <span className="field-hint">检查模型状态…</span>
+                    ) : ocrReady ? (
+                      <span className="chip chip-green">
+                        <IconCheck size={11} />
+                        已就绪
                       </span>
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        disabled={ocrDownloading}
-                        onClick={() => void handleDownloadModels()}
-                      >
-                        <IconDownload size={13} />
-                        {ocrDownloading ? "下载中…" : "下载模型"}
-                      </button>
-                    </>
-                  )}
+                    ) : (
+                      <>
+                        <span className="chip chip-amber">
+                          <IconAlert size={11} />
+                          未下载（约 16MB）
+                        </span>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          disabled={ocrDownloading}
+                          onClick={() => void handleDownloadModels()}
+                        >
+                          <IconDownload size={13} />
+                          {ocrDownloading ? "下载中…" : "下载模型"}
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
-              {ocrProgress && (
-                <div className="progress">
-                  <div style={{ width: `${Math.max(6, Math.round(ocrProgress.ratio * 100))}%` }} />
-                </div>
-              )}
-              {ocrMsg && <StatusBar msg={ocrMsg} />}
+                {ocrProgress && (
+                  <div className="progress">
+                    <div style={{ width: `${Math.max(6, Math.round(ocrProgress.ratio * 100))}%` }} />
+                  </div>
+                )}
+                {ocrMsg && <StatusBar msg={ocrMsg} />}
+              </section>
             </div>
 
             <section className="danger-zone">
@@ -973,6 +1104,7 @@ export function Settings() {
             </section>
           </>
         )}
+        </div>
 
         {/* 底部操作条 */}
         <div className="save-bar">
@@ -1062,12 +1194,14 @@ function ProviderItem({
         {mark}
       </span>
       <span className="provider-name">{preset.displayName}</span>
-      {preset.allowEmptyApiKey ? (
-        <span className="chip chip-green">免 Key</span>
-      ) : hasKey ? (
-        <span className="provider-keydot" title="已保存此服务商的 API Key" />
-      ) : null}
-      <span className="provider-model-chip">{preset.model}</span>
+      <span className="provider-meta">
+        {preset.allowEmptyApiKey ? (
+          <span className="chip chip-green">免 Key</span>
+        ) : hasKey ? (
+          <span className="provider-keydot" title="已保存此服务商的 API Key" />
+        ) : null}
+        <span className="provider-model-chip">{preset.model}</span>
+      </span>
       {active && (
         <span className="provider-check">
           <IconCheck size={12} />

@@ -146,7 +146,7 @@ export function AccountSection() {
       </header>
 
       {!status.loggedIn || !status.user ? (
-        <div className="group-card">
+        <section className="group-card acct-signin-panel">
           <div className="acct-empty">
             <span className="acct-empty-icon" aria-hidden>
               ◐
@@ -160,10 +160,10 @@ export function AccountSection() {
               登 录
             </button>
           </div>
-        </div>
+        </section>
       ) : (
-        <>
-          <div className="group-card">
+        <div className="account-workspace">
+          <section className="group-card acct-profile-panel">
             <div className="acct-row">
               <span className="avatar" aria-hidden>
                 {avatarGlyph(status.user)}
@@ -176,9 +176,9 @@ export function AccountSection() {
                 <div className="acct-email">{status.user.email}</div>
               </div>
             </div>
-          </div>
+          </section>
 
-          <div className="group-card">
+          <section className="group-card acct-details-panel">
             <div className="acct-card-title">登录信息</div>
             <div className="field-row">
               <div className="field-text">
@@ -221,9 +221,9 @@ export function AccountSection() {
                 {configMsg.text}
               </div>
             )}
-          </div>
+          </section>
 
-          <div className="group-card">
+          <section className="group-card acct-security-panel">
             <div className="field-row">
               <div className="field-text">
                 <span className="field-hint">
@@ -246,8 +246,8 @@ export function AccountSection() {
                 {logoutErr}
               </div>
             )}
-          </div>
-        </>
+          </section>
+        </div>
       )}
     </>
   );

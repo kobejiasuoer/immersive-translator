@@ -1096,7 +1096,7 @@ export function TranslationPanel() {
           <span className="panel-logo" aria-hidden>
             <IconTranslate size={13} />
           </span>
-          <span className="app-name">ImmersiveTranslator</span>
+          <span className="app-name">沉浸口语</span>
           {stateDot.className && <span className={stateDot.className} title={stateDot.title} />}
           {sourceLabel && (status === "done" || status === "translating" || status === "error") && (
             <span className={`chip chip-${panelSource === "ocr" ? "amber" : "blue"}`}>{sourceLabel}</span>
@@ -1208,7 +1208,7 @@ export function TranslationPanel() {
           <div className="loading-block">
             {original && (
               <div className="orig-block">
-                <div className="orig-label">原文 · {sourceLabel}</div>
+                <div className="orig-label">原文 <span className="label-divider">/</span> {sourceLabel}</div>
                 <div className="orig-text">{original}</div>
               </div>
             )}
@@ -1297,7 +1297,7 @@ export function TranslationPanel() {
             {original && (
               <div className="orig-block">
                 <div className="orig-label-row">
-                  <div className="orig-label">原文 · {sourceLabel}</div>
+                  <div className="orig-label">原文 <span className="label-divider">/</span> {sourceLabel}</div>
                   <span className="orig-edit-hint">可编辑</span>
                   {canRetranslate && (
                     <button
@@ -1380,7 +1380,7 @@ export function TranslationPanel() {
                         {speaking === "translated" ? <IconStop size={14} /> : <IconVolume size={14} />}
                       </button>
                       <button
-                        className="btn btn-secondary btn-sm"
+                        className="btn btn-secondary btn-sm trans-copy"
                         onClick={() => {
                           void navigator.clipboard.writeText(translated);
                           flashCopied("已复制译文");
