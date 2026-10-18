@@ -56,7 +56,7 @@ export function Onboarding() {
           <div className="ob-logo" aria-hidden>
             译
           </div>
-          <h1>欢迎使用 ImmersiveTranslator</h1>
+          <h1>欢迎使用沉浸口语</h1>
           <p className="ob-tagline">划词即译 · 截图即翻 · 长文精读</p>
         </div>
 

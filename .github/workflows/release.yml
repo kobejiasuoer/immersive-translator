@@ -311,7 +311,9 @@ jobs:
       run:
         working-directory: immersive-translator-windows
     env:
-      APP_NAME: ImmersiveTranslator
+      # 与 tauri.conf.json 的 productName 一致（安装包文件名 = {productName}_版本_arch-setup.exe）。
+      # exe 名来自 cargo 产物（immersive-translator-windows.exe），不受此值影响。
+      APP_NAME: 沉浸口语
       GH_TOKEN: ${{ github.token }}
 
     steps:

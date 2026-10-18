@@ -271,7 +271,7 @@ fn show_window(app: &tauri::AppHandle, label: &str) {
     // 窗口缺失（如启动瞬间 WebView2 数据目录被上一实例占用，个别窗口创建失败）。
     // 原先这里静默返回，表现为点托盘菜单"没有反应"；现在现场重建。
     let spec = match label {
-        "settings" => Some(("ImmersiveTranslator 设置", 720.0, 660.0)),
+        "settings" => Some(("沉浸口语设置", 720.0, 660.0)),
         "history" => Some(("翻译历史", 780.0, 620.0)),
         "reader" => Some(("沉浸阅读室", 1200.0, 800.0)),
         // 登录窗规格与 tauri.conf.json 一致（系统装饰 + resizable，D9 零分叉）
@@ -562,7 +562,7 @@ fn show_onboarding_window(app: &AppHandle) {
             "onboarding",
             tauri::WebviewUrl::App("index.html".into()),
         )
-        .title("欢迎使用 ImmersiveTranslator")
+        .title("欢迎使用沉浸口语")
         .inner_size(620.0, 560.0)
         .resizable(false)
         .decorations(false)
@@ -1465,8 +1465,7 @@ pub fn run() {
             let reader = MenuItem::with_id(app, "reader", "沉浸阅读室", true, None::<&str>)?;
             let vocab = MenuItem::with_id(app, "vocab", "生词本", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
-            let account =
-                MenuItem::with_id(app, "account", "账号登录", true, None::<&str>)?;
+            let account = MenuItem::with_id(app, "account", "账号登录", true, None::<&str>)?;
             let history = MenuItem::with_id(app, "history", "翻译历史", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
@@ -1480,7 +1479,7 @@ pub fn run() {
 
             let tray = TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("ImmersiveTranslator")
+                .tooltip("沉浸口语")
                 .menu(&menu)
                 // 左键单击同样弹出菜单（此前为 false：左键点击托盘毫无反应，
                 // 新用户找不到入口；Windows 下左/右键都弹菜单是托盘常驻类

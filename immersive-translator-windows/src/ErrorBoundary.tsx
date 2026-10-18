@@ -62,7 +62,7 @@ export class ErrorBoundary extends Component<Props, State> {
     const version = await getVersion().catch(() => "unknown");
     const { error, info } = this.state;
     const lines = [
-      "ImmersiveTranslator 界面诊断",
+      "沉浸口语 界面诊断",
       `窗口: ${windowLabel()}`,
       `版本: ${version}`,
       `时间: ${new Date().toISOString()}`,

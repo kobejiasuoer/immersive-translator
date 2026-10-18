@@ -1,6 +1,6 @@
-# ImmersiveTranslator
+# 沉浸口语（ImmersiveTranslator）
 
-ImmersiveTranslator 是一个跨平台的沉浸式翻译工具，提供选中文本翻译和截图 OCR 翻译，让日常阅读和翻译更顺手。
+沉浸口语（ImmersiveTranslator）是一个跨平台的沉浸式翻译工具，提供选中文本翻译和截图 OCR 翻译，让日常阅读和翻译更顺手。
 
 ## 平台
 

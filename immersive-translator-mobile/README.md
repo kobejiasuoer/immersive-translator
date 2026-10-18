@@ -1,6 +1,6 @@
 # immersive-translator-mobile
 
-沉浸阅读室移动端（iOS 先行）· **M0 spike 工程**。
+沉浸口语移动端（iOS 先行）· **M0 spike 工程**。
 
 目的：在写正式代码前，真机验证 Tauri 2 iOS 的关键不确定性（落地文档 §3-M0）。
 交互蓝本：`prototypes/mobile-v1.html`；执行手册：`docs/mobile-spike-runbook.md`。

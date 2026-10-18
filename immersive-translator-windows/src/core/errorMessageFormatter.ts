@@ -414,7 +414,7 @@ export function buildDiagnosticReport(input: DiagnosticInput): string {
     : "未配置";
   const safeEndpoint = redactEndpoint(input.endpoint);
   const lines = [
-    "===== ImmersiveTranslator 诊断报告 =====",
+    "===== 沉浸口语 诊断报告 =====",
     `生成时间：${now}`,
     `版本：${input.appVersion ?? "未知"}`,
     `平台：Windows (Tauri)`,
