@@ -225,6 +225,22 @@ export function History() {
 
   return (
     <div className="history-page">
+      <header className="history-header">
+        <div className="history-heading">
+          <span className="history-mark" aria-hidden>
+            <IconClock size={17} />
+          </span>
+          <div>
+            <h1>翻译历史</h1>
+            <p>查看、筛选和整理最近的翻译记录</p>
+          </div>
+        </div>
+        <div className="history-total" aria-live="polite">
+          <strong>{loading ? "…" : records.length}</strong>
+          <span>条记录</span>
+        </div>
+      </header>
+
       {/* 顶部：搜索 + 筛选 */}
       <div className="history-toolbar">
         <div className="search-box">
@@ -251,44 +267,37 @@ export function History() {
             收藏
           </button>
         </div>
-        <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 12, color: "var(--text-3)" }}>
-          {loading ? "加载中…" : `${records.length} 条`}
-        </span>
       </div>
 
       {/* 次栏：选择 / 导出 / 清空 */}
       <div className="history-subbar">
-        {hasRecords && (
-          <label
-            className="favCheck"
-            style={{ display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer", marginRight: 4 }}
-          >
-            <input
-              type="checkbox"
-              checked={allSelected}
-              onChange={toggleSelectAll}
-            />
-            全选
-          </label>
-        )}
-        <span>导出 / 复制：</span>
-        <button className="btn btn-ghost btn-sm" onClick={() => void handleExport("csv")}>
-          CSV
-        </button>
-        <button className="btn btn-ghost btn-sm" onClick={() => void handleExport("json")}>
-          JSON
-        </button>
-        <button className="btn btn-ghost btn-sm" onClick={() => void handleExport("markdown")}>
-          Markdown
-        </button>
-        <button className="btn btn-ghost btn-sm" onClick={() => void handleExport("text")}>
-          纯文本
-        </button>
-        <div style={{ flex: 1 }} />
+        <div className="history-subbar-group">
+          {hasRecords && (
+            <label className="history-select-all">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={toggleSelectAll}
+              />
+              全选
+            </label>
+          )}
+          <span className="history-subbar-label">导出记录</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => void handleExport("csv")}>
+            CSV
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={() => void handleExport("json")}>
+            JSON
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={() => void handleExport("markdown")}>
+            Markdown
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={() => void handleExport("text")}>
+            纯文本
+          </button>
+        </div>
         <button
-          className="btn btn-ghost btn-sm"
-          style={{ color: "var(--err)" }}
+          className="btn btn-ghost btn-sm history-clear"
           onClick={() => void handleClearNonFavorites()}
           disabled={!hasRecords}
         >
@@ -299,11 +308,11 @@ export function History() {
 
       {/* 批量操作条：勾选后出现 */}
       {selectedRecords.length > 0 && (
-        <div className="history-subbar" style={{ background: "var(--accent-softer)", borderTop: "none" }}>
-          <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+        <div className="history-subbar history-selection-bar">
+          <span className="history-selection-count">
             已选 {selectedRecords.length} 条
           </span>
-          <div style={{ flex: 1 }} />
+          <div className="history-selection-actions">
           <button className="btn btn-secondary btn-sm" onClick={() => void copySelectedTranslations()}>
             <IconCopy size={12} />
             复制所选译文
@@ -315,6 +324,7 @@ export function History() {
             <IconTrash size={12} />
             删除所选
           </button>
+          </div>
         </div>
       )}
 
@@ -326,18 +336,18 @@ export function History() {
           </div>
         )}
         {!loading && !hasRecords && (
-          <div className="empty">
+          <div className="empty history-empty">
             {query || favFilter === "favorites" ? (
               <>
                 <IconSearch size={26} />
                 <div className="empty-title">没有匹配的记录</div>
-                换个关键词或筛选条件试试
+                <div className="empty-copy">换个关键词或筛选条件试试</div>
               </>
             ) : (
               <>
                 <IconClock size={26} />
                 <div className="empty-title">还没有翻译历史</div>
-                选中文本按热键翻译后，会记录在这里
+                <div className="empty-copy">选中文本按热键翻译后，会记录在这里</div>
               </>
             )}
           </div>
@@ -473,7 +483,7 @@ function HistoryCard({
   }
 
   return (
-    <div className={`history-card${expanded ? " expanded" : ""}${selected ? " selected" : ""}`}>
+    <article className={`history-card${expanded ? " expanded" : ""}${selected ? " selected" : ""}`}>
       <div className="meta">
         <input
           type="checkbox"
@@ -486,8 +496,8 @@ function HistoryCard({
           {isOcr ? <IconCrop size={10} /> : <IconSearch size={10} />}
           {isOcr ? "OCR" : "选中"}
         </span>
-        <span className="lang">{record.targetLanguage || "—"}</span>
-        <span>{time}</span>
+        <span className="lang">{record.targetLanguage || "自动"}</span>
+        <span className="history-time">{time}</span>
         <span className="model">{record.model}</span>
         <span className="chip chip-gray">{(record.elapsedMs / 1000).toFixed(1)}s</span>
         <span className="spacer" />
@@ -558,19 +568,26 @@ function HistoryCard({
           </button>
         </div>
       </div>
-      <div className="orig">{record.original}</div>
-      <div className="trans">{record.translation}</div>
-      <div style={{ display: "flex", justifyContent: "center", marginTop: 2 }}>
+      <div className="history-copy">
+        <div className="history-copy-block history-original">
+          <span className="history-copy-label">原文</span>
+          <div className="orig">{record.original}</div>
+        </div>
+        <div className="history-copy-block history-translation">
+          <span className="history-copy-label">译文</span>
+          <div className="trans">{record.translation}</div>
+        </div>
+      </div>
+      <div className="history-expand-row">
         <button
           className="btn btn-ghost btn-sm"
-          style={{ fontSize: 11, color: "var(--text-4)" }}
           onClick={() => setExpanded((v) => !v)}
         >
           <IconChevronDown size={12} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
           {expanded ? "收起" : "展开全文"}
         </button>
       </div>
-    </div>
+    </article>
   );
 }
 

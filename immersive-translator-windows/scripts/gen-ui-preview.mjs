@@ -42,7 +42,7 @@ const html = `<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>ImmersiveTranslator · 新版 UI 预览</title>
+<title>沉浸口语 · 新版 UI 预览</title>
 <style>
 ${css}
 /* —— 预览页专用：允许滚动、灰底 —— */
@@ -63,7 +63,7 @@ html, body { background: #e9ebf2 !important; overflow: auto !important; }
 </head>
 <body>
 <div class="preview-wrap">
-  <div class="preview-head"><h1>ImmersiveTranslator · 新版 UI 预览</h1><span class="tag">Windows · 设计稿</span></div>
+  <div class="preview-head"><h1>沉浸口语 · 新版 UI 预览</h1><span class="tag">Windows · 设计稿</span></div>
   <div class="preview-sub">样式直接读取 <code>src/styles.css</code> 生成；图标为静态 SVG 近似。真机效果请运行 <code>npm run tauri dev</code>。</div>
 
   <div class="block-label">翻译浮窗 · 已完成 / 流式翻译中 / 出错</div>
@@ -107,7 +107,7 @@ function donePanel() {
     <header class="panel-header">
       <div class="panel-title" style="cursor:default">
         <span class="panel-logo">${I.translate.replace('width="16"','width="13"')}</span>
-        <span class="app-name">ImmersiveTranslator</span>
+        <span class="app-name">沉浸口语</span>
         <span class="chip chip-blue">选中</span>
       </div>
       <div class="panel-actions">
@@ -140,7 +140,7 @@ function errorPanel() {
     <header class="panel-header">
       <div class="panel-title" style="cursor:default">
         <span class="panel-logo">${I.translate.replace('width="16"','width="13"')}</span>
-        <span class="app-name">ImmersiveTranslator</span>
+        <span class="app-name">沉浸口语</span>
         <span class="chip chip-blue">选中</span>
       </div>
       <div class="panel-actions">
@@ -170,7 +170,7 @@ function streamingPanel() {
     <header class="panel-header">
       <div class="panel-title" style="cursor:default">
         <span class="panel-logo">${I.translate.replace('width="16"','width="13"')}</span>
-        <span class="app-name">ImmersiveTranslator</span>
+        <span class="app-name">沉浸口语</span>
         <span class="dot-pulse"></span>
       </div>
       <div class="panel-actions">
@@ -222,7 +222,7 @@ function settingsSections() {
     </div>
 
     <div class="welcome-box">
-      <div class="welcome-title">欢迎使用 ImmersiveTranslator</div>
+      <div class="welcome-title">欢迎使用 沉浸口语</div>
       <div class="welcome-body">1. 选一个服务商（国内直连推荐 <strong>DeepSeek</strong> 或 <strong>智谱</strong>）。<br/>2. 填入对应 <strong>API Key</strong>（本地 Ollama / LM Studio 可留空）。<br/>3. 点「测试当前接口」，选中文本按热键即可翻译。</div>
       <button class="btn">我知道了</button>
     </div>
