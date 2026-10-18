@@ -1,7 +1,7 @@
 {
   "name": "immersive-translator-windows",
   "version": "0.8.1",
-  "description": "Tauri + React + TypeScript 实现的 Windows 版 ImmersiveTranslator。",
+  "description": "Tauri + React + TypeScript 实现的 Windows 版沉浸口语。",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -42,6 +42,7 @@
     "nanoid": "3.3.18",
     "postcss": "8.5.26",
     "browserslist": "^4.28.9",
-    "baseline-browser-mapping": "^2.11.22"
+    "baseline-browser-mapping": "^2.11.22",
+    "source-map-js": "1.2.2"
   }
 }
