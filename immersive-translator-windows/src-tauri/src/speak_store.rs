@@ -407,7 +407,12 @@ mod tests {
         let s: SpeakSession = serde_json::from_str(json).expect("v0.8 会话反序列化");
         let ctx = s.context.as_ref().expect("有语境");
         match ctx {
-            SpeakSessionContext::Book { book_title, chapter_idx, excerpt, .. } => {
+            SpeakSessionContext::Book {
+                book_title,
+                chapter_idx,
+                excerpt,
+                ..
+            } => {
                 assert_eq!(book_title, "The Call of the Wild");
                 assert_eq!(*chapter_idx, 0);
                 assert_eq!(excerpt.len(), 1);
@@ -444,7 +449,9 @@ mod tests {
         }"#;
         let s: SpeakSession = serde_json::from_str(json).expect("vocab 语境反序列化");
         match s.context.as_ref().expect("有语境") {
-            SpeakSessionContext::Vocab { word_ids } => assert_eq!(word_ids, &["w1".to_string(), "w2".to_string()]),
+            SpeakSessionContext::Vocab { word_ids } => {
+                assert_eq!(word_ids, &["w1".to_string(), "w2".to_string()])
+            }
             other => panic!("语境应为 vocab：{other:?}"),
         }
     }

@@ -1366,8 +1366,12 @@ mod tests {
         let out = serde_json::to_value(&legacy).unwrap();
         assert!(out.get("spokenAt").is_none());
 
-        let spoken = VocabWord { spoken_at: Some(1_728_000_000_000), ..legacy };
-        let back: VocabWord = serde_json::from_value(serde_json::to_value(&spoken).unwrap()).unwrap();
+        let spoken = VocabWord {
+            spoken_at: Some(1_728_000_000_000),
+            ..legacy
+        };
+        let back: VocabWord =
+            serde_json::from_value(serde_json::to_value(&spoken).unwrap()).unwrap();
         assert_eq!(back.spoken_at, Some(1_728_000_000_000));
     }
 

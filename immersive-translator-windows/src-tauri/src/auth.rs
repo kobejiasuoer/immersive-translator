@@ -120,7 +120,8 @@ pub struct AuthHttpResponse {
 /// 满足 `'static`（§4.2），且 `Box<dyn AuthTransport>` 需要_dyn 兼容_签名；
 /// 实现方把所需状态（reqwest Client / 测试桩的 Arc）克隆进 future。
 pub trait AuthTransport: Send + Sync {
-    fn send(&self, req: AuthHttpRequest) -> BoxFuture<'static, Result<AuthHttpResponse, AuthError>>;
+    fn send(&self, req: AuthHttpRequest)
+        -> BoxFuture<'static, Result<AuthHttpResponse, AuthError>>;
 }
 
 /// dev/联调缺省（§4.6 第 2 层）；生产由 `app_data_dir/server_endpoint.json` 覆盖。
@@ -166,7 +167,10 @@ impl ReqwestTransport {
 }
 
 impl AuthTransport for ReqwestTransport {
-    fn send(&self, req: AuthHttpRequest) -> BoxFuture<'static, Result<AuthHttpResponse, AuthError>> {
+    fn send(
+        &self,
+        req: AuthHttpRequest,
+    ) -> BoxFuture<'static, Result<AuthHttpResponse, AuthError>> {
         let client = self.client.clone();
         let base_url = self.base_url.clone();
         async move {
@@ -339,10 +343,7 @@ fn now_unix() -> i64 {
 
 /// 刷新上下文下的致命三码（凭据已被清除；§7 表「fatal 三码」）。
 fn is_fatal_code(code: &str) -> bool {
-    matches!(
-        code,
-        "token_expired" | "token_invalid" | "token_reused"
-    )
+    matches!(code, "token_expired" | "token_invalid" | "token_reused")
 }
 
 /// 401 致命码 → notice（D8）：reused 全设备下线单列，其余归会话过期。
@@ -426,9 +427,7 @@ impl TokenManager {
                 // ③ 空槽且票未换：本调用者发起。do_refresh 以 Arc 克隆捕获（'static 注记）。
                 let gen = self.next_gen.fetch_add(1, Ordering::Relaxed);
                 let this = Arc::clone(self);
-                let fut: SharedRefresh = async move { this.do_refresh().await }
-                    .boxed()
-                    .shared();
+                let fut: SharedRefresh = async move { this.do_refresh().await }.boxed().shared();
                 *slot = Some((gen, fut.clone()));
                 (gen, fut)
             }
@@ -568,7 +567,8 @@ impl TokenManager {
                 if replay.status == 401 {
                     // 重放仍 401：会话已死，清凭据并按新 code 处理
                     let replay_err = error_from_response(&replay);
-                    self.clear_credentials(notice_for_code(&replay_err.code)).await;
+                    self.clear_credentials(notice_for_code(&replay_err.code))
+                        .await;
                     return Err(replay_err);
                 }
                 Ok(replay)
@@ -602,7 +602,11 @@ impl TokenManager {
     }
 
     /// POST /v1/auth/otp/verify（§7-2）。device 由 Rust 填，前端不传。
-    pub async fn verify_otp(self: &Arc<Self>, email: &str, code: &str) -> Result<AuthSession, AuthError> {
+    pub async fn verify_otp(
+        self: &Arc<Self>,
+        email: &str,
+        code: &str,
+    ) -> Result<AuthSession, AuthError> {
         let body = serde_json::json!({
             "email": email,
             "code": code,
@@ -612,7 +616,11 @@ impl TokenManager {
     }
 
     /// POST /v1/auth/login（§7-3）。device 同上。
-    pub async fn login_password(self: &Arc<Self>, email: &str, password: &str) -> Result<AuthSession, AuthError> {
+    pub async fn login_password(
+        self: &Arc<Self>,
+        email: &str,
+        password: &str,
+    ) -> Result<AuthSession, AuthError> {
         let body = serde_json::json!({
             "email": email,
             "password": password,
@@ -730,9 +738,7 @@ impl TokenManager {
 
     /// GET /v1/me（§7-7，带鉴权请求样板：可触发单飞刷新与重放）。
     pub async fn fetch_me(self: &Arc<Self>) -> Result<AuthUser, AuthError> {
-        let resp = self
-            .with_auth(reqwest::Method::GET, "/v1/me", None)
-            .await?;
+        let resp = self.with_auth(reqwest::Method::GET, "/v1/me", None).await?;
         if !(200..300).contains(&resp.status) {
             return Err(error_from_response(&resp));
         }
@@ -834,8 +840,12 @@ async fn fetch_server_config_and_persist(
         .map_err(|e| AuthError::local("storage_error", format!("无法创建数据目录: {e}")))?;
     let text = serde_json::to_string_pretty(&value)
         .map_err(|e| AuthError::local("storage_error", format!("序列化 me/config 失败: {e}")))?;
-    std::fs::write(dir.join("server_config.json"), text)
-        .map_err(|e| AuthError::local("storage_error", format!("写入 server_config.json 失败: {e}")))?;
+    std::fs::write(dir.join("server_config.json"), text).map_err(|e| {
+        AuthError::local(
+            "storage_error",
+            format!("写入 server_config.json 失败: {e}"),
+        )
+    })?;
     Ok(value)
 }
 
@@ -1429,7 +1439,11 @@ mod tests {
         let manager = make_manager(transport.clone(), store);
         let token = manager.get_access_token().await.unwrap();
         assert_eq!(token, "proactive-access", "应返回刷新后的新 access");
-        assert_eq!(transport.count("/v1/auth/refresh"), 1, "惰性阈值内应刷新一次");
+        assert_eq!(
+            transport.count("/v1/auth/refresh"),
+            1,
+            "惰性阈值内应刷新一次"
+        );
 
         // 第二档：now + 400 > 180 → 不刷，直接用旧票
         let seq2 = Arc::new(AtomicU64::new(0));
@@ -1445,7 +1459,11 @@ mod tests {
         let manager2 = make_manager(transport2.clone(), store2);
         let token2 = manager2.get_access_token().await.unwrap();
         assert_eq!(token2, "old-access", "阈值外不应刷新");
-        assert_eq!(transport2.count("/v1/auth/refresh"), 0, "阈值外不应发 refresh");
+        assert_eq!(
+            transport2.count("/v1/auth/refresh"),
+            0,
+            "阈值外不应发 refresh"
+        );
     }
 
     /// 429 + retry-after:37 → Err 透传 retryAfterSeconds=37；不自动重试。
