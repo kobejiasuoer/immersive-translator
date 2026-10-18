@@ -1,4 +1,4 @@
-# ImmersiveTranslator (Windows)
+# 沉浸口语（ImmersiveTranslator）· Windows
 
 基于 Tauri 2.x + React + TypeScript 的 Windows 沉浸式翻译工具。
 

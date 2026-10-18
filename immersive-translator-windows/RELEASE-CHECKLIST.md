@@ -83,7 +83,7 @@ curl -s "https://api.github.com/repos/kobejiasuoer/immersive-translator/releases
 ```
 
 - **Release** 工作流：mac job 先创建 release（mac 三件资产）；windows job 随后
-  （约 10-25 分钟）构建 NSIS 并上传 `ImmersiveTranslator_X.Y.Z_x64-setup.exe`，
+  （约 10-25 分钟）构建 NSIS 并上传 `沉浸口语_X.Y.Z_x64-setup.exe`，
   再用 `release-notes/vX.Y.Z.md` 覆盖自动生成的英文说明。
 - **CI** 工作流：mac swift / 前端 audit+test+build / Rust fmt+test(--locked) 三组门禁。
 
@@ -91,15 +91,15 @@ curl -s "https://api.github.com/repos/kobejiasuoer/immersive-translator/releases
 
 ```bash
 # ① 下载 CI 产物 —— ⚠️ 字节与本机构建不同，.sig 必须对 CI 产物签！
-curl -sL -o ci.exe "https://github.com/kobejiasuoer/immersive-translator/releases/download/vX.Y.Z/ImmersiveTranslator_X.Y.Z_x64-setup.exe"
+curl -sL -o ci.exe "https://github.com/kobejiasuoer/immersive-translator/releases/download/vX.Y.Z/%E6%B2%89%E6%B5%B8%E5%8F%A3%E8%AF%AD_X.Y.Z_x64-setup.exe"
 # ② 签名：-k 传 base64 后的私钥全文（不是文件路径！），密码是空串
 npx tauri signer sign -k "$(base64 -w0 ~/.tauri/immersive-translator-updater.key)" --password "" ci.exe
 # ③ 按 §3 ① 验 keynum == 723b366356af3935
 # ④ 按 §4 生成 latest.json：signature = 新 .sig 全文；url 用
-#    https://gh-proxy.com/https://github.com/kobejiasuoer/immersive-translator/releases/latest/download/ImmersiveTranslator_X.Y.Z_x64-setup.exe（常青链）
+#    https://gh-proxy.com/https://github.com/kobejiasuoer/immersive-translator/releases/latest/download/%E6%B2%89%E6%B5%B8%E5%8F%A3%E8%AF%AD_X.Y.Z_x64-setup.exe（常青链；中文名 URL 必须百分号编码）
 # ⑤ 投放仓库并推送（.sig 文件名必须与 release 资产 exe 同名；latest.json 名字固定）
 mkdir -p release-updater/vX.Y.Z
-cp ci.exe.sig release-updater/vX.Y.Z/ImmersiveTranslator_X.Y.Z_x64-setup.exe.sig
+cp ci.exe.sig release-updater/vX.Y.Z/沉浸口语_X.Y.Z_x64-setup.exe.sig
 cp latest.json  release-updater/vX.Y.Z/latest.json
 git add release-updater && git commit -m "chore(release): vX.Y.Z updater 签名与 latest.json" && git push
 #    推送后 updater-assets.yml 自动把两者附件到对应 tag 的 release
@@ -183,8 +183,17 @@ npm run tauri build
 
 | 文件 | 用途 |
 |---|---|
-| `ImmersiveTranslator_X.Y.Z_x64-setup.exe` | 安装包（= Tauri 2 的 updater 产物，**没有** v1 时代的 `.nsis.zip`，UPDATE-SETUP.md 旧段落提 `.nsis.zip` 已过时） |
-| `ImmersiveTranslator_X.Y.Z_x64-setup.exe.sig` | updater 签名（latest.json 的 signature 字段用它的全文） |
+| `沉浸口语_X.Y.Z_x64-setup.exe` | 安装包（= Tauri 2 的 updater 产物，**没有** v1 时代的 `.nsis.zip`，UPDATE-SETUP.md 旧段落提 `.nsis.zip` 已过时） |
+| `沉浸口语_X.Y.Z_x64-setup.exe.sig` | updater 签名（latest.json 的 signature 字段用它的全文） |
+
+> **v0.9.0 起改名为「沉浸口语」**：`productName` 改中文，安装包文件名 / 开始菜单 /
+> 安装目录默认值随之变中文；exe 名来自 cargo 产物（`immersive-translator-windows.exe`），
+> 与 productName 无关，不受影响；WebView2 数据与设置存储按 identifier
+> （`com.immersivetranslator.windows`）寻址，升级后设置保留。
+> ⚠️ 老版本（≤0.8.1）升级时 NSIS 按 productName 找已安装项，匹配不上会**装进新目录形成双份**：
+> 升级后手动卸载旧的 ImmersiveTranslator，并到旧版里关掉开机自启
+> （或在任务管理器-启动里删掉指向旧 exe 的项）。
+> URL 含中文名时一律用百分号编码（`沉浸口语` = `%E6%B2%89%E6%B5%B8%E5%8F%A3%E8%AF%AD`）。
 
 ## 3. 验证产物（上传前必做）
 
@@ -194,12 +203,12 @@ cd src-tauri/target/release/bundle/nsis
 # ① updater 签名与 tauri.conf.json 公钥同一对（keynum 应为 723b366356af3935）
 python -c "
 import base64
-sig = base64.b64decode(open('ImmersiveTranslator_X.Y.Z_x64-setup.exe.sig').read())
+sig = base64.b64decode(open('沉浸口语_X.Y.Z_x64-setup.exe.sig').read())
 inner = base64.b64decode(sig.splitlines()[1])
 print(inner[2:10].hex())
 "
 # ② Authenticode（应为 Valid）
-powershell -NoProfile -Command "(Get-AuthenticodeSignature 'ImmersiveTranslator_X.Y.Z_x64-setup.exe').Status"
+powershell -NoProfile -Command "(Get-AuthenticodeSignature '沉浸口语_X.Y.Z_x64-setup.exe').Status"
 
 # ③ 测试全绿
 npm run test          # vitest
@@ -211,14 +220,14 @@ cd src-tauri && cargo test
 ```bash
 python -c "
 import json, datetime
-sig = open('ImmersiveTranslator_X.Y.Z_x64-setup.exe.sig').read()
+sig = open('沉浸口语_X.Y.Z_x64-setup.exe.sig').read()
 manifest = {
   'version': 'X.Y.Z',
   'notes': ' vX.Y.Z 更新说明',
   'pub_date': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
   'platforms': {'windows-x86_64': {
     'signature': sig,
-    'url': 'https://gh-proxy.com/https://github.com/kobejiasuoer/immersive-translator/releases/latest/download/ImmersiveTranslator_X.Y.Z_x64-setup.exe'
+    'url': 'https://gh-proxy.com/https://github.com/kobejiasuoer/immersive-translator/releases/latest/download/%E6%B2%89%E6%B5%B8%E5%8F%A3%E8%AF%AD_X.Y.Z_x64-setup.exe'
   }}
 }
 json.dump(manifest, open('latest-vX.Y.Z.json','w',encoding='utf-8'), ensure_ascii=False, indent=2)
@@ -251,8 +260,8 @@ RID=$(curl -s -H "Authorization: token $TOKEN" \
   "https://api.github.com/repos/kobejiasuoer/immersive-translator/releases/tags/vX.Y.Z" \
   | python -c "import json,sys; print(json.load(sys.stdin)['id'])")
 UPLOAD_URL="https://uploads.github.com/repos/kobejiasuoer/immersive-translator/releases/$RID/assets?name="
-for f in "ImmersiveTranslator_X.Y.Z_x64-setup.exe" \
-         "ImmersiveTranslator_X.Y.Z_x64-setup.exe.sig" \
+for f in "沉浸口语_X.Y.Z_x64-setup.exe" \
+         "沉浸口语_X.Y.Z_x64-setup.exe.sig" \
          "latest-vX.Y.Z.json"; do
   NAME="$f"; [ "$f" = "latest-vX.Y.Z.json" ] && NAME="latest.json"
   curl -s -o /dev/null -w "$NAME -> HTTP %{http_code}\n" -X POST \

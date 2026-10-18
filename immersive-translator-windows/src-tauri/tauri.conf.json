@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ImmersiveTranslator",
+  "productName": "沉浸口语",
   "version": "0.8.1",
   "identifier": "com.immersivetranslator.windows",
   "build": {
@@ -30,7 +30,7 @@
       },
       {
         "label": "settings",
-        "title": "ImmersiveTranslator 设置",
+        "title": "沉浸口语设置",
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --auto-accept-camera-and-microphone-capture",
         "width": 720,
         "height": 660,
@@ -127,7 +127,7 @@
       },
       {
         "label": "onboarding",
-        "title": "欢迎使用 ImmersiveTranslator",
+        "title": "欢迎使用沉浸口语",
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --auto-accept-camera-and-microphone-capture",
         "width": 620,
         "height": 560,

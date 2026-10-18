@@ -1,6 +1,6 @@
 # Windows 开发环境准备检查单
 
-在 Windows 机器上继续 ImmersiveTranslator Windows 版开发前，按本检查单准备好环境。每项后面都有验证命令，跑通才算 OK。
+在 Windows 机器上继续沉浸口语（ImmersiveTranslator）Windows 版开发前，按本检查单准备好环境。每项后面都有验证命令，跑通才算 OK。
 
 ## 1. 操作系统
 
