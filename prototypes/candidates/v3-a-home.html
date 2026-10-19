@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>候选 A · 静气纸感 · 今天（390×844）</title>
+<style>
+/* ============================================================
+   v3 候选 A · 首页视觉小样 —— 静气 · 纸感编辑风
+   单文件无依赖。浅色为默认；URL 加 #dark 看深色。
+   令牌与 docs/mobile-v3-candidate-a.md §2 一致。
+   ============================================================ */
+:root{
+  --bg:#FAF8F3; --surface:#FFFFFF; --surface-2:#F3F0E9;
+  --ink:#201D18; --ink-2:#565147; --ink-3:#736C5F; --ink-4:#B4AC9E;
+  --hairline:#E7E2D6; --hairline-strong:#D8D2C2;
+  --accent:#2B567F; --accent-soft:rgba(43,86,127,.10);
+  --on-ink:#FAF8F3; --ok:#3F7050; --warn:#96631C; --err:#AE4A3C;
+  --tb-bg:rgba(250,248,243,.86);
+  --studio:#E9E5DC; --bezel:#101010; --shadow:0 30px 80px rgba(32,29,24,.35), 0 6px 20px rgba(32,29,24,.22);
+  --font-serif:ui-serif,"New York","Songti SC","Noto Serif SC",Georgia,serif;
+  --font-sans:-apple-system,"SF Pro Text","PingFang SC",system-ui,sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,monospace;
+}
+:root[data-theme="dark"]{
+  --bg:#1A1815; --surface:#24211D; --surface-2:#2E2A25;
+  --ink:#ECE7DD; --ink-2:#BFB8AA; --ink-3:#938B7C; --ink-4:#6B655A;
+  --hairline:#35312A; --hairline-strong:#453F36;
+  --accent:#8FB3D4; --accent-soft:rgba(143,179,212,.14);
+  --on-ink:#1A1815; --ok:#85AC90; --warn:#C9A15C; --err:#D98376;
+  --tb-bg:rgba(26,24,21,.86);
+  --studio:#111010; --bezel:#000; --shadow:0 30px 90px rgba(0,0,0,.7);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  background:var(--studio);
+  background-image:radial-gradient(120% 90% at 50% 0%, rgba(255,255,255,.28), rgba(255,255,255,0) 60%);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:18px;padding:40px 24px;
+  font-family:var(--font-sans);color:var(--ink);
+  -webkit-font-smoothing:antialiased;transition:background-color .16s;
+}
+
+/* ---------- 手机壳 ---------- */
+.phone{
+  width:412px;height:866px;flex:none;
+  background:var(--bezel);border-radius:56px;padding:11px;
+  box-shadow:var(--shadow);
+}
+.screen{
+  position:relative;width:390px;height:844px;
+  border-radius:45px;overflow:hidden;
+  background:var(--bg);transition:background-color .16s;
+}
+.island{
+  position:absolute;top:11px;left:50%;transform:translateX(-50%);
+  width:122px;height:35px;border-radius:20px;background:var(--bezel);z-index:40;
+}
+
+/* ---------- 状态栏 ---------- */
+.statusbar{
+  position:absolute;top:0;left:0;right:0;height:54px;z-index:30;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:6px 30px 0 34px;color:var(--ink);
+}
+.sb-time{font-size:16px;font-weight:600;letter-spacing:.02em;font-variant-numeric:tabular-nums}
+.sb-icons{display:flex;align-items:center;gap:7px}
+
+/* ---------- 内容 ---------- */
+.content{
+  position:absolute;top:52px;bottom:74px;left:0;right:0;
+  padding:0 20px;overflow-y:auto;overscroll-behavior:contain;
+}
+.folio{
+  display:flex;justify-content:space-between;align-items:baseline;
+  padding:10px 0 10px;border-bottom:1px solid var(--hairline);
+  font-size:12px;letter-spacing:.05em;color:var(--ink-3);
+}
+.h1{
+  font-family:var(--font-serif);font-size:32px;line-height:38px;
+  font-weight:600;letter-spacing:.01em;margin-top:10px;
+}
+.overline{
+  font-size:11px;line-height:16px;font-weight:500;
+  letter-spacing:.12em;color:var(--ink-3);
+}
+.hr{height:1px;background:var(--hairline);border:0}
+
+/* 主角块：到期 */
+.hero{margin-top:14px}
+.hero-row{display:flex;align-items:flex-end;gap:16px;margin-top:4px}
+.hero-num{
+  font-family:var(--font-serif);font-size:62px;line-height:1;
+  font-weight:500;font-variant-numeric:lining-nums;letter-spacing:-.01em;
+}
+.hero-side{padding-bottom:6px;font-size:13px;line-height:22px}
+.hero-side .s1{color:var(--ink-2)}
+.hero-side .s2{color:var(--ink-3)}
+.btn{
+  display:flex;align-items:center;justify-content:center;
+  width:100%;height:48px;margin-top:14px;
+  background:var(--ink);color:var(--on-ink);
+  border-radius:12px;border:0;cursor:pointer;
+  font-family:var(--font-sans);font-size:17px;font-weight:600;letter-spacing:.02em;
+  transition:opacity .12s;
+}
+.btn:active{opacity:.78}
+
+/* 分区 */
+.sec{margin-top:22px}
+.sec-head{display:flex;justify-content:space-between;align-items:baseline}
+.sec-head .pct{font-size:12px;font-weight:500;letter-spacing:.04em;color:var(--accent);font-variant-numeric:tabular-nums}
+.sec-head .when{font-size:12px;color:var(--ink-3)}
+.art-title{
+  font-family:var(--font-serif);font-size:20px;line-height:27px;font-weight:600;
+  margin-top:10px;cursor:pointer;
+}
+.art-meta{margin-top:4px;font-size:13px;line-height:18px;color:var(--ink-3)}
+.meter{margin-top:8px;height:2px;background:var(--hairline);border-radius:1px;overflow:hidden}
+.meter>i{display:block;height:100%;width:67%;background:var(--accent)}
+
+/* 剪贴板引文块 */
+.quote{
+  margin-top:8px;padding:2px 0 2px 14px;border-left:2px solid var(--ink-3);
+  font-family:var(--font-serif);font-style:italic;font-size:16px;line-height:24px;color:var(--ink-2);
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+}
+.quote-actions{margin-top:8px;font-size:15px;line-height:20px}
+.quote-actions .a{color:var(--accent);font-weight:500;cursor:pointer}
+.quote-actions .dot{color:var(--ink-4);margin:0 10px}
+.quote-actions .b{color:var(--ink-2);cursor:pointer}
+
+/* 练一练 */
+.practice{display:flex;justify-content:space-between;margin-top:10px}
+.p-item{display:flex;align-items:center;gap:9px;cursor:pointer}
+.p-item svg{color:var(--ink);flex:none}
+.p-item .t{font-size:14px;font-weight:500;color:var(--ink);line-height:17px}
+.p-item .s{font-size:12px;color:var(--ink-3);line-height:15px;margin-top:1px}
+
+/* 本周 */
+.week{display:grid;grid-template-columns:1fr 1fr 1fr;gap:24px;margin-top:10px}
+.w-num{font-family:var(--font-serif);font-size:22px;line-height:28px;font-weight:600;font-variant-numeric:lining-nums}
+.w-label{font-size:12px;color:var(--ink-3);margin-top:2px}
+
+/* ---------- Tab 栏 ---------- */
+.tabbar{
+  position:absolute;left:0;right:0;bottom:0;height:74px;z-index:30;
+  border-top:1px solid var(--hairline);
+  background:var(--tb-bg);
+  -webkit-backdrop-filter:saturate(1.4) blur(18px);backdrop-filter:saturate(1.4) blur(18px);
+  display:flex;align-items:flex-start;padding-top:9px;
+}
+.tab{
+  flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;
+  color:var(--ink-3);font-size:10px;line-height:12px;font-weight:500;cursor:pointer;
+  transition:color .16s;
+}
+.tab.on{color:var(--ink)}
+.tab{position:relative}
+.badge{
+  position:absolute;top:-5px;left:50%;margin-left:3px;
+  min-width:16px;height:16px;padding:0 4px;border-radius:9px;
+  background:var(--accent);color:var(--on-ink);
+  font-size:10px;line-height:16px;font-weight:600;text-align:center;
+}
+.home-indicator{
+  position:absolute;bottom:8px;left:50%;transform:translateX(-50%);
+  width:134px;height:5px;border-radius:3px;background:var(--ink);opacity:.9;z-index:31;
+}
+
+/* ---------- 壳外说明 ---------- */
+.caption{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--ink-2);opacity:.85}
+.caption b{font-weight:600;color:var(--ink)}
+.caption a{color:var(--accent);cursor:pointer;text-decoration:none;border-bottom:1px solid var(--accent-soft)}
+.caption a.on{border-bottom-color:var(--accent);font-weight:500}
+
+@media (prefers-reduced-motion: reduce){
+  *{transition:none!important}
+}
+</style>
+</head>
+<body>
+
+<div class="phone">
+  <div class="screen" id="screen">
+    <div class="island"></div>
+
+    <!-- 状态栏 -->
+    <div class="statusbar">
+      <span class="sb-time">9:41</span>
+      <span class="sb-icons">
+        <svg width="18" height="12" viewBox="0 0 18 12" fill="currentColor" aria-hidden="true">
+          <rect x="0" y="7.5" width="3" height="4.5" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/>
+          <rect x="10" y="2.5" width="3" height="9.5" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".3"/>
+        </svg>
+        <svg width="17" height="12" viewBox="0 0 17 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+          <path d="M1.6 4.4C3.5 2.7 5.9 1.7 8.5 1.7s5 1 6.9 2.7"/>
+          <path d="M4.2 7.2c1.2-1.1 2.7-1.7 4.3-1.7s3.1.6 4.3 1.7"/>
+          <circle cx="8.5" cy="10" r="1.3" fill="currentColor" stroke="none"/>
+        </svg>
+        <svg width="25" height="12" viewBox="0 0 25 12" fill="none" aria-hidden="true">
+          <rect x=".6" y=".6" width="21" height="10.8" rx="3.2" stroke="currentColor" opacity=".35" stroke-width="1.1"/>
+          <rect x="2.4" y="2.4" width="13.5" height="7.2" rx="1.8" fill="currentColor"/>
+          <path d="M23.4 3.8v4.4" stroke="currentColor" opacity=".35" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </span>
+    </div>
+
+    <!-- 内容 -->
+    <div class="content" id="content">
+
+      <!-- folio 页眉行 -->
+      <div class="folio"><span>9月24日&nbsp;&nbsp;星期四</span><span>连续 14 天</span></div>
+
+      <div class="h1">今天</div>
+
+      <!-- 到期主角块 -->
+      <div class="hero">
+        <div class="overline">生词到期</div>
+        <div class="hero-row">
+          <div class="hero-num">8</div>
+          <div class="hero-side">
+            <div class="s1">个生词 · 约 5 分钟</div>
+            <div class="s2">单词 2 · 词块 6</div>
+          </div>
+        </div>
+        <button class="btn">开始复习</button>
+      </div>
+
+      <hr class="hr" style="margin-top:18px">
+
+      <!-- 继续阅读 -->
+      <div class="sec" style="margin-top:14px">
+        <div class="sec-head"><span class="overline">继续阅读</span><span class="pct">67%</span></div>
+        <div class="art-title">Why Cities Need Trees</div>
+        <div class="art-meta">读到第 8 句 · 共 12 句 · 还剩 6 分钟</div>
+        <div class="meter"><i></i></div>
+      </div>
+
+      <hr class="hr" style="margin-top:16px">
+
+      <!-- 剪贴板快译 -->
+      <div class="sec" style="margin-top:14px">
+        <div class="sec-head"><span class="overline">剪贴板</span><span class="when">刚刚复制</span></div>
+        <div class="quote">The council planted twelve thousand trees after the summer of heatwaves.</div>
+        <div class="quote-actions"><span class="a">翻译</span><span class="dot">·</span><span class="b">存入书架精读</span></div>
+      </div>
+
+      <hr class="hr" style="margin-top:16px">
+
+      <!-- 练一练 -->
+      <div class="sec" style="margin-top:14px">
+        <div class="overline">练一练</div>
+        <div class="practice">
+          <div class="p-item">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 10v4M8 7v10M12 4.5v15M16 7v10M20 10v4"/></svg>
+            <div><div class="t">跟读</div><div class="s">4 句待练</div></div>
+          </div>
+          <div class="p-item">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.5c4.6 0 8 2.8 8 6.4s-3.4 6.4-8 6.4c-.9 0-1.8-.1-2.6-.3L6.2 19l.5-2.9C5 15 4 13.1 4 10.9c0-3.6 3.4-6.4 8-6.4Z"/></svg>
+            <div><div class="t">陪练</div><div class="s">4 个场景</div></div>
+          </div>
+          <div class="p-item">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M7 10.5h6M7 14h9.5"/></svg>
+            <div><div class="t">直译</div><div class="s">双语字幕</div></div>
+          </div>
+        </div>
+      </div>
+
+      <hr class="hr" style="margin-top:16px">
+
+      <!-- 本周 -->
+      <div class="sec" style="margin-top:14px;padding-bottom:14px">
+        <div class="overline">本周</div>
+        <div class="week">
+          <div><div class="w-num">21</div><div class="w-label">复习</div></div>
+          <div><div class="w-num">6</div><div class="w-label">新词</div></div>
+          <div><div class="w-num">3</div><div class="w-label">直译陷阱</div></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Tab 栏 -->
+    <div class="tabbar">
+      <div class="tab on">
+        <svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5.5" width="16" height="14.5" rx="2.5"/><path d="M4 10.2h16M8.5 3.2v3.6M15.5 3.2v3.6"/><circle cx="12" cy="15.2" r="1.5" fill="currentColor" stroke="none"/></svg>
+        今天
+      </div>
+      <div class="tab">
+        <svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 10v4M8 7v10M12 4.5v15M16 7v10M20 10v4"/></svg>
+        练
+      </div>
+      <div class="tab">
+        <svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 4.5v15M10 4.5v15M14.6 4.9l3.7 14.2"/><path d="M4 19.5h16"/></svg>
+        书架
+      </div>
+      <div class="tab">
+        <span class="badge">8</span>
+        <svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4.5h10V19.5l-5-3.9-5 3.9Z"/></svg>
+        生词
+      </div>
+      <div class="tab">
+        <svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="8.4" r="3.4"/><path d="M5.4 19.6c1.2-3.3 3.7-5 6.6-5s5.4 1.7 6.6 5"/></svg>
+        我的
+      </div>
+    </div>
+    <div class="home-indicator"></div>
+
+  </div>
+</div>
+
+<div class="caption">
+  <b>候选 A · 静气纸感</b><span>今天 · 390×844</span>
+  <a id="t-light" class="on">浅色</a><a id="t-dark">深色</a>
+</div>
+
+<script>
+(function(){
+  var root=document.documentElement;
+  function apply(t){
+    if(t==='dark'){root.setAttribute('data-theme','dark')}else{root.removeAttribute('data-theme')}
+    document.getElementById('t-light').className=t==='light'?'on':'';
+    document.getElementById('t-dark').className=t==='dark'?'on':'';
+    try{history.replaceState(null,'',t==='dark'?'#dark':'#')}catch(e){}
+  }
+  apply(/dark/.test(location.hash)?'dark':'light');
+  document.getElementById('t-light').onclick=function(){apply('light')};
+  document.getElementById('t-dark').onclick=function(){apply('dark')};
+})();
+</script>
+</body>
+</html>

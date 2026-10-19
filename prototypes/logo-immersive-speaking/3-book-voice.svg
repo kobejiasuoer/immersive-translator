@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#FAF6EC"/>
+      <stop offset="1" stop-color="#ECDFC8"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.25" r="0.9">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="0.7" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+  <g fill="#2B567F">
+    <rect x="296" y="292" width="52" height="110" rx="26"/>
+    <rect x="391" y="240" width="52" height="214" rx="26"/>
+    <rect x="486" y="188" width="52" height="318" rx="26"/>
+    <rect x="581" y="240" width="52" height="214" rx="26"/>
+    <rect x="676" y="292" width="52" height="110" rx="26"/>
+  </g>
+  <path d="M108 668 C 292 606 434 616 512 660 L 512 836 C 434 792 292 782 108 834 Z" fill="#2B567F"/>
+  <path d="M916 668 C 732 606 590 616 512 660 L 512 836 C 590 792 732 782 916 834 Z" fill="#4A7BAB"/>
+</svg>

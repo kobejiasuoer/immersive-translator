@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.55" y2="1">
+      <stop offset="0" stop-color="#0A1B38"/>
+      <stop offset="0.55" stop-color="#123B6E"/>
+      <stop offset="1" stop-color="#1B6AAE"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#7FD4FF" stop-opacity="0.4"/>
+      <stop offset="0.65" stop-color="#7FD4FF" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="ds" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="16" stdDeviation="26" flood-color="#061225" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+  <g filter="url(#ds)">
+    <rect x="196" y="200" width="410" height="320" rx="112" fill="#FFFFFF" fill-opacity="0.34"/>
+    <path d="M336 500 L286 596 L470 512 Z" fill="#FFFFFF" fill-opacity="0.34"/>
+    <rect x="330" y="420" width="480" height="352" rx="118" fill="#FFFFFF"/>
+    <path d="M440 756 L376 866 L600 764 Z" fill="#FFFFFF"/>
+  </g>
+  <g fill="#144A80">
+    <rect x="421" y="540" width="46" height="112" rx="23"/>
+    <rect x="503" y="482" width="46" height="228" rx="23"/>
+    <rect x="585" y="522" width="46" height="148" rx="23"/>
+    <rect x="667" y="556" width="46" height="80" rx="23"/>
+  </g>
+</svg>
