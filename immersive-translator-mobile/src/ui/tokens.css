@@ -1,111 +1,92 @@
 /* ============================================================
-   主题令牌 —— 与 reading-room 原型同源。
-   ⚠ spike 适配：不使用 color-mix()（需 iOS 16.2+），半透面用
-   每主题显式 rgba 变量 --tb-bg（tabbar/顶栏毛玻璃底）。
+   v3 设计令牌 —— docs/mobile-v3-design-2026-09-24.md §1 定稿
+   候选 A「静气 · 纸感编辑风」：暖纸 / 暖炭，零渐变。
+   ⚠ iOS 16 兼容：禁渐进色函数与宽色域函数（见原型头注 §1.1）；
+   半透明面一律每主题显式 rgba（--tb-bg 等）。值 = §1.1 / §1.2 直接可用。
    ============================================================ */
 
 :root,
 [data-theme="light"] {
-  --bg: #f4f5f9;
-  --surface: #ffffff;
-  --surface-2: #f9fafc;
-  --border: #e4e7ee;
-  --border-strong: #d6dae4;
-  --text-1: #1c2029;
-  --text-2: #4b5261;
-  --text-3: #7c8494;
-  --text-4: #a6adbb;
-  --accent: #4c5ff0;
-  --accent-hover: #3f52e0;
-  --accent-soft: #eef0fe;
-  --accent-softer: #f6f7ff;
-  --accent-hl: #dde2fd;
-  --on-accent: #ffffff;
-  --ok: #1f8a4c;
-  --ok-soft: #e8f5ee;
-  --warn: #b45309;
-  --warn-soft: #fdf1e3;
-  --err: #cf4141;
-  --err-soft: #fdeeee;
-  --tb-bg: rgba(255, 255, 255, 0.84);
-  --shadow-pop: 0 12px 32px rgba(16, 24, 40, 0.16), 0 3px 10px rgba(16, 24, 40, 0.1);
-  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+  --bg: #faf8f3;            /* 全局纸底 */
+  --surface: #ffffff;       /* sheet、菜单、模态 */
+  --surface-2: #f3f0e9;     /* 按压态、分段轨道、输入框底 */
+  --ink: #201d18;           /* 主文字、主按钮底（15.8:1） */
+  --ink-2: #565147;         /* 次级文字（7.4:1） */
+  --ink-3: #736c5f;         /* 辅助文字、meta、overline（4.9:1） */
+  --ink-4: #b4ac9e;         /* 禁用、装饰；仅大号/装饰用（2.1:1） */
+  --hairline: #e7e2d6;
+  --hairline-strong: #d8d2c2;
+  --accent: #2b567f;        /* 墨蓝点缀（7.2:1） */
+  --accent-soft: rgba(43, 86, 127, 0.1);
+  --on-ink: #faf8f3;        /* 墨底文字 */
+  --ok: #3f7050;
+  --ok-soft: rgba(63, 112, 80, 0.1);
+  --warn: #96631c;
+  --warn-soft: rgba(150, 99, 28, 0.1);
+  --err: #ae4a3c;
+  --err-soft: rgba(174, 74, 60, 0.1);
+  --tb-bg: rgba(250, 248, 243, 0.86); /* tab bar/顶栏毛玻璃底（显式 rgba 兜底） */
+  --shadow-sheet: 0 -8px 40px rgba(32, 29, 24, 0.14);
+  --shadow-pop: 0 10px 30px rgba(32, 29, 24, 0.16);
 }
+
 [data-theme="dark"] {
-  --bg: #1d1f26;
-  --surface: #262933;
-  --surface-2: #2e313c;
-  --border: #373b47;
-  --border-strong: #474c5a;
-  --text-1: #edeef4;
-  --text-2: #c4c9d6;
-  --text-3: #9399ab;
-  --text-4: #6d7384;
-  --accent: #7d8cff;
-  --accent-hover: #93a0ff;
-  --accent-soft: rgba(125, 140, 255, 0.16);
-  --accent-softer: rgba(125, 140, 255, 0.09);
-  --accent-hl: rgba(125, 140, 255, 0.3);
-  --on-accent: #ffffff;
-  --ok: #4cc38a;
-  --ok-soft: rgba(76, 195, 138, 0.14);
-  --warn: #e0a458;
-  --warn-soft: rgba(224, 164, 88, 0.14);
-  --err: #e57070;
-  --err-soft: rgba(229, 112, 112, 0.14);
-  --tb-bg: rgba(38, 41, 51, 0.84);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --bg: #1a1815;
+  --surface: #24211d;
+  --surface-2: #2e2a25;
+  --ink: #ece7dd;
+  --ink-2: #bfb8aa;
+  --ink-3: #938b7c; /* 5.3:1 */
+  --ink-4: #6b655a;
+  --hairline: #35312a;
+  --hairline-strong: #453f36;
+  --accent: #8fb3d4; /* 8.1:1 */
+  --accent-soft: rgba(143, 179, 212, 0.14);
+  --on-ink: #1a1815; /* 深色下主按钮=纸底 */
+  --ok: #85ac90;
+  --ok-soft: rgba(133, 172, 144, 0.14);
+  --warn: #c9a15c;
+  --warn-soft: rgba(201, 161, 92, 0.14);
+  --err: #d98376;
+  --err-soft: rgba(217, 131, 118, 0.14);
+  --tb-bg: rgba(26, 24, 21, 0.86);
+  --shadow-sheet: 0 -8px 40px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.55);
 }
-[data-theme="sepia"] {
-  --bg: #f5efdf;
-  --surface: #fbf7ec;
-  --surface-2: #f1ead7;
-  --border: #e4dac0;
-  --border-strong: #d2c6a6;
-  --text-1: #37301f;
-  --text-2: #5a5138;
-  --text-3: #857a5c;
-  --text-4: #a89d80;
-  --accent: #4c5ff0;
-  --accent-hover: #3f52e0;
-  --accent-soft: rgba(76, 95, 240, 0.1);
-  --accent-softer: rgba(76, 95, 240, 0.06);
-  --accent-hl: rgba(76, 95, 240, 0.2);
-  --on-accent: #ffffff;
-  --ok: #35793f;
-  --ok-soft: rgba(53, 121, 63, 0.12);
-  --warn: #9a6212;
-  --warn-soft: rgba(154, 98, 18, 0.12);
-  --err: #b03a32;
-  --err-soft: rgba(176, 58, 50, 0.12);
-  --tb-bg: rgba(251, 247, 236, 0.86);
-  --shadow-pop: 0 12px 32px rgba(80, 66, 32, 0.18), 0 3px 10px rgba(80, 66, 32, 0.1);
-  --shadow-card: 0 1px 2px rgba(80, 66, 32, 0.05), 0 1px 3px rgba(80, 66, 32, 0.06);
+
+/* ---------- §1.4 字体栈（零 webfont：iOS 命中 New York + 宋体） ---------- */
+:root {
+  --font-serif: ui-serif, "New York", "Songti SC", "Noto Serif SC", Georgia, serif;
+  --font-sans: -apple-system, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  /* §1.5 间距 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 28px;
+  --sp-7: 36px;
+  --sp-8: 48px;
+  --sp-9: 64px;
+  /* §1.6 圆角 */
+  --r-xs: 5px;
+  --r-s: 8px;
+  --r-m: 12px;
+  --r-l: 16px;
 }
-[data-theme="oled"] {
+
+/* 阅读主题「纯黑」——只作用于阅读正文区（§1.2 主题范围；纸色=全局默认） */
+.rd-black {
   --bg: #000000;
   --surface: #0a0a0b;
   --surface-2: #141416;
-  --border: #212126;
-  --border-strong: #2f2f36;
-  --text-1: #e8e7e4;
-  --text-2: #b0aeab;
-  --text-3: #77756f;
-  --text-4: #4c4a46;
-  --accent: #7d8cff;
-  --accent-hover: #93a0ff;
-  --accent-soft: rgba(125, 140, 255, 0.13);
-  --accent-softer: rgba(125, 140, 255, 0.07);
-  --accent-hl: rgba(125, 140, 255, 0.26);
-  --on-accent: #0c0c10;
-  --ok: #4cc38a;
-  --ok-soft: rgba(76, 195, 138, 0.12);
-  --warn: #e0a458;
-  --warn-soft: rgba(224, 164, 88, 0.12);
-  --err: #e57070;
-  --err-soft: rgba(229, 112, 112, 0.12);
-  --tb-bg: rgba(10, 10, 11, 0.84);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.8), 0 3px 10px rgba(0, 0, 0, 0.5);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.6);
+  --ink: #e8e7e4;
+  --ink-2: #b0aeab;
+  --ink-3: #77756f;
+  --hairline: #212126;
+  --hairline-strong: #2f2f36;
+  --tb-bg: rgba(10, 10, 11, 0.86);
+  --accent-soft: rgba(143, 179, 212, 0.16); /* 亮色高亮：已收藏词底/播放高亮在纯黑上可见（P-22） */
 }

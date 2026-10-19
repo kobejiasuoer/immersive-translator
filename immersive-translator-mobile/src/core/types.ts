@@ -51,4 +51,7 @@ export interface VocabWord {
   sourceArticleId: string;
   sourceSentenceIdx: number;
   dueAt: number;
+  /** 最近一次判错（forgot / 陷阱）时间戳（治 ux-cross-1）：gradeVocab 落账、undoGrade 撤销；
+   *  「近期」口径由读取侧按窗口过滤（免迁移、免跨天遍历改写），单字段留存无膨胀风险。 */
+  lastWrongAt?: number;
 }

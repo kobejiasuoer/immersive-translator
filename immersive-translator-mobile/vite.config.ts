@@ -8,7 +8,8 @@ export default defineConfig({
   server: {
     port: 5174,
     strictPort: true,
-    host: false,
+    // 真机 dev：同时监听 localhost（CLI 探活）与局域网 IP（手机加载页面）
+    host: true,
   },
   build: {
     target: "safari16", // 最低 iOS 16（落地文档 §0）

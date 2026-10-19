@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "default",
+  "description": "主窗口基础权限：核心 IPC（invoke 自定义命令 + 事件监听）+ 设备能力插件（通知/震动/剪贴板/分享/深链）",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "notification:default",
+    "haptics:default",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text",
+    "share:default",
+    "deep-link:default"
+  ]
+}
