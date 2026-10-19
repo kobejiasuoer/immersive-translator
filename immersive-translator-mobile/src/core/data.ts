@@ -83,19 +83,21 @@ export function makeStressArticle(multiplier = 75): Article {
 
 const now = Date.now();
 
+/** sourceSentenceIdx 按 core/demo.ts TREE_SENTS(12 句)/SLOW_SENTS(3 句) 的真实文句编号；
+    曾按旧 8 句切分编号造成两套错位、完形素材缺失降级识别（P-13）。 */
 export const DEMO_VOCAB: VocabWord[] = [
   { id: "take-root", word: "take root", kind: "chunk", chunkType: "短语动词", senses: [{ pos: "phrasal", cn: "扎根；（想法）被接受并流行开来" }], pattern: "take root (in sth)", trap: "take roots（不可数，无复数）", sourceArticleId: "trees", sourceSentenceIdx: 0, dueAt: now },
   { id: "in-the-wake-of", word: "in the wake of", kind: "chunk", chunkType: "习语", senses: [{ pos: "idiom", cn: "紧随……之后（常指随坏事件而来）" }], pattern: "in the wake of sth", trap: "in the wake for / at the wake of", sourceArticleId: "trees", sourceSentenceIdx: 1, dueAt: now },
-  { id: "buffer-against", word: "buffer against", kind: "chunk", chunkType: "搭配", senses: [{ pos: "collocation", cn: "缓冲，抵御（噪声、冲击、炎热）" }], pattern: "buffer A against B", trap: "buffer from（中式直译）", sourceArticleId: "trees", sourceSentenceIdx: 3, dueAt: now },
-  { id: "attribute-to", word: "attribute X to Y", kind: "chunk", chunkType: "句式", senses: [{ pos: "pattern", cn: "把 X 归因于 Y" }], pattern: "attribute X to Y", trap: "attribute for（介词误用）", sourceArticleId: "trees", sourceSentenceIdx: 4, dueAt: now },
-  { id: "torrential-rain", word: "torrential rain", kind: "chunk", chunkType: "搭配", senses: [{ pos: "collocation", cn: "倾盆大雨（不是 big rain）" }], trap: "big rain（中文直译）", sourceArticleId: "trees", sourceSentenceIdx: 5, dueAt: now },
+  { id: "buffer-against", word: "buffer against", kind: "chunk", chunkType: "搭配", senses: [{ pos: "collocation", cn: "缓冲，抵御（噪声、冲击、炎热）" }], pattern: "buffer A against B", trap: "buffer from（中式直译）", sourceArticleId: "trees", sourceSentenceIdx: 4, dueAt: now },
+  { id: "attribute-to", word: "attribute X to Y", kind: "chunk", chunkType: "句式", senses: [{ pos: "pattern", cn: "把 X 归因于 Y" }], pattern: "attribute X to Y", trap: "attribute for（介词误用）", sourceArticleId: "trees", sourceSentenceIdx: 6, dueAt: now },
+  { id: "torrential-rain", word: "torrential rain", kind: "chunk", chunkType: "搭配", senses: [{ pos: "collocation", cn: "倾盆大雨（不是 big rain）" }], trap: "big rain（中文直译）", sourceArticleId: "trees", sourceSentenceIdx: 7, dueAt: now },
   { id: "settle-in", word: "settle in", kind: "chunk", chunkType: "短语动词", senses: [{ pos: "phrasal", cn: "安顿下来，适应新环境" }], pattern: "settle in (to sth)", trap: "settle down to（语义偏向安定就寝）", sourceArticleId: "trees", sourceSentenceIdx: 6, dueAt: now },
-  { id: "canopy", word: "canopy", phonetic: "ˈkænəpi", senses: [{ pos: "n.", cn: "（树的）树冠层；顶篷" }], sourceArticleId: "trees", sourceSentenceIdx: 2, dueAt: now },
+  { id: "canopy", word: "canopy", phonetic: "ˈkænəpi", senses: [{ pos: "n.", cn: "（树的）树冠层；顶篷" }], sourceArticleId: "trees", sourceSentenceIdx: 3, dueAt: now },
   { id: "comprehension", word: "comprehension", phonetic: "ˌkɒmprɪˈhenʃn", senses: [{ pos: "n.", cn: "理解力（尤指阅读/听力）" }], sourceArticleId: "slow", sourceSentenceIdx: 0, dueAt: now },
   { id: "heatwave", word: "heatwave", phonetic: "ˈhiːtweɪv", senses: [{ pos: "n.", cn: "热浪" }], sourceArticleId: "trees", sourceSentenceIdx: 0, dueAt: now + 3 * 86400_000 },
-  { id: "linden", word: "linden", phonetic: "ˈlɪndən", senses: [{ pos: "n.", cn: "椴树（常用行道树）" }], sourceArticleId: "trees", sourceSentenceIdx: 3, dueAt: now + 7 * 86400_000 },
-  { id: "drainage", word: "drainage", phonetic: "ˈdreɪnɪdʒ", senses: [{ pos: "n.", cn: "排水（系统）" }], sourceArticleId: "trees", sourceSentenceIdx: 5, dueAt: now + 12 * 86400_000 },
-  { id: "solitude", word: "solitude", phonetic: "ˈsɒlɪtjuːd", senses: [{ pos: "n.", cn: "独处；远离人群的状态（中性偏褒）" }], trap: "别与 loneliness（孤独感，贬义）混译", sourceArticleId: "slow", sourceSentenceIdx: 3, dueAt: now + 12 * 86400_000 },
+  { id: "linden", word: "linden", phonetic: "ˈlɪndən", senses: [{ pos: "n.", cn: "椴树（常用行道树）" }], sourceArticleId: "trees", sourceSentenceIdx: 4, dueAt: now + 7 * 86400_000 },
+  { id: "drainage", word: "drainage", phonetic: "ˈdreɪnɪdʒ", senses: [{ pos: "n.", cn: "排水（系统）" }], sourceArticleId: "trees", sourceSentenceIdx: 7, dueAt: now + 12 * 86400_000 },
+  { id: "solitude", word: "solitude", phonetic: "ˈsɒlɪtjuːd", senses: [{ pos: "n.", cn: "独处；远离人群的状态（中性偏褒）" }], trap: "别与 loneliness（孤独感，贬义）混译", sourceArticleId: "slow", sourceSentenceIdx: 2, dueAt: now + 12 * 86400_000 },
 ];
 
 /** spike 词典（未收藏词 tap 查词的假结果；实际实现走 readerDict）。 */

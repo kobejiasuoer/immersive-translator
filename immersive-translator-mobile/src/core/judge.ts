@@ -5,6 +5,9 @@
 
 export function norm(s: string): string {
   return (s || "")
+    /* 弯引号归一为直引号：iOS 键盘「智能标点」默认把 ' 转成 ’，不归一的话含撇号的
+       完全正确答案会被判「接近」（SRS 建议档被系统性压低）。tokenizer/iseAlign 已同款。 */
+    .replace(/[‘’]/g, "'")
     .toLowerCase()
     .replace(/[^a-z0-9\s']/g, " ")
     .replace(/\s+/g, " ")

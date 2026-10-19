@@ -10,7 +10,13 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [],
+    "windows": [
+      {
+        "label": "main",
+        "url": "index.html",
+        "title": "reader-spike"
+      }
+    ],
     "security": {
       "csp": null
     }
