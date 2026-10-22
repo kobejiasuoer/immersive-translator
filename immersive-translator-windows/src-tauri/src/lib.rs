@@ -1,5 +1,6 @@
 mod auth;
 mod clipboard;
+mod crash;
 mod file_export;
 mod history;
 mod ocr;
@@ -14,6 +15,10 @@ mod tray_badge;
 mod tts;
 mod uia;
 mod web_extract;
+
+// 暴露给 main.rs（独立 bin crate）在 main() 第一行安装崩溃钩子；
+// 模块本身保持私有，只重导出这一个入口。
+pub use crash::install_panic_hook;
 
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -70,13 +75,8 @@ struct ReaderImportPayload {
 #[derive(Default)]
 struct PendingReaderImport(Mutex<Option<ReaderImportPayload>>);
 
-/// 托盘「生词本」要求阅读室打开复习页：窗口已存在时走事件即时切换；
-/// 窗口不存在时先记下标记，等窗口挂载后取走（同 PendingReaderImport 模式）。
-#[derive(Default)]
-struct PendingOpenReview(Mutex<Option<()>>);
-
 /// 提醒卡「继续阅读」要求阅读室直达书级断点：窗口已存在时走事件即时跳转；
-/// 窗口不存在时先记下 bookId，等窗口挂载后取走（同 PendingOpenReview 模式）。
+/// 窗口不存在时先记下 bookId，等窗口挂载后取走（同 PendingReaderImport 模式）。
 #[derive(Default)]
 struct PendingOpenBook(Mutex<Option<String>>);
 
@@ -601,15 +601,9 @@ fn finish_onboarding(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 阅读室窗口挂载时取走「打开复习页」请求（托盘「生词本」入口）。
-#[tauri::command]
-fn take_pending_open_review(state: tauri::State<'_, PendingOpenReview>) -> bool {
-    state.0.lock().unwrap().take().is_some()
-}
-
 /// 提醒卡「继续阅读」：打开/聚焦阅读室窗口并直达书级断点章。
 /// 窗口已存在时走事件即时跳转；不存在时先记 pending，等挂载后取走
-/// （与托盘「生词本」同一模式：窗口存在时不写 pending，避免陈旧请求）。
+/// （同 PendingReaderImport 模式：窗口存在时不写 pending，避免陈旧请求）。
 #[tauri::command]
 fn open_reader_book(app: tauri::AppHandle, book_id: String) {
     if app.get_webview_window("reader").is_some() {
@@ -917,9 +911,18 @@ fn reregister_hotkeys(
     let switched = switch_hotkeys(
         &mut slots,
         |s| {
-            app.global_shortcut()
-                .unregister(s)
-                .map_err(|e| e.to_string())
+            // 注销失败 ≠ 需要回滚：从未注册成功的键（典型：启动时默认键被其它
+            // 软件占用，setup 只记 [hotkey] 日志继续启动，ActiveHotkeys 里却仍
+            // 留着它作 current）在插件侧查无此键，UnregisterHotKey 对未知 id
+            // 必然 Err（global-hotkey windows/mod.rs）。它本就不存在，视同已
+            // 释放；若把错误上抛，switch_hotkeys 第 4 步会误判失败而回滚——
+            // 注销刚注册成功的用户自选键，还把默认键持久化进 hotkey.txt 等
+            // 覆盖用户保存的配置。真正注册过的键由本插件持有 id，注销不会
+            // 失败，此处不会掩盖真实错误。
+            if let Err(e) = app.global_shortcut().unregister(s) {
+                clipboard::diag_log(&format!("[hotkey] 注销 {s} 失败，视同未注册不回滚: {e}"));
+            }
+            Ok(())
         },
         |all| persist_hotkeys(&app, all[0], all[1], all[2]),
     )
@@ -1359,7 +1362,6 @@ pub fn run() {
         .manage(tts::TtsState::default())
         .manage(PendingPanelPayload::default())
         .manage(PendingReaderImport::default())
-        .manage(PendingOpenReview::default())
         .manage(PendingOpenBook::default())
         .manage(review_reminder::TrayHandles::default())
         .manage(review_reminder::PendingReminder::default())
@@ -1398,7 +1400,6 @@ pub fn run() {
             show_ocr_result,
             reregister_hotkeys,
             take_pending_reader_import,
-            take_pending_open_review,
             open_reader_book,
             take_pending_open_book,
             finish_onboarding,
@@ -1446,6 +1447,7 @@ pub fn run() {
             auth::auth_refresh_now,
             auth::auth_fetch_me,
             auth::auth_fetch_server_config,
+            auth::auth_server_base_url,
             open_login_window,
             settings_open_tab,
             settings_take_pending_tab,
@@ -1463,7 +1465,6 @@ pub fn run() {
             let ocr = MenuItem::with_id(app, "ocr", "截图翻译 (OCR)", true, None::<&str>)?;
             let live = MenuItem::with_id(app, "live", "录音直译", true, None::<&str>)?;
             let reader = MenuItem::with_id(app, "reader", "沉浸阅读室", true, None::<&str>)?;
-            let vocab = MenuItem::with_id(app, "vocab", "生词本", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let account = MenuItem::with_id(app, "account", "账号登录", true, None::<&str>)?;
             let history = MenuItem::with_id(app, "history", "翻译历史", true, None::<&str>)?;
@@ -1472,8 +1473,7 @@ pub fn run() {
             let menu = Menu::with_items(
                 app,
                 &[
-                    &ocr, &quick, &live, &reader, &vocab, &sep, &account, &history, &settings,
-                    &quit,
+                    &ocr, &quick, &live, &reader, &sep, &account, &history, &settings, &quit,
                 ],
             )?;
 
@@ -1492,17 +1492,6 @@ pub fn run() {
                     "reader" => show_reader_window(app),
                     "quick" => review_reminder::open_quick_review_window(app),
                     "live" => show_live_caption_window(app),
-                    "vocab" => {
-                        // 生词本：打开阅读室并切到复习页。窗口已存在 → 事件即时切换；
-                        // 不存在 → 记下标记，窗口挂载后由 take_pending_open_review 消费。
-                        if app.get_webview_window("reader").is_some() {
-                            show_reader_window(app);
-                            let _ = app.emit_to("reader", "reader:open-review", ());
-                        } else {
-                            *app.state::<PendingOpenReview>().0.lock().unwrap() = Some(());
-                            show_reader_window(app);
-                        }
-                    }
                     "ocr" => {
                         // 截图 OCR：截全屏 → 发给 overlay → 显示 overlay
                         open_ocr_overlay(app.clone());
@@ -1575,27 +1564,56 @@ pub fn run() {
             //   Ctrl+Shift+E —— 截图 OCR 翻译
             //   Ctrl+Shift+R —— 送进沉浸阅读室
             // 热键按下后的实际逻辑见 trigger_panel / trigger_ocr / trigger_reader。
-            app.global_shortcut()
-                .on_shortcut("Ctrl+Shift+Q", |app, _shortcut, event| {
-                    if event.state != ShortcutState::Pressed {
-                        return;
-                    }
-                    trigger_panel(app);
-                })?;
-            app.global_shortcut()
-                .on_shortcut("Ctrl+Shift+E", |app, _shortcut, event| {
-                    if event.state != ShortcutState::Pressed {
-                        return;
-                    }
-                    trigger_ocr(app);
-                })?;
-            app.global_shortcut()
-                .on_shortcut("Ctrl+Shift+R", |app, _shortcut, event| {
-                    if event.state != ShortcutState::Pressed {
-                        return;
-                    }
-                    trigger_reader(app);
-                })?;
+            //
+            // 注册失败不能用 ? 上抛：on_shortcut 当场经 Win32 RegisterHotKey 注册
+            // （系统级独占资源），被输入法/截图/其它翻译软件占用是常态；Err 一旦
+            // 传给 setup，会在 run() 末尾的 expect 处 panic，release
+            // （windows_subsystem="windows"）下表现为双击秒退且无任何提示。
+            // 降级为记日志后继续启动：默认键被占只损失三个热键，用户改键后
+            // reregister_hotkeys 仍可注册自选键。[hotkey] 是固定检索标记，
+            // scripts/verify-hotkey-conflict.ps1 靠它断言冲突场景已走到降级分支。
+            if let Err(e) =
+                app.global_shortcut()
+                    .on_shortcut("Ctrl+Shift+Q", |app, _shortcut, event| {
+                        if event.state != ShortcutState::Pressed {
+                            return;
+                        }
+                        trigger_panel(app);
+                    })
+            {
+                let msg =
+                    format!("[hotkey] 默认热键 Ctrl+Shift+Q 注册失败（可能被其它软件占用）: {e}");
+                eprintln!("{msg}");
+                clipboard::diag_log(&msg);
+            }
+            if let Err(e) =
+                app.global_shortcut()
+                    .on_shortcut("Ctrl+Shift+E", |app, _shortcut, event| {
+                        if event.state != ShortcutState::Pressed {
+                            return;
+                        }
+                        trigger_ocr(app);
+                    })
+            {
+                let msg =
+                    format!("[hotkey] 默认热键 Ctrl+Shift+E 注册失败（可能被其它软件占用）: {e}");
+                eprintln!("{msg}");
+                clipboard::diag_log(&msg);
+            }
+            if let Err(e) =
+                app.global_shortcut()
+                    .on_shortcut("Ctrl+Shift+R", |app, _shortcut, event| {
+                        if event.state != ShortcutState::Pressed {
+                            return;
+                        }
+                        trigger_reader(app);
+                    })
+            {
+                let msg =
+                    format!("[hotkey] 默认热键 Ctrl+Shift+R 注册失败（可能被其它软件占用）: {e}");
+                eprintln!("{msg}");
+                clipboard::diag_log(&msg);
+            }
 
             // 启动后用用户保存的热键覆盖默认（hotkey.txt / ocr_hotkey.txt /
             // reader_hotkey.txt 在 app_data_dir）。
