@@ -82,7 +82,14 @@ final class LiveCaptionTests: XCTestCase {
 
     func testBuildCaptionMarkdown() {
         let md = buildCaptionMarkdown(sampleSegments, meta: CaptionExportMeta(direction: .zh2en, startedAt: 1_789_500_000_000, endedAt: 1_789_501_800_000))
-        XCTAssertTrue(md.hasPrefix("# 录音直译 · 2026-09-16"))
+        // 导出日期按设备本地时区渲染，期望值须同款 formatter 现算——硬编码日期在 UTC runner 上会差一天
+        let expectedDate: String = {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyy-MM-dd HH:mm"
+            return f.string(from: Date(timeIntervalSince1970: 1_789_500_000_000 / 1000))
+        }()
+        XCTAssertTrue(md.hasPrefix("# 录音直译 · \(expectedDate)"))
         XCTAssertTrue(md.contains("方向：中 → 英 · 时长约 30 分钟 · 3 句"))
         XCTAssertTrue(md.contains("- 今天天气不错"))
         XCTAssertTrue(md.contains("  - Nice weather today."))
@@ -98,7 +105,14 @@ final class LiveCaptionTests: XCTestCase {
 
     func testCaptionFileName() {
         let name = captionFileName(now: 1_789_500_000_000, ext: "md")
-        XCTAssertTrue(name.hasPrefix("录音直译-2026-09-16-"))
+        // 文件名日期同样按本地时区渲染，期望值现算避免 UTC runner 差一天
+        let expectedDate: String = {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyy-MM-dd"
+            return f.string(from: Date(timeIntervalSince1970: 1_789_500_000_000 / 1000))
+        }()
+        XCTAssertTrue(name.hasPrefix("录音直译-\(expectedDate)-"))
         XCTAssertTrue(name.hasSuffix(".md"))
     }
 }
