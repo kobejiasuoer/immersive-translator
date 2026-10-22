@@ -122,6 +122,11 @@ pub struct AuthHttpResponse {
 pub trait AuthTransport: Send + Sync {
     fn send(&self, req: AuthHttpRequest)
         -> BoxFuture<'static, Result<AuthHttpResponse, AuthError>>;
+    /// 服务端 base URL（§4.6 两层机制解析结果）；沉浸云 gateway endpoint 由它派生。
+    /// 测试桩等不关心 base 的实现用缺省 None。
+    fn base_url(&self) -> Option<String> {
+        None
+    }
 }
 
 /// dev/联调缺省（§4.6 第 2 层）；生产由 `app_data_dir/server_endpoint.json` 覆盖。
@@ -167,6 +172,10 @@ impl ReqwestTransport {
 }
 
 impl AuthTransport for ReqwestTransport {
+    fn base_url(&self) -> Option<String> {
+        Some(self.base_url.clone())
+    }
+
     fn send(
         &self,
         req: AuthHttpRequest,
@@ -511,7 +520,8 @@ impl TokenManager {
     /// 取可用 accessToken：无凭据报未登录；剩余寿命 ≤ REFRESH_MARGIN_SECS
     /// 时先走一次单飞刷新（D6 绝对阈值）。主动刷新失败时：致命码上抛
     /// （凭据已清），瞬时错误用旧票继续——401 token_expired 兜底永在（R4）。
-    async fn get_access_token(self: &Arc<Self>) -> Result<String, AuthError> {
+    /// pub：沉浸云翻译/连通性探测共用同一取票口（单飞语义不旁路）。
+    pub async fn get_access_token(self: &Arc<Self>) -> Result<String, AuthError> {
         let (token, expires_at) = {
             let mut state = self.state.lock().await;
             if state.is_none() {
@@ -757,6 +767,14 @@ impl TokenManager {
         serde_json::from_str(&resp.body)
             .map_err(|e| AuthError::local("parse_error", format!("解析 me/config 失败: {e}")))
     }
+
+    /// 沉浸云 gateway endpoint（OpenAI 兼容别名 `/v1/chat/completions`）。
+    /// 由 transport 的 base_url 派生；测试桩等无 base 实现返回 None。
+    pub fn gateway_endpoint(&self) -> Option<String> {
+        self.transport
+            .base_url()
+            .map(|b| format!("{}/v1/chat/completions", b.trim_end_matches('/')))
+    }
 }
 
 /// §7-2：device 由 Rust 填 `{platform:"windows", name: COMPUTERNAME 截 64
@@ -961,6 +979,13 @@ pub async fn auth_fetch_server_config(
             Err(e)
         }
     }
+}
+
+/// 服务端 base URL（§4.6 两层机制：server_endpoint.json 覆盖 dev 缺省）。
+/// 前端设置页用它拼沉浸云 gateway endpoint（展示 + 预设匹配），只读非敏感。
+#[tauri::command]
+pub fn auth_server_base_url(app: AppHandle) -> String {
+    ReqwestTransport::resolve_base_url(&app)
 }
 
 /// 启动静默续登录（§4.4）：预填内存态 → emit 已登录（离线也显示已登录）

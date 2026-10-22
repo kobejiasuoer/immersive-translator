@@ -13,6 +13,38 @@ describe("classifyTranslationError", () => {
     expect(result.retryable).toBe(false);
   });
 
+  it("maps immersive-cloud gateway codes to actionable messages", () => {
+    const quota = classifyTranslationError({
+      kind: "http",
+      status: 402,
+      body: '{"error":{"code":"quota_exceeded","message":"免费额度已用尽"}}',
+    });
+    expect(quota.message).toContain("额度已用尽");
+    expect(quota.retryable).toBe(false);
+
+    const banned = classifyTranslationError({
+      kind: "http",
+      status: 403,
+      body: '{"error":{"code":"banned","message":"账号被封禁"}}',
+    });
+    expect(banned.message).toContain("封禁");
+
+    const unauthorized = classifyTranslationError({
+      kind: "http",
+      status: 401,
+      body: '{"error":{"code":"unauthorized","message":"使用沉浸云服务需要先登录账号（设置 → 账号）"}}',
+    });
+    expect(unauthorized.message).toContain("登录");
+
+    const rateLimited = classifyTranslationError({
+      kind: "http",
+      status: 429,
+      body: '{"error":{"code":"rate_limited","message":"请求过于频繁"}}',
+    });
+    expect(rateLimited.message).toContain("频繁");
+    expect(rateLimited.retryable).toBe(true);
+  });
+
   it("classifies 403 as permission/auth problem, not retryable", () => {
     const result = classifyTranslationError({ kind: "http", status: 403, body: "" });
     expect(result.message).toContain("权限");

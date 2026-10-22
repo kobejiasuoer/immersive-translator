@@ -121,6 +121,19 @@ function vendorHint(vendor: Vendor, status: number, code?: string, message?: str
   }
 }
 
+/** 沉浸云服务端（/v1/chat/completions 网关）错误码 → 用户可操作文案。
+ *  code 是稳定机器码（见服务端 docs/api.md），优先于 HTTP 状态与厂商推断。 */
+const PLATFORM_CODE_HINTS: Record<string, string> = {
+  unauthorized: "尚未登录沉浸云，请到 设置 → 账号 登录后再试。",
+  token_invalid: "登录状态已失效，请到 设置 → 账号 重新登录。",
+  token_reused: "账号在其他设备重新登录导致本机会话下线，请重新登录。",
+  token_expired: "登录已过期，请重试一次（会自动续期）。",
+  banned: "账号已被封禁，暂时无法使用沉浸云服务。如有疑问请联系支持。",
+  quota_exceeded: "沉浸云免费额度已用尽（月度周期结束后自动恢复）。可使用兑换码或联系支持加量。",
+  rate_limited: "请求过于频繁，请稍后再试。",
+  model_not_available: "该模型未在沉浸云开放，请在模型下拉里换一个。",
+};
+
 export function classifyTranslationError(
   input: TranslationErrorInput,
   endpoint?: string,
@@ -162,6 +175,14 @@ export function classifyTranslationError(
       const { status, body } = input;
       const safeBody = sanitizeDiagnosticText(body, safeEndpoint, apiKey);
       const parsed = parseErrorBody(safeBody);
+      // 沉浸云网关按 code 给可操作文案（登录/额度/限流），优先于通用 HTTP 分支
+      const platformHint = parsed.code ? PLATFORM_CODE_HINTS[parsed.code] : undefined;
+      if (platformHint) {
+        return {
+          message: `${platformHint}${parsed.message ? `（${preview(parsed.message, 80)}）` : ""}`,
+          retryable: parsed.code === "rate_limited" || parsed.code === "token_expired",
+        };
+      }
       const vendor = detectVendor(safeBody, parsed.code);
       const hint = vendorHint(vendor, status, parsed.code, parsed.message);
       // 把服务端错误消息拼进去（截断）

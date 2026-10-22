@@ -4512,6 +4512,140 @@ input[type="radio"] {
   background: var(--accent-softer);
 }
 
+/* 沉浸云官方卡：与下方「自带 API Key」网格用不同的视觉语法，避免两种接入方式混淆 */
+.provider-group + .provider-group {
+  margin-top: 18px;
+}
+
+.platform-card {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 16px;
+  column-gap: 10px;
+  align-items: start;
+  width: 100%;
+  padding: 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border));
+  border-radius: 8px;
+  background: var(--accent-softer);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.platform-card:hover:not(.active) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-soft);
+}
+
+.platform-card.active {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.platform-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.platform-card .provider-mark {
+  width: 32px;
+  height: 32px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.platform-card-body {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.platform-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-1);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.platform-card-title .chip {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-size: 9.5px;
+}
+
+.platform-card-desc {
+  color: var(--text-3);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.platform-card-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.platform-card-status i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  flex: none;
+}
+
+.platform-card-status.off {
+  color: var(--text-3);
+}
+
+.platform-card-status.off i {
+  background: var(--warn);
+}
+
+.platform-card .provider-check {
+  justify-self: end;
+}
+
+/* 连接配置面板里的沉浸云账号块 */
+.platform-account-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 2px 0 6px;
+}
+
+.platform-account-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.platform-account-email {
+  overflow: hidden;
+  color: var(--text-1);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .translation-route {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 22px minmax(0, 1.4fr) auto;

@@ -1,5 +1,5 @@
 import type { TranslationMode } from "../core/languageDetect";
-import { findMatchingPreset, isLocalhostEndpoint } from "../core/providerPresets";
+import { findMatchingPreset, isLocalhostEndpoint, PLATFORM_PROVIDER_ID } from "../core/providerPresets";
 import { secretGet, secretSet } from "./tauriBridge";
 
 /** 词典卡片模式：auto = 选中单词/短语时自动切换；off = 始终普通翻译。 */
@@ -142,9 +142,13 @@ export function parseKeyVault(raw: string, fallbackProviderId: string): KeyVault
 }
 
 /** 当前生效的服务商 id：一律从 endpoint 推断（预设精确匹配，自定义接口归 custom）。
- *  不读已保存的 providerId：旧版可能存了与 endpoint 不一致的值，以实际请求的 endpoint 为准。 */
-export function providerIdFor(settings: Pick<AppSettings, "endpoint">): string {
-  return findMatchingPreset(settings.endpoint)?.id ?? CUSTOM_PROVIDER_ID;
+ *  不读已保存的 providerId：旧版可能存了与 endpoint 不一致的值，以实际请求的 endpoint 为准。
+ *  platformEndpoint：沉浸云网关地址（动态），传入后命中即归 immersive-cloud。 */
+export function providerIdFor(
+  settings: Pick<AppSettings, "endpoint">,
+  platformEndpoint?: string,
+): string {
+  return findMatchingPreset(settings.endpoint, platformEndpoint)?.id ?? CUSTOM_PROVIDER_ID;
 }
 
 /**
@@ -329,11 +333,13 @@ export function saveSettings(settings: AppSettings): void {
 
 /**
  * 判断是否已配置好可用的接口。
+ * 沉浸云：账号令牌由 Rust 网关自动附带（endpoint 命中即识别），允许空 Key；
  * 本地接口（localhost）允许留空 API Key。
  */
 export function hasValidSettings(settings: AppSettings): boolean {
   const endpointOk = settings.endpoint.trim() !== "";
+  if (!endpointOk) return false;
+  if (settings.providerId === PLATFORM_PROVIDER_ID) return true;
   const isLocal = isLocalhostEndpoint(settings.endpoint);
-  const keyOk = settings.apiKey.trim() !== "" || isLocal;
-  return endpointOk && keyOk;
+  return settings.apiKey.trim() !== "" || isLocal;
 }

@@ -16,6 +16,9 @@ import type { TranslationMode } from "../core/languageDetect";
 import {
   PROVIDER_PRESETS,
   isLocalhostEndpoint,
+  PLATFORM_PROVIDER_ID,
+  PLATFORM_DEV_BASE_URL,
+  platformEndpoint,
   type ProviderPreset,
 } from "../core/providerPresets";
 import {
@@ -24,7 +27,7 @@ import {
   normalizeHotkey,
   RECOMMENDED_HOTKEYS,
 } from "../core/hotkeyValidator";
-import { reregisterHotkeys, testConnectivity, openOnboarding, settingsTakePendingTab, listenSettingsNavigateTab } from "../lib/tauriBridge";
+import { reregisterHotkeys, testConnectivity, openOnboarding, settingsTakePendingTab, listenSettingsNavigateTab, authFetchServerConfig, authServerBaseUrl, openLoginWindow } from "../lib/tauriBridge";
 import {
   enable as enableAutostart,
   disable as disableAutostart,
@@ -139,6 +142,44 @@ export function Settings() {
   // 状态机由 AccountSection 内的 useAccountStatus 持有；这里再取一份给侧栏 conn-chip。
   const { status: accountStatus } = useAccountStatus();
 
+  // ---- 沉浸云（平台网关）----
+  // endpoint = auth 同源 base + /v1/chat/completions（Rust 侧同构派生与识别）；
+  // 模型列表来自 /v1/me/config（登录后才可拉），作为模型下拉建议。
+  const [platformBase, setPlatformBase] = useState<string>("");
+  const [platformModels, setPlatformModels] = useState<string[]>([]);
+  useEffect(() => {
+    let active = true;
+    void authServerBaseUrl()
+      .then((base) => {
+        if (active) setPlatformBase(base);
+      })
+      .catch(() => setPlatformBase(PLATFORM_DEV_BASE_URL));
+    return () => {
+      active = false;
+    };
+  }, []);
+  const platformEp = platformBase ? platformEndpoint(platformBase) : "";
+  const loggedIn = accountStatus?.loggedIn ?? false;
+  useEffect(() => {
+    if (!loggedIn) {
+      setPlatformModels([]);
+      return;
+    }
+    let active = true;
+    void authFetchServerConfig()
+      .then((cfg) => {
+        if (!active) return;
+        const models = (cfg as { models?: unknown })?.models;
+        setPlatformModels(
+          Array.isArray(models) ? models.filter((m): m is string => typeof m === "string") : [],
+        );
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [loggedIn]);
+
   // 账号 tab 双入口定位（docs §7 命令 10/11）：挂载时取走 pending tab（恰好一次，
   // settings 窗 hide 不销毁、挂载一生一次，pending 只覆盖启动早期的窗口窄缝）。
   useEffect(() => {
@@ -182,9 +223,12 @@ export function Settings() {
   }
 
   /** 当前服务商 id（与 vault 桶一致）。 */
-  const activeProviderId = providerIdFor(settings);
+  const activeProviderId = providerIdFor(settings, platformEp || undefined);
   const activePreset = PROVIDER_PRESETS.find((p) => p.id === activeProviderId);
-  const currentIsLocal = activePreset?.allowEmptyApiKey ?? isLocalhostEndpoint(settings.endpoint);
+  const isPlatform = activeProviderId === PLATFORM_PROVIDER_ID;
+  const currentIsLocal = isPlatform || (activePreset?.allowEmptyApiKey ?? isLocalhostEndpoint(settings.endpoint));
+  const platformPreset = PROVIDER_PRESETS.find((p) => p.id === PLATFORM_PROVIDER_ID);
+  const localPresets = PROVIDER_PRESETS.filter((p) => p.id !== PLATFORM_PROVIDER_ID);
   const dirty =
     savedSnapshot !== null && JSON.stringify(settings) !== JSON.stringify(savedSnapshot);
 
@@ -197,6 +241,20 @@ export function Settings() {
 
   /** 点服务商行：切换 endpoint + 模型 + 该服务商自己的 Key。 */
   function applyPreset(p: ProviderPreset) {
+    if (p.id === PLATFORM_PROVIDER_ID) {
+      // 沉浸云：endpoint 由 auth 同源 base 动态拼出；模型取服务端下发列表第一个
+      const ep = platformEp || platformEndpoint(PLATFORM_DEV_BASE_URL);
+      setSettings((prev) => ({
+        ...prev,
+        providerId: p.id,
+        endpoint: ep,
+        model: platformModels[0] ?? "",
+        apiKey: "",
+      }));
+      setTestMsg(null);
+      setSaved(false);
+      return;
+    }
     setSettings((prev) => ({
       ...prev,
       providerId: p.id,
@@ -207,6 +265,13 @@ export function Settings() {
     setTestMsg(null);
     setSaved(false);
   }
+
+  // 沉浸云模型兜底：me/config 比选中动作晚到时补上首个下发模型，避免空 model 请求
+  useEffect(() => {
+    if (isPlatform && platformModels.length > 0 && !settings.model.trim()) {
+      update("model", platformModels[0]);
+    }
+  }, [isPlatform, platformModels, settings.model]);
 
   // ---- 连通性测试 ----
   const [testing, setTesting] = useState(false);
@@ -361,7 +426,7 @@ export function Settings() {
       await registerAllHotkeys();
     }
     // 配置已有效时，自动关闭引导卡
-    if (hasValidSettings(settings)) {
+    if (configured) {
       setOnboardingDismissed(true);
       setShowWelcome(false);
     }
@@ -387,7 +452,8 @@ export function Settings() {
     setSaved(false);
   }
 
-  const configured = hasValidSettings(settings);
+  // 沉浸云的「已配置」= 已选中且已登录（令牌代替 Key）；其他服务商看 endpoint + Key。
+  const configured = hasValidSettings(settings) && (!isPlatform || loggedIn);
   const currentTabLabel = TABS.find((tab) => tab.id === activeTab)?.label ?? "模型服务";
 
   function renderTab(t: (typeof TABS)[number]) {
@@ -449,7 +515,7 @@ export function Settings() {
             <header className="set-pagehead">
               <div className="set-pagehead-text">
                 <h2>模型服务</h2>
-                <p>选择一个翻译服务商；每家的密钥分开保存，切换互不影响。</p>
+                <p>沉浸云登录即用；其他服务商使用你自己的 API Key，每家密钥分开保存、切换互不影响。</p>
               </div>
             </header>
 
@@ -457,11 +523,11 @@ export function Settings() {
               <div className="welcome-box">
                 <div className="welcome-title">三步开始使用</div>
                 <div className="welcome-body">
-                  ① 选一个服务商（国内直连推荐 <strong>DeepSeek</strong> 或 <strong>智谱 GLM</strong>）。
+                  ① 选「<strong>沉浸云</strong>」登录即用；或选一个自带 Key 的服务商（国内直连推荐 <strong>DeepSeek</strong> 或 <strong>智谱 GLM</strong>）。
                   <br />
-                  ② 填入对应的 <strong>API Key</strong>（本地 Ollama 可留空）。
+                  ② 自带 Key 的服务商需填入对应的 <strong>API Key</strong>（本地 Ollama 可留空）。
                   <br />
-                  ③ 点「测试连接」，然后选中任意文字按 <strong>Ctrl+Shift+Q</strong> 即可翻译。
+                  ③ 自带 Key 的服务商可点「测试连接」验证；选中任意文字按 <strong>Ctrl+Shift+Q</strong> 即可翻译。
                 </div>
                 <button
                   className="btn btn-sm"
@@ -477,33 +543,81 @@ export function Settings() {
 
             <div className="provider-workspace">
               <section className="provider-selection">
-                <div className="settings-section-heading">
-                  <div>
-                    <h3>选择服务商</h3>
-                    <p>切换时会保留各自的密钥与模型配置</p>
+                <div role="radiogroup" aria-label="翻译服务商">
+                  <div className="provider-group">
+                    <div className="settings-section-heading">
+                      <div>
+                        <h3>官方云服务</h3>
+                        <p>沉浸云账号登录即用，无需申请任何密钥</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={isPlatform}
+                      className={`platform-card${isPlatform ? " active" : ""}`}
+                      onClick={() => platformPreset && applyPreset(platformPreset)}
+                    >
+                      <span className="provider-mark" aria-hidden>
+                        云
+                      </span>
+                      <span className="platform-card-body">
+                        <span className="platform-card-title">
+                          沉浸云
+                          <span className="chip chip-green">官方</span>
+                        </span>
+                        <span className="platform-card-desc">
+                          模型与额度由服务端统一管理，本机不保存任何密钥。
+                        </span>
+                        <span className={`platform-card-status${loggedIn ? "" : " off"}`}>
+                          <i aria-hidden />
+                          {loggedIn
+                            ? `已登录 ${accountStatus?.user?.email ?? ""}`
+                            : "未登录——选中后到右侧登录即可使用"}
+                        </span>
+                      </span>
+                      {isPlatform && (
+                        <span className="provider-check">
+                          <IconCheck size={12} />
+                        </span>
+                      )}
+                    </button>
                   </div>
-                  <span className="provider-count">{PROVIDER_PRESETS.length} 个</span>
-                </div>
-                <div className="provider-list" role="radiogroup" aria-label="服务商">
-                  {PROVIDER_PRESETS.map((p) => (
-                    <ProviderItem
-                      key={p.id}
-                      preset={p}
-                      active={activeProviderId === p.id}
-                      hasKey={(vault[p.id]?.trim() ?? "") !== "" || (p.allowEmptyApiKey ?? false)}
-                      onApply={() => applyPreset(p)}
-                    />
-                  ))}
+
+                  <div className="provider-group">
+                    <div className="settings-section-heading">
+                      <div>
+                        <h3>自带 API Key 的服务商</h3>
+                        <p>使用你自己的密钥，加密保存在本机，切换互不影响</p>
+                      </div>
+                      <span className="provider-count">{localPresets.length} 个</span>
+                    </div>
+                    <div className="provider-list">
+                      {localPresets.map((p) => (
+                        <ProviderItem
+                          key={p.id}
+                          preset={p}
+                          active={activeProviderId === p.id}
+                          hasKey={(vault[p.id]?.trim() ?? "") !== "" || (p.allowEmptyApiKey ?? false)}
+                          onApply={() => applyPreset(p)}
+                        />
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </section>
 
               <section className="provider-configuration">
                 <div className="settings-section-heading">
                   <div>
-                    <h3>连接配置</h3>
+                    <h3>{isPlatform ? "沉浸云账号" : "连接配置"}</h3>
                     <p>{activePreset ? activePreset.displayName : "自定义 OpenAI 兼容接口"}</p>
                   </div>
-                  {currentIsLocal ? (
+                  {isPlatform ? (
+                    <span className={`chip ${loggedIn ? "chip-green" : "chip-amber"}`}>
+                      {loggedIn ? "已登录" : "未登录"}
+                    </span>
+                  ) : currentIsLocal ? (
                     <span className="chip chip-green">本机服务</span>
                   ) : (
                     <span className={`chip ${settings.apiKey.trim() ? "chip-green" : "chip-amber"}`}>
@@ -511,53 +625,103 @@ export function Settings() {
                     </span>
                   )}
                 </div>
-                <p className="provider-caption">
-                  {activePreset ? activePreset.hint : "可在高级设置中填写接口地址。"}
-                </p>
+                {!isPlatform && (
+                  <p className="provider-caption">
+                    {activePreset ? activePreset.hint : "可在高级设置中填写接口地址。"}
+                  </p>
+                )}
                 <div className="group-card">
-              <div className="field-block">
-                <div className="field-block-head">
-                  <span className="field-label-v2">API Key</span>
-                  {currentIsLocal ? (
-                    <span className="chip chip-green">本机无需 Key</span>
-                  ) : (
-                    <span className={`chip ${settings.apiKey.trim() ? "chip-green" : "chip-amber"}`}>
-                      {settings.apiKey.trim() ? "已保存" : "未设置"}
-                    </span>
-                  )}
-                </div>
-                {!currentIsLocal && (
-                  <div className="input-group key-input-full">
-                    <input
-                      className="input mono"
-                      type={showKey ? "text" : "password"}
-                      value={settings.apiKey}
-                      onChange={(e) => updateApiKey(e.target.value)}
-                      placeholder={
-                        activePreset
-                          ? `填入 ${activePreset.displayName} 的 API Key`
-                          : "sk-…"
-                      }
-                      spellCheck={false}
-                      autoComplete="off"
-                    />
-                    <button
-                      type="button"
-                      className="icon-btn input-append"
-                      title={showKey ? "隐藏 Key" : "显示 Key"}
-                      onClick={() => setShowKey((v) => !v)}
-                    >
-                      {showKey ? <IconEyeOff size={14} /> : <IconEye size={14} />}
-                    </button>
+                {isPlatform ? (
+                  <div className="field-block">
+                    <div className="field-block-head">
+                      <span className="field-label-v2">账号</span>
+                    </div>
+                    {loggedIn ? (
+                      <>
+                        <div className="platform-account-row">
+                          <span className="platform-account-mark" aria-hidden>
+                            <IconUser size={13} />
+                          </span>
+                          <span className="platform-account-email">
+                            {accountStatus?.user?.email ?? ""}
+                          </span>
+                        </div>
+                        <p className="field-hint">
+                          翻译请求自动携带账号令牌（到期自动续期），按账号额度计费；模型由服务端统一下发，无需配置。
+                        </p>
+                        <div className="provider-actions" style={{ margin: 0 }}>
+                          <button
+                            className="btn btn-secondary"
+                            onClick={() => setActiveTab("account")}
+                          >
+                            <IconUser size={14} />
+                            管理账号
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <p className="field-hint">
+                          登录后即可使用：无需 API Key，模型由服务端下发，按账号额度计费。
+                        </p>
+                        <div className="provider-actions" style={{ margin: 0 }}>
+                          <button
+                            className="btn btn-primary"
+                            onClick={() => void openLoginWindow().catch(() => {})}
+                          >
+                            <IconUser size={14} />
+                            登录沉浸云
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <div className="field-block">
+                    <div className="field-block-head">
+                      <span className="field-label-v2">API Key</span>
+                      {currentIsLocal ? (
+                        <span className="chip chip-green">本机无需 Key</span>
+                      ) : (
+                        <span className={`chip ${settings.apiKey.trim() ? "chip-green" : "chip-amber"}`}>
+                          {settings.apiKey.trim() ? "已保存" : "未设置"}
+                        </span>
+                      )}
+                    </div>
+                    {!currentIsLocal && (
+                      <div className="input-group key-input-full">
+                        <input
+                          className="input mono"
+                          type={showKey ? "text" : "password"}
+                          value={settings.apiKey}
+                          onChange={(e) => updateApiKey(e.target.value)}
+                          placeholder={
+                            activePreset
+                              ? `填入 ${activePreset.displayName} 的 API Key`
+                              : "sk-…"
+                          }
+                          spellCheck={false}
+                          autoComplete="off"
+                        />
+                        <button
+                          type="button"
+                          className="icon-btn input-append"
+                          title={showKey ? "隐藏 Key" : "显示 Key"}
+                          onClick={() => setShowKey((v) => !v)}
+                        >
+                          {showKey ? <IconEyeOff size={14} /> : <IconEye size={14} />}
+                        </button>
+                      </div>
+                    )}
+                    {activePreset?.keyUrl && !currentIsLocal && (
+                      <a className="key-link" href={activePreset.keyUrl} target="_blank" rel="noreferrer">
+                        ↗ 前往 {activePreset.displayName} 控制台获取 API Key
+                      </a>
+                    )}
                   </div>
                 )}
-                {activePreset?.keyUrl && !currentIsLocal && (
-                  <a className="key-link" href={activePreset.keyUrl} target="_blank" rel="noreferrer">
-                    ↗ 前往 {activePreset.displayName} 控制台获取 API Key
-                  </a>
-                )}
-              </div>
 
+                {!isPlatform && (
               <div className="field-block">
                 <span className="field-label-v2">模型</span>
                 <input
@@ -573,18 +737,24 @@ export function Settings() {
                     <option key={m} value={m} />
                   ))}
                 </datalist>
-                <span className="field-hint">下拉里是 {activePreset ? activePreset.displayName : "该服务商"} 的常用模型，也可自由输入</span>
+                <span className="field-hint">
+                  {`下拉里是 ${activePreset ? activePreset.displayName : "该服务商"} 的常用模型，也可自由输入`}
+                </span>
               </div>
+                )}
                 </div>
 
-                <div className="provider-actions">
-                  <button className="btn btn-secondary" disabled={testing} onClick={() => void handleTest()}>
-                    <IconRetry size={14} />
-                    {testing ? "测试中…" : "测试连接"}
-                  </button>
-                </div>
-                {testMsg && <StatusBar msg={testMsg} />}
+                {!isPlatform && (
+                  <div className="provider-actions">
+                    <button className="btn btn-secondary" disabled={testing} onClick={() => void handleTest()}>
+                      <IconRetry size={14} />
+                      {testing ? "测试中…" : "测试连接"}
+                    </button>
+                  </div>
+                )}
+                {!isPlatform && testMsg && <StatusBar msg={testMsg} />}
 
+                {!isPlatform && (
                 <details className="settings-advanced">
                   <summary>高级：接口地址与诊断</summary>
                   <div className="settings-advanced-body">
@@ -636,6 +806,7 @@ export function Settings() {
                     </div>
                   </div>
                 </details>
+                )}
               </section>
             </div>
           </>
@@ -1196,7 +1367,7 @@ function ProviderItem({
       <span className="provider-name">{preset.displayName}</span>
       <span className="provider-meta">
         {preset.allowEmptyApiKey ? (
-          <span className="chip chip-green">免 Key</span>
+          <span className="chip chip-green">本地</span>
         ) : hasKey ? (
           <span className="provider-keydot" title="已保存此服务商的 API Key" />
         ) : null}
