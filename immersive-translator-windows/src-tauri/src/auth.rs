@@ -129,13 +129,16 @@ pub trait AuthTransport: Send + Sync {
     }
 }
 
-/// dev/联调缺省（§4.6 第 2 层）；生产由 `app_data_dir/server_endpoint.json` 覆盖。
+/// 本地联调缺省：仅开发机经 `app_data_dir/server_endpoint.json` 指回本地时
+/// 生效（auth 联调测试也直接引用它），公众包不再回退到它。
 const DEV_BASE_URL: &str = "http://127.0.0.1:8090";
 
-/// 沉浸云是否对公众开放：**服务端公开部署上线后改为 `true`（唯一开关）**，
-/// 同时把 `DEV_BASE_URL` 换成生产域名（开发机再用 server_endpoint.json
-/// 指回本地）。在此之前仅本机显式配置了 override 的开发/内测机可见入口。
-const PLATFORM_PUBLIC: bool = false;
+/// 生产服务 base（登录/鉴权同源；gateway = base + /v1/chat/completions）。
+const PROD_BASE_URL: &str = "https://www.prismspace.online";
+
+/// 沉浸云对公众开放（服务端已公开部署，2026-10）。正式包缺省直连生产域名；
+/// 开发/内测机用 `app_data_dir/server_endpoint.json` 指回本地联调地址。
+const PLATFORM_PUBLIC: bool = true;
 
 struct ReqwestTransport {
     base_url: String,
@@ -165,8 +168,7 @@ fn endpoint_override(app: &AppHandle) -> Option<String> {
 }
 
 /// 沉浸云入口开放判定：公众开关 OR 本机 override（开发/内测机）。
-/// v0.10.1 事故修正：服务端未公开部署前，公众机器上入口必须不可见，
-/// 避免给出选中即失败的配置。
+/// 关闭期间公众机器入口不可见（v0.10.1 事故修正机制），开启时直连生产。
 fn platform_available(app: &AppHandle) -> bool {
     PLATFORM_PUBLIC || endpoint_override(app).is_some()
 }
@@ -193,9 +195,16 @@ impl ReqwestTransport {
     }
 
     /// §4.6 base_url 两层机制：`app_data_dir/server_endpoint.json`
-    /// （`{"baseUrl":"https://..."}`，明文非敏感）存在则覆盖 dev 缺省。
+    /// （`{"baseUrl":"https://..."}`）优先；否则公众开放期走生产域名，
+    /// 未开放期回退本地联调地址。
     fn resolve_base_url(app: &AppHandle) -> String {
-        endpoint_override(app).unwrap_or_else(|| DEV_BASE_URL.to_string())
+        endpoint_override(app).unwrap_or_else(|| {
+            if PLATFORM_PUBLIC {
+                PROD_BASE_URL.to_string()
+            } else {
+                DEV_BASE_URL.to_string()
+            }
+        })
     }
 }
 

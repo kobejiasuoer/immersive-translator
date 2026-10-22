@@ -39,7 +39,9 @@ export interface ProviderPreset {
 /** 沉浸云服务（官方网关）的 provider id。 */
 export const PLATFORM_PROVIDER_ID = "immersive-cloud";
 
-/** 服务端 base URL 的本地开发缺省（与 Rust auth::DEV_BASE_URL 一致；生产由 server_endpoint.json 覆盖）。 */
+/** 本地联调缺省（与 Rust auth::DEV_BASE_URL 一致）。正式包缺省走生产域名
+ *  （Rust auth::PROD_BASE_URL，经 auth_server_base_url 下发）；本常量仅供
+ *  测试与文档参照，UI 不再回退到它。 */
 export const PLATFORM_DEV_BASE_URL = "http://127.0.0.1:8090";
 
 /** 由服务端 base 拼 OpenAI 兼容网关地址（Rust 侧 gateway_endpoint 同构）。 */
