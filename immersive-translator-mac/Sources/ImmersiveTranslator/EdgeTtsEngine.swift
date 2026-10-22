@@ -7,11 +7,12 @@ import XfyunCore
 /// 免费无凭据、开箱即用（isReady 恒 true）；真正的失败在 speak 时走回落
 /// （ReaderPlaybackEngine.speakCloud 的 catch，语义与讯飞共用）。
 ///
-/// 双层缓存（key = edge:voice|text，语速不入键）：
+/// 双层缓存（key = edge:voice|text，缺省语速不入键；显式 nativeRate 时 key 带 r<rate>）：
 /// - L1：内存 LRU（TtsLruCache，80 条）。
 /// - L2：磁盘缓存（TtsDiskCache）——与讯飞共用同一 tts-cache 目录与 3000 条淘汰
 ///   （对齐 Windows：两引擎共用同一 IndexedDB store）。
-/// 语速策略：恒 +0% 合成，播放端 AVAudioPlayer.enableRate 变速不变调。
+/// 语速策略：缺省 +0% 合成，播放端 AVAudioPlayer.enableRate 变速不变调；
+/// v0.8 慢速示范（SPEAK-8）传 nativeRate "-25%" 走原生 prosody，与常速缓存互不污染。
 final class EdgeTtsEngine: @unchecked Sendable {
     static let shared = EdgeTtsEngine()
 
@@ -77,11 +78,16 @@ final class EdgeTtsEngine: @unchecked Sendable {
 
     /// 取一段文本的音频：L1 → L2 → 网络（写入双层缓存）。
     /// 重试/校准编排全部在协议层 synthesizeEdgeTts 内，这里不做 catch 重试。
-    func audioData(for text: String) async throws -> Data {
+    /// nativeRate（SSML 百分比，如 "-25%"）是 v0.8 慢速示范的原生合成语速：
+    /// 缺省 nil 走既有 +0% 合成（请求与缓存 key 均不变，对齐 speechEngine.ts:237-246）。
+    func audioData(for text: String, nativeRate: String? = nil) async throws -> Data {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw EdgeTtsError.emptyText }
         let chinese = XfyunTts.looksChinese(trimmed)
-        let opts = EdgeTtsOptions(voice: voice(forChinese: chinese))
+        let opts = EdgeTtsOptions(
+            voice: voice(forChinese: chinese),
+            ratePercent: nativeRate
+        )
         let key = edgeCacheKey(text: trimmed, opts: opts)
 
         if let hit = l1.get(key) {

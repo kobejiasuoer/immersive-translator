@@ -64,6 +64,43 @@ struct TranslationHistoryDeletedRecord {
     let index: Int
 }
 
+/// 历史窗批量选择的纯逻辑（PANEL-9，对应 Windows History.tsx:53-186 的 selection 语义）：
+/// 选集裁剪、全选判定/切换、按可见顺序取选中记录、批量译文文本与双语复制格式。
+enum HistoryBatchSelection {
+    /// 结果变化后把选集里已不可见的 id 裁掉（History.tsx:104-109 refresh 的选择清理）。
+    static func pruned(_ selection: Set<UUID>, visibleRecords: [TranslationRecord]) -> Set<UUID> {
+        guard !selection.isEmpty else { return selection }
+        let visibleIDs = Set(visibleRecords.map(\.id))
+        return selection.intersection(visibleIDs)
+    }
+
+    /// 可见记录是否已全部选中（History.tsx:158 allSelected）。
+    static func isAllSelected(_ selection: Set<UUID>, visibleRecords: [TranslationRecord]) -> Bool {
+        !visibleRecords.isEmpty && selection.count == visibleRecords.count && selection.isSubset(of: Set(visibleRecords.map(\.id)))
+    }
+
+    /// 全选/清除切换：未全选 → 全选可见；已全选 → 清空（History.tsx:169-171 toggleSelectAll）。
+    static func toggledAll(_ selection: Set<UUID>, visibleRecords: [TranslationRecord]) -> Set<UUID> {
+        isAllSelected(selection, visibleRecords: visibleRecords) ? [] : Set(visibleRecords.map(\.id))
+    }
+
+    /// 按可见顺序取出选中记录（导出/复制保持列表顺序，不随 Set 乱序）。
+    static func selectedRecords(_ selection: Set<UUID>, visibleRecords: [TranslationRecord]) -> [TranslationRecord] {
+        guard !selection.isEmpty else { return [] }
+        return visibleRecords.filter { selection.contains($0.id) }
+    }
+
+    /// 批量复制译文：N 条译文以空行分隔（History.tsx:174 `.join("\n\n")`）。
+    static func translationsText(for records: [TranslationRecord]) -> String {
+        records.map(\.translation).joined(separator: "\n\n")
+    }
+
+    /// 单条双语复制：原文、空一行、译文（History.tsx:481 copyBoth，无标签前缀）。
+    static func bilingualText(for record: TranslationRecord) -> String {
+        "\(record.original)\n\n\(record.translation)"
+    }
+}
+
 @MainActor
 final class TranslationHistoryStore: ObservableObject {
     @Published private(set) var records: [TranslationRecord] = []
@@ -71,8 +108,13 @@ final class TranslationHistoryStore: ObservableObject {
     private let fileURL: URL
     private let maxRecords = 500
 
-    init() {
-        fileURL = Self.makeHistoryURL()
+    convenience init() {
+        self.init(fileURL: Self.makeHistoryURL())
+    }
+
+    /// 指定落盘路径的初始化器（单测用临时目录，避免读写真实用户历史）。
+    init(fileURL: URL) {
+        self.fileURL = fileURL
         records = Self.loadRecords(from: fileURL)
     }
 
@@ -162,6 +204,18 @@ final class TranslationHistoryStore: ObservableObject {
         let record = records.remove(at: index)
         save()
         return TranslationHistoryDeletedRecord(record: record, index: index)
+    }
+
+    /// 批量删除（PANEL-9）：逐条走 `delete(recordID:)` 的现有单删路径——与 Windows
+    /// History.tsx:202 `for (const id of action.ids) await historyDelete(id)` 语义一致，
+    /// 返回实际删除条数（不存在的 id 静默跳过）。
+    @discardableResult
+    func delete(recordIDs: [UUID]) -> Int {
+        var deletedCount = 0
+        for id in recordIDs where delete(recordID: id) != nil {
+            deletedCount += 1
+        }
+        return deletedCount
     }
 
     func restoreDeletedRecord(_ deleted: TranslationHistoryDeletedRecord) {
@@ -629,7 +683,10 @@ struct TranslationHistoryView: View {
     let onSendToReader: (TranslationRecord) async throws -> Void
     @State private var filter: HistoryFilter = .all
     @State private var searchText = ""
-    @State private var selectedRecordID: UUID?
+    /// 批量选择集（PANEL-9）：⌘ 点击追加/取消、⇧ 点击连选、行首勾选框直接切换。
+    @State private var selectedRecordIDs: Set<UUID> = []
+    /// 连选锚点：⇧ 点击从上次单选/⌘ 选中的行开始连选。
+    @State private var selectionAnchorID: UUID?
     @State private var exportMessage = ""
     @State private var lastExportResult: TranslationHistoryExportResult?
     @State private var recentlyDeletedRecord: TranslationHistoryDeletedRecord?
@@ -640,6 +697,7 @@ struct TranslationHistoryView: View {
     /// 本次窗口会话里已成功加入生词本的记录（按钮置为已入册态）。
     @State private var vocabSavedRecordIDs: Set<UUID> = []
     @FocusState private var isSearchFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let historySearchDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = .current
@@ -679,15 +737,25 @@ struct TranslationHistoryView: View {
         historyStore.records.filter(\.isFavorite)
     }
 
+    private var selectedRecords: [TranslationRecord] {
+        HistoryBatchSelection.selectedRecords(selectedRecordIDs, visibleRecords: visibleRecords)
+    }
+
+    /// 单选锚记录：仅在恰好选中 1 条时存在——底部单条操作（⌘R/复制/收藏/导出选中）
+    /// 沿用旧单选语义；多选时由批量条接管。
     private var selectedRecord: TranslationRecord? {
-        guard let selectedRecordID else { return nil }
-        return visibleRecords.first { $0.id == selectedRecordID }
+        selectedRecordIDs.count == 1 ? selectedRecords.first : nil
+    }
+
+    private var allVisibleSelected: Bool {
+        HistoryBatchSelection.isAllSelected(selectedRecordIDs, visibleRecords: visibleRecords)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             headerBar
             searchBar
+            selectionBar
             recordList
             footerBar
             shortcutHint
@@ -695,9 +763,14 @@ struct TranslationHistoryView: View {
         .padding(20)
         .onAppear {
             isSearchFocused = true
-            selectFirstVisibleRecordIfNeeded()
+            // 对齐 Windows：开窗不预选（批量条只在勾选后出现）。
+            ensureValidSelection()
         }
-        .onDeleteCommand(perform: deleteSelectedRecord)
+        .onDeleteCommand(perform: deleteSelectionFromKeyboard)
+        .animation(
+            reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 1),
+            value: selectedRecordIDs.isEmpty
+        )
         .onChange(of: visibleRecords.map(\.id)) { _ in
             ensureValidSelection()
         }
@@ -760,13 +833,62 @@ struct TranslationHistoryView: View {
                 .frame(maxWidth: .infinity)
             Spacer()
         } else {
-            List(selection: $selectedRecordID) {
+            // Set 绑定的多选：列表自身支持 ⌘/⇧ 点击（行内容上的 tap 手势另行按修饰键对齐）。
+            List(selection: $selectedRecordIDs) {
                 ForEach(visibleRecords) { record in
                     recordRow(record)
                         .tag(record.id)
                 }
             }
             .listStyle(.inset)
+        }
+    }
+
+    /// 批量操作条（PANEL-9，对应 Windows History.tsx:309-329 history-selection-bar）：
+    /// 勾选后出现——「已选 N 条」＋复制所选译文（空行连接）＋删除所选（确认弹窗）＋全选/清除。
+    @ViewBuilder
+    private var selectionBar: some View {
+        if !selectedRecordIDs.isEmpty {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Color.accentColor)
+                Text("已选 \(selectedRecordIDs.count) 条")
+                    .font(.footnote.weight(.semibold))
+                Button {
+                    copySelectedTranslations()
+                } label: {
+                    Label("复制所选译文", systemImage: "doc.on.doc")
+                }
+                .controlSize(.small)
+                .help("把所选 \(selectedRecordIDs.count) 条译文以空行分隔复制到剪贴板")
+                Button(role: .destructive) {
+                    confirmDeleteSelectedRecords()
+                } label: {
+                    Label("删除所选", systemImage: "trash")
+                }
+                .controlSize(.small)
+                .tint(.red)
+                .help("删除所选 \(selectedRecordIDs.count) 条记录（先确认，不可撤销）")
+                Spacer(minLength: 0)
+                Button(allVisibleSelected ? "清除" : "全选") {
+                    toggleSelectAll()
+                }
+                .controlSize(.small)
+                .help(
+                    allVisibleSelected
+                        ? "清除当前选择"
+                        : "选中当前列表全部 \(visibleRecords.count) 条"
+                )
+            }
+            .font(.footnote)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+            )
+            .transition(.opacity.combined(with: .move(edge: .top)))
         }
     }
 
@@ -791,9 +913,7 @@ struct TranslationHistoryView: View {
             if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text("当前显示 \(visibleRecords.count) 条")
             }
-            if selectedRecord != nil {
-                Text("已选中 1 条")
-            }
+            // 选中数量由勾选后出现的批量条「已选 N 条」统一呈现（PANEL-9）。
         }
         .font(.footnote)
         .foregroundStyle(.secondary)
@@ -954,7 +1074,7 @@ struct TranslationHistoryView: View {
     }
 
     private var shortcutHint: some View {
-        Text("快捷键：⌘F 搜索 · ⌘↑/⌘↓ 切换记录 · ⌘R 重新翻译 · ⌘⇧C 复制译文 · ⌘⌥C 复制原文 · ⌘⌥⇧C 复制组合 · ⌘⌥M 复制 Markdown · ⌘⌥S 收藏 · ⌘⌥E 导出选中 · Delete 删除 · ⌘Z 撤销删除")
+        Text("快捷键：⌘F 搜索 · ⌘↑/⌘↓ 切换记录 · ⌘/⇧ 点击或勾选框多选 · ⌘R 重新翻译 · ⌘⇧C 复制译文 · ⌘⌥C 复制原文 · ⌘⌥⇧C 复制组合 · ⌘⌥M 复制 Markdown · ⌘⌥S 收藏 · ⌘⌥E 导出选中 · Delete 删除（多选先确认） · ⌘Z 撤销删除")
             .font(.caption2)
             .foregroundStyle(.tertiary)
             .lineLimit(1)
@@ -972,6 +1092,11 @@ struct TranslationHistoryView: View {
     private func recordRow(_ record: TranslationRecord) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
+                // 行勾选框（PANEL-9，对应 Windows hist-select）：确定性多选入口，不依赖修饰键。
+                Toggle("", isOn: rowSelectionBinding(record))
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+                    .help(selectedRecordIDs.contains(record.id) ? "取消选择" : "选择")
                 Text(record.source.displayName)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -1071,11 +1196,62 @@ struct TranslationHistoryView: View {
         .padding(.vertical, 8)
         .contentShape(Rectangle())
         .onTapGesture {
-            selectedRecordID = record.id
+            handleRowClick(record)
         }
         .contextMenu {
             recordContextMenu(record)
         }
+    }
+
+    /// 行点击的多选语义（⌘ 追加 / ⇧ 连选 / 单击单选）。行内容上的 tap 手势会先于
+    /// List 原生选择消费点击，所以这里按当前修饰键自行实现与原生一致的语义。
+    private func handleRowClick(_ record: TranslationRecord) {
+        let flags = NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.command) {
+            if selectedRecordIDs.contains(record.id) {
+                selectedRecordIDs.remove(record.id)
+            } else {
+                selectedRecordIDs.insert(record.id)
+            }
+            selectionAnchorID = record.id
+            return
+        }
+        if flags.contains(.shift) {
+            let anchorID = selectionAnchorID
+                ?? selectedRecords.first?.id
+                ?? record.id
+            if let anchorIndex = visibleRecords.firstIndex(where: { $0.id == anchorID }),
+               let clickedIndex = visibleRecords.firstIndex(where: { $0.id == record.id }) {
+                let range = min(anchorIndex, clickedIndex)...max(anchorIndex, clickedIndex)
+                selectedRecordIDs.formUnion(visibleRecords[range].map(\.id))
+            } else {
+                selectedRecordIDs.insert(record.id)
+            }
+            selectionAnchorID = anchorID
+            return
+        }
+        selectedRecordIDs = [record.id]
+        selectionAnchorID = record.id
+    }
+
+    /// 勾选框绑定：直接切换该行是否在选集中（不改锚点）。
+    private func rowSelectionBinding(_ record: TranslationRecord) -> Binding<Bool> {
+        Binding(
+            get: { selectedRecordIDs.contains(record.id) },
+            set: { isSelected in
+                if isSelected {
+                    selectedRecordIDs.insert(record.id)
+                    if selectionAnchorID == nil {
+                        selectionAnchorID = record.id
+                    }
+                } else {
+                    selectedRecordIDs.remove(record.id)
+                    if selectionAnchorID == record.id {
+                        selectionAnchorID = nil
+                    }
+                }
+            }
+        )
     }
 
     @ViewBuilder
@@ -1107,28 +1283,28 @@ struct TranslationHistoryView: View {
         Divider()
 
         Button {
-            selectedRecordID = record.id
+            selectedRecordIDs = [record.id]
             copyHistoryText(record.translation, label: "译文")
         } label: {
             Label("复制译文", systemImage: "doc.on.doc")
         }
 
         Button {
-            selectedRecordID = record.id
+            selectedRecordIDs = [record.id]
             copyHistoryText(record.original, label: "原文")
         } label: {
             Label("复制原文", systemImage: "doc.text")
         }
 
         Button {
-            selectedRecordID = record.id
+            selectedRecordIDs = [record.id]
             copyHistoryText(combinedHistoryText(for: record), label: "原文和译文")
         } label: {
             Label("复制原文和译文", systemImage: "doc.text.below.ecg")
         }
 
         Button {
-            selectedRecordID = record.id
+            selectedRecordIDs = [record.id]
             copyHistoryText(historyStore.markdownSnippet(for: record), label: "Markdown 片段")
         } label: {
             Label("复制 Markdown 片段", systemImage: "doc.richtext")
@@ -1145,7 +1321,7 @@ struct TranslationHistoryView: View {
         Menu("导出此条") {
             ForEach(HistoryExportFormat.allCases) { format in
                 Button(format.title) {
-                    selectedRecordID = record.id
+                    selectedRecordIDs = [record.id]
                     exportSingleRecord(record, format: format)
                 }
             }
@@ -1155,7 +1331,7 @@ struct TranslationHistoryView: View {
             Menu("复制为") {
                 ForEach(HistoryExportFormat.allCases) { format in
                     Button(format.title) {
-                        selectedRecordID = record.id
+                        selectedRecordIDs = [record.id]
                         copyExportHistoryRecords(
                             [record],
                             scopeTitle: "当前记录",
@@ -1192,7 +1368,7 @@ struct TranslationHistoryView: View {
             return
         }
 
-        selectedRecordID = record.id
+        selectedRecordIDs = [record.id]
         lastExportResult = nil
         recentlyDeletedRecord = nil
         exportMessage = "正在用当前设置重新翻译这条原文"
@@ -1253,14 +1429,10 @@ struct TranslationHistoryView: View {
         }
     }
 
+    /// 单条双语复制（PANEL-11 对齐）：原文、空一行、译文，无标签前缀
+    /// （Windows History.tsx:481 copyBoth）。
     private func combinedHistoryText(for record: TranslationRecord) -> String {
-        """
-        原文：
-        \(record.original)
-
-        译文：
-        \(record.translation)
-        """
+        HistoryBatchSelection.bilingualText(for: record)
     }
 
     private func toggleSelectedFavorite() {
@@ -1270,7 +1442,7 @@ struct TranslationHistoryView: View {
 
     private func toggleFavorite(_ record: TranslationRecord, selecting: Bool = false) {
         if selecting {
-            selectedRecordID = record.id
+            selectedRecordIDs = [record.id]
         }
         historyStore.toggleFavorite(recordID: record.id)
         lastExportResult = nil
@@ -1278,11 +1450,21 @@ struct TranslationHistoryView: View {
         exportMessage = record.isFavorite ? "已取消收藏" : "已收藏"
     }
 
+    /// Delete 键路由（PANEL-9）：多选 → 批量删除（先确认）；单选 → 沿用旧单删路径
+    /// （立即删除、可 ⌘Z 撤销，行为不回归）。
+    private func deleteSelectionFromKeyboard() {
+        if selectedRecordIDs.count > 1 {
+            confirmDeleteSelectedRecords()
+            return
+        }
+        deleteSelectedRecord()
+    }
+
     private func deleteSelectedRecord() {
         guard let selectedRecord else { return }
         let deleted = historyStore.delete(recordID: selectedRecord.id)
         recentlyDeletedRecord = deleted
-        selectedRecordID = nil
+        selectedRecordIDs.remove(selectedRecord.id)
         lastExportResult = nil
         exportMessage = deletedMessage(for: selectedRecord, fallback: "已删除选中记录")
     }
@@ -1290,9 +1472,7 @@ struct TranslationHistoryView: View {
     private func deleteHistoryRecord(_ record: TranslationRecord) {
         let deleted = historyStore.delete(recordID: record.id)
         recentlyDeletedRecord = deleted
-        if selectedRecordID == record.id {
-            selectedRecordID = nil
-        }
+        selectedRecordIDs.remove(record.id)
         lastExportResult = nil
         exportMessage = deletedMessage(for: record, fallback: "已删除记录")
     }
@@ -1300,51 +1480,37 @@ struct TranslationHistoryView: View {
     private func restoreRecentlyDeletedRecord() {
         guard let deleted = recentlyDeletedRecord else { return }
         historyStore.restoreDeletedRecord(deleted)
-        selectedRecordID = deleted.record.id
+        selectedRecordIDs = [deleted.record.id]
         lastExportResult = nil
         recentlyDeletedRecord = nil
         exportMessage = "已恢复：\(recordSummary(deleted.record))"
     }
 
+    /// 选集只做裁剪，不再自动补选首条（Windows 语义：开窗/删后无预选，批量条只在勾选后出现）。
     private func validateSelectedRecord() {
-        guard let selectedRecordID else { return }
-        if !visibleRecords.contains(where: { $0.id == selectedRecordID }) {
-            self.selectedRecordID = nil
-        }
+        ensureValidSelection()
     }
 
     private func ensureValidSelection() {
-        guard !visibleRecords.isEmpty else {
-            selectedRecordID = nil
-            return
+        let pruned = HistoryBatchSelection.pruned(selectedRecordIDs, visibleRecords: visibleRecords)
+        if pruned != selectedRecordIDs {
+            selectedRecordIDs = pruned
         }
-
-        if let selectedRecordID,
-           visibleRecords.contains(where: { $0.id == selectedRecordID }) {
-            return
+        if let selectionAnchorID, !visibleRecords.contains(where: { $0.id == selectionAnchorID }) {
+            self.selectionAnchorID = selectedRecords.first?.id
         }
-
-        selectedRecordID = visibleRecords.first?.id
-    }
-
-    private func selectFirstVisibleRecordIfNeeded() {
-        guard selectedRecordID == nil else {
-            ensureValidSelection()
-            return
-        }
-        selectedRecordID = visibleRecords.first?.id
     }
 
     private func selectAdjacentRecord(offset: Int) {
         guard !visibleRecords.isEmpty else {
-            selectedRecordID = nil
+            selectedRecordIDs = []
             lastExportResult = nil
             exportMessage = "当前没有可选择的历史"
             return
         }
 
-        let currentIndex = selectedRecordID
-            .flatMap { id in visibleRecords.firstIndex { $0.id == id } }
+        let currentIndex = selectedRecords.first
+            .flatMap { record in visibleRecords.firstIndex { $0.id == record.id } }
         let startIndex = offset < 0 ? visibleRecords.count : -1
         let rawIndex = (currentIndex ?? startIndex) + offset
         let clampedIndex = min(max(rawIndex, 0), visibleRecords.count - 1)
@@ -1355,16 +1521,60 @@ struct TranslationHistoryView: View {
             return
         }
 
-        selectedRecordID = visibleRecords[clampedIndex].id
+        // ⌘↑/⌘↓ 是单条导航：把选择收拢到目标一条（对齐旧单选语义）。
+        selectedRecordIDs = [visibleRecords[clampedIndex].id]
+        selectionAnchorID = visibleRecords[clampedIndex].id
         lastExportResult = nil
         let direction = offset < 0 ? "上一条" : "下一条"
         exportMessage = "已选中\(direction)：\(recordSummary(visibleRecords[clampedIndex]))"
     }
 
+    // MARK: - 批量操作（PANEL-9）
+
+    /// 批量复制所选译文：按列表顺序以空行连接写入剪贴板（Windows copySelectedTranslations）。
+    private func copySelectedTranslations() {
+        let records = selectedRecords
+        guard !records.isEmpty else { return }
+        copyHistoryText(
+            HistoryBatchSelection.translationsText(for: records),
+            label: " \(records.count) 条译文"
+        )
+    }
+
+    /// 全选/清除切换（Windows toggleSelectAll）。
+    private func toggleSelectAll() {
+        selectedRecordIDs = HistoryBatchSelection.toggledAll(selectedRecordIDs, visibleRecords: visibleRecords)
+        selectionAnchorID = selectedRecords.first?.id
+    }
+
+    /// 批量删除：先弹与「清空非收藏」同款的确认弹窗，确认后逐条走现有单删路径
+    /// （historyStore.delete(recordIDs:) 内逐 id 调 delete(recordID:)），不可撤销。
+    private func confirmDeleteSelectedRecords() {
+        let records = selectedRecords
+        guard !records.isEmpty else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "删除所选 \(records.count) 条记录？"
+        alert.informativeText = "将永久删除选中的 \(records.count) 条记录，此操作不可撤销。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        alert.buttons.first?.hasDestructiveAction = true
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let deletedCount = historyStore.delete(recordIDs: records.map(\.id))
+        selectedRecordIDs = []
+        selectionAnchorID = nil
+        recentlyDeletedRecord = nil
+        lastExportResult = nil
+        exportMessage = deletedCount > 0 ? "已删除 \(deletedCount) 条" : "所选记录已不存在"
+    }
+
     private func recordsForExport(_ scope: HistoryExportScope) -> [TranslationRecord] {
         switch scope {
         case .selected:
-            return selectedRecord.map { [$0] } ?? []
+            // 多选后「选中记录」按整个选集导出（PANEL-9），单选时与旧语义一致。
+            return selectedRecords
         case .visible:
             return visibleRecords
         case .all:
@@ -1535,7 +1745,7 @@ struct TranslationHistoryView: View {
                     ? "当前没有可选择的历史，先完成一次翻译后再导出。"
                     : "当前搜索没有结果，清空搜索或换个关键词后再导出。"
             }
-            return "请先选中一条历史，再导出选中记录。"
+            return "请先选中至少一条历史，再导出选中记录。"
         case .visible:
             if !query.isEmpty {
                 return "当前列表为空：没有匹配“\(query)”的历史，清空搜索或换个关键词后再导出。"

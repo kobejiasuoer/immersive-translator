@@ -15,6 +15,35 @@ public enum ContrastMode: String, Codable, Equatable, CaseIterable {
         case .zh: return "仅中文"
         }
     }
+
+    /// 视图菜单「对照模式」的下一档（仅英文 → 对照 → 仅中文 → 仅英文）。
+    /// 对齐 Windows ReaderTopBar.tsx:224 `(indexOf + 1) % length`；
+    /// 旧 Mac 写法 `firstIndex(of:) ?? 0 + 1` 因 `+` 优先级高于 `??` 取到当前档自身，
+    /// 菜单点了等于没点——这里把循环收进枚举，UI 不再手算下标。
+    public var next: ContrastMode {
+        let all = ContrastMode.allCases
+        let idx = all.firstIndex(of: self) ?? 0
+        return all[(idx + 1) % all.count]
+    }
+}
+
+/// 画报排版（v0.8）：prose = 段落英文流 + 当前句行间折叠卡；
+/// parallel = 逐句双栏对照（≈旧句对行）。
+public enum SpreadLayout: String, Codable, Equatable, CaseIterable {
+    case prose
+    case parallel
+
+    /// 刊头「排版」开关文案（ReadingView.tsx:585：段落 / 双语对照）。
+    public var label: String {
+        switch self {
+        case .prose: return "段落"
+        case .parallel: return "双语对照"
+        }
+    }
+
+    public var next: SpreadLayout {
+        self == .prose ? .parallel : .prose
+    }
 }
 
 /// 产出式复习的练习形态：识别翻卡 / 完形填空 / 听写。
@@ -63,20 +92,361 @@ public enum MaskStyle: String, Codable, Equatable, CaseIterable {
     }
 }
 
+/// 阅读室主题枚举（四值不删，老数据 theme 字段原样生效）。v0.8 起三套氛围皮肤折进四枚举：
+/// light ↔ warm-archival（纸书）· dark/oled ↔ obsidian-sonic（深色/纯黑同值）·
+/// sepia ↔ nordic-mist（护眼）。令牌见 ReaderThemeTokens。
 public enum ReaderTheme: String, Codable, Equatable, CaseIterable {
     case light
     case dark
     case sepia
     case oled
 
+    /// 顶栏主题按钮四档文案（对齐 Windows ReaderTopBar.tsx:68-73 themeLabel）。
     public var label: String {
         switch self {
-        case .light: return "浅色"
+        case .light: return "纸书"
         case .dark: return "深色"
         case .sepia: return "护眼"
         case .oled: return "纯黑"
         }
     }
+
+    /// 主题按钮循环：纸书 → 深色 → 护眼 → 纯黑 → 纸书（Windows THEME_CYCLE 同序）。
+    public var next: ReaderTheme {
+        let all = ReaderTheme.allCases
+        let idx = all.firstIndex(of: self) ?? 0
+        return all[(idx + 1) % all.count]
+    }
+
+    /// 深色皮肤（控件走系统 dark 外观）。
+    public var isDark: Bool {
+        switch self {
+        case .dark, .oled: return true
+        case .light, .sepia: return false
+        }
+    }
+}
+
+// MARK: - v0.8 氛围主题令牌（对齐 Windows src/styles.css:2817-2997 .reader-root 主题层）
+
+/// 一枚颜色令牌：#RRGGBB + 不透明度（CSS rgba(…) 折成 hex + alpha，便于单测逐值对账）。
+public struct ReaderColorToken: Equatable {
+    public let hex: String
+    public let alpha: Double
+
+    public init(_ hex: String, alpha: Double = 1) {
+        self.hex = hex
+        self.alpha = alpha
+    }
+
+    /// 解析为 0–1 的 RGB 分量；非法 hex 返回 nil（UI 层回落黑/白，不崩）。
+    public var rgb: (r: Double, g: Double, b: Double)? {
+        var s = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasPrefix("#") { s.removeFirst() }
+        guard s.count == 6, let value = UInt32(s, radix: 16) else { return nil }
+        return (
+            Double((value >> 16) & 0xFF) / 255,
+            Double((value >> 8) & 0xFF) / 255,
+            Double(value & 0xFF) / 255
+        )
+    }
+}
+
+/// 三套氛围主题的全部令牌（单一真源：ReaderPalette 从这里取色，单测对账 styles.css）。
+public struct ReaderThemeTokens: Equatable {
+    public let theme: ReaderTheme
+    /// 画布底色 + 双极柔和径向光晕（原型 .spatial-universe）。
+    public let canvasBg: ReaderColorToken
+    public let aura1: ReaderColorToken
+    public let aura2: ReaderColorToken
+    /// 毛玻璃材质层。
+    public let glassSurface: ReaderColorToken
+    public let glassElevated: ReaderColorToken
+    public let glassPill: ReaderColorToken
+    public let glassBorder: ReaderColorToken
+    public let glassBorderStrong: ReaderColorToken
+    public let glassHighlight: ReaderColorToken
+    /// 墨阶四级。
+    public let ink1: ReaderColorToken
+    public let ink2: ReaderColorToken
+    public let ink3: ReaderColorToken
+    public let ink4: ReaderColorToken
+    /// 主色与衍生。
+    public let accent: ReaderColorToken
+    public let accentHover: ReaderColorToken
+    public let accentSoft: ReaderColorToken
+    public let accentSofter: ReaderColorToken
+    public let accentGlow: ReaderColorToken
+    /// 声波青（读完/成功态）与从句靛蓝。
+    public let sonicTeal: ReaderColorToken
+    public let sonicTealSoft: ReaderColorToken
+    public let clauseIndigo: ReaderColorToken
+    public let clauseIndigoSoft: ReaderColorToken
+    /// 胶带（级别 chip / 标签）。
+    public let tapeBg: ReaderColorToken
+    public let tapeBorder: ReaderColorToken
+    public let tapeInk: ReaderColorToken
+    /// 语义状态色。
+    public let warn: ReaderColorToken
+    public let warnSoft: ReaderColorToken
+    public let err: ReaderColorToken
+    public let errSoft: ReaderColorToken
+    /// 旧令牌派生（阅读室既有组件直接换肤）。
+    public let surface: ReaderColorToken
+    public let surface2: ReaderColorToken
+
+    /// 换肤过渡时长（秒）与弹性曲线控制点（原型 350ms var(--ease-spring)）。
+    public static let skinTransitionDuration: Double = 0.35
+    public static let springCurve: (c0x: Double, c0y: Double, c1x: Double, c1y: Double) = (0.16, 1, 0.3, 1)
+
+    public static func tokens(for theme: ReaderTheme) -> ReaderThemeTokens {
+        switch theme {
+        case .light:
+            return warmArchival
+        case .dark, .oled:
+            // oled 与 dark 同值（Windows styles.css:2900 `[data-theme="dark"], [data-theme="oled"]`）。
+            return ReaderThemeTokens(copying: obsidianSonic, theme: theme)
+        case .sepia:
+            return nordicMist
+        }
+    }
+
+    /// warm-archival（纸书）。
+    public static let warmArchival = ReaderThemeTokens(
+        theme: .light,
+        canvasBg: .init("#F6F3EC"),
+        aura1: .init("#D05A3F", alpha: 0.07),
+        aura2: .init("#1F6E5C", alpha: 0.06),
+        glassSurface: .init("#FCFAF5", alpha: 0.78),
+        glassElevated: .init("#FFFFFF", alpha: 0.90),
+        glassPill: .init("#F7F4EC", alpha: 0.86),
+        glassBorder: .init("#1C1B18", alpha: 0.09),
+        glassBorderStrong: .init("#1C1B18", alpha: 0.16),
+        glassHighlight: .init("#FFFFFF", alpha: 0.7),
+        ink1: .init("#171614"),
+        ink2: .init("#4A4740"),
+        ink3: .init("#7A756C"),
+        ink4: .init("#ACA69B"),
+        accent: .init("#C84B31"),
+        accentHover: .init("#B03E26"),
+        accentSoft: .init("#C84B31", alpha: 0.11),
+        accentSofter: .init("#C84B31", alpha: 0.06),
+        accentGlow: .init("#C84B31", alpha: 0.22),
+        sonicTeal: .init("#1B6B58"),
+        sonicTealSoft: .init("#1B6B58", alpha: 0.11),
+        clauseIndigo: .init("#3649C4"),
+        clauseIndigoSoft: .init("#3649C4", alpha: 0.11),
+        tapeBg: .init("#E9DEC8"),
+        tapeBorder: .init("#D5C5A5"),
+        tapeInk: .init("#6E5D43"),
+        warn: .init("#B45309"),
+        warnSoft: .init("#B45309", alpha: 0.11),
+        err: .init("#B91C1C"),
+        errSoft: .init("#B91C1C", alpha: 0.10),
+        surface: .init("#FCFAF5"),
+        surface2: .init("#1C1B18", alpha: 0.045)
+    )
+
+    /// obsidian-sonic（深色 / 纯黑同值）。
+    public static let obsidianSonic = ReaderThemeTokens(
+        theme: .dark,
+        canvasBg: .init("#0E1014"),
+        aura1: .init("#E06D53", alpha: 0.11),
+        aura2: .init("#34A88E", alpha: 0.09),
+        glassSurface: .init("#16181E", alpha: 0.76),
+        glassElevated: .init("#1D2028", alpha: 0.88),
+        glassPill: .init("#181B22", alpha: 0.84),
+        glassBorder: .init("#FFFFFF", alpha: 0.09),
+        glassBorderStrong: .init("#FFFFFF", alpha: 0.17),
+        glassHighlight: .init("#FFFFFF", alpha: 0.06),
+        ink1: .init("#F4F2ED"),
+        ink2: .init("#B9B5AC"),
+        ink3: .init("#7E7B73"),
+        ink4: .init("#4D4B45"),
+        accent: .init("#E26D52"),
+        accentHover: .init("#EC8268"),
+        accentSoft: .init("#E26D52", alpha: 0.16),
+        accentSofter: .init("#E26D52", alpha: 0.09),
+        accentGlow: .init("#E26D52", alpha: 0.30),
+        sonicTeal: .init("#38B296"),
+        sonicTealSoft: .init("#38B296", alpha: 0.16),
+        clauseIndigo: .init("#8093FF"),
+        clauseIndigoSoft: .init("#8093FF", alpha: 0.16),
+        tapeBg: .init("#2B2824"),
+        tapeBorder: .init("#4A4339"),
+        tapeInk: .init("#C8B9A2"),
+        warn: .init("#E59A3C"),
+        warnSoft: .init("#E59A3C", alpha: 0.16),
+        err: .init("#F06868"),
+        errSoft: .init("#F06868", alpha: 0.16),
+        surface: .init("#171A20"),
+        surface2: .init("#FFFFFF", alpha: 0.05)
+    )
+
+    /// nordic-mist（护眼）。warn/err 未在 sepia 块重定义，继承 .reader-root 基值（纸书同值）。
+    public static let nordicMist = ReaderThemeTokens(
+        theme: .sepia,
+        canvasBg: .init("#EEF1EF"),
+        aura1: .init("#1F6E5C", alpha: 0.08),
+        aura2: .init("#3649C4", alpha: 0.06),
+        glassSurface: .init("#F7F9F8", alpha: 0.80),
+        glassElevated: .init("#FFFFFF", alpha: 0.92),
+        glassPill: .init("#F4F7F5", alpha: 0.88),
+        glassBorder: .init("#141E1A", alpha: 0.09),
+        glassBorderStrong: .init("#141E1A", alpha: 0.16),
+        glassHighlight: .init("#FFFFFF", alpha: 0.75),
+        ink1: .init("#131B18"),
+        ink2: .init("#3D4A45"),
+        ink3: .init("#6C7A74"),
+        ink4: .init("#9CA9A3"),
+        accent: .init("#1B6B58"),
+        accentHover: .init("#14574A"),
+        accentSoft: .init("#1B6B58", alpha: 0.12),
+        accentSofter: .init("#1B6B58", alpha: 0.07),
+        accentGlow: .init("#1B6B58", alpha: 0.24),
+        sonicTeal: .init("#C84B31"),
+        sonicTealSoft: .init("#C84B31", alpha: 0.11),
+        clauseIndigo: .init("#1F6E5E"),
+        clauseIndigoSoft: .init("#1F6E5E", alpha: 0.12),
+        tapeBg: .init("#D7E2DC"),
+        tapeBorder: .init("#B6C8BE"),
+        tapeInk: .init("#385247"),
+        warn: .init("#B45309"),
+        warnSoft: .init("#B45309", alpha: 0.11),
+        err: .init("#B91C1C"),
+        errSoft: .init("#B91C1C", alpha: 0.10),
+        surface: .init("#F7F9F8"),
+        surface2: .init("#141E1A", alpha: 0.045)
+    )
+
+    /// 同值换标签（oled 复用 obsidian 令牌但 theme 字段仍为 .oled）。
+    private init(copying other: ReaderThemeTokens, theme: ReaderTheme) {
+        self.init(
+            theme: theme,
+            canvasBg: other.canvasBg, aura1: other.aura1, aura2: other.aura2,
+            glassSurface: other.glassSurface, glassElevated: other.glassElevated, glassPill: other.glassPill,
+            glassBorder: other.glassBorder, glassBorderStrong: other.glassBorderStrong, glassHighlight: other.glassHighlight,
+            ink1: other.ink1, ink2: other.ink2, ink3: other.ink3, ink4: other.ink4,
+            accent: other.accent, accentHover: other.accentHover, accentSoft: other.accentSoft,
+            accentSofter: other.accentSofter, accentGlow: other.accentGlow,
+            sonicTeal: other.sonicTeal, sonicTealSoft: other.sonicTealSoft,
+            clauseIndigo: other.clauseIndigo, clauseIndigoSoft: other.clauseIndigoSoft,
+            tapeBg: other.tapeBg, tapeBorder: other.tapeBorder, tapeInk: other.tapeInk,
+            warn: other.warn, warnSoft: other.warnSoft, err: other.err, errSoft: other.errSoft,
+            surface: other.surface, surface2: other.surface2
+        )
+    }
+
+    public init(
+        theme: ReaderTheme,
+        canvasBg: ReaderColorToken, aura1: ReaderColorToken, aura2: ReaderColorToken,
+        glassSurface: ReaderColorToken, glassElevated: ReaderColorToken, glassPill: ReaderColorToken,
+        glassBorder: ReaderColorToken, glassBorderStrong: ReaderColorToken, glassHighlight: ReaderColorToken,
+        ink1: ReaderColorToken, ink2: ReaderColorToken, ink3: ReaderColorToken, ink4: ReaderColorToken,
+        accent: ReaderColorToken, accentHover: ReaderColorToken, accentSoft: ReaderColorToken,
+        accentSofter: ReaderColorToken, accentGlow: ReaderColorToken,
+        sonicTeal: ReaderColorToken, sonicTealSoft: ReaderColorToken,
+        clauseIndigo: ReaderColorToken, clauseIndigoSoft: ReaderColorToken,
+        tapeBg: ReaderColorToken, tapeBorder: ReaderColorToken, tapeInk: ReaderColorToken,
+        warn: ReaderColorToken, warnSoft: ReaderColorToken, err: ReaderColorToken, errSoft: ReaderColorToken,
+        surface: ReaderColorToken, surface2: ReaderColorToken
+    ) {
+        self.theme = theme
+        self.canvasBg = canvasBg
+        self.aura1 = aura1
+        self.aura2 = aura2
+        self.glassSurface = glassSurface
+        self.glassElevated = glassElevated
+        self.glassPill = glassPill
+        self.glassBorder = glassBorder
+        self.glassBorderStrong = glassBorderStrong
+        self.glassHighlight = glassHighlight
+        self.ink1 = ink1
+        self.ink2 = ink2
+        self.ink3 = ink3
+        self.ink4 = ink4
+        self.accent = accent
+        self.accentHover = accentHover
+        self.accentSoft = accentSoft
+        self.accentSofter = accentSofter
+        self.accentGlow = accentGlow
+        self.sonicTeal = sonicTeal
+        self.sonicTealSoft = sonicTealSoft
+        self.clauseIndigo = clauseIndigo
+        self.clauseIndigoSoft = clauseIndigoSoft
+        self.tapeBg = tapeBg
+        self.tapeBorder = tapeBorder
+        self.tapeInk = tapeInk
+        self.warn = warn
+        self.warnSoft = warnSoft
+        self.err = err
+        self.errSoft = errSoft
+        self.surface = surface
+        self.surface2 = surface2
+    }
+}
+
+// MARK: - 顶部导航岛三档（对齐 Windows ReaderTopBar.tsx IslandSurface）
+
+/// 导航岛三档：阅读 / 口语 / 笔记与复习。阅读室内部路由（shelf/reading/review/notes/speak）
+/// 由 `IslandSurface(folding:)` 归并到这三档高亮。
+public enum IslandSurface: String, Equatable, CaseIterable {
+    case reading
+    case speak
+    case vault
+
+    public var label: String {
+        switch self {
+        case .reading: return "阅读"
+        case .speak: return "口语"
+        case .vault: return "笔记与复习"
+        }
+    }
+
+    /// 内部路由归并：shelf/reading → 阅读、speak → 口语、review/notes → 笔记与复习
+    /// （对齐 ReaderApp.tsx:1660 islandSurface）。
+    public init(folding route: ReaderRouteKind) {
+        switch route {
+        case .shelf, .reading: self = .reading
+        case .speak: self = .speak
+        case .review, .notes: self = .vault
+        }
+    }
+}
+
+/// 阅读室内部路由种类（视图模型 Route 的纯数据镜像；书架是首页落点）。
+public enum ReaderRouteKind: String, Equatable, CaseIterable {
+    case shelf
+    case reading
+    case review
+    case notes
+    case speak
+
+    /// 顶栏「书架 · X」触发器与窗口标题用的当前面名（阅读档回落文章名，由调用方传入）。
+    public func surfaceTitle(articleTitle: String?) -> String? {
+        switch self {
+        case .shelf: return "书架"
+        case .reading: return articleTitle
+        case .review, .notes: return "笔记与复习"
+        case .speak: return "口语陪练"
+        }
+    }
+
+    /// 左上书卷胶囊的完整文案：「书架 · 当前面名」；书架页自身只写「书架」
+    /// （Windows 这里会显示成「书架 · 书架」，Mac 去重）；阅读档没有文章时也只写「书架」。
+    public func folioTriggerLabel(articleTitle: String?) -> String {
+        guard let title = surfaceTitle(articleTitle: articleTitle), title != "书架",
+              !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "书架"
+        }
+        return "书架 · \(title)"
+    }
+}
+
+/// 「笔记与复习」档角标 = 待复习词数 + 未整理进笔记的生词数（ReaderTopBar.tsx:85 vaultCount）。
+/// 负值按 0 计，不让坏数据把角标算成负数。
+public func vaultBadgeCount(dueNow: Int, unnotedCount: Int) -> Int {
+    max(0, dueNow) + max(0, unnotedCount)
 }
 
 /// 正文字体配对。
@@ -159,6 +529,18 @@ public struct ReaderSettings: Codable, Equatable {
     public var showVocabMarks: Bool
     /// 复习模式（全局，不入文章覆盖）。
     public var reviewMode: ReviewModeSetting
+    /// 专注模式（v0.8）：非当前句降透明度聚光，仅影响画报正文流。
+    /// 可选字段：老 JSON 缺省读 false（schema:265 缺省 false，免迁移）。
+    public var spotlightMode: Bool?
+    /// 画报排版（v0.8）：prose 段落英文流 / parallel 双语对照。
+    /// 可选字段：老 JSON 缺省回落 .prose（schema:269，免迁移）。
+    public var spreadLayout: SpreadLayout?
+
+    /// 生效值：缺省 false（ReadingView.tsx:97 `settings.spotlightMode ?? false` 同口径）。
+    public var spotlightEnabled: Bool { spotlightMode ?? false }
+
+    /// 生效值：缺省 prose（ReadingView.tsx:98 `settings.spreadLayout ?? "prose"` 同口径）。
+    public var effectiveSpreadLayout: SpreadLayout { spreadLayout ?? .prose }
 
     public init(
         contrastMode: ContrastMode = .dual,
@@ -185,7 +567,9 @@ public struct ReaderSettings: Codable, Equatable {
         shadowingSilenceMs: Double = 1500,
         chunkHighlight: Bool = true,
         showVocabMarks: Bool = true,
-        reviewMode: ReviewModeSetting = .smart
+        reviewMode: ReviewModeSetting = .smart,
+        spotlightMode: Bool? = nil,
+        spreadLayout: SpreadLayout? = nil
     ) {
         self.contrastMode = contrastMode
         self.maskTranslation = maskTranslation
@@ -212,6 +596,8 @@ public struct ReaderSettings: Codable, Equatable {
         self.chunkHighlight = chunkHighlight
         self.showVocabMarks = showVocabMarks
         self.reviewMode = reviewMode
+        self.spotlightMode = spotlightMode
+        self.spreadLayout = spreadLayout
     }
 
     public static let `default` = ReaderSettings()
@@ -251,6 +637,10 @@ public struct ReaderSettingsOverride: Codable, Equatable {
     public var showVocabMarks: Bool?
     /// reviewMode 只进全局默认，文章覆盖不承载（Windows 同口径）。
     public var reviewMode: String?
+    /// 专注模式（v0.8，可选透传）。
+    public var spotlightMode: Bool?
+    /// 画报排版（v0.8，可选透传；非法值 merge 时忽略）。
+    public var spreadLayout: String?
 
     public init() {}
 
@@ -271,6 +661,8 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         self.chunkHighlight = patch["chunkHighlight"] as? Bool
         self.showVocabMarks = patch["showVocabMarks"] as? Bool
         self.reviewMode = patch["reviewMode"] as? String
+        self.spotlightMode = patch["spotlightMode"] as? Bool
+        self.spreadLayout = patch["spreadLayout"] as? String
     }
 
     enum CodingKeys: String, CodingKey {
@@ -280,6 +672,7 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         case edgeVoiceZh, edgeVoiceEn
         case shadowingAssess, shadowingPassScore, shadowingAutoMic, shadowingSilenceMs
         case chunkHighlight, showVocabMarks, reviewMode
+        case spotlightMode, spreadLayout
     }
 
     public init(from decoder: Decoder) throws {
@@ -309,6 +702,10 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         chunkHighlight = try c.decodeIfPresent(Bool.self, forKey: .chunkHighlight)
         showVocabMarks = try c.decodeIfPresent(Bool.self, forKey: .showVocabMarks)
         reviewMode = try c.decodeIfPresent(String.self, forKey: .reviewMode)
+        // v0.8 字段宽松解码：类型不符（如字符串塞进布尔位）按缺省处理，
+        // 不让坏数据打穿整份覆盖（merge 侧再挡非法枚举值）。
+        spotlightMode = try? c.decodeIfPresent(Bool.self, forKey: .spotlightMode)
+        spreadLayout = try? c.decodeIfPresent(String.self, forKey: .spreadLayout)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -338,6 +735,8 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         try c.encodeIfPresent(chunkHighlight, forKey: .chunkHighlight)
         try c.encodeIfPresent(showVocabMarks, forKey: .showVocabMarks)
         try c.encodeIfPresent(reviewMode, forKey: .reviewMode)
+        try c.encodeIfPresent(spotlightMode, forKey: .spotlightMode)
+        try c.encodeIfPresent(spreadLayout, forKey: .spreadLayout)
     }
 
     /// 用一个合法设置 patch 覆盖（只写入 patch 里出现的字段）。
@@ -367,6 +766,8 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         if let v = patch["chunkHighlight"] as? Bool { chunkHighlight = v }
         if let v = patch["showVocabMarks"] as? Bool { showVocabMarks = v }
         if let v = patch["reviewMode"] as? String { reviewMode = v }
+        if let v = patch["spotlightMode"] as? Bool { spotlightMode = v }
+        if let v = patch["spreadLayout"] as? String { spreadLayout = v }
     }
 }
 
@@ -411,6 +812,10 @@ public func mergeReaderSettings(_ global: ReaderSettings, _ override: ReaderSett
     if let v = o.chunkHighlight { merged.chunkHighlight = v }
     if let v = o.showVocabMarks { merged.showVocabMarks = v }
     if let v = o.reviewMode, let parsed = ReviewModeSetting(rawValue: v) { merged.reviewMode = parsed }
+    // v0.8 画报字段：spotlight 布尔透传；spreadLayout 非法值忽略回落缺省
+    //（ReadingView.tsx:97-98 的 `?? false` / `?? "prose"` 同口径）。
+    if let v = o.spotlightMode { merged.spotlightMode = v }
+    if let v = o.spreadLayout, let parsed = SpreadLayout(rawValue: v) { merged.spreadLayout = parsed }
     return merged
 }
 
@@ -442,6 +847,9 @@ public func readerSettingsPatch(from old: ReaderSettings, to new: ReaderSettings
     if old.shadowingSilenceMs != new.shadowingSilenceMs { patch["shadowingSilenceMs"] = new.shadowingSilenceMs }
     if old.chunkHighlight != new.chunkHighlight { patch["chunkHighlight"] = new.chunkHighlight }
     if old.showVocabMarks != new.showVocabMarks { patch["showVocabMarks"] = new.showVocabMarks }
+    // v0.8 画报字段：写出具体生效值（nil 归位 = 默认值），老覆盖缺字段不受影响。
+    if old.spotlightMode != new.spotlightMode { patch["spotlightMode"] = new.spotlightMode ?? false }
+    if old.spreadLayout != new.spreadLayout { patch["spreadLayout"] = (new.spreadLayout ?? .prose).rawValue }
     return patch
 }
 

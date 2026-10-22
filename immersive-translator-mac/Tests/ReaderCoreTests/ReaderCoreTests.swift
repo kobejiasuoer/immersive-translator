@@ -399,6 +399,36 @@ final class ReaderCoreTests: XCTestCase {
         XCTAssertEqual(judgeCloze("takes on", "take on", options: JudgeOptions(accepted: ["takes on"])), .perfect)
     }
 
+    /// REV-7 回归：快速复习迷你窗完形卡与阅读室完形卡共用同一判分向量——
+    /// 答案一律传「句中词块原文」（如「He needs to unwind」里挖出的 unwind），
+    /// 绝不传挖空后的整句（否则拼写接近的输入与整句算编辑距离必判 wrong，
+    /// close 档失效）。同一输入在两侧产出同一 verdict。
+    func testQuickReviewClozeJudgeMatchesReadingRoomVector() {
+        // 「He needs to unwind」：句中词块原文 = "unwind"
+        let answer = "unwind"
+        // perfect：原样 / 大小写
+        XCTAssertEqual(judgeCloze("unwind", answer), .perfect)
+        XCTAssertEqual(judgeCloze("UNWIND", answer), .perfect)
+        // close：差 1 个字母（过去判 wrong 的缺陷向量）
+        XCTAssertEqual(judgeCloze("unwin", answer), .close)
+        XCTAssertEqual(judgeCloze("unwinds", answer), .close)
+        // wrong：完全不相干
+        XCTAssertEqual(judgeCloze("relax completely", answer), .wrong)
+        XCTAssertEqual(judgeCloze("", answer), .wrong)
+        // trap：命中直译陷阱候选仍判 trap（不因 accepted 兜底而误判 perfect）
+        XCTAssertEqual(
+            judgeCloze("loosen the rope", answer, options: JudgeOptions(trap: "loosen the rope", accepted: [answer])),
+            .trap
+        )
+        // 句中出现屈折形式（unwinding）时答案=屈折原文，输入词条原形走 accepted
+        XCTAssertEqual(judgeCloze("unwind", "unwinding", options: JudgeOptions(accepted: [answer])), .perfect)
+        // 反向：答案=原形、输入=长屈折（unwinding 距离 3）超出 close 容差 → wrong；
+        // 打字造句降级档想用原形/屈折须靠 accepted（与 Windows SpeakChallengeCard 同参）
+        XCTAssertEqual(judgeCloze("unwinding", answer, options: JudgeOptions(accepted: [answer])), .wrong)
+        // 防回归：把「挖空后整句」当答案的老缺陷形态必须仍判 wrong（语义锁定）
+        XCTAssertEqual(judgeCloze("unwin", "he needs to ______"), .wrong)
+    }
+
     func testWordDiffAndDictation() {
         let diff = wordDiff("She took momemtum", "she took on momentum")
         XCTAssertEqual(diff.filter { $0.status == .ok }.map(\.text), ["she", "took"])
@@ -625,5 +655,256 @@ final class ReaderCoreTests: XCTestCase {
         XCTAssertEqual(resolveTargetLanguage("这是一段中文", TargetLanguageConfig(auto: true, fixed: "")), "English")
         XCTAssertEqual(resolveTargetLanguage("Hello", TargetLanguageConfig(auto: false, fixed: "Deutsch")), "Deutsch")
         XCTAssertEqual(resolveTargetLanguage("Hello", TargetLanguageConfig(auto: false, fixed: "  ")), "简体中文")
+    }
+}
+
+// MARK: - REV-10 · 复习时间口径共享调度向量（readerSrs.test.ts 全量 1:1 移植）
+
+/// Windows `src/core/readerSrs.test.ts` 全部向量逐条移植（2026-09-10 本地 10:00 同一时刻），
+/// 两端 gradeSrs / reviewStats / streak / 热力图 dayKey 分桶的输出逐值一致。
+/// readerSrs.test.ts:163-213（内化三阶 / 热力格）亦在 VaultExportTests.InternalizationDashboardTests
+/// 有一份同向量副本——本类是自包含的权威镜像，双份断言互为回归网。
+final class ReaderSrsSharedVectorTests: XCTestCase {
+    /// 与 Windows 测试同一时刻：2026-09-10 本地 10:00（heatBuckets 首格应为 2026-08-14）。
+    private var nowMs: Int64 {
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 9
+        comps.day = 10
+        comps.hour = 10
+        let date = Calendar.current.date(from: comps) ?? Date()
+        return Int64(date.timeIntervalSince1970 * 1000)
+    }
+
+    private func makeWord(
+        _ id: String,
+        dueAt: Int64,
+        intervalDays: Double = 0,
+        kind: VocabKind? = nil,
+        chunkType: ChunkType? = nil,
+        spokenAt: Int64? = nil
+    ) -> VocabWord {
+        VocabWord(
+            id: id,
+            word: id,
+            kind: kind,
+            chunkType: chunkType,
+            source: VocabSource(articleId: "a1", sentenceIdx: 0),
+            srs: VocabSrsState(ease: 2.5, intervalDays: intervalDays, reps: 0, dueAt: dueAt, lapses: 0),
+            addedAt: 0,
+            spokenAt: spokenAt
+        )
+    }
+
+    // MARK: 到期判定与计数同源（§9-3；readerSrs.test:29-74）
+
+    func testDueVocabOnlyDueSortedByUrgency() {
+        let vocab = [
+            makeWord("later", dueAt: nowMs + 5000),
+            makeWord("older-due", dueAt: nowMs - 9000),
+            makeWord("newer-due", dueAt: nowMs - 1000),
+        ]
+        XCTAssertEqual(dueVocab(vocab, now: nowMs).map(\.id), ["older-due", "newer-due"])
+    }
+
+    func testIsDueBoundaryEqualsNowIsDue() {
+        XCTAssertEqual(isDue(makeWord("a", dueAt: nowMs), now: nowMs), true)
+        XCTAssertEqual(isDue(makeWord("b", dueAt: nowMs + 1), now: nowMs), false)
+    }
+
+    func testReviewStatsDueNowMatchesDueVocab() {
+        let vocab = [makeWord("a", dueAt: nowMs - 1), makeWord("b", dueAt: nowMs + 1)]
+        let log = ReviewLogFile(schemaVersion: 1, days: [])
+        let stats = reviewStats(vocab, log, nowMs: nowMs)
+        XCTAssertEqual(stats.dueNow, dueVocab(vocab, now: nowMs).count)
+        XCTAssertEqual(stats.dueNow, 1)
+        XCTAssertEqual(stats.total, 2)
+    }
+
+    func testWordsAndChunksCountedSeparatelyKindNilDefaultsToWord() {
+        // kind 缺省视为单词（readerSrs.ts:145 的 else 分支）
+        let word = makeWord("speed", dueAt: nowMs - 1)
+        let wordLater = makeWord("goal", dueAt: nowMs + 999_999)
+        let chunk = makeWord("take on momentum", dueAt: nowMs - 1, kind: .chunk, chunkType: .collocation)
+        let chunkLater = makeWord("settle in", dueAt: nowMs + 999_999, kind: .chunk, chunkType: .phrasal)
+        XCTAssertEqual(word.effectiveKind, .word)
+        let stats = reviewStats([word, wordLater, chunk, chunkLater], ReviewLogFile(schemaVersion: 1, days: []), nowMs: nowMs)
+        XCTAssertEqual(stats.total, 4)
+        XCTAssertEqual(stats.totalWords, 2)
+        XCTAssertEqual(stats.totalChunks, 2)
+        XCTAssertEqual(stats.dueWords, 1)
+        XCTAssertEqual(stats.dueChunks, 1)
+    }
+
+    // MARK: 四档评分（readerSrs.test:76-106）
+
+    func testGradeIntervalsAreDocConstants() {
+        let srs = initialSrs(now: nowMs)
+        XCTAssertEqual(gradeSrs(srs, .forgot, now: nowMs).dueAt - nowMs, 10 * 60 * 1000)
+        XCTAssertEqual(gradeSrs(srs, .hard, now: nowMs).dueAt - nowMs, 24 * 60 * 60 * 1000)
+        XCTAssertEqual(gradeSrs(srs, .good, now: nowMs).dueAt - nowMs, 3 * 24 * 60 * 60 * 1000)
+        XCTAssertEqual(gradeSrs(srs, .easy, now: nowMs).dueAt - nowMs, 7 * 24 * 60 * 60 * 1000)
+    }
+
+    func testForgotAccumulatesLapsesEasyRaisesEaseClamped() {
+        let srs = initialSrs(now: nowMs)
+        let forgot = gradeSrs(srs, .forgot, now: nowMs)
+        XCTAssertEqual(forgot.lapses, 1)
+        XCTAssertEqual(forgot.ease, 2.3, accuracy: 0.0001)
+        let easy = gradeSrs(srs, .easy, now: nowMs)
+        XCTAssertEqual(easy.lapses, 0)
+        XCTAssertEqual(easy.ease, 2.65, accuracy: 0.0001)
+        var s = srs
+        for _ in 0..<20 { s = gradeSrs(s, .forgot, now: nowMs) }
+        XCTAssertGreaterThanOrEqual(s.ease, 1.3)
+        s = srs
+        for _ in 0..<20 { s = gradeSrs(s, .easy, now: nowMs) }
+        XCTAssertLessThanOrEqual(s.ease, 2.8)
+    }
+
+    func testGradeSrsDoesNotMutateInput() {
+        let srs = initialSrs(now: nowMs)
+        _ = gradeSrs(srs, .hard, now: nowMs)
+        XCTAssertEqual(srs.reps, 0) // 值语义：返回新状态，入参不动
+    }
+
+    // MARK: 打卡与 streak（readerSrs.test:108-161）
+
+    func testStreakContinuesFromYesterdayWhenTodayMissing() {
+        let log = ReviewLogFile(schemaVersion: 1, days: [
+            ReviewLogDay(day: "2026-09-08", count: 1),
+            ReviewLogDay(day: "2026-09-09", count: 2),
+        ])
+        XCTAssertEqual(reviewStats([], log, nowMs: nowMs).streak, 2)
+    }
+
+    func testRecordReviewLandsToday() {
+        let updated = recordReview(ReviewLogFile(schemaVersion: 1, days: []), nowMs: nowMs)
+        let stats = reviewStats([], updated, nowMs: nowMs)
+        XCTAssertEqual(stats.reviewedToday, 1)
+        XCTAssertEqual(stats.streak, 1)
+    }
+
+    func testStreakBreaksOnGapDay() {
+        // 今天 09-10 没打卡 → 从昨天 09-09 数：09-09、09-08 连续，09-06 断。
+        let log = ReviewLogFile(schemaVersion: 1, days: [
+            ReviewLogDay(day: "2026-09-06", count: 1),
+            ReviewLogDay(day: "2026-09-08", count: 1),
+            ReviewLogDay(day: "2026-09-09", count: 1),
+        ])
+        XCTAssertEqual(reviewStats([], log, nowMs: nowMs).streak, 2)
+    }
+
+    func testStreakZeroWhenTodayAndYesterdayBothMissing() {
+        let log = ReviewLogFile(schemaVersion: 1, days: [
+            ReviewLogDay(day: "2026-09-08", count: 1),
+        ])
+        XCTAssertEqual(reviewStats([], log, nowMs: nowMs).streak, 0)
+    }
+
+    func testDistributionBucketsByCurrentInterval() {
+        let vocab = [
+            makeWord("l", dueAt: nowMs, intervalDays: 0),
+            makeWord("f", dueAt: nowMs, intervalDays: 3),
+            makeWord("m", dueAt: nowMs, intervalDays: 7),
+        ]
+        let distribution = reviewStats(vocab, ReviewLogFile(schemaVersion: 1, days: []), nowMs: nowMs).distribution
+        XCTAssertEqual(distribution, MasteryDistribution(learning: 1, familiar: 1, mastered: 1))
+    }
+
+    // MARK: dayKey 口径（readerSrs.ts:65-73：本地时区 YYYY-MM-DD 零填充）
+
+    func testDayKeyLocalZeroPadded() {
+        XCTAssertEqual(dayKey(nowMs: nowMs), "2026-09-10")
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 1
+        comps.day = 5
+        comps.hour = 0
+        let edge = Calendar.current.date(from: comps) ?? Date()
+        XCTAssertEqual(dayKey(date: edge), "2026-01-05") // 月/日零填充
+        // dayKeyOffset 的等价物：偏移 27 天跨月仍按本地日期键推进
+        XCTAssertEqual(shiftDayKey("2026-09-10", -27), "2026-08-14")
+    }
+
+    // MARK: v0.8 内化三阶（readerSrs.test:163-178）
+
+    func testMasteryStageS1S2ByInterval() {
+        XCTAssertEqual(masteryStage(makeWord("fresh", dueAt: nowMs, intervalDays: 0)), .s1)
+        XCTAssertEqual(masteryStage(makeWord("familiar", dueAt: nowMs, intervalDays: 1)), .s2)
+        XCTAssertEqual(masteryStage(makeWord("mastered", dueAt: nowMs, intervalDays: 7)), .s2)
+    }
+
+    func testMasteryStageSpokenAtWinsOverInterval() {
+        // 新词当天就在口语里用出：s1 → s3，不被 intervalDays<1 压住
+        XCTAssertEqual(masteryStage(makeWord("spoken-fresh", dueAt: nowMs, intervalDays: 0, spokenAt: nowMs - 1000)), .s3)
+        // 熟词用出：s2 → s3
+        XCTAssertEqual(masteryStage(makeWord("spoken-fam", dueAt: nowMs, intervalDays: 7, spokenAt: nowMs - 1000)), .s3)
+    }
+
+    // MARK: v0.8 热力格（readerSrs.test:180-213）
+
+    func testHeatBucketsWindow28DaysOldToNewTodayMarked() {
+        let buckets = heatBuckets(ReviewLogFile(schemaVersion: 1, days: []), nowMs: nowMs)
+        XCTAssertEqual(buckets.count, 28)
+        XCTAssertEqual(buckets[27].dayKey, dayKey(nowMs: nowMs))
+        XCTAssertTrue(buckets[27].isToday)
+        XCTAssertEqual(buckets.filter(\.isToday).count, 1)
+        // 首格 = 今天往前 27 天（跨月也按本地日期键推进）
+        XCTAssertEqual(buckets[0].dayKey, "2026-08-14")
+        XCTAssertFalse(buckets[0].isToday)
+    }
+
+    func testHeatBucketsLevels0To3AndOutsideWindowIgnored() {
+        let today = dayKey(nowMs: nowMs)
+        let log = ReviewLogFile(schemaVersion: 1, days: [
+            ReviewLogDay(day: today, count: 1),        // l1
+            ReviewLogDay(day: "2026-09-09", count: 3), // l2
+            ReviewLogDay(day: "2026-09-08", count: 6), // l2（6 次仍在 3-6 档）
+            ReviewLogDay(day: "2026-09-07", count: 7), // l3
+            ReviewLogDay(day: "2026-01-01", count: 9), // 窗口外不计
+        ])
+        let buckets = heatBuckets(log, nowMs: nowMs)
+        let todayBucket = buckets.first { $0.dayKey == today }
+        XCTAssertEqual(todayBucket?.level, 1)
+        XCTAssertEqual(todayBucket?.count, 1)
+        XCTAssertEqual(buckets.first { $0.dayKey == "2026-09-09" }?.level, 2)
+        XCTAssertEqual(buckets.first { $0.dayKey == "2026-09-08" }?.level, 2)
+        let l3 = buckets.first { $0.dayKey == "2026-09-07" }
+        XCTAssertEqual(l3?.level, 3)
+        XCTAssertEqual(l3?.count, 7)
+        // 没有记录的天是 level 0，窗口外的天不出现在窗口里
+        XCTAssertNil(buckets.first { $0.dayKey == "2026-01-01" })
+        XCTAssertEqual(buckets.filter { $0.level == 0 }.count, 28 - 4)
+    }
+
+    /// REV-10 对照修正的回归向量：同一 day 重复时取后写一条——
+    /// 对齐 Windows `new Map(log.days.map(...))` 的后写覆盖（readerSrs.ts:210）。
+    func testHeatBucketsDuplicateDayLastWriteWins() {
+        let today = dayKey(nowMs: nowMs)
+        let log = ReviewLogFile(schemaVersion: 1, days: [
+            ReviewLogDay(day: today, count: 1),
+            ReviewLogDay(day: today, count: 7), // 后写覆盖 → l3
+        ])
+        let bucket = heatBuckets(log, nowMs: nowMs).first { $0.isToday }
+        XCTAssertEqual(bucket?.count, 7)
+        XCTAssertEqual(bucket?.level, 3)
+    }
+
+    // MARK: REV-11 · 智能派发小签契约（SMART_ROUTE_TIP 三条逐字 + 「智能 · X」拼法）
+
+    func testSmartRouteTipVerbatim() {
+        XCTAssertEqual(smartRouteTip(.cloze), "智能混合：本卡是词块，练完形（放进原句默写）")
+        XCTAssertEqual(smartRouteTip(.dictation), "智能混合：本卡已复习过（间隔≥1 天），练听写")
+        XCTAssertEqual(smartRouteTip(.recognition), "智能混合：本卡是新词，先看词想义")
+    }
+
+    func testSmartPillLabelPrefixAndFixedModeUntouched() {
+        XCTAssertEqual(smartPillLabel("完形", smart: true), "智能 · 完形")
+        XCTAssertEqual(smartPillLabel("听写", smart: true), "智能 · 听写")
+        XCTAssertEqual(smartPillLabel("识别", smart: true), "智能 · 识别")
+        // 固定模式 pill 不变
+        XCTAssertEqual(smartPillLabel("完形", smart: false), "完形")
+        XCTAssertEqual(smartPillLabel("听写", smart: false), "听写")
     }
 }

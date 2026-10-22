@@ -17,6 +17,7 @@ trap cleanup EXIT
     cat "$PARSER_PATH"
     awk '
         /^private struct GlossarySummary / { printing = 1 }
+        /^struct SettingsSaveSnapshot/ { printing = 0 }
         /^final class SettingsWindowController/ { printing = 0 }
         printing { print }
     ' "$SETTINGS_PATH"

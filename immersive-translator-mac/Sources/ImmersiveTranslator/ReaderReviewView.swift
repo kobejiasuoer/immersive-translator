@@ -2,15 +2,33 @@ import AppKit
 import SwiftUI
 import ReaderCore
 
-/// 生词本左栏词表（复习态）：到期队列带序号（可点跳卡），其余按到期时间只读排列。
+/// 生词本左栏词表（复习态；Windows VocabListPanel.tsx）：到期队列带序号
+///（与卡片 1/N 对应，可点跳卡），其余词按到期时间只读排列，只给下次见面时间。
+/// 加练模式（focusCount>0）：队列只含某篇笔记的仍错词，横幅提示并给退出口，
+/// 「稍后再来」分组收起（Windows `!focusing && later...` 同口径）。
+/// REV-12 起挂入三合一容器挑战档左栏：queue/pos 由闯关舞台注入（会话快照，
+/// 评过的词已离队），保证序号与「第 N / M 关」一致；页脚带阅读/口语/笔记库入口
+///（四个房间在任何左栏都可见，不要求先回书架）与「生成复习笔记」按钮。
 struct VocabListPanelView: View {
     @ObservedObject var vm: ReaderViewModel
     @Environment(\.readerPalette) private var palette
+    /// 到期队列（闯关舞台会话快照：加练批次优先，评过的词已离队）。
+    let queue: [VocabWord]
+    /// 当前卡片在队列中的位置。
+    let pos: Int
+    /// 点到期词跳卡（pos 联动，Windows onJumpToCard = setReviewPos）。
+    let onJumpToCard: (Int) -> Void
+    /// 退出加练，回到全局到期队列（Windows exitFocus = setFocusIds(null)）。
+    var onExitFocus: (() -> Void)? = nil
 
-    /// 复习队列：笔记加练批次优先，否则普通到期队列。
-    private var due: [VocabWord] { vm.reviewQueue }
+    /// 加练模式：剩余仍错词数（批次激活但已评完时为 0，横幅仍在，退出口可达）。
+    private var focusCount: Int { vm.focusReviewIds?.count ?? 0 }
+    /// 加练批次激活（vm.focusReviewIds != nil）：列表只显示加练队列，稍后再来分组收起。
+    private var focusing: Bool { vm.focusReviewIds != nil }
     private var later: [VocabWord] {
-        let dueIds = Set(due.map(\.id))
+        // 加练模式列表只显示加练队列（Windows `!focusing && later` 同口径）。
+        guard !focusing else { return [] }
+        let dueIds = Set(queue.map(\.id))
         return vm.vocabWords
             .filter { !dueIds.contains($0.id) }
             .sorted { $0.srs.dueAt < $1.srs.dueAt }
@@ -25,26 +43,55 @@ struct VocabListPanelView: View {
                     .foregroundColor(palette.text)
                 Spacer()
                 Text("\(vm.vocabWords.count)")
-                    .font(.system(size: 11))
+                    .font(.system(size: 11.5).monospacedDigit())
                     .foregroundColor(palette.textTertiary)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
+            if focusing {
+                // .focus-banner：accent-softer 底 + accent 发丝边，标题 600
+                HStack(spacing: 8) {
+                    Text("加练 · 只测笔记仍错词（剩 \(focusCount)）")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundColor(palette.accent)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 0)
+                    if let onExitFocus {
+                        Button("退出", action: onExitFocus)
+                            .font(.system(size: 11.5))
+                            .buttonStyle(.plain)
+                            .foregroundColor(palette.accent)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .help("回到全部到期队列")
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(palette.accentSofter)
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.accentSoft))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 8)
+                .padding(.bottom, 4)
+            }
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     if vm.vocabWords.isEmpty {
-                        Text("还没有生词。\n在阅读里查词或点词块，选「加入生词本」，就会出现在这里。")
+                        Text("还没有生词。\n在阅读里查词或点词块，选「加入生词本」——攒下的词随时能一键整理成复习笔记。")
                             .font(.system(size: 12))
                             .foregroundColor(palette.textTertiary)
                             .lineSpacing(4)
                             .padding(.horizontal, 12)
                             .padding(.top, 8)
                     }
-                    if !due.isEmpty {
-                        groupLabel("待复习 · \(due.count)")
+                    if !queue.isEmpty {
+                        groupLabel(focusing ? "加练队列 · \(queue.count)" : "待复习 · \(queue.count)")
                     }
-                    ForEach(Array(due.enumerated()), id: \.element.id) { index, word in
+                    ForEach(Array(queue.enumerated()), id: \.element.id) { index, word in
                         dueRow(index: index, word: word)
                     }
                     if !later.isEmpty {
@@ -54,12 +101,12 @@ struct VocabListPanelView: View {
                         HStack {
                             Text(word.word)
                                 .font(.system(size: 12.5))
-                                .foregroundColor(palette.textSecondary)
+                                .foregroundColor(palette.textTertiary)
                                 .lineLimit(1)
                             Spacer()
                             Text(nextDueLabel(word.srs.dueAt))
-                                .font(.system(size: 10.5))
-                                .foregroundColor(palette.textTertiary)
+                                .font(.system(size: 11).monospacedDigit())
+                                .foregroundColor(palette.ink4)
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 6)
@@ -71,23 +118,42 @@ struct VocabListPanelView: View {
 
             Divider().opacity(0.5)
             VStack(alignment: .leading, spacing: 6) {
-                Button {
-                    vm.openReading()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: ReaderIcons.book).font(.system(size: 12))
-                        Text("沉浸式阅读").font(.system(size: 12.5))
-                        Spacer()
+                if !vm.vocabWords.isEmpty {
+                    Button {
+                        vm.openNoteDialog()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "square.and.pencil")
+                                .font(.system(size: 11))
+                            Text("生成复习笔记")
+                                .font(.system(size: 11.5))
+                            Spacer()
+                            let unnoted = vm.unnotedWordCount
+                            if unnoted > 0 {
+                                Text("\(unnoted) 词未整理")
+                                    .font(.system(size: 9.5, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 0.5)
+                                    .background(Color.orange)
+                                    .clipShape(Capsule())
+                            }
+                        }
+                        .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .foregroundColor(palette.accent)
+                    .help("把生词本里的词整理成一篇复习笔记")
                 }
-                .buttonStyle(.plain)
-                .foregroundColor(palette.text)
 
-                let todayTotal = stats.reviewedToday + due.count
+                navRow(icon: ReaderIcons.book, label: "沉浸式阅读") { vm.openReading() }
+                navRow(icon: ReaderIcons.navSpeak, label: "口语陪练") { vm.openSpeak() }
+                navRow(icon: "books.vertical", label: "笔记库") { vm.openNotes() }
+
+                let todayTotal = stats.reviewedToday + queue.count
                 Text(todayTotal > 0
-                    ? "今日复习 \(stats.reviewedToday) / \(todayTotal) · 连续打卡 \(stats.streak) 天"
-                    : "今日没有到期生词了。")
+                     ? "今日复习 \(stats.reviewedToday) / \(todayTotal) · 连续打卡 \(stats.streak) 天"
+                     : "今日没有到期生词了。")
                     .font(.system(size: 11))
                     .foregroundColor(palette.textTertiary)
             }
@@ -97,25 +163,40 @@ struct VocabListPanelView: View {
         .background(palette.surfaceAlt)
     }
 
+    private func navRow(icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 12))
+                Text(label).font(.system(size: 12.5))
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(palette.text)
+        .help("前往\(label)")
+    }
+
     private func groupLabel(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 10.5, weight: .semibold))
-            .foregroundColor(palette.textTertiary)
+            .font(.system(size: 11, weight: .bold))
+            .foregroundColor(palette.ink4)
+            .tracking(0.8)
             .padding(.leading, 4)
-            .padding(.top, 8)
+            .padding(.top, 10)
     }
 
     private func dueRow(index: Int, word: VocabWord) -> some View {
-        let active = index == vm.reviewPos
+        let active = index == pos
         return Button {
-            vm.reviewPos = index
+            onJumpToCard(index)
         } label: {
             HStack(spacing: 6) {
                 Text("\(index + 1)")
-                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                    .foregroundColor(active ? .white : palette.textTertiary)
+                    .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                    .foregroundColor(active ? palette.accent : palette.ink4)
                     .frame(width: 16, height: 16)
-                    .background(active ? palette.accent : Color.clear)
+                    .background(active ? palette.accent.opacity(0.12) : Color.clear)
                     .clipShape(Circle())
                 Text(word.word)
                     .font(.system(size: 12.5))
@@ -123,8 +204,11 @@ struct VocabListPanelView: View {
                     .lineLimit(1)
                 if word.effectiveKind == .chunk {
                     Text("块")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundColor(palette.knownColor)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(palette.ink4)
+                        .padding(.horizontal, 4)
+                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(palette.border))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
                 Spacer()
             }
@@ -439,6 +523,8 @@ struct ReviewView: View {
                 modeSwitch
                 if let word = current {
                     let pos = min(max(0, vm.reviewPos), due.count - 1)
+                    // 智能混合按卡路由：小签变「智能 · X」并带派发原因（REV-11）
+                    let smart = vm.effectiveSettings.reviewMode == .smart
                     switch effective.mode {
                     case .recognition:
                         RecognitionCardView(
@@ -446,6 +532,7 @@ struct ReviewView: View {
                             flipped: flipped,
                             pos: pos,
                             total: due.count,
+                            smart: smart,
                             sourceLabel: metaSource(word),
                             sentence: vm.sourcePreview(articleId: word.source.articleId, sentenceIdx: word.source.sentenceIdx) ?? word.example?.en,
                             palette: palette,
@@ -466,6 +553,7 @@ struct ReviewView: View {
                             verdict: verdict,
                             pos: min(max(0, vm.reviewPos), due.count - 1),
                             total: due.count,
+                            smart: smart,
                             sourceLabel: metaSource(word),
                             palette: palette,
                             fontPair: vm.effectiveSettings.fontPair,
@@ -487,6 +575,7 @@ struct ReviewView: View {
                             replays: replays,
                             pos: min(max(0, vm.reviewPos), due.count - 1),
                             total: due.count,
+                            smart: smart,
                             sourceLabel: metaSource(word),
                             palette: palette,
                             fontPair: vm.effectiveSettings.fontPair,
@@ -499,10 +588,17 @@ struct ReviewView: View {
                         )
                     }
                 } else if due.isEmpty, !results.isEmpty {
-                    SummaryPanelView(results: results, palette: palette) {
-                        results = []
-                        gradedThisRound = gradedThisRound.filter { !$0.contains("#spoke") }
-                    }
+                    // 结果摘要黄金出口（REV-9）：本轮错题预选进生成弹窗 / 去笔记库看复盘
+                    SummaryPanelView(
+                        results: results,
+                        palette: palette,
+                        onRestart: {
+                            results = []
+                            gradedThisRound = gradedThisRound.filter { !$0.contains("#spoke") }
+                        },
+                        onGenerateNote: { ids in vm.openNoteDialog(preselect: ids) },
+                        onOpenNotes: { vm.openNotes() }
+                    )
                 } else {
                     donePanel
                 }
@@ -601,9 +697,14 @@ private func substring(_ s: String, _ range: ReaderCore.TextRange) -> String {
 
 // MARK: - 词条版式小件
 
+/// 卡片头部：形态标签（智能混合下前缀「智能」并带派发原因悬停说明）+ 来源 + 进度。
+/// 对齐 Windows ReviewView.tsx:503-540 CardMeta + .mode-pill.smart（虚线描边表示
+/// 派发来源，透明底、text-2 墨色，悬停见 SMART_ROUTE_TIP）。
 private struct CardMeta: View {
     let pill: String
     let tone: Color?
+    /// 智能混合按卡路由时为 true：小签变「智能 · X」，一眼可见是派发而非切错模式。
+    var smart: Bool = false
     let source: String
     let pos: Int
     let total: Int
@@ -611,13 +712,21 @@ private struct CardMeta: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(pill)
+            Text(smartPillLabel(pill, smart: smart))
                 .font(.system(size: 10.5, weight: .bold))
-                .foregroundColor(tone == nil ? .white : (tone ?? .white))
-                .padding(.horizontal, 7)
+                .foregroundColor(smart ? palette.textSecondary : (tone == nil ? .white : (tone ?? .white)))
+                .padding(.horizontal, smart ? 6 : 7)
                 .padding(.vertical, 2)
-                .background(tone == nil ? palette.accent : (tone?.opacity(0.15) ?? palette.accent))
+                .background(smart ? Color.clear : (tone == nil ? palette.accent : (tone?.opacity(0.15) ?? palette.accent)))
+                .overlay(
+                    // .mode-pill.smart：透明底 + 1px 虚线描边（border-strong）
+                    Capsule().strokeBorder(
+                        smart ? palette.glassBorderStrong : Color.clear,
+                        style: StrokeStyle(lineWidth: 1, dash: [3, 2])
+                    )
+                )
                 .clipShape(Capsule())
+                .optionalHelp(smart ? pillTip(pill) : nil)
             Text(source)
                 .font(.system(size: 11))
                 .foregroundColor(palette.textTertiary)
@@ -625,6 +734,28 @@ private struct CardMeta: View {
             Text("\(pos + 1) / \(total)")
                 .font(.system(size: 11).monospacedDigit())
                 .foregroundColor(palette.textTertiary)
+        }
+    }
+}
+
+/// 小签 → 派发原因（仅智能混合；固定模式返回 nil 不挂 tooltip）。
+private func pillTip(_ pill: String) -> String? {
+    switch pill {
+    case "完形": return smartRouteTip(.cloze)
+    case "听写": return smartRouteTip(.dictation)
+    case "识别": return smartRouteTip(.recognition)
+    default: return nil
+    }
+}
+
+private extension View {
+    /// 有文案才挂 tooltip（固定模式小签不留空气泡）。
+    @ViewBuilder
+    func optionalHelp(_ text: String?) -> some View {
+        if let text {
+            help(text)
+        } else {
+            self
         }
     }
 }
@@ -911,6 +1042,7 @@ private struct RecognitionCardView: View {
     let flipped: Bool
     let pos: Int
     let total: Int
+    var smart: Bool = false
     let sourceLabel: String
     let sentence: String?
     let palette: ReaderPalette
@@ -923,7 +1055,7 @@ private struct RecognitionCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            CardMeta(pill: "识别", tone: palette.textTertiary, source: sourceLabel, pos: pos, total: total, palette: palette)
+            CardMeta(pill: "识别", tone: palette.textTertiary, smart: smart, source: sourceLabel, pos: pos, total: total, palette: palette)
             WordHead(
                 word: word,
                 flipped: flipped,
@@ -982,6 +1114,7 @@ private struct ClozeCardView: View {
     let verdict: RecallVerdict?
     let pos: Int
     let total: Int
+    var smart: Bool = false
     let sourceLabel: String
     let palette: ReaderPalette
     let fontPair: ReaderFontPair
@@ -1000,7 +1133,7 @@ private struct ClozeCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            CardMeta(pill: "完形", tone: palette.accent, source: sourceLabel, pos: pos, total: total, palette: palette)
+            CardMeta(pill: "完形", tone: palette.accent, smart: smart, source: sourceLabel, pos: pos, total: total, palette: palette)
 
             if let source, let blank {
                 clozeSentence(source: source, blank: blank)
@@ -1144,6 +1277,7 @@ private struct DictationCardView: View {
     let replays: Int
     let pos: Int
     let total: Int
+    var smart: Bool = false
     let sourceLabel: String
     let palette: ReaderPalette
     let fontPair: ReaderFontPair
@@ -1156,7 +1290,7 @@ private struct DictationCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            CardMeta(pill: "听写", tone: palette.knownColor, source: sourceLabel, pos: pos, total: total, palette: palette)
+            CardMeta(pill: "听写", tone: palette.knownColor, smart: smart, source: sourceLabel, pos: pos, total: total, palette: palette)
 
             if let source {
                 HStack(spacing: 10) {
@@ -1249,21 +1383,44 @@ private struct DictationCardView: View {
     }
 }
 
-// MARK: - 结果摘要
+// MARK: - 结果摘要（REV-9 黄金出口；对齐 ReviewView.tsx:1181-1239 SummaryPanel）
 
-private struct SummaryPanelView: View {
+/// 本轮复习完成摘要：四格判分统计（产出卡）+ 两个黄金出口——
+/// 「把这轮错题整理成笔记」（本轮 wrong/close/trap 词预选进生成弹窗；无错题禁用）与
+/// 「去笔记库看复盘」；下方保留「清空本轮统计」。挑战档完成态（ReaderVaultView）同样复用。
+struct SummaryPanelView: View {
     let results: [ReviewView.RecallResult]
     let palette: ReaderPalette
+    /// 标题（复习流「本轮复习完成 🎉」/ 闯关「本轮闯关完成 🎉」）。
+    var title: String = "本轮复习完成 🎉"
     let onRestart: () -> Void
+    /// 「把这轮错题整理成笔记」：入参为本轮错题词 id（wrong/close/trap，去重保序）；
+    /// nil 不渲染该按钮（Windows onGenerateNote 可选同口径）。
+    var onGenerateNote: (([String]) -> Void)? = nil
+    /// 「去笔记库看复盘」；nil 不渲染该按钮。
+    var onOpenNotes: (() -> Void)? = nil
+
+    /// 本轮错题词：产出卡（完形/听写）判为 wrong / close / trap 的词，去重保序。
+    /// 识别卡无判分（judged == nil）不计——与四格统计只数产出卡同口径。
+    static func wrongWordIds(_ results: [ReviewView.RecallResult]) -> [String] {
+        var seen = Set<String>()
+        var ids: [String] = []
+        for r in results {
+            guard let judged = r.judged, judged == .wrong || judged == .close || judged == .trap else { continue }
+            if seen.insert(r.wordId).inserted { ids.append(r.wordId) }
+        }
+        return ids
+    }
 
     var body: some View {
         let produced = results.filter { $0.mode != .recognition }
         let recogCount = results.count - produced.count
+        let wrongIds = Self.wrongWordIds(results)
         func count(_ verdict: RecallVerdict) -> Int {
             produced.filter { $0.judged == verdict }.count
         }
         return VStack(spacing: 12) {
-            Text("本轮复习完成 🎉")
+            Text(title)
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(palette.text)
             Text("\(produced.count) 张产出卡（完形/听写）" + (recogCount > 0 ? " · 另完成 \(recogCount) 张识别卡" : ""))
@@ -1274,6 +1431,30 @@ private struct SummaryPanelView: View {
                 summaryCell(value: count(.close), label: "接近差一点", color: palette.warn)
                 summaryCell(value: count(.trap), label: "直译陷阱", color: palette.err)
                 summaryCell(value: count(.wrong), label: "未想起", color: palette.textTertiary)
+            }
+            if onGenerateNote != nil || onOpenNotes != nil {
+                // .review-done-nav：居中、间距 10、上边距 16
+                HStack(spacing: 10) {
+                    if let onGenerateNote {
+                        Button {
+                            onGenerateNote(wrongIds)
+                        } label: {
+                            Text("把这轮错题整理成笔记")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(wrongIds.isEmpty)
+                        .help(wrongIds.isEmpty
+                              ? "本轮没有错题，不用整理"
+                              : "错题记录刚写盘，正是整理笔记的好时机（预选 \(wrongIds.count) 个错题词）")
+                        .accessibilityHint(wrongIds.isEmpty ? "本轮没有错题" : "打开生成弹窗并预选本轮 \(wrongIds.count) 个错题词")
+                    }
+                    if let onOpenNotes {
+                        Button("去笔记库看复盘", action: onOpenNotes)
+                            .buttonStyle(.bordered)
+                            .help("切到笔记库，回看这批词的复盘")
+                    }
+                }
+                .padding(.top, 4)
             }
             Button("清空本轮统计", action: onRestart)
                 .controlSize(.small)

@@ -69,6 +69,53 @@ func shadowDrillEntries(target: String, marks: [XfyunCore.WordMark]) -> [ShadowD
         }
 }
 
+// MARK: - 报告卡 / 异常卡令牌（逐值对账 reader.css，ShadowReportBridgeTests 核对）
+
+/// 跟读报告卡与异常卡的尺寸/动效令牌。阅读室与口语页同一套观感，值逐项对账
+/// Windows reader.css：.speak-report-card（3793-3807）、@keyframes rc-in（3809-3818）、
+/// .speak-report-err（4214-4240）。
+enum ShadowCardTokens {
+    // .speak-report-card：12 圆角 / padding 12px 14px 11px / gap 9 / 1px 发丝边 /
+    // box-shadow 0 1px 3px rgba(16,24,40,.05)（CSS 模糊半径 3px ≈ SwiftUI radius 1.5）
+    static let reportCornerRadius: CGFloat = 12
+    static let reportPadding = EdgeInsets(top: 12, leading: 14, bottom: 11, trailing: 14)
+    static let reportSpacing: CGFloat = 9
+    static let reportShadowOpacity: Double = 0.05
+    static let reportShadowRadius: CGFloat = 1.5
+    static let reportShadowY: CGFloat = 1
+
+    // @keyframes rc-in：.38s cubic-bezier(.2,.9,.3,1.15)，from translateY(8px) scale(.985) opacity 0
+    static let enterDuration: Double = 0.38
+    static let enterCurve: (c0x: Double, c0y: Double, c1x: Double, c1y: Double) = (0.2, 0.9, 0.3, 1.15)
+    static let enterOffsetY: CGFloat = 8
+    static let enterScale: CGFloat = 0.985
+    /// 「减弱动态效果」时的替代：仅淡入（apple-design §14）。
+    static let enterReducedDuration: Double = 0.2
+
+    // .speak-report-err：10 圆角 / padding 9px 12px / gap 6 / border-left 3px / 12.5px 正文 / line-height 1.65
+    static let failureCornerRadius: CGFloat = 10
+    static let failurePadding = EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12)
+    static let failureSpacing: CGFloat = 6
+    static let failureAccentLineWidth: CGFloat = 3
+    static let failureFontSize: CGFloat = 12.5
+    /// line-height 1.65 × 12.5px ≈ 20.6pt 行高 → 行距 ≈ 8pt 的一半取 4（SwiftUI lineSpacing 为行间附加值）。
+    static let failureLineSpacing: CGFloat = 4
+
+    /// 卡片入场动画（随系统减弱动态效果切换）。
+    static func enterAnimation(reduceMotion: Bool) -> Animation {
+        reduceMotion
+            ? .easeOut(duration: enterReducedDuration)
+            : .timingCurve(enterCurve.c0x, enterCurve.c0y, enterCurve.c1x, enterCurve.c1y, duration: enterDuration)
+    }
+
+    /// 卡片入场过渡（减弱动态效果时只留淡入）。
+    static func enterTransition(reduceMotion: Bool) -> AnyTransition {
+        reduceMotion
+            ? .opacity
+            : .opacity.combined(with: .offset(y: enterOffsetY)).combined(with: .scale(scale: enterScale))
+    }
+}
+
 // MARK: - 录音回放器
 
 /// 「听我的录音」回放器：16k Float32 PCM → 内存 WAV（44 字节 RIFF 头）→ AVAudioPlayer。
@@ -160,55 +207,77 @@ struct ShadowReportOverlay: View {
         .animation(.easeOut(duration: 0.25), value: showCard)
         .frame(maxWidth: 560, alignment: .leading)
         .padding(.horizontal, 16)
-        .padding(.bottom, 60)
+        // M-02：底部改悬浮走带胶囊（bottom 18 + 高约 50）后抬高，报告卡不压胶囊。
+        .padding(.bottom, 88)
     }
 }
 
-// MARK: - 报告卡
+// MARK: - 报告卡（数据驱动主体，阅读室与口语页共用）
 
-/// 跟读报告卡（ShadowReport.tsx 的 Mac 对应物）：总分/徽章 → 维度条 → 诊断句 →
-/// 词着色原句 → 动作行。数据直读 assess 控制器（结果/词着色/尝试历史/录音留存），
-/// 布局尺寸对照 reader.css 的 .speak-report-card（3810-3823）。
-private struct ShadowReportCard: View {
-    private let vm: ReaderViewModel
-    @ObservedObject private var assess: ShadowAssessController
+/// 报告卡动作集（SPEAK-7）：把卡与宿主解耦——阅读室接 vm.assess*，口语页接
+/// SpeakViewController 的跟读动作。所有动作由宿主保证「先停播报、与主麦克风互斥」。
+struct ShadowReportActions {
+    /// 🎤 再跟读整句。
+    var again: () -> Void
+    /// 🎯 只练差词：宿主负责把 bad+missed 前 4 词开进差词抽屉（body 已算好 entries）。
+    var drill: (_ entries: [ShadowDrillController.Entry]) -> Void
+    /// 🔊 听领读（整句示范播报）。
+    var hearModel: () -> Void
+    /// ▶ 听我的录音；nil = 无录音可放（按钮禁用，Windows onHearMine 传 null 同义）。
+    var hearMine: (() -> Void)?
+    /// 弹层「🔊 听这个词」。
+    var speakWord: (_ word: String) -> Void
+    /// 弹层「🎯 练这个词」：收弹层后开抽屉并把该词置顶。
+    var drillWord: (_ word: String) -> Void
+    /// 右上 ✕ 收卡；nil = 不显示（口语页报告卡常驻到下一轮，Windows 同款无 ✕）。
+    var dismiss: (() -> Void)?
+}
+
+/// 跟读报告卡主体（ShadowReport.tsx 的 Mac 对应物）：总分/徽章 → 维度条 → 诊断句 →
+/// 词着色原句（点词音素弹层）→ 动作行。数据全由调用方给（阅读室 = assess 控制器，
+/// 口语页 = 落盘 ShadowAttempt），布局尺寸对照 reader.css 的 .speak-report-card
+///（3793-3823：12/14/11/14 padding、12 圆角、surface 底 + 发丝边 + 浅投影、9 间距）。
+struct ShadowReportCardBody: View {
+    let result: XfyunCore.PronunciationResult
+    let marks: [XfyunCore.WordMark]
+    /// 历次总分（含本次，最新在末尾）——「第 n 次跟读」/ 历次 chips。
+    let attemptTotals: [Double]
+    let passScore: Double
+    /// 词着色底本（与 marks 的 start/end 同源；空 = 无从着色）。
+    let target: String
+    let actions: ShadowReportActions
     @Environment(\.readerPalette) private var palette
     /// 维度条入场宽度动画（对齐 Windows transition:width .8s）。
     @State private var dimBarMounted = false
 
-    init(vm: ReaderViewModel) {
-        self.vm = vm
-        self.assess = vm.assess
-    }
-
-    private var passScore: Double { vm.effectiveSettings.shadowingPassScore }
-
     var body: some View {
-        if let result = assess.state.result {
-            let diag = diagnoseShadow(
-                result.shadowDiag,
-                assess.state.marks.map(\.shadowDiagMark),
-                passScore: passScore
-            )
-            VStack(alignment: .leading, spacing: 9) {
-                header(result: result, diag: diag)
-                dimBars(result: result, weakDim: diag.weakDim)
-                diagSentence(diag)
-                ShadowMarkedSentence(vm: vm, target: vm.assessTargetSentence, marks: assess.state.marks)
-                actionRow(diag)
-            }
-            .padding(EdgeInsets(top: 12, leading: 14, bottom: 11, trailing: 14))
-            .background(palette.surface, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(palette.border, lineWidth: 1))
-            .shadow(color: .black.opacity(0.08), radius: 5, y: 1)
+        let diag = diagnoseShadow(
+            result.shadowDiag,
+            marks.map(\.shadowDiagMark),
+            passScore: passScore
+        )
+        VStack(alignment: .leading, spacing: ShadowCardTokens.reportSpacing) {
+            header(diag: diag)
+            dimBars(weakDim: diag.weakDim)
+            diagSentence(diag)
+            ShadowMarkedSentence(target: target, marks: marks, actions: actions)
+            actionRow(diag)
         }
+        .padding(ShadowCardTokens.reportPadding)
+        .background(palette.surface, in: RoundedRectangle(cornerRadius: ShadowCardTokens.reportCornerRadius))
+        .overlay(RoundedRectangle(cornerRadius: ShadowCardTokens.reportCornerRadius).stroke(palette.border, lineWidth: 1))
+        .shadow(
+            color: .black.opacity(ShadowCardTokens.reportShadowOpacity),
+            radius: ShadowCardTokens.reportShadowRadius,
+            y: ShadowCardTokens.reportShadowY
+        )
     }
 
     // ---- 头部：总分 + 徽章 + 第 n 次跟读 + 历次 chips + ✕ ----
 
-    private func header(result: XfyunCore.PronunciationResult, diag: ShadowDiagnosis) -> some View {
-        let attemptNo = assess.attemptTotals.count
-        let prev: Double? = attemptNo >= 2 ? assess.attemptTotals[attemptNo - 2] : nil
+    private func header(diag: ShadowDiagnosis) -> some View {
+        let attemptNo = attemptTotals.count
+        let prev: Double? = attemptNo >= 2 ? attemptTotals[attemptNo - 2] : nil
         let delta: Double? = prev.map { result.total - $0 }
         return HStack(alignment: .center, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -232,15 +301,17 @@ private struct ShadowReportCard: View {
             if attemptNo >= 2 {
                 attemptChips
             }
-            Button {
-                assess.dismissReport()
-            } label: {
-                Image(systemName: ReaderIcons.close)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(palette.textTertiary)
+            if let dismiss = actions.dismiss {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: ReaderIcons.close)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(palette.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .help("收起报告卡（评测条仍在，下次跟读再弹）")
             }
-            .buttonStyle(.plain)
-            .help("收起报告卡（评测条仍在，下次跟读再弹）")
         }
     }
 
@@ -271,8 +342,8 @@ private struct ShadowReportCard: View {
     /// 历次分数 chips（rc-chips）：当前次 accent 描边加粗，历史 ≥ 门槛 ok 色。
     private var attemptChips: some View {
         HStack(spacing: 4) {
-            ForEach(Array(assess.attemptTotals.enumerated()), id: \.offset) { i, total in
-                let isCurrent = i == assess.attemptTotals.count - 1
+            ForEach(Array(attemptTotals.enumerated()), id: \.offset) { i, total in
+                let isCurrent = i == attemptTotals.count - 1
                 Text(String(format: "%.1f", total))
                     .font(.system(size: 10.5).monospacedDigit())
                     .fontWeight(isCurrent ? .bold : .regular)
@@ -289,10 +360,10 @@ private struct ShadowReportCard: View {
 
     // ---- 维度条：准确度/流畅度/完整度，weak 维度换 warn + 备注 ----
 
-    private func dimBars(result: XfyunCore.PronunciationResult, weakDim: ShadowDimKind?) -> some View {
+    private func dimBars(weakDim: ShadowDimKind?) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             ForEach([ShadowDimKind.accuracy, .fluency, .integrity], id: \.self) { dim in
-                let score = dimScore(dim, of: result)
+                let score = dimScore(dim)
                 let weak = weakDim == dim
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
@@ -332,7 +403,7 @@ private struct ShadowReportCard: View {
         }
     }
 
-    private func dimScore(_ dim: ShadowDimKind, of result: XfyunCore.PronunciationResult) -> Double {
+    private func dimScore(_ dim: ShadowDimKind) -> Double {
         switch dim {
         case .accuracy: return result.accuracy
         case .fluency: return result.fluency
@@ -387,7 +458,7 @@ private struct ShadowReportCard: View {
     private func actionRow(_ diag: ShadowDiagnosis) -> some View {
         HStack(spacing: 8) {
             Button {
-                vm.assessRetry()
+                actions.again()
             } label: {
                 Text("🎤 再跟读整句")
             }
@@ -396,7 +467,7 @@ private struct ShadowReportCard: View {
 
             if !diag.drillWords.isEmpty {
                 Button {
-                    vm.openDrillFromCard()
+                    actions.drill(shadowDrillEntries(target: target, marks: marks))
                 } label: {
                     Text("🎯 只练 \(diag.drillWords.count) 个词")
                 }
@@ -405,14 +476,86 @@ private struct ShadowReportCard: View {
             }
 
             ShadowLinkButton(title: "🔊 听领读") {
-                vm.assessLead()
+                actions.hearModel()
             }
-            ShadowLinkButton(title: "▶ 听我的录音", disabled: assess.lastAttemptPcm == nil) {
-                vm.playAssessRecording()
+            ShadowLinkButton(title: "▶ 听我的录音", disabled: actions.hearMine == nil) {
+                actions.hearMine?()
             }
             Spacer(minLength: 0)
         }
     }
+}
+
+// MARK: - 报告卡（阅读室挂载：数据直读 assess 控制器）
+
+/// 阅读室报告卡：assess 控制器 → 数据驱动主体的薄壳（结果/词着色/尝试历史/录音留存
+/// 均来自 ShadowAssessController；结果与词着色也供 AssessStripView 评测条复用）。
+private struct ShadowReportCard: View {
+    private let vm: ReaderViewModel
+    @ObservedObject private var assess: ShadowAssessController
+
+    init(vm: ReaderViewModel) {
+        self.vm = vm
+        self.assess = vm.assess
+    }
+
+    var body: some View {
+        if let result = assess.state.result {
+            ShadowReportCardBody(
+                result: result,
+                marks: assess.state.marks,
+                attemptTotals: assess.attemptTotals,
+                passScore: vm.effectiveSettings.shadowingPassScore,
+                target: vm.assessTargetSentence ?? "",
+                actions: ShadowReportActions(
+                    again: { vm.assessRetry() },
+                    drill: { entries in vm.drill.open(entries: entries) },
+                    hearModel: { vm.assessLead() },
+                    hearMine: assess.lastAttemptPcm == nil
+                        ? nil
+                        : { vm.playAssessRecording() },
+                    speakWord: { vm.speakWord($0) },
+                    drillWord: { word in vm.openDrill(preferring: word) },
+                    dismiss: { assess.dismissReport() }
+                )
+            )
+        }
+    }
+}
+
+// MARK: - 落盘 attempts → 报告卡视图数据（SPEAK-7：口语页复用）
+
+/// 落盘跟读 attempts 派生的报告卡数据（Windows SpeakView.tsx:650-678 lastReport：
+/// 渲染统一从落盘派生——刚评完与重开旧会话走同一条路）。result 为末次 attempt 的
+/// 视图重建（isRejected=false / exceptInfo=nil：进 attempts 的必是干净结果）。
+struct ShadowAttemptReport: Equatable {
+    /// 末次尝试时间戳（报告卡重挂载 key，换新一轮即重渲）。
+    let attemptAt: Int64
+    /// 本轮全部尝试的总分（含本次，最新在末尾）。
+    let totals: [Double]
+    let result: XfyunCore.PronunciationResult
+    let marks: [XfyunCore.WordMark]
+}
+
+/// attempts 非空时派生报告卡数据；空/无末次返回 nil。
+func shadowAttemptReport(target: String, attempts: [ShadowAttempt]) -> ShadowAttemptReport? {
+    guard let last = attempts.last else { return nil }
+    let words = last.words.map(\.xfyunWordScore)
+    return ShadowAttemptReport(
+        attemptAt: last.at,
+        totals: attempts.map(\.total),
+        result: PronunciationResult(
+            total: last.total,
+            accuracy: last.accuracy,
+            fluency: last.fluency,
+            standard: last.total,
+            integrity: last.integrity,
+            isRejected: false,
+            exceptInfo: nil,
+            words: words
+        ),
+        marks: mapWordsToText(text: target, words: words)
+    )
 }
 
 // MARK: - 词着色原句（四档全着色 + 点词音素弹层）
@@ -421,12 +564,13 @@ private struct ShadowReportCard: View {
 /// FlowLayout 逐词换行。四档样式逐条对齐 reader.css:4024-4042：
 /// good→ok 绿字 / ok→warn 黄字 / bad→err+点状下划线 / missed→err+实线下划线+err 12% 底。
 /// 可点（弹层）仅 quality != good（ShadowReport.tsx:263）。
-/// 切句底本 target 与对齐同源：vm.assessTargetSentence（= article.sentences[idx].en）。
+/// 切句底本 target 必须与 marks 对齐同源（阅读室 = vm.assessTargetSentence；口语页 =
+/// 最新 assistant 句）。
 private struct ShadowMarkedSentence: View {
-    let vm: ReaderViewModel
-    /// 对齐底本（nil/空 = 无从着色，整块不渲染）。
-    let target: String?
+    /// 对齐底本（空 = 无从着色，整块不渲染）。
+    let target: String
     let marks: [XfyunCore.WordMark]
+    let actions: ShadowReportActions
     @Environment(\.readerPalette) private var palette
     /// 当前弹出音素层的词（token id；NSPopover 原生处理点外部/Esc 关闭）。
     @State private var activeToken: Int?
@@ -438,7 +582,7 @@ private struct ShadowMarkedSentence: View {
     }
 
     var body: some View {
-        if let target, !target.isEmpty {
+        if !target.isEmpty {
             FlowLayout(lineSpacing: 6) {
                 ForEach(tokens(target: target)) { token in
                     if let mark = token.mark {
@@ -494,7 +638,15 @@ private struct ShadowMarkedSentence: View {
             attachmentAnchor: .point(.bottom),
             arrowEdge: .bottom
         ) {
-            ShadowWordPopover(vm: vm, text: token.text, mark: mark, onClose: { activeToken = nil })
+            ShadowWordPopover(
+                text: token.text,
+                mark: mark,
+                onSpeakWord: actions.speakWord,
+                onDrillWord: { word in
+                    activeToken = nil
+                    actions.drillWord(word)
+                }
+            )
         }
     }
 
@@ -586,11 +738,13 @@ struct FlowLayout: Layout {
 /// 点词音素弹层（ShadowReport.tsx WordPopover 的 Mac 对应物）：词 + 分数/漏读徽标、
 /// 音素行（worst err 底白字）、纠音 tip、听这个词/练这个词。Windows 的手写 portal
 /// 定位与点外部/Esc 关闭逻辑由 NSPopover 原生处理，不需要移植。
+/// 动作走闭包（宿主决定是阅读室 vm 还是口语控制器）。
 private struct ShadowWordPopover: View {
-    let vm: ReaderViewModel
     let text: String
     let mark: XfyunCore.WordMark
-    var onClose: () -> Void = {}
+    let onSpeakWord: (String) -> Void
+    /// 「练这个词」：宿主先收弹层再开抽屉置顶该词。
+    let onDrillWord: (String) -> Void
     @Environment(\.readerPalette) private var palette
 
     var body: some View {
@@ -632,7 +786,7 @@ private struct ShadowWordPopover: View {
             }
             HStack(spacing: 8) {
                 Button {
-                    vm.speakWord(text)
+                    onSpeakWord(text)
                 } label: {
                     Text("🔊 听这个词").frame(maxWidth: .infinity)
                 }
@@ -640,8 +794,7 @@ private struct ShadowWordPopover: View {
                 .controlSize(.small)
                 if !missed {
                     Button {
-                        onClose()
-                        vm.openDrill(preferring: text)
+                        onDrillWord(text)
                     } label: {
                         Text("🎯 练这个词").frame(maxWidth: .infinity)
                     }
@@ -717,5 +870,94 @@ struct ShadowLinkButton: View {
         .buttonStyle(.plain)
         .disabled(disabled)
         .onHover { hover = $0 }
+    }
+}
+
+// MARK: - 跟读异常可行动卡片（SPEAK-13，对齐 SpeakView.tsx:1604-1669 ShadowErrorCard）
+
+/// 跟读异常的可行动卡片：标题 + 一句怎么办 + 动作按钮（听领读 / 再跟读）。
+/// 视觉对齐 reader.css:4214-4240 .speak-report-err：1px 发丝边 + 左边 3pt 强调线 +
+/// 10 圆角 + 9/12 padding；rejected = warn 左线 + warnSoft 底，其余三类走 .novoice
+/// 中性变体（左边 textTertiary + surfaceAlt 底）；标题 600 text、正文 12.5 textSecondary。
+struct ShadowFailureCardView: View {
+    let card: ShadowFailureCard
+    /// 按钮分发（口语控制器 performShadowFailureAction；听领读先停播报）。
+    let perform: (ShadowFailureActionKind) -> Void
+    /// 收起角标（nil = 无 ✕；口语页与 Windows 一致常驻到下一轮，这里留逃生门）。
+    var onDismiss: (() -> Void)?
+    @Environment(\.readerPalette) private var palette
+
+    private var accentColor: Color { card.kind == .rejected ? palette.warn : palette.textTertiary }
+    private var cardBackground: Color { card.kind == .rejected ? palette.warnSoft : palette.surfaceAlt }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ShadowCardTokens.failureSpacing) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(verbatim: card.title)
+                    .font(.system(size: ShadowCardTokens.failureFontSize, weight: .semibold))
+                    .foregroundColor(palette.text)
+                Spacer(minLength: 8)
+                if let onDismiss {
+                    Button {
+                        onDismiss()
+                    } label: {
+                        Image(systemName: ReaderIcons.close)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(palette.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("收起这张卡（点「跟读打分」重新开始）")
+                }
+            }
+            Text(verbatim: card.body)
+                .font(.system(size: ShadowCardTokens.failureFontSize))
+                .foregroundColor(palette.textSecondary)
+                .lineSpacing(ShadowCardTokens.failureLineSpacing)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 8) {
+                ForEach(Array(card.actions.enumerated()), id: \.offset) { _, action in
+                    actionButton(action)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(ShadowCardTokens.failurePadding)
+        .background(cardBackground, in: RoundedRectangle(cornerRadius: ShadowCardTokens.failureCornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: ShadowCardTokens.failureCornerRadius).stroke(palette.border, lineWidth: 1)
+        )
+        .overlay(alignment: .leading) {
+            // 左边 3pt 强调线（border-left: 3px）：rejected = warn，其余中性
+            RoundedRectangle(cornerRadius: 2)
+                .fill(accentColor)
+                .frame(width: ShadowCardTokens.failureAccentLineWidth)
+                .padding(.vertical, 1)
+                .accessibilityHidden(true)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("跟读提示：\(card.title)")
+    }
+
+    /// rc-btn.primary → borderedProminent；rc-btn → bordered（与报告卡动作行同一套控件）。
+    @ViewBuilder
+    private func actionButton(_ action: ShadowFailureAction) -> some View {
+        if action.primary {
+            Button {
+                perform(action.kind)
+            } label: {
+                Text(verbatim: action.title)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        } else {
+            Button {
+                perform(action.kind)
+            } label: {
+                Text(verbatim: action.title)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
     }
 }

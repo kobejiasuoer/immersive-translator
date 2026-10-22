@@ -12,7 +12,8 @@ import CryptoKit
 // - 握手要求 User-Agent：mac 端 URLSession 不会自动携带浏览器 UA，必须显式设置
 //   （主版本与 Sec-MS-GEC-Version 对齐；服务端只校验格式）。
 // - 帧序列：连上发两条文本帧（speech.config 指定 mp3 输出；ssml 带 voice/prosody），
-//   语速恒 +0%（变速由播放端 AVAudioPlayer 承担，与讯飞引擎同一策略）。
+//   语速缺省 +0%（变速由播放端 AVAudioPlayer 承担，与讯飞引擎同一策略）；v0.8 慢速
+//   示范可显式传 ratePercent（如 "-25%"）走原生 prosody 合成，缓存按语速分份。
 // - 响应：二进制帧 = 2 字节大端头长 + 头文本（含 Path:audio）+ mp3 净荷，逐帧累加；
 //   文本帧含 Path:turn.end 收尾。
 // - 免费无凭据，但属非官方接口：微软可能收紧，引擎链里必须有本地系统语音兜底
@@ -48,6 +49,10 @@ public enum EdgeTts {
     public static let defaultVoice = "zh-CN-XiaoxiaoNeural"
     /// 英文句缺省音色：Ava。
     public static let defaultVoiceEn = "en-US-AvaNeural"
+    /// 缺省 prosody rate（与旧请求逐字节一致；edgeTts.ts:78 DEFAULT_EDGE_RATE_PERCENT）。
+    public static let defaultRatePercent = "+0%"
+    /// v0.8 慢速示范的原生合成语速（ReaderApp.tsx:1974 nativeRate:"-25%"）。
+    public static let slowDemoRatePercent = "-25%"
 
     /// 设置抽屉「Edge 音色」输入框的建议列表（对齐 EDGE_TTS_VOICE_SUGGESTIONS）。
     public static let voiceSuggestions: [(voice: String, label: String)] = [
@@ -69,9 +74,20 @@ public enum EdgeTts {
 public struct EdgeTtsOptions: Equatable, Sendable {
     /// Edge 音色 ShortName；空串 = 缺省音色（中文句晓晓 / 英文句由引擎选）。
     public var voice: String
+    /// 原生合成语速（SSML prosody rate 百分比，如 "-25%"；v0.8 慢速示范用）。
+    /// nil = 缺省 "+0%"：请求与旧版逐字节一致、缓存 key 也不变（变速仍由播放端
+    /// AVAudioPlayer 承担）；一旦传值，缓存 key 纳入该值（不同语速各合成一份）。
+    /// 对齐 edgeTts.ts:26-35 EdgeTtsOptions.ratePercent。
+    public var ratePercent: String?
 
-    public init(voice: String = EdgeTts.defaultVoice) {
+    public init(voice: String = EdgeTts.defaultVoice, ratePercent: String? = nil) {
         self.voice = voice
+        self.ratePercent = ratePercent
+    }
+
+    /// 实际写入 SSML 的 rate（缺省回落 "+0%"）。
+    public var effectiveRatePercent: String {
+        ratePercent ?? EdgeTts.defaultRatePercent
     }
 }
 
@@ -96,16 +112,29 @@ public enum EdgeTtsError: Error, LocalizedError, Equatable {
 
 // MARK: - 缓存键
 
-/// 缓存键 = edge:voice|text（语速不入键，变速由播放端承担；空音色回落缺省音色）。
+/// 缓存键 = edge:voice|text（缺省语速不入键，1× 变速在播放端；空音色回落缺省音色）；
+/// 显式传了 ratePercent 且不等于缺省 "+0%" 才拼入 `|r<rate>`——缺省值 key 与旧 key
+/// 完全一致，老缓存不失效（对齐 edgeTts.ts:168-179 edgeTtsCacheKey）。
 public func edgeCacheKey(text: String, opts: EdgeTtsOptions) -> String {
-    "edge:\(opts.voice.isEmpty ? EdgeTts.defaultVoice : opts.voice)|\(text)"
+    let voice = opts.voice.isEmpty ? EdgeTts.defaultVoice : opts.voice
+    let rate = opts.effectiveRatePercent
+    return rate == EdgeTts.defaultRatePercent
+        ? "edge:\(voice)|\(text)"
+        : "edge:\(voice)|r\(rate)|\(text)"
 }
 
 // MARK: - 请求帧构造（纯函数，单测可及）
 
-/// ssml 文本帧：voice 嵌入 + prosody 恒 +0%（变速由播放端承担）。
+/// ssml 文本帧：voice 嵌入 + prosody rate（缺省 "+0%" 与旧请求逐字节一致；
+/// 慢速示范传 "-25%"，对齐 edgeTts.ts:80-98 buildSsmlMessage）。
 /// 文本做 &/</> 转义后嵌入；locale 取音色前两段。
-public func buildEdgeSsmlMessage(voice: String, text: String, requestId: String, timestamp: String) -> String {
+public func buildEdgeSsmlMessage(
+    voice: String,
+    text: String,
+    requestId: String,
+    timestamp: String,
+    ratePercent: String = EdgeTts.defaultRatePercent
+) -> String {
     var locale = voice.split(separator: "-").prefix(2).joined(separator: "-")
     if locale.isEmpty { locale = "en-US" }
     let safe = text
@@ -114,7 +143,7 @@ public func buildEdgeSsmlMessage(voice: String, text: String, requestId: String,
         .replacingOccurrences(of: ">", with: "&gt;")
     let ssml =
         "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='\(locale)'>" +
-        "<voice name='\(voice)'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>\(safe)</prosody></voice></speak>"
+        "<voice name='\(voice)'><prosody pitch='+0Hz' rate='\(ratePercent)' volume='+0%'>\(safe)</prosody></voice></speak>"
     return (
         "X-RequestId:\(requestId)\r\nContent-Type:application/ssml+xml\r\n" +
         "X-Timestamp:\(timestamp)\r\nPath:ssml\r\n\r\n\(ssml)"
@@ -314,7 +343,8 @@ public func synthesizeEdgeTtsOnce(
                     voice: voice,
                     text: trimmed,
                     requestId: UUID().uuidString.replacingOccurrences(of: "-", with: ""),
-                    timestamp: timestamp
+                    timestamp: timestamp,
+                    ratePercent: opts.effectiveRatePercent
                 ))
                 while true {
                     switch try await transport.receive() {

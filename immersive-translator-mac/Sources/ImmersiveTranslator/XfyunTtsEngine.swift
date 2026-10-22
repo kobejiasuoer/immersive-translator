@@ -6,12 +6,13 @@ import XfyunCore
 
 /// 讯飞云 TTS 的 mac 引擎外观（speechEngine.ts + ttsDiskCache.ts 的对应物）。
 ///
-/// 双层缓存（key = vcn|volume|text，语速不入键）：
+/// 双层缓存（key = vcn|volume|text，缺省语速不入键；显式 nativeRate 时 key 带 r<speed>）：
 /// - L1：内存 LRU（TtsLruCache，80 条）。
 /// - L2：磁盘缓存（Application Support/ImmersiveTranslator/tts-cache/，3000 条上限，
 ///   超限按访问时间淘汰最旧）——重听/领读/预取不烧每日 500 次免费额度，
 ///   且应用重启后仍命中。
-/// 语速策略：恒 1× 合成，播放端 AVAudioPlayer.enableRate 变速不变调。
+/// 语速策略：缺省 1× 合成，播放端 AVAudioPlayer.enableRate 变速不变调；
+/// v0.8 慢速示范（SPEAK-8）传 nativeRate "-25%" → business.speed 38，与常速缓存互不污染。
 final class XfyunTtsEngine {
     static let shared = XfyunTtsEngine()
 
@@ -59,11 +60,17 @@ final class XfyunTtsEngine {
     }
 
     /// 取一段文本的音频：L1 → L2 → 网络（写入双层缓存）。
-    func audioData(for text: String) async throws -> Data {
+    /// nativeRate（SSML 百分比，如 "-25%"）是 v0.8 慢速示范的原生合成语速：缺省 nil
+    /// 走既有 1× 合成（请求与缓存 key 均不变，对齐 speechEngine.ts:198-215 的
+    /// `nativeRate ? { rate: speedFromRatePercent(nativeRate) } : {}`）。
+    func audioData(for text: String, nativeRate: String? = nil) async throws -> Data {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw XfyunTtsError.emptyText }
         let chinese = XfyunTts.looksChinese(trimmed)
-        let opts = XfyunTtsOptions(vcn: vcn(forChinese: chinese))
+        let opts = XfyunTtsOptions(
+            vcn: vcn(forChinese: chinese),
+            rate: nativeRate.map(speedFromRatePercent)
+        )
         let key = ttsCacheKey(text: trimmed, opts: opts)
 
         if let hit = l1.get(key) {

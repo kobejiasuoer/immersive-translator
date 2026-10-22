@@ -60,6 +60,8 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
     private var cloudTask: Task<Void, Never>?
     /// 句间停顿的延迟推进（云播放用；本地走 postUtteranceDelay）。
     private var pauseWorkItem: DispatchWorkItem?
+    /// once 播放中（折叠卡「朗读本句」）：当前句播完自动停，不连读。
+    private var oncePending = false
 
     /// 云播放器引用（delegate 回调身份比较用）。
     var currentCloudPlayer: AVAudioPlayer? { cloudPlayer }
@@ -109,17 +111,20 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
     }
 
     /// 播放中跳读；未播放时只移动光标（§9-7），autoplay 强制开始播放。
-    func jumpTo(_ idx: Int, autoplay: Bool = false) {
+    /// once = 只读目标句，读完自动停（行间折叠卡「朗读本句」，usePlayback.ts 的 onceRef）。
+    func jumpTo(_ idx: Int, autoplay: Bool = false, once: Bool = false) {
         guard !texts.isEmpty else { return }
         let clamped = min(texts.count - 1, max(0, idx))
         if playing || autoplay {
             epoch += 1
             shadowingWait = false
             playing = true
+            oncePending = once
             cursor = clamped
             publish(.activeIdx(clamped))
             speak(clamped)
         } else {
+            oncePending = false
             cursor = clamped
             publish(.activeIdx(clamped))
         }
@@ -131,16 +136,18 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
 
     func stop() {
         epoch += 1
+        oncePending = false
         playing = false
         shadowingWait = false
         sentenceSynth.stopSpeaking(at: .immediate)
         stopCloudPlayback()
     }
 
-    /// 跟读确认：读完本句后继续下一句。
+    /// 跟读确认：读完本句后继续下一句（连续播放语义，清掉 once）。
     func continueAfterShadowing() {
         guard shadowingWait else { return }
         shadowingWait = false
+        oncePending = false
         let next = cursor + 1
         if next >= texts.count {
             playing = false
@@ -155,6 +162,7 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
     /// 文章切换后复位。
     func reset(startIdx: Int) {
         epoch += 1
+        oncePending = false
         playing = false
         shadowingWait = false
         sentenceSynth.stopSpeaking(at: .immediate)
@@ -289,6 +297,12 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
     @MainActor
     private func advanceAfterSentenceFinish() {
         guard playing, !shadowingWait else { return }
+        // once 语义（usePlayback.ts onceRef）：本句读完即停，不连读不进跟读。
+        if oncePending {
+            oncePending = false
+            playing = false
+            return
+        }
         let next = cursor + 1
         if next >= texts.count {
             playing = false

@@ -189,4 +189,98 @@ final class ShadowReportBridgeTests: XCTestCase {
         XCTAssertEqual(u16(46), (-32768) & 0xFFFF)
         XCTAssertEqual(u16(48), 16383)
     }
+
+    // MARK: SPEAK-7 - 落盘 attempts → 报告卡数据（Windows SpeakView.tsx:650-678 lastReport）
+
+    private func attempt(at: Int64, total: Double, words: [WordScore]) -> ShadowAttempt {
+        ShadowAttempt(
+            at: at, total: total, accuracy: total, fluency: total - 0.2, integrity: 4.8,
+            words: words.map { w in
+                ShadowWord(content: w.content, totalScore: w.totalScore, dpMessage: w.dpMessage, sylls: [])
+            }
+        )
+    }
+
+    func testShadowAttemptReportDerivesFromLastAttemptWithAllTotals() throws {
+        let attempts = [
+            attempt(at: 100, total: 3.1, words: mainWords()),
+            attempt(at: 200, total: 4.1, words: mainWords()),
+        ]
+        let report = try XCTUnwrap(shadowAttemptReport(target: target, attempts: attempts))
+        XCTAssertEqual(report.attemptAt, 200)
+        XCTAssertEqual(report.totals, [3.1, 4.1])
+        // result 由末次 attempt 重建：standard 取 total；进 attempts 的必是干净结果
+        XCTAssertEqual(report.result.total, 4.1)
+        XCTAssertEqual(report.result.accuracy, 4.1)
+        XCTAssertEqual(report.result.fluency, 3.9, accuracy: 0.0001)
+        XCTAssertEqual(report.result.integrity, 4.8)
+        XCTAssertEqual(report.result.standard, 4.1)
+        XCTAssertFalse(report.result.isRejected)
+        XCTAssertNil(report.result.exceptInfo)
+        XCTAssertEqual(report.result.words.map(\.content), mainWords().map(\.content))
+        // marks 与原句对齐（四档齐全、差词/漏词命中）
+        XCTAssertEqual(report.marks.count, 9)
+        XCTAssertEqual(report.marks.first { $0.quality == .bad }?.word?.content, "fox")
+        XCTAssertEqual(report.marks.first { $0.quality == .missed }?.word?.content, "brown")
+        // 诊断链路直接可用（报告卡主体同一套输入）
+        let diag = diagnoseShadow(report.result.shadowDiag, report.marks.map(\.shadowDiagMark))
+        XCTAssertEqual(diag.badge, "差 0.1 过关")
+        XCTAssertEqual(diag.drillWords, ["fox", "brown"])
+        // 差词清单也从同一 target/marks 切出
+        XCTAssertEqual(shadowDrillEntries(target: target, marks: report.marks).map(\.text), ["brown", "fox"])
+    }
+
+    func testShadowAttemptReportIsNilWithoutAttempts() {
+        XCTAssertNil(shadowAttemptReport(target: target, attempts: []))
+    }
+
+    func testShadowAttemptReportSingleAttemptHasOneTotal() throws {
+        let report = try XCTUnwrap(shadowAttemptReport(target: "hello world", attempts: [
+            attempt(at: 5, total: 4.6, words: [word("hello", 4.6), word("world", 4.6)]),
+        ]))
+        XCTAssertEqual(report.totals, [4.6])
+        XCTAssertEqual(report.marks.map(\.quality), [.good, .good])
+    }
+
+    // MARK: SPEAK-7/13 - 报告卡与异常卡令牌逐值对账（reader.css）
+
+    /// .speak-report-card（reader.css:3793-3807）：12 圆角 / padding 12 14 11 / gap 9 /
+    /// box-shadow 0 1px 3px rgba(16,24,40,.05)。
+    func testReportCardTokensMatchReaderCSS() {
+        XCTAssertEqual(ShadowCardTokens.reportCornerRadius, 12)
+        XCTAssertEqual(ShadowCardTokens.reportPadding.top, 12)
+        XCTAssertEqual(ShadowCardTokens.reportPadding.leading, 14)
+        XCTAssertEqual(ShadowCardTokens.reportPadding.bottom, 11)
+        XCTAssertEqual(ShadowCardTokens.reportPadding.trailing, 14)
+        XCTAssertEqual(ShadowCardTokens.reportSpacing, 9)
+        XCTAssertEqual(ShadowCardTokens.reportShadowOpacity, 0.05)
+        XCTAssertEqual(ShadowCardTokens.reportShadowRadius, 1.5)   // CSS blur 3px ≈ radius 1.5
+        XCTAssertEqual(ShadowCardTokens.reportShadowY, 1)
+    }
+
+    /// @keyframes rc-in（reader.css:3809-3818）：.38s cubic-bezier(.2,.9,.3,1.15)，
+    /// from translateY(8px) scale(.985)；减弱动态效果时只留 0.2s 淡入。
+    func testCardEnterMotionTokensMatchRcIn() {
+        XCTAssertEqual(ShadowCardTokens.enterDuration, 0.38)
+        XCTAssertEqual(ShadowCardTokens.enterCurve.c0x, 0.2)
+        XCTAssertEqual(ShadowCardTokens.enterCurve.c0y, 0.9)
+        XCTAssertEqual(ShadowCardTokens.enterCurve.c1x, 0.3)
+        XCTAssertEqual(ShadowCardTokens.enterCurve.c1y, 1.15)
+        XCTAssertEqual(ShadowCardTokens.enterOffsetY, 8)
+        XCTAssertEqual(ShadowCardTokens.enterScale, 0.985)
+        XCTAssertEqual(ShadowCardTokens.enterReducedDuration, 0.2)
+    }
+
+    /// .speak-report-err（reader.css:4214-4240）：10 圆角 / padding 9 12 / gap 6 /
+    /// border-left 3px / 12.5px。
+    func testFailureCardTokensMatchReaderCSS() {
+        XCTAssertEqual(ShadowCardTokens.failureCornerRadius, 10)
+        XCTAssertEqual(ShadowCardTokens.failurePadding.top, 9)
+        XCTAssertEqual(ShadowCardTokens.failurePadding.leading, 12)
+        XCTAssertEqual(ShadowCardTokens.failurePadding.bottom, 9)
+        XCTAssertEqual(ShadowCardTokens.failurePadding.trailing, 12)
+        XCTAssertEqual(ShadowCardTokens.failureSpacing, 6)
+        XCTAssertEqual(ShadowCardTokens.failureAccentLineWidth, 3)
+        XCTAssertEqual(ShadowCardTokens.failureFontSize, 12.5)
+    }
 }

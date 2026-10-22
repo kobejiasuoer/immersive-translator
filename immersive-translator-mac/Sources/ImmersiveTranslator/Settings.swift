@@ -254,6 +254,37 @@ final class SettingsStore: ObservableObject {
         transform(&providers[idx])
     }
 
+    /// 危险区「恢复默认」(SET-9, 对齐 Windows doResetDefaults 只重置接口配置与设置的语义):
+    /// - 全部设置字段回出厂默认值(endpoint/模型/热键/词典卡/术语表/风格等, didSet 实时落盘);
+    /// - 批量清空全部 Provider 密钥槽与旧全局密钥(含已不存在的自定义 provider 残槽);
+    /// - 账号令牌槽(server_auth)、翻译历史、生词等不在本类管辖, 天然保留。
+    /// 返回被清除的 Keychain account 列表(供测试断言)。
+    @discardableResult
+    func resetToDefaults() -> [String] {
+        let clearedAccounts = KeychainStore.deleteAllProviderAPIKeySlots()
+
+        providers = ProviderProfile.builtinPresets
+        activeProviderID = ProviderProfile.builtinPresets[0].id
+        editingAPIKey = ""
+        // 空值是「恢复默认」的显式结果而非读取失败占位：后续编辑允许正常覆盖。
+        editingAPIKeyLoaded = true
+        apiKeyStorageError = nil
+
+        targetLanguage = "简体中文"
+        translationDirection = .autoChineseEnglish
+        ocrMode = .accurate
+        ocrLanguagePreset = .autoMixed
+        enableStreamingTranslation = true
+        dictCardAuto = true
+        customPrompt = ""
+        glossaryText = ""
+        selectionHotKeyShortcut = .optionSpace
+        ocrHotKeyShortcut = .controlOptionSpace
+        readerHotKeyShortcut = .controlOptionR
+
+        return clearedAccounts
+    }
+
     private func persistProviders() {
         if let data = try? JSONEncoder().encode(providers) {
             UserDefaults.standard.set(data, forKey: Keys.providers)
@@ -798,21 +829,191 @@ private struct GlossarySummary {
     }
 }
 
+// MARK: - 设置中心 IA（SET-5：侧栏分组 / 面包屑 / 保存条，对齐 Windows Settings.tsx TABS）
+
+/// 设置中心七分区（Windows SettingsTab：模型服务/翻译/语音/术语表/快捷键/账号/关于）。
+enum SettingsSection: String, CaseIterable, Identifiable {
+    case provider
+    case translation
+    case voice
+    case glossary
+    case hotkeys
+    case account
+    case about
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .provider: return "模型服务"
+        case .translation: return "翻译"
+        case .voice: return "语音"
+        case .glossary: return "术语表"
+        case .hotkeys: return "快捷键"
+        case .account: return "账号"
+        case .about: return "关于"
+        }
+    }
+
+    /// 侧栏行图标（对齐 Windows TABS 的 IconSparkles/IconTranslate/…）。
+    var iconSystemImage: String {
+        switch self {
+        case .provider: return "sparkles"
+        case .translation: return "character.book.closed"
+        case .voice: return "speaker.wave.2"
+        case .glossary: return "book"
+        case .hotkeys: return "keyboard"
+        case .account: return "person.crop.circle"
+        case .about: return "info.circle"
+        }
+    }
+
+    /// 侧栏分组（Windows set-nav-caption：翻译与工具 / 账号与应用）。
+    var group: SettingsNavGroup {
+        switch self {
+        case .provider, .translation, .voice, .glossary, .hotkeys:
+            return .tools
+        case .account, .about:
+            return .app
+        }
+    }
+
+    /// 分区页头副标题（对齐 Windows set-pagehead-text p 的直白中文）。
+    var pageSubtitle: String {
+        switch self {
+        case .provider:
+            return "选择一个翻译服务商；每家的密钥分开保存，切换互不影响。"
+        case .translation:
+            return "目标语言与翻译浮窗的行为。"
+        case .voice:
+            return "填一组讯飞凭据，跟读打分、云端朗读、口语识别三个服务共用；经 Keychain 加密存储。"
+        case .glossary:
+            return "固定译法。每行一条，翻译时随请求一并发送（最多前 \(GlossaryParser.promptMappingLimit) 条）。"
+        case .hotkeys:
+            return "任意界面下全局生效；改完即自动保存并重新注册。"
+        case .account:
+            return "账号是可选项：登录后同步云端配置，不登录不影响本地功能。"
+        case .about:
+            return "版本更新、启动与引导。"
+        }
+    }
+}
+
+/// 侧栏分组标题（Windows set-nav-caption）。
+enum SettingsNavGroup: CaseIterable {
+    case tools
+    case app
+
+    var caption: String {
+        switch self {
+        case .tools: return "翻译与工具"
+        case .app: return "账号与应用"
+        }
+    }
+
+    var sections: [SettingsSection] {
+        SettingsSection.allCases.filter { $0.group == self }
+    }
+}
+
+/// 保存条脏检测快照（对齐 Windows savedSnapshot + JSON.stringify 全量比较）。
+/// 记录设置窗口可编辑的全部字段；与当前值逐字段相等 = 无未保存更改。
+struct SettingsSaveSnapshot: Equatable {
+    var providers: [ProviderProfile]
+    var activeProviderID: String
+    var editingAPIKey: String
+    var targetLanguage: String
+    var translationDirection: TranslationDirection
+    var ocrMode: OCRRecognitionMode
+    var ocrLanguagePreset: OCRLanguagePreset
+    var enableStreamingTranslation: Bool
+    var dictCardAuto: Bool
+    var customPrompt: String
+    var glossaryText: String
+    var selectionHotKeyShortcut: HotKeyShortcut
+    var ocrHotKeyShortcut: HotKeyShortcut
+    var readerHotKeyShortcut: HotKeyShortcut
+
+    static func capture(from store: SettingsStore) -> SettingsSaveSnapshot {
+        SettingsSaveSnapshot(
+            providers: store.providers,
+            activeProviderID: store.activeProviderID,
+            editingAPIKey: store.editingAPIKey,
+            targetLanguage: store.targetLanguage,
+            translationDirection: store.translationDirection,
+            ocrMode: store.ocrMode,
+            ocrLanguagePreset: store.ocrLanguagePreset,
+            enableStreamingTranslation: store.enableStreamingTranslation,
+            dictCardAuto: store.dictCardAuto,
+            customPrompt: store.customPrompt,
+            glossaryText: store.glossaryText,
+            selectionHotKeyShortcut: store.selectionHotKeyShortcut,
+            ocrHotKeyShortcut: store.ocrHotKeyShortcut,
+            readerHotKeyShortcut: store.readerHotKeyShortcut
+        )
+    }
+
+    /// 热键是否相对另一快照有改动（对齐 Windows handleSave：只有改过才整组重注册）。
+    func hotKeysDiffer(from other: SettingsSaveSnapshot) -> Bool {
+        selectionHotKeyShortcut != other.selectionHotKeyShortcut
+            || ocrHotKeyShortcut != other.ocrHotKeyShortcut
+            || readerHotKeyShortcut != other.readerHotKeyShortcut
+    }
+}
+
+/// 关于分区「应用更新」卡的状态机（对齐 Windows UpdateStage，mac 无自动重启故无 installing）。
+enum SettingsUpdatePhase: Equatable {
+    case idle
+    case checking
+    case downloading
+    case done
+    case error
+}
+
 final class SettingsWindowController: NSWindowController {
     private let settingsStore: SettingsStore
+    /// 「账号」分区导航信号（菜单「账号登录」已登录时选中账号页签）。
+    private let accountNavigation = SettingsAccountNavigation()
 
     init(
         settingsStore: SettingsStore,
-        onShowOnboarding: @escaping () -> Void
+        serverAuth: ServerAuthClient,
+        onShowOnboarding: @escaping () -> Void,
+        onOpenLogin: @escaping () -> Void,
+        onReregisterHotKeys: @escaping () -> Void,
+        onInstallUpdate: @escaping (UpdateDownloadResult, UpdateCheckResult) -> Void
     ) {
         self.settingsStore = settingsStore
-        let view = SettingsView(settingsStore: settingsStore, onShowOnboarding: onShowOnboarding)
+        let view = SettingsView(
+            settingsStore: settingsStore,
+            onShowOnboarding: onShowOnboarding,
+            serverAuth: serverAuth,
+            accountNavigation: accountNavigation,
+            onOpenLogin: onOpenLogin,
+            onReregisterHotKeys: onReregisterHotKeys,
+            onInstallUpdate: onInstallUpdate
+        )
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
-        window.title = "沉浸式翻译设置"
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.setContentSize(NSSize(width: 600, height: 680))
-        window.minSize = NSSize(width: 520, height: 440)
+        window.title = "沉浸口语 · 设置中心"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        // REVIEW-02 双头标题栏：标准标题条写「沉浸口语 · 设置中心」，窗内又有
+        // 44pt 面包屑顶栏「应用设置 ／ …」——同一屏两行都在说『你在设置』。
+        // 对齐阅读室窗的做法（ReaderWindowController）：藏 title（Mission Control /
+        // 辅助功能仍可读到）、透明标题条，让面包屑顶栏上移吃掉系统标题条高度。
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        // REVIEW-03 侧栏 vibrancy：behindWindow 混合需要窗口透出底，否则
+        // NSVisualEffectView 只能渲染基色 tint。右侧内容区由 SwiftUI 显式铺
+        // windowBackgroundColor（SettingsView 右列），窗口本体保持透明。
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        // 对齐 Windows settings 窗 720x660（tauri.conf.json），加侧栏后取 760x680。
+        // REVIEW-02：fullSizeContentView 后 setContentSize 量的是整窗框（含原
+        // 标题条 28pt）而非内容区——补 28pt 保持开窗尺寸与改造前逐点一致，
+        // 滚动区反而多赚出标题条那一条。
+        window.setContentSize(NSSize(width: 760, height: 708))
+        window.minSize = NSSize(width: 640, height: 548)
         window.isReleasedWhenClosed = false
         super.init(window: window)
     }
@@ -826,11 +1027,27 @@ final class SettingsWindowController: NSWindowController {
         window?.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
+
+    /// 打开设置并定位到「账号」分区（Windows settings_open_tab("account") 对应物：
+    /// 菜单「账号登录」在已登录时走这里；新 IA 下信号被消费端改释为选中账号页签）。
+    func showAccountSection() {
+        show()
+        accountNavigation.requestScrollToAccount()
+    }
 }
 
 struct SettingsView: View {
     @ObservedObject var settingsStore: SettingsStore
     let onShowOnboarding: () -> Void
+    /// 账号登录态事件源（登录/登出/失效 @Published 驱动侧栏 chip 与账号分区）。
+    @ObservedObject var serverAuth: ServerAuthClient
+    @ObservedObject var accountNavigation: SettingsAccountNavigation
+    let onOpenLogin: () -> Void
+    /// 设置改动且热键相对快照有变 → 整组重注册（REVIEW-01 后由自动保存确认触发；
+    /// 语义仍对齐 Windows handleSave → reregisterHotkeys）。
+    let onReregisterHotKeys: () -> Void
+    /// 设置内「升级到 vN」下载完成 → 接既有校验＋替换安装确认流（AppDelegate）。
+    let onInstallUpdate: (UpdateDownloadResult, UpdateCheckResult) -> Void
     @State private var recordingHotKey: HotKeyRecorderTarget?
     @State private var hotKeyRecorderMessage = ""
     @State private var providerDiagnostic = ProviderConnectionDiagnostic.idle
@@ -847,6 +1064,26 @@ struct SettingsView: View {
     @State private var customPromptMessage = ""
     @State private var glossaryMaintenanceMessage = ""
 
+    // SET-5 设置中心 IA：当前分区 / 保存条。mac 侧设置即时落盘（didSet 直写
+    // UserDefaults、editingAPIKey 一变即入 Keychain），保存条不再照搬 Windows 的
+    // 「未保存 / 保存设置」显式双轨——压在自动落盘之上是失实文案（REVIEW-01）；
+    // 快照只用来探测「刚发生了改动」，借以触发「已自动保存 ✓」瞬时确认条。
+    @State private var activeSection: SettingsSection = .provider
+    @State private var savedSnapshot: SettingsSaveSnapshot?
+    @State private var autoSavedAck = false
+    @State private var autoSavedAckTask: Task<Void, Never>?
+
+    // SET-9 危险区：恢复默认确认弹窗
+    @State private var confirmResetDefaults = false
+
+    // SET-6 关于分区「应用更新」卡状态
+    @State private var updatePhase: SettingsUpdatePhase = .idle
+    @State private var updateMessage: String?
+    /// 下载进度 0…1；nil = 大小未知的不确定进度（对齐 Windows progress?: number）。
+    @State private var updateProgress: Double?
+    @State private var updateAvailableResult: UpdateCheckResult?
+    @State private var updateTask: Task<Void, Never>?
+
     // 开机自启（对齐 Windows：乐观切换，失败回滚并提示）
     @State private var launchAtLoginEnabled = LaunchAtLogin.isEnabled
     @State private var launchAtLoginErrorMessage: String?
@@ -861,213 +1098,28 @@ struct SettingsView: View {
     @State private var customModelInput = ""
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("沉浸式翻译设置")
-                            .font(.title2.weight(.semibold))
-                        Spacer()
-                        Text(currentProviderHint)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    settingsSection("翻译服务") {
-                        providerOnboardingGuide
-
-                        providerSelector
-
-                        labeledField("接口地址", text: Binding(
-                            get: { settingsStore.activeProvider.endpoint },
-                            set: { newValue in settingsStore.updateActiveProvider { $0.endpoint = newValue } }
-                        ))
-                        labeledField("模型", text: Binding(
-                            get: { settingsStore.activeProvider.model },
-                            set: { newValue in settingsStore.updateActiveProvider { $0.model = newValue } }
-                        ))
-                        // 模型候选下拉(内置 + 自定义历史) + 自定义输入入口
-                        modelCandidatePicker
-                        labeledField(apiKeyFieldTitle, text: $settingsStore.editingAPIKey, secure: true)
-                        providerConfigurationSummary
-
-                        Picker("翻译方向", selection: $settingsStore.translationDirection) {
-                            ForEach(TranslationDirection.allCases) { direction in
-                                Text(direction.title).tag(direction)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        Text(settingsStore.translationDirection.detail)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-
-                        if settingsStore.translationDirection == .fixedTarget {
-                            labeledField("目标语言", text: $settingsStore.targetLanguage)
-                        }
-                        Toggle("流式显示译文", isOn: $settingsStore.enableStreamingTranslation)
-                        Toggle("词典卡片", isOn: $settingsStore.dictCardAuto)
-                        Text("划选单个单词或短语时，浮窗自动切换为词典卡片（音标、多义项释义、例句）；关闭后一律整句翻译。")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    settingsSection("接口诊断") {
-                        if !providerPresetMessage.isEmpty {
-                            HStack(alignment: .top, spacing: 6) {
-                                Image(systemName: "checkmark.circle")
-                                    .foregroundStyle(.green)
-                                Text(providerPresetMessage)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        }
-
-                        Text(providerDiagnosticsText)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        providerConnectionDiagnosticRow
-                    }
-
-                    settingsSection("截图 OCR") {
-                        Picker("识别模式", selection: $settingsStore.ocrMode) {
-                            ForEach(OCRRecognitionMode.allCases) { mode in
-                                Text(mode.title).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        Picker("识别语言", selection: $settingsStore.ocrLanguagePreset) {
-                            ForEach(OCRLanguagePreset.allCases) { preset in
-                                Text(preset.title).tag(preset)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        Text("日文截图建议选“日文”或“混合”；快速模式遇到日文/中文/韩文会自动用准确模式识别。")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    settingsSection("术语表与固定风格") {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("自定义提示词")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            TextEditor(text: $settingsStore.customPrompt)
-                                .font(.system(size: 13))
-                                .frame(minHeight: 70)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
-                                )
-                            Text("例如：译文要自然口语化；技术名词保留英文；不要翻译产品名。")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                            customPromptPresetActions
-                        }
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("本地术语表")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            TextEditor(text: $settingsStore.glossaryText)
-                                .font(.system(size: 13))
-                                .frame(minHeight: 90)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
-                                )
-                            Text("每行一个术语，例如：ImmersiveTranslator = 沉浸式翻译器。也支持 CSV/TSV 前两列、逗号/中文逗号或竖线分隔；表格里的后续备注列只本地忽略，不会随请求发送。空行、# 或 // 开头的备注、表头和无法识别的行也不会发送。")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-
-                            glossarySummaryView
-                            glossaryMaintenanceActions
-                        }
-                    }
-
-                    settingsSection("快捷键") {
-                        hotKeyRecorderRow(
-                            title: "选中文本翻译",
-                            shortcut: settingsStore.selectionHotKeyShortcut,
-                            target: .selection
-                        ) { shortcut in
-                            settingsStore.selectionHotKeyShortcut = shortcut
-                        }
-
-                        hotKeyRecorderRow(
-                            title: "截图 OCR 翻译",
-                            shortcut: settingsStore.ocrHotKeyShortcut,
-                            target: .ocr
-                        ) { shortcut in
-                            settingsStore.ocrHotKeyShortcut = shortcut
-                        }
-
-                        hotKeyRecorderRow(
-                            title: "沉浸阅读室",
-                            shortcut: settingsStore.readerHotKeyShortcut,
-                            target: .reader
-                        ) { shortcut in
-                            settingsStore.readerHotKeyShortcut = shortcut
-                        }
-
-                        if let conflictMessage = hotKeyConflictMessage {
-                            Text(conflictMessage)
-                                .font(.footnote)
-                                .foregroundStyle(.orange)
-                                .fixedSize(horizontal: false, vertical: true)
-                        } else if let registrationMessage = settingsStore.hotKeyRegistrationMessage {
-                            Text(registrationMessage)
-                                .font(.footnote)
-                                .foregroundStyle(.orange)
-                                .fixedSize(horizontal: false, vertical: true)
-                        } else if !hotKeyRecorderMessage.isEmpty {
-                            Text(hotKeyRecorderMessage)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        } else {
-                            Text("点击“录制”后按下新组合键。建议至少包含 Control / Option / Command 之一，避免和普通输入冲突。")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    settingsSection("语音（讯飞）") {
-                        XfyunVoiceSettingsSection()
-                    }
-
-                    settingsSection("关于") {
-                        aboutVersionRow
-                        aboutLaunchAtLoginRow
-                        aboutOnboardingRow
-                    }
-
-                    storageMessage
-                }
-                .padding(24)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-            }
+        HStack(spacing: 0) {
+            sidebar
 
             Divider()
 
-            HStack {
-                Button("打开辅助功能设置") {
-                    PermissionPrompter.openPrivacyPane(kind: .accessibility)
+            VStack(spacing: 0) {
+                breadcrumbTopbar
+                Divider()
+
+                ScrollView {
+                    sectionContent
+                        .padding(EdgeInsets(top: 25, leading: 26, bottom: 28, trailing: 30))
+                        .frame(maxWidth: 720, alignment: .topLeading)
                 }
-                Button("打开屏幕录制设置") {
-                    PermissionPrompter.openPrivacyPane(kind: .screenRecording)
-                }
-                Spacer()
+                // 切分区回顶（Windows useEffect: contentRef.scrollTop = 0）
+                .id(activeSection)
+
+                saveBar
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 14)
-            .background(.regularMaterial)
+            // 窗口透底（REVIEW-03）后右列显式铺系统窗底色：侧栏 vibrancy 之外的
+            // 区域保持标准不透明外观，深浅色跟随系统。
+            .background(Color(nsColor: .windowBackgroundColor))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onChange(of: settingsStore.activeProvider.endpoint) { _ in
@@ -1113,6 +1165,11 @@ struct SettingsView: View {
             providerPresetMessage = ""
             markProviderDiagnosticNeedsRerun("术语表已变更，建议重新验证翻译请求。")
         }
+        .onChange(of: isDirty) { dirty in
+            // REVIEW-01：脏态出现 = 有字段刚被改动，而 mac 侧此刻已经落盘——
+            // 刷新快照 + 闪现「已自动保存 ✓」（热键改动沿用旧 handleSave 语义整组重注册）。
+            if dirty { acknowledgeAutoSave() }
+        }
         .sheet(isPresented: $showAddCustomProvider) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("添加自定义提供商").font(.headline)
@@ -1145,7 +1202,7 @@ struct SettingsView: View {
             Button("取消", role: .cancel) { pendingDeleteProvider = nil }
             Button("删除", role: .destructive) { confirmDeleteCustomProvider() }
         } message: {
-            Text("确认删除“\(pendingDeleteProvider?.displayName ?? "")”？其 API Key 会一并从钥匙串清除，常驻提供商（DeepSeek/智谱/OpenAI）不可删除。")
+            Text("确认删除“\(pendingDeleteProvider?.displayName ?? "")”？其 API Key 会一并从钥匙串清除，常驻提供商不可删除。")
         }
         .alert("设置开机自启失败", isPresented: Binding(
             get: { launchAtLoginErrorMessage != nil },
@@ -1155,25 +1212,881 @@ struct SettingsView: View {
         } message: {
             Text(launchAtLoginErrorMessage ?? "")
         }
+        // SET-9 危险区确认弹窗（对齐 Windows ConfirmDialog：说明后果 + 恢复默认）
+        .alert("恢复默认设置", isPresented: $confirmResetDefaults) {
+            Button("取消", role: .cancel) {}
+            Button("恢复默认", role: .destructive) { performResetDefaults() }
+        } message: {
+            Text("将清空已保存的接口配置（接口地址 / API Key / 模型等），并恢复全部默认值。账号登录状态、翻译历史与生词数据不受影响。确定继续？")
+        }
         .onChange(of: settingsStore.providerDiagnosticRequestID) { _ in
             runRequestedProviderDiagnostic()
         }
         .onAppear {
             runRequestedProviderDiagnostic()
+            savedSnapshot = SettingsSaveSnapshot.capture(from: settingsStore)
         }
         .onDisappear {
             cancelProviderDiagnosticTasks()
+            updateTask?.cancel()
+            autoSavedAckTask?.cancel()
+        }
+        .onReceive(accountNavigation.$scrollRequestID.dropFirst()) { _ in
+            // 菜单「账号登录」已登录：新 IA 下选中账号页签（原滚动锚点改释，SET-5）。
+            withAnimation(.easeInOut(duration: 0.2)) {
+                activeSection = .account
+            }
         }
     }
 
-    private func settingsSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+    // MARK: - SET-5 设置中心壳：侧栏 / 面包屑 / 分区内容 / 保存条
+
+    /// 左侧导航栏（Windows set-side 180px：品牌区 + 分组导航 + 双 conn-chip + 版本号）。
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // 品牌区（set-brand：24pt 渐变徽记 + 沉浸口语 / 设置中心）
+            HStack(spacing: 9) {
+                Text("译")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.accentColor, Color.accentColor.opacity(0.78)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("沉浸口语")
+                        .font(.system(size: 13.5, weight: .bold))
+                    // REVIEW-05：10.5 → 11pt，常驻文案不低于 macOS 辅助字号下限。
+                    Text("设置中心")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 16)
+
+            // 分组导航（set-nav-caption：翻译与工具 / 账号与应用）
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(SettingsNavGroup.allCases, id: \.caption) { group in
+                    // REVIEW-05：10 → 11pt（Windows set-nav-caption 10px 是网页值，
+                    // mac 侧作上限不作下限；非 Retina 外接屏 10pt 发虚）。
+                    Text(group.caption)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 10)
+                        .padding(.top, group == .app ? 16 : 0)
+                        .padding(.bottom, 6)
+
+                    ForEach(group.sections) { section in
+                        sidebarNavItem(section)
+                    }
+                }
+            }
+
+            Spacer(minLength: 12)
+
+            // 侧栏底部（set-side-foot：双 conn-chip + 版本号）
+            VStack(alignment: .leading, spacing: 5) {
+                Divider()
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 8)
+                sidebarConnChip(
+                    ok: providerConfigured,
+                    text: providerConfigured ? "接口已配置" : "未配置接口"
+                )
+                sidebarConnChip(
+                    ok: serverAuth.status.loggedIn,
+                    text: serverAuth.status.loggedIn ? "账号已登录" : "未登录账号"
+                )
+                // REVIEW-05：10.5 → 11pt mono，常驻版本号抬到可读下限。
+                Text(sidebarVersionText)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .padding(.leading, 7)
+            }
+        }
+        // REVIEW-02：fullSizeContentView 后交通灯（y≈7…21）叠进侧栏左上，
+        // 顶距 46 = 原标题条 28 + 原顶距 18——品牌区视觉位置与改造前逐点一致，
+        // 只是材质如今一直铺到窗口顶缘（交通灯浮在 vibrancy 上，同系统设置）。
+        .padding(EdgeInsets(top: 46, leading: 11, bottom: 12, trailing: 11))
+        .frame(width: 184, alignment: .topLeading)
+        // REVIEW-03 侧栏材质：平面 3.5% 灰在深色下几乎不可见，且与底部保存条的
+        // .regularMaterial 讲两套材质故事。换成系统 sidebar vibrancy（材质承载层级，
+        // 结构性区域更厚）；「减弱透明度」开启时系统自动退化为实底，无需分支。
+        .background(SidebarVibrancyBackground())
+    }
+
+    /// 侧栏导航行（set-nav-item：16pt 图标 + 13pt 文案；选中 accent-soft 底 + 左缘 3pt 主色条）。
+    private func sidebarNavItem(_ section: SettingsSection) -> some View {
+        let isActive = activeSection == section
+        return Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                activeSection = section
+            }
+        } label: {
+            HStack(spacing: 0) {
+                Group {
+                    if isActive {
+                        RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                            .fill(Color.accentColor)
+                            .frame(width: 3, height: 16)
+                    } else {
+                        Color.clear.frame(width: 3, height: 16)
+                    }
+                }
+                .padding(.trailing, 8)
+                .accessibilityHidden(true)
+
+                Image(systemName: section.iconSystemImage)
+                    .font(.system(size: 13))
+                    .opacity(isActive ? 1 : 0.72)
+                    .frame(width: 17)
+
+                Text(section.title)
+                    .font(.system(size: 13, weight: isActive ? .semibold : .regular))
+                    .padding(.leading, 9)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 7)
+            .foregroundStyle(isActive ? Color.accentColor : Color.primary.opacity(0.78))
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isActive ? Color.accentColor.opacity(0.12) : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(section.title)
+        .accessibilityAddTraits(isActive ? [.isSelected] : [])
+    }
+
+    /// 状态胶囊（set-side-foot conn-chip：6pt 状态点 + 11pt 文案；绿=已配置/已登录，橙=未）。
+    private func sidebarConnChip(ok: Bool, text: String) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(ok ? Color.green : Color.orange)
+                .frame(width: 6, height: 6)
+            Text(text)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.primary.opacity(0.72))
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 7)
+        .accessibilityLabel(text)
+    }
+
+    private var sidebarVersionText: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        return version.isEmpty ? "v…" : "v\(version)"
+    }
+
+    /// Windows hasValidSettings 对应物：endpoint 非空，且（云接口已填 Key 或本地接口免 Key）。
+    private var providerConfigured: Bool {
+        let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !endpoint.isEmpty else { return false }
+        guard let url = providerEffectiveURL else { return false }
+        let apiKey = (KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return !apiKey.isEmpty || !TranslationClient.requiresAPIKey(for: url)
+    }
+
+    /// 右侧面包屑顶栏（set-topbar：应用设置 ／ 分区名）。
+    /// REVIEW-02：fullSizeContentView 后上移吃掉系统标题条高度——28pt 透明标题
+    /// 区 + 44pt 原顶栏 = 72pt，与改造前（标题条 + 顶栏）总高一致，下方零位移。
+    private var breadcrumbTopbar: some View {
+        HStack(spacing: 8) {
+            Text("应用设置")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.tertiary)
+            Text("／")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary.opacity(0.55))
+                .accessibilityHidden(true)
+            Text(activeSection.title)
+                .font(.system(size: 12, weight: .semibold))
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 26)
+        .padding(.top, 28)
+        .frame(minHeight: 44)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("应用设置，\(activeSection.title)")
+    }
+
+    /// 右侧分区内容（set-content：pagehead + 各分区卡片栈）。
+    @ViewBuilder
+    private var sectionContent: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            switch activeSection {
+            case .provider:
+                pagehead(.provider, trailingMeta: currentProviderHint)
+                providerSection
+            case .translation:
+                pagehead(.translation)
+                translationSection
+            case .voice:
+                pagehead(.voice)
+                XfyunVoiceSettingsSection()
+            case .glossary:
+                pagehead(.glossary)
+                glossarySection
+            case .hotkeys:
+                pagehead(.hotkeys)
+                hotkeysSection
+            case .account:
+                AccountSectionView(serverAuth: serverAuth, onOpenLogin: onOpenLogin)
+            case .about:
+                pagehead(.about)
+                aboutSection
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    /// 分区页头（set-pagehead：19pt 标题 + 副标题 + 底部发丝线）。
+    private func pagehead(_ section: SettingsSection, trailingMeta: String? = nil) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(section.title)
+                    .font(.system(size: 19, weight: .bold))
+                Text(section.pageSubtitle)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            if let trailingMeta {
+                Text(trailingMeta)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.bottom, 14)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+        .padding(.bottom, 3)
+    }
+
+    /// 分组卡片（group-card：15pt 标题 + 副标题 + 卡片底/描边）。
+    private func groupCard<Content: View>(
+        _ title: String,
+        hint: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 11) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                if let hint {
+                    Text(hint)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.primary.opacity(0.09), lineWidth: 1)
+        )
+    }
+
+    // MARK: 各分区内容（控件全部沿用第一轮实现，只做 IA 归位）
+
+    /// 「模型服务」分区（provider-workspace：选择服务商 + 连接配置 + 接口诊断）。
+    private var providerSection: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            providerOnboardingGuide
+
+            groupCard("选择服务商", hint: "切换时会保留各自的密钥与模型配置") {
+                providerSelector
+            }
+
+            groupCard("连接配置", hint: settingsStore.activeProvider.displayName) {
+                labeledField("接口地址", text: Binding(
+                    get: { settingsStore.activeProvider.endpoint },
+                    set: { newValue in settingsStore.updateActiveProvider { $0.endpoint = newValue } }
+                ))
+                labeledField("模型", text: Binding(
+                    get: { settingsStore.activeProvider.model },
+                    set: { newValue in settingsStore.updateActiveProvider { $0.model = newValue } }
+                ))
+                // 模型候选下拉(内置 + 自定义历史) + 自定义输入入口
+                modelCandidatePicker
+                labeledField(apiKeyFieldTitle, text: $settingsStore.editingAPIKey, secure: true)
+                providerConfigurationSummary
+                storageMessage
+            }
+
+            groupCard("接口诊断", hint: "先测连通，再用真实请求验证 Key、模型与额度") {
+                if !providerPresetMessage.isEmpty {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "checkmark.circle")
+                            .foregroundStyle(.green)
+                        Text(providerPresetMessage)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                }
+
+                Text(providerDiagnosticsText)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                providerConnectionDiagnosticRow
+            }
+        }
+    }
+
+    /// 「翻译」分区（translation-grid：译文目标 / 输出行为 / 自定义风格 / 截图 OCR）。
+    private var translationSection: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            translationRouteBanner
+
+            groupCard("译文目标", hint: "决定翻译结果使用的语言") {
+                Picker("翻译方向", selection: $settingsStore.translationDirection) {
+                    ForEach(TranslationDirection.allCases) { direction in
+                        Text(direction.title).tag(direction)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text(settingsStore.translationDirection.detail)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if settingsStore.translationDirection == .fixedTarget {
+                    labeledField("目标语言", text: $settingsStore.targetLanguage)
+                }
+            }
+
+            groupCard("输出行为", hint: "选择划词浮窗呈现结果的方式") {
+                Toggle("流式显示译文", isOn: $settingsStore.enableStreamingTranslation)
+                Toggle("词典卡片", isOn: $settingsStore.dictCardAuto)
+                Text("划选单个单词或短语时，浮窗自动切换为词典卡片（音标、多义项释义、例句）；关闭后一律整句翻译。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            groupCard("自定义翻译风格", hint: "可选项，追加到系统提示词") {
+                customPromptEditor
+            }
+
+            groupCard("截图 OCR", hint: "框选识别后的翻译行为") {
+                Picker("识别模式", selection: $settingsStore.ocrMode) {
+                    ForEach(OCRRecognitionMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Picker("识别语言", selection: $settingsStore.ocrLanguagePreset) {
+                    ForEach(OCRLanguagePreset.allCases) { preset in
+                        Text(preset.title).tag(preset)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text("日文截图建议选“日文”或“混合”；快速模式遇到日文/中文/韩文会自动用准确模式识别。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// 翻译方向示意条（Windows translation-route：原文 → 译文 + 模式标签）。
+    private var translationRouteBanner: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("原文")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                Text("自动识别")
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            Image(systemName: "arrow.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.tertiary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("译文")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                Text(translationRouteTargetText)
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            Spacer(minLength: 8)
+            Text(settingsStore.translationDirection == .autoChineseEnglish ? "自动切换" : "固定目标")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.primary.opacity(0.07), lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("翻译方向：原文自动识别，译文\(translationRouteTargetText)")
+    }
+
+    private var translationRouteTargetText: String {
+        settingsStore.translationDirection == .autoChineseEnglish
+            ? "English / 简体中文"
+            : settingsStore.displayTargetLanguage
+    }
+
+    /// 自定义翻译风格编辑器（原「术语表与固定风格」区的 customPrompt 部分）。
+    private var customPromptEditor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextEditor(text: $settingsStore.customPrompt)
+                .font(.system(size: 13))
+                .frame(minHeight: 70)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                )
+            Text("例如：译文要自然口语化；技术名词保留英文；不要翻译产品名。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            customPromptPresetActions
+        }
+    }
+
+    /// 「术语表」分区（glossary-workspace：编辑器 + 统计 + 维护动作）。
+    private var glossarySection: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            groupCard("译法条目", hint: "一行一组原词与译法") {
+                TextEditor(text: $settingsStore.glossaryText)
+                    .font(.system(size: 13))
+                    .frame(minHeight: 120)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                    )
+                Text("每行一个术语，例如：GDP = 国内生产总值。也支持 CSV/TSV 前两列、逗号/中文逗号或竖线分隔；表格里的后续备注列只本地忽略，不会随请求发送。空行、# 或 // 开头的备注、表头和无法识别的行也不会发送。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                glossaryMaintenanceActions
+            }
+
+            groupCard("条目统计", hint: "每次翻译最多附带 \(GlossaryParser.promptMappingLimit) 条有效术语") {
+                glossarySummaryView
+            }
+        }
+    }
+
+    /// 「快捷键」分区（hotkey-list：三个录入卡 + 冲突/注册提示）。
+    private var hotkeysSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            hotKeyRecorderRow(
+                title: "选中文本翻译",
+                shortcut: settingsStore.selectionHotKeyShortcut,
+                target: .selection
+            ) { shortcut in
+                settingsStore.selectionHotKeyShortcut = shortcut
+            }
+
+            hotKeyRecorderRow(
+                title: "截图 OCR 翻译",
+                shortcut: settingsStore.ocrHotKeyShortcut,
+                target: .ocr
+            ) { shortcut in
+                settingsStore.ocrHotKeyShortcut = shortcut
+            }
+
+            hotKeyRecorderRow(
+                title: "沉浸阅读室",
+                shortcut: settingsStore.readerHotKeyShortcut,
+                target: .reader
+            ) { shortcut in
+                settingsStore.readerHotKeyShortcut = shortcut
+            }
+
+            if let conflictMessage = hotKeyConflictMessage {
+                Text(conflictMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let registrationMessage = settingsStore.hotKeyRegistrationMessage {
+                Text(registrationMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !hotKeyRecorderMessage.isEmpty {
+                Text(hotKeyRecorderMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("点击“录制”后按下新组合键。建议至少包含 Control / Option / Command 之一，避免和普通输入冲突。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// 「关于」分区（about-grid：应用更新 / 启动与引导 / 权限 / 危险区）。
+    private var aboutSection: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            aboutUpdateCard
+
+            groupCard("启动与引导", hint: "控制后台驻留与功能介绍") {
+                aboutLaunchAtLoginRow
+                Divider()
+                aboutOnboardingRow
+            }
+
+            groupCard("权限", hint: "选中文本翻译与截图 OCR 需要的系统授权") {
+                HStack(spacing: 8) {
+                    Button("打开辅助功能设置") {
+                        PermissionPrompter.openPrivacyPane(kind: .accessibility)
+                    }
+                    .controlSize(.small)
+                    Button("打开屏幕录制设置") {
+                        PermissionPrompter.openPrivacyPane(kind: .screenRecording)
+                    }
+                    .controlSize(.small)
+                    Spacer(minLength: 0)
+                }
+                if let failureHint = aboutPermissionHint {
+                    Text(failureHint)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            dangerZone
+        }
+    }
+
+    /// 权限行辅助提示：两项都已授权时给一颗定心丸，否则提示去哪授权。
+    private var aboutPermissionHint: String? {
+        let accessibility = PermissionPrompter.isAccessibilityTrusted()
+        let screen = PermissionPrompter.isScreenCaptureTrusted()
+        if accessibility && screen {
+            return "辅助功能与屏幕录制权限均已允许。"
+        }
+        var missing: [String] = []
+        if !accessibility { missing.append("辅助功能") }
+        if !screen { missing.append("屏幕录制") }
+        return "还差 \(missing.joined(separator: "、")) 权限：授权后如果热键没反应，重启一次这个工具即可。"
+    }
+
+    // MARK: SET-6 应用更新卡
+
+    /// 「应用更新」卡（about-release：检查按钮（检查中…态）→ 结果文案 → 升级按钮 + 下载进度条）。
+    private var aboutUpdateCard: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("应用更新")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("更新从 GitHub Releases 拉取，下载后自动校验签名再安装；也可点菜单栏「译」→「检查更新」手动检查。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                Text(aboutVersionText)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+
+            HStack(spacing: 8) {
+                if let result = updateAvailableResult, updatePhase != .downloading {
+                    Button {
+                        downloadUpdate(result)
+                    } label: {
+                        Label("升级到 v\(result.manifest.version)", systemImage: "arrow.down.circle")
+                    }
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+
+                    if let sizeText = updatePackageSizeText(result) {
+                        Text(sizeText)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+
+                Button(updatePhase == .checking ? "检查中…" : "检查更新") {
+                    checkForUpdateInSettings()
+                }
+                .controlSize(.small)
+                .disabled(updatePhase == .checking || updatePhase == .downloading)
+
+                Spacer(minLength: 0)
+            }
+
+            if updatePhase == .downloading {
+                updateProgressBars
+            }
+
+            if let updateMessage {
+                HStack(alignment: .top, spacing: 5) {
+                    Image(systemName: updatePhase == .error ? "exclamationmark.triangle" : "checkmark.circle")
+                        .font(.footnote)
+                    Text(updateMessage)
+                        .font(.footnote)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .foregroundStyle(updatePhase == .error ? Color.red : Color.green)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.primary.opacity(0.09), lineWidth: 1)
+        )
+    }
+
+    /// 下载进度条（progress：6pt 胶囊轨道 + 主色填充；大小未知时转圈）。
+    private var updateProgressBars: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let progress = updateProgress {
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.primary.opacity(0.10))
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.accentColor, Color.accentColor.opacity(0.78)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: max(6, proxy.size.width * max(0.02, min(1, progress))))
+                    }
+                }
+                .frame(height: 6)
+                Text("已下载 \(Int(round(max(0.02, min(1, updateProgress ?? 0)) * 100)))%")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.7)
+                    Text("正在下载…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: updateProgress)
+    }
+
+    /// manifest 声明了包大小时给用户一个预期（Windows 只显版本，mac 加大小属增益）。
+    private func updatePackageSizeText(_ result: UpdateCheckResult) -> String? {
+        guard let sizeBytes = result.manifest.sizeBytes, sizeBytes > 0 else { return nil }
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: sizeBytes)
+    }
+
+    /// 设置内检查更新（对齐 Windows handleCheckUpdate：检查中 → 发现新版/已最新/失败归因）。
+    private func checkForUpdateInSettings() {
+        guard updatePhase != .checking, updatePhase != .downloading else { return }
+        updatePhase = .checking
+        updateMessage = "正在检查更新…"
+        updateAvailableResult = nil
+        updateProgress = nil
+
+        updateTask = Task { @MainActor in
+            defer { updateTask = nil }
+            do {
+                let result = try await UpdateChecker.check()
+                guard !Task.isCancelled else { return }
+                if result.hasUpdate {
+                    if result.isSystemCompatible {
+                        updateAvailableResult = result
+                        updateMessage = "发现新版本 v\(result.latestDisplayVersion)（当前 v\(result.currentDisplayVersion)）"
+                        updatePhase = .idle
+                    } else {
+                        updateMessage = "发现新版本 v\(result.latestDisplayVersion)，但它要求 macOS \(result.minimumSystemDisplayVersion) 或更高（当前 macOS \(result.currentSystemVersion)），暂不建议下载。"
+                        updatePhase = .error
+                    }
+                } else {
+                    updateMessage = "已是最新版本 v\(result.currentDisplayVersion)"
+                    updatePhase = .done
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                updateMessage = ErrorMessageFormatter.message(for: error)
+                updatePhase = .error
+            }
+        }
+    }
+
+    /// 设置内下载更新（对齐 Windows handleDownloadUpdate：进度推进 → 完成后接替换安装确认流）。
+    private func downloadUpdate(_ result: UpdateCheckResult) {
+        guard updatePhase != .downloading else { return }
+        updatePhase = .downloading
+        updateMessage = "正在下载 v\(result.latestDisplayVersion)…"
+        updateProgress = result.manifest.sizeBytes.map { _ in 0 }
+
+        updateTask = Task { @MainActor in
+            defer { updateTask = nil }
+            do {
+                let download = try await UpdateChecker.downloadPackage(for: result) { bytes, total in
+                    // UpdateChecker 在下载任务线程回调；节流后跳回主线程驱动进度条。
+                    DispatchQueue.main.async {
+                        if let total, total > 0 {
+                            updateProgress = Double(bytes) / Double(total)
+                        } else {
+                            updateProgress = nil
+                        }
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                updateProgress = 1
+                updatePhase = .done
+                updateMessage = "下载完成，校验通过；请在弹出的窗口确认替换安装。"
+                updateAvailableResult = nil
+                onInstallUpdate(download, result)
+            } catch {
+                guard !Task.isCancelled else { return }
+                updatePhase = .error
+                updateMessage = "更新失败：\(ErrorMessageFormatter.message(for: error))"
+            }
+        }
+    }
+
+    // MARK: SET-9 危险区
+
+    /// 危险区（danger-zone：红底描边卡 + 恢复默认按钮 → 确认弹窗）。
+    private var dangerZone: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("恢复默认设置")
+                    .font(.footnote.weight(.medium))
+                Text("清空已保存的接口配置（接口地址 / API Key / 模型等），并恢复全部默认值")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Button("恢复默认") {
+                confirmResetDefaults = true
+            }
+            .controlSize(.small)
+            .buttonStyle(.bordered)
+            .tint(.red)
+        }
+        .padding(EdgeInsets(top: 13, leading: 16, bottom: 13, trailing: 16))
+        .background(Color.red.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.red.opacity(0.32), lineWidth: 1)
+        )
+    }
+
+    /// 确认后执行（对齐 Windows doResetDefaults：全字段回默认 + 密钥槽清空；快照对齐使保存条回净）。
+    private func performResetDefaults() {
+        settingsStore.resetToDefaults()
+        cancelProviderDiagnosticTasks()
+        providerDiagnostic = .idle
+        providerPresetMessage = ""
+        providerClipboardMessage = ""
+        // 重置同样即时落盘：刷新快照 + 「已自动保存 ✓」确认（REVIEW-01）。
+        acknowledgeAutoSave()
+    }
+
+    // MARK: 保存条（save-bar）
+
+    /// 与上次确认快照比较，任何可编辑字段有差异即为「刚发生改动」
+    ///（Windows dirty = JSON 全量比较；mac 侧仅用来触发自动保存确认）。
+    private var isDirty: Bool {
+        guard let savedSnapshot else { return false }
+        return SettingsSaveSnapshot.capture(from: settingsStore) != savedSnapshot
+    }
+
+    /// 底部保存条（REVIEW-01：mac 即时落盘 → 「已自动保存 ✓」瞬时确认 + 关闭；
+    /// 不再保留 Windows 的「有未保存的更改」橙点与「保存设置」按钮——设置实际
+    /// 已写入，脏态文案在撒谎。系统设置同款「改了就好」语义，静置 2.5s 后确认淡出）。
+    private var saveBar: some View {
+        HStack(spacing: 10) {
+            if autoSavedAck {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("已自动保存")
+                        .font(.system(size: 12))
+                }
+                .foregroundStyle(.green)
+                .transition(.opacity)
+                .accessibilityLabel("已自动保存")
+            }
+
+            Spacer(minLength: 0)
+
+            Button("关闭") {
+                closeSettingsWindow()
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: autoSavedAck)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.regularMaterial)
+        .overlay(alignment: .top) {
+            Divider()
+        }
+    }
+
+    /// 自动保存确认（原 handleSave 的 mac 化）：改动即已落盘，这里只做三件事——
+    /// 热键相对快照有改动时整组重注册（保留旧 handleSave 语义，App.observeSettings
+    /// 的逐字段 sink 亦兜底）、快照对齐、闪现「已自动保存 ✓」。
+    /// 连续打字时计时器不断重置：指示常驻但不撒谎；停手 2.5s 后 0.45s 淡出。
+    private func acknowledgeAutoSave() {
+        settingsStore.persistEditingAPIKey(for: settingsStore.activeProviderID)
+
+        let current = SettingsSaveSnapshot.capture(from: settingsStore)
+        if let snapshot = savedSnapshot, current.hotKeysDiffer(from: snapshot) {
+            onReregisterHotKeys()
+        }
+        savedSnapshot = current
+
+        autoSavedAckTask?.cancel()
+        withAnimation(.easeOut(duration: 0.18)) { autoSavedAck = true }
+        autoSavedAckTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.45)) { autoSavedAck = false }
+        }
+    }
+
+    private func closeSettingsWindow() {
+        NSApp.keyWindow?.performClose(nil)
     }
 
     private var storageMessage: some View {
@@ -1190,40 +2103,15 @@ struct SettingsView: View {
         }
     }
 
-    /// 「关于」分区：版本行 + 查看引导入口（对齐 Windows 设置 → 关于 的版本与功能引导行）。
-    private var aboutVersionRow: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("版本")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("更新从 GitHub Releases 拉取，下载后自动校验签名再安装；也可点菜单栏「译」→「检查更新」手动检查。")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 12)
-            Text(aboutVersionText)
-                .font(.system(size: 14, weight: .medium, design: .rounded))
-                .textSelection(.enabled)
-        }
-        .padding(10)
-        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
-        )
-    }
-
     /// 「关于」分区：开机自启开关（对齐 Windows 设置 → 关于 的开机自启行，SMAppService 登录项）。
+    /// 住在「启动与引导」分组卡内，行本身不再带卡片底。
     private var aboutLaunchAtLoginRow: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("开机自启")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.footnote.weight(.medium))
                 Text("登录系统后自动启动并驻留菜单栏，复习提醒与角标不会因为忘了打开应用而漏掉。")
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1236,12 +2124,7 @@ struct SettingsView: View {
             .controlSize(.small)
             .labelsHidden()
         }
-        .padding(10)
-        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
-        )
+        .padding(.vertical, 4)
     }
 
     /// 对齐 Windows toggleAutostart：先尝试注册/注销登录项，失败则回滚开关并弹 alert（不做乐观落盘）。
@@ -1260,14 +2143,14 @@ struct SettingsView: View {
         }
     }
 
+    /// 「关于」分区：功能引导入口（住在「启动与引导」分组卡内）。
     private var aboutOnboardingRow: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("功能引导")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.footnote.weight(.medium))
                 Text("再看一次三大能力与快捷键介绍。")
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1277,12 +2160,7 @@ struct SettingsView: View {
             }
             .controlSize(.small)
         }
-        .padding(10)
-        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
-        )
+        .padding(.vertical, 4)
     }
 
     /// 版本号读打包后的 Info.plist；swift run 未打包时没有该键，按开发运行提示。
@@ -1956,7 +2834,7 @@ struct SettingsView: View {
         }
 
         let report = """
-        ImmersiveTranslator Provider Diagnostic
+        沉浸口语 Provider Diagnostic
         App version: \(version) (\(build))
         macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)
         Provider: \(currentProviderHint)
@@ -1997,7 +2875,7 @@ struct SettingsView: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         let bundle = """
-        ImmersiveTranslator Support Bundle
+        沉浸口语 Support Bundle
         Generated at: \(Self.providerDiagnosticISOFormatter.string(from: Date()))
         Redaction: credentials, URL userinfo/fragments, and sensitive query items are removed or replaced with REDACTED; curl uses ${API_KEY} when auth is required.
 
@@ -3546,4 +4424,27 @@ private final class HotKeyRecorderView: NSView {
         UInt32(kVK_F11),
         UInt32(kVK_F12)
     ]
+}
+
+// MARK: - 侧栏系统材质（REVIEW-03）
+
+/// 设置窗侧栏的 sidebar vibrancy 底。SwiftUI 的 Material 枚举在 macOS 13 目标
+/// 上没有 `.sidebar`（编译期已验证），故直接包 NSVisualEffectView：
+/// material .sidebar + blendingMode .behindWindow，配合窗口 backgroundColor
+/// .clear / isOpaque = false 才有「内容滚动/桌面透感」。品牌区、导航行、conn-chip
+/// 等自定义前景全部不动，只换底。系统「减弱透明度」开启时 NSVisualEffectView
+/// 自动画实底，深浅色与动态外观均由系统托管。
+private struct SidebarVibrancyBackground: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        // state 保持默认 .followsWindowActiveState：窗口非活跃时材质自动变暗
+        //（系统设置侧栏同款）；「减弱透明度」开启时系统自动画实底。
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        // 材质/混合模式一次性设定；外观切换与减弱透明度由系统驱动，无需更新。
+    }
 }

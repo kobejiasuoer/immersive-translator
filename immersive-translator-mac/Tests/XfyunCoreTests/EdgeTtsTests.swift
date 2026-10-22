@@ -118,6 +118,76 @@ final class EdgeTtsTests: XCTestCase {
         XCTAssertNotEqual(base, edgeCacheKey(text: "hello", opts: EdgeTtsOptions(voice: "en-US-AndrewNeural")))
     }
 
+    // MARK: SPEAK-8 - 原生慢速（ratePercent）：缓存键 / SSML prosody（对齐 edgeTts.ts:80-98,168-179）
+
+    /// 不带 rate 的调用缓存 key 与现状完全一致（老缓存不失效）；显式 "+0%" 等同缺省。
+    func testEdgeCacheKeyDefaultRateUnchangedAndExplicitZeroIsSame() {
+        let legacy = "edge:en-US-AvaNeural|hello"
+        XCTAssertEqual(edgeCacheKey(text: "hello", opts: EdgeTtsOptions(voice: "en-US-AvaNeural")), legacy)
+        XCTAssertEqual(edgeCacheKey(text: "hello", opts: EdgeTtsOptions(voice: "en-US-AvaNeural", ratePercent: nil)), legacy)
+        XCTAssertEqual(edgeCacheKey(text: "hello", opts: EdgeTtsOptions(voice: "en-US-AvaNeural", ratePercent: "+0%")), legacy)
+        XCTAssertEqual(EdgeTts.defaultRatePercent, "+0%")
+        XCTAssertEqual(EdgeTts.slowDemoRatePercent, "-25%")
+    }
+
+    /// 传了 ratePercent 才拼入 `|r<rate>`：同词常速/慢速各一份，互不污染。
+    func testEdgeCacheKeyWithRateIsDistinctAndStable() {
+        let slow = edgeCacheKey(text: "hello", opts: EdgeTtsOptions(voice: "en-US-AvaNeural", ratePercent: "-25%"))
+        XCTAssertEqual(slow, "edge:en-US-AvaNeural|r-25%|hello")
+        XCTAssertNotEqual(slow, edgeCacheKey(text: "hello", opts: EdgeTtsOptions(voice: "en-US-AvaNeural")))
+        XCTAssertNotEqual(slow, edgeCacheKey(text: "hello", opts: EdgeTtsOptions(voice: "en-US-AvaNeural", ratePercent: "-10%")))
+        // 同参稳定
+        XCTAssertEqual(slow, edgeCacheKey(text: "hello", opts: EdgeTtsOptions(voice: "en-US-AvaNeural", ratePercent: "-25%")))
+        // 空音色回落 + 慢速
+        XCTAssertEqual(
+            edgeCacheKey(text: "hi", opts: EdgeTtsOptions(voice: "", ratePercent: "-25%")),
+            "edge:zh-CN-XiaoxiaoNeural|r-25%|hi"
+        )
+    }
+
+    /// SSML prosody：缺省仍是 rate='+0%'（逐字节与旧请求一致）；慢速示范注入 rate='-25%'。
+    func testBuildEdgeSsmlMessageInjectsProsodyRate() {
+        let legacy = buildEdgeSsmlMessage(voice: "en-US-AvaNeural", text: "hello", requestId: "r", timestamp: "t")
+        XCTAssertTrue(legacy.contains("<prosody pitch='+0Hz' rate='+0%' volume='+0%'>hello</prosody>"))
+        let slow = buildEdgeSsmlMessage(voice: "en-US-AvaNeural", text: "hello", requestId: "r", timestamp: "t", ratePercent: "-25%")
+        XCTAssertTrue(slow.contains("<prosody pitch='+0Hz' rate='-25%' volume='+0%'>hello</prosody>"))
+        XCTAssertFalse(slow.contains("rate='+0%'"))
+        // 除 rate 外其余字节完全一致
+        XCTAssertEqual(
+            legacy.replacingOccurrences(of: "rate='+0%'", with: "rate='-25%'"),
+            slow
+        )
+    }
+
+    /// 合成主链路把 opts.ratePercent 写进 ssml 帧；缺省 opts 仍发 +0%。
+    func testSynthesizeOnceSendsNativeRateInSsmlFrame() async throws {
+        let payload = Data([0x01])
+        let slowTransport = ScriptedEdgeTransport(rounds: [[
+            .data(makeEdgeBinaryFrame(header: audioHeader, payload: payload)),
+            .text(turnEnd),
+        ]])
+        _ = try await synthesizeEdgeTtsOnce(
+            text: "hello",
+            opts: EdgeTtsOptions(voice: "en-US-AvaNeural", ratePercent: "-25%"),
+            skewSeconds: 0,
+            transport: slowTransport
+        )
+        XCTAssertEqual(slowTransport.sent.count, 2)
+        XCTAssertTrue(slowTransport.sent[1].contains("rate='-25%'"))
+
+        let normalTransport = ScriptedEdgeTransport(rounds: [[
+            .data(makeEdgeBinaryFrame(header: audioHeader, payload: payload)),
+            .text(turnEnd),
+        ]])
+        _ = try await synthesizeEdgeTtsOnce(
+            text: "hello",
+            opts: EdgeTtsOptions(voice: "en-US-AvaNeural"),
+            skewSeconds: 0,
+            transport: normalTransport
+        )
+        XCTAssertTrue(normalTransport.sent[1].contains("rate='+0%'"))
+    }
+
     // MARK: - 合成主链路（脚本化传输，对齐 edgeTts.test.ts 的 scripts 回放语义）
 
     /// 脚本化传输：每轮合成（connect→send→receive…）按预排脚本回放；

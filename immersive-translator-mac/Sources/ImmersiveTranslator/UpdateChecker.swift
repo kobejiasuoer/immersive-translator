@@ -351,15 +351,30 @@ enum UpdateChecker {
         )
     }
 
-    static func downloadPackage(for result: UpdateCheckResult) async throws -> UpdateDownloadResult {
-        var request = URLRequest(url: result.downloadURL)
-        request.timeoutInterval = 90
-        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+    /// 下载更新包并校验（大小 + sha256 + zip 内 App 元数据 + 签名结构）。
+    ///
+    /// - Parameter progress: 可选进度回调 `(已下载字节数, 预期总字节数)`。总字节数取
+    ///   HTTP Content-Length，缺失时回落 manifest 的 size_bytes，两者都没有则回调
+    ///   `nil`（UI 转不确定进度）。回调在下载任务线程发出、按 128KB 节流；不传时
+    ///   走原 URLSession.download 路径（菜单栏更新流程，行为与签名逐字节不变）。
+    static func downloadPackage(
+        for result: UpdateCheckResult,
+        progress: ((_ bytesDownloaded: Int64, _ expectedTotal: Int64?) -> Void)? = nil
+    ) async throws -> UpdateDownloadResult {
+        let temporaryURL: URL
+        if let progress {
+            temporaryURL = try await streamedDownload(withProgress: result, progress: progress)
+        } else {
+            var request = URLRequest(url: result.downloadURL)
+            request.timeoutInterval = 90
+            request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
 
-        let (temporaryURL, response) = try await URLSession.shared.download(for: request)
-        if let httpResponse = response as? HTTPURLResponse,
-           !(200..<300).contains(httpResponse.statusCode) {
-            throw UpdateDownloadError.badResponse(httpResponse.statusCode)
+            let (downloadedURL, response) = try await URLSession.shared.download(for: request)
+            if let httpResponse = response as? HTTPURLResponse,
+               !(200..<300).contains(httpResponse.statusCode) {
+                throw UpdateDownloadError.badResponse(httpResponse.statusCode)
+            }
+            temporaryURL = downloadedURL
         }
 
         let integrity = try verifyPackageIntegrity(at: temporaryURL, result: result)
@@ -376,6 +391,86 @@ enum UpdateChecker {
             byteCount: integrity.byteCount,
             packageVerification: packageVerification
         )
+    }
+
+    /// 带进度下载：URLSessionDownloadDelegate 的 didWriteData 回调驱动进度，
+    /// 走系统级下载管线（不逐字节 await，也不把整包缓冲在内存），完成后与
+    /// download 路径共用同一套校验流程。
+    private static func streamedDownload(
+        withProgress result: UpdateCheckResult,
+        progress: @escaping (_ bytesDownloaded: Int64, _ expectedTotal: Int64?) -> Void
+    ) async throws -> URL {
+        let delegate = DownloadProgressDelegate(
+            progress: progress,
+            fallbackTotalBytes: result.manifest.sizeBytes
+        )
+        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+
+        var request = URLRequest(url: result.downloadURL)
+        // 下载任务的超时是「相邻两次数据之间的空闲超时」，取宽松值避免慢网误杀。
+        request.timeoutInterval = 90
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+
+        let (downloadedURL, response) = try await session.download(for: request)
+        if let httpResponse = response as? HTTPURLResponse,
+           !(200..<300).contains(httpResponse.statusCode) {
+            throw UpdateDownloadError.badResponse(httpResponse.statusCode)
+        }
+        // session 持有的临时文件随会话失效被回收；趁会话仍存活先搬到自管临时路径，
+        // 后续校验/落盘与文件生命周期解耦（defer 的 invalidate 不再影响它）。
+        let stableURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("update-download-\(UUID().uuidString).zip")
+        try FileManager.default.moveItem(at: downloadedURL, to: stableURL)
+        return stableURL
+    }
+
+    /// 下载进度桥：didWriteData 在 URLSession 的 delegate 队列（串行）上回调，
+    /// 按 128KB 节流后转发给 UI 回调；totalBytesExpectedToWrite ≤ 0（服务端未给
+    /// Content-Length）时回落 manifest 的 size_bytes，两者都没有则报 nil。
+    private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate {
+        private let progress: (_ bytesDownloaded: Int64, _ expectedTotal: Int64?) -> Void
+        private let fallbackTotalBytes: Int64?
+        private let reportGranularity: Int64 = 128 * 1024
+        private var lastReported: Int64 = 0
+
+        init(
+            progress: @escaping (_ bytesDownloaded: Int64, _ expectedTotal: Int64?) -> Void,
+            fallbackTotalBytes: Int64? = nil
+        ) {
+            self.progress = progress
+            self.fallbackTotalBytes = fallbackTotalBytes
+        }
+
+        func urlSession(
+            _ session: URLSession,
+            downloadTask: URLSessionDownloadTask,
+            didWriteData bytesWritten: Int64,
+            totalBytesWritten: Int64,
+            totalBytesExpectedToWrite: Int64
+        ) {
+            guard totalBytesWritten - lastReported >= reportGranularity || totalBytesWritten == totalBytesExpectedToWrite else {
+                return
+            }
+            lastReported = totalBytesWritten
+            let expected: Int64?
+            if totalBytesExpectedToWrite > 0 {
+                expected = totalBytesExpectedToWrite
+            } else if let fallbackTotalBytes, fallbackTotalBytes > 0 {
+                expected = fallbackTotalBytes
+            } else {
+                expected = nil
+            }
+            progress(totalBytesWritten, expected)
+        }
+
+        func urlSession(
+            _ session: URLSession,
+            downloadTask: URLSessionDownloadTask,
+            didFinishDownloadingTo location: URL
+        ) {
+            // async download(for:) 负责把文件交回调用方；这里只需满足协议。
+        }
     }
 
     static func prepareInstallation(
@@ -965,7 +1060,7 @@ enum UpdateChecker {
         fail() {
           log "FAILED: $*"
           /usr/bin/open -R "$SOURCE_APP" >/dev/null 2>&1 || true
-          /usr/bin/osascript -e 'display dialog "沉浸式翻译更新没有完成。已在 Finder 中显示已校验的新版本 App，请查看安装日志或手动拖入 Applications 替换。" buttons {"好"} default button "好" with icon caution' >/dev/null 2>&1 || true
+          /usr/bin/osascript -e 'display dialog "沉浸口语更新没有完成。已在 Finder 中显示已校验的新版本 App，请查看安装日志或手动拖入 Applications 替换。" buttons {"好"} default button "好" with icon caution' >/dev/null 2>&1 || true
           exit 1
         }
 
