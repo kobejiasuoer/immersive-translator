@@ -487,4 +487,4 @@ ruby -rjson -e 'JSON.parse(File.read("release/update-manifest.json")); puts "man
 
 ## License
 
-MIT
+AGPL-3.0
