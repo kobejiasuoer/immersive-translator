@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { actions, flushPersist, getState, reviewStats, rolloverIfDue, toast, useApp } from "./store";
 import { Icon } from "./ui/icons";
-import { NavCtx, type Nav, type PushName, type PushProps } from "./ui/nav";
+import { NavCtx, useNav, type Nav, type PushName, type PushProps } from "./ui/nav";
 import { SheetHost } from "./ui/sheets";
 import { haptic, invoke, onDeepLink, readClipboard, registerDiagSink } from "./services/device";
 /* 静态导入（非动态 chunk）：诊断模块共享 store/voice 模块，动态 import 会让
@@ -29,7 +29,6 @@ import { NotesGen, NotesLib, NoteDetail } from "./screens/NotesScreens";
 import { AboutScreen, DiagScreen, GlossaryScreen, HistoryScreen, ShareScreen } from "./screens/MiscScreens";
 import { SetLookScreen, SetModelScreen, SetPrefScreen, SetRemindScreen, SetVoiceScreen } from "./screens/SettingsScreens";
 import OnboardingScreen from "./screens/OnboardingScreen";
-import SpikeScreen from "./screens/SpikeScreen";
 import type { Article } from "./core/types";
 import type { SpeakSession } from "./core/sessions";
 
@@ -49,13 +48,40 @@ const TABS: { key: "today" | "practice" | "shelf" | "vocab" | "me"; label: strin
   { key: "me", label: "我的", icon: "me" },
 ];
 
+/* push 页名称 → 读屏名称（U-17：.push 根 role=dialog 的 aria-label；与各屏 PNav 标题同口径） */
+const PUSH_TITLES: Record<PushName, string> = {
+  reader: "阅读",
+  review: "复习",
+  quick: "快速复习",
+  translate: "翻译",
+  camera: "拍译",
+  scenes: "口语场景",
+  chat: "口语陪练",
+  shadow: "跟读",
+  caption: "录音直译",
+  notes: "生成笔记",
+  noteslib: "笔记库",
+  notedetail: "笔记详情",
+  history: "历史",
+  glossary: "生词本",
+  diag: "诊断",
+  about: "关于",
+  setModel: "模型服务",
+  setPref: "偏好设置",
+  setVoice: "语音服务",
+  setRemind: "提醒设置",
+  setLook: "外观",
+  onboarding: "欢迎使用",
+  share: "分享",
+};
+
 export default function App() {
   const tab = useApp((s) => s.tab);
   const st = useApp(reviewStats);
   const onboarded = useApp((s) => s.onboarded);
   const articles = useApp((s) => s.articles);
   const bannerState = useApp((s) => s.banner);
-  const rdBlack = useApp((s) => s.reader.topic === "black");
+  const sheet = useApp((s) => s.sheet);
 
   /* ---------- push 栈 ---------- */
   const stackRef = useRef<Entry[]>([]);
@@ -63,7 +89,17 @@ export default function App() {
   const idRef = useRef(0);
   /** 600ms 同名防重入（P-54：双击行叠两层复习页）；pop/popAll 清守卫，不误伤「返回后再进」 */
   const lastPushRef = useRef<{ name: PushName; at: number } | null>(null);
+  /** U-17：进栈前抓当前焦点，栈清空后归还（中途 pop 回到上一层时聚焦其标题） */
+  const lastFocusRef = useRef<HTMLElement | null>(null);
   const sync = useCallback(() => setStack([...stackRef.current]), []);
+
+  const focusPushTitle = useCallback((id: number) => {
+    const el = document.querySelector<HTMLElement>(`.push[data-push-id="${id}"] .ttl`);
+    if (el) {
+      el.tabIndex = -1;
+      el.focus({ preventScroll: true });
+    }
+  }, []);
 
   const nav: Nav = {
     push: (name, props = {}) => {
@@ -71,6 +107,7 @@ export default function App() {
       const last = lastPushRef.current;
       if (last && last.name === name && now - last.at < 600) return;
       lastPushRef.current = { name, at: now };
+      lastFocusRef.current = document.activeElement as HTMLElement | null;
       const entry: Entry = { id: ++idRef.current, name, props, entered: false, closing: false };
       stackRef.current = [...stackRef.current, entry];
       sync();
@@ -78,6 +115,7 @@ export default function App() {
         requestAnimationFrame(() => {
           entry.entered = true;
           sync();
+          focusPushTitle(entry.id);
         }),
       );
       haptic("light");
@@ -91,6 +129,10 @@ export default function App() {
       setTimeout(() => {
         stackRef.current = stackRef.current.filter((e) => e.id !== last.id);
         sync();
+        /* U-17：出栈归还焦点——还有上层则聚焦其标题，栈空则还原进栈前位置 */
+        const top = stackRef.current[stackRef.current.length - 1];
+        if (top) focusPushTitle(top.id);
+        else lastFocusRef.current?.focus?.();
       }, 330);
     },
     popAll: () => {
@@ -102,12 +144,21 @@ export default function App() {
       setTimeout(() => {
         stackRef.current = stackRef.current.filter((e) => !ids.includes(e.id));
         sync();
+        lastFocusRef.current?.focus?.();
       }, 330);
     },
     replace: (name, props = {}) => {
-      const entry: Entry = { id: ++idRef.current, name, props, entered: true, closing: false };
+      /* U-32：replace 与 push 同款入场（entered:false + 双 rAF），新屏 320ms 滑入、旧屏即刻卸载露 tab 层 */
+      const entry: Entry = { id: ++idRef.current, name, props, entered: false, closing: false };
       stackRef.current = [...stackRef.current.slice(0, -1), entry];
       sync();
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          entry.entered = true;
+          sync();
+          focusPushTitle(entry.id);
+        }),
+      );
       haptic("light");
     },
   };
@@ -212,22 +263,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
-  /* ---------- 应用内横幅：60s「无操作」自动收起（§3.14 / 评审要点 7③）——
-     任意 pointerdown 重置计时，用户持续操作时不干等（P-01 及 P-15/24/49/58 同源） ---------- */
-  useEffect(() => {
-    if (!bannerState) return;
-    let t = setTimeout(() => actions.closeBanner(), 60000);
-    const bump = () => {
-      clearTimeout(t);
-      t = setTimeout(() => actions.closeBanner(), 60000);
-    };
-    document.addEventListener("pointerdown", bump, true);
-    return () => {
-      clearTimeout(t);
-      document.removeEventListener("pointerdown", bump, true);
-    };
-  }, [bannerState?.at]);
-
+  /* ---------- 应用内横幅：进出场动画与 60s 自动收起都由 BannerHost 承担（U-05/§3.14） ---------- */
   const bannerShown = useRef(false);
   const bannerDeferred = useRef(false);
   useEffect(() => {
@@ -311,18 +347,20 @@ export default function App() {
         return <OnboardingScreen />;
       case "share":
         return <ShareScreen />;
-      case "spike":
-        return <SpikeScreen />;
       default:
         return <Missing onBack={nav.pop} />;
     }
   }
 
+  /* U-17：任一模态层（push/sheet/首启）打开时，底层 pane 与 tabbar 一律 inert——
+     读屏与点按都无法穿层（sheet 与 push 共用这一套机制） */
+  const overlayOpen = stack.length > 0 || !!sheet || !onboarded;
+
   return (
     <NavCtx.Provider value={nav}>
       <div className="app">
         {TABS.map((t) => (
-          <div key={t.key} className={`pane ${tab === t.key ? "on" : ""}`}>
+          <div key={t.key} className={`pane ${tab === t.key ? "on" : ""}`} inert={overlayOpen || undefined}>
             {t.key === "today" && <TodayScreen />}
             {t.key === "practice" && <PracticeScreen />}
             {t.key === "shelf" && <ShelfScreen />}
@@ -331,12 +369,13 @@ export default function App() {
           </div>
         ))}
 
-        <nav className="tabbar">
+        <nav className={`tabbar ${stack.length > 0 ? "behind" : ""}`} inert={overlayOpen || undefined}>
           {TABS.map((t) => (
             <button
               key={t.key}
               className={`tab ${tab === t.key ? "on" : ""}`}
-              aria-label={t.label}
+              aria-label={st.due > 0 && t.key === "vocab" ? `生词，${st.due} 个到期` : t.label}
+              aria-current={tab === t.key ? "true" : undefined}
               onClick={() => {
                 haptic("light");
                 actions.setTab(t.key);
@@ -349,11 +388,19 @@ export default function App() {
           ))}
         </nav>
 
-        {/* push 栈（阅读页携带阅读主题作用域 token） */}
-        {stack.map((e) => (
+        {/* U-37：push 存在期间底层压暗 + tab 栏视差左移，「盖纸」变「推入」 */}
+        <div className={`push-scrim ${stack.length > 0 ? "on" : ""}`} />
+
+        {/* push 栈（U-17：dialog 语义；U-07：阅读主题作用域已收敛进 ReaderScreen 正文容器） */}
+        {stack.map((e, i) => (
           <div
             key={e.id}
-            className={`push ${e.entered && !e.closing ? "in" : ""} ${e.closing ? "out" : ""} ${e.name === "reader" && rdBlack ? "rd-black" : ""}`}
+            data-push-id={e.id}
+            role="dialog"
+            aria-modal="true"
+            aria-label={PUSH_TITLES[e.name]}
+            className={`push ${e.entered && !e.closing ? "in" : ""} ${e.closing ? "out" : ""}`}
+            inert={i < stack.length - 1 || undefined}
           >
             {view(e)}
           </div>
@@ -361,50 +408,13 @@ export default function App() {
 
         {/* 首启 Onboarding（不可返回，三步后进今天） */}
         {!onboarded && (
-          <div className="push in">
+          <div className="push in" role="dialog" aria-modal="true" aria-label="欢迎使用">
             <OnboardingScreen />
           </div>
         )}
 
-        {/* 通知横幅 */}
-        {bannerState && (
-          <div className="banner on">
-            <div className="bt">
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <span className="bico">
-                  <Icon name="mark" size={16} />
-                </span>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 600 }}>{bannerState.title}</div>
-                  <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 1 }}>{bannerState.body}</div>
-                </div>
-              </div>
-              <button className="iconbtn" aria-label="关闭" style={{ width: 28, height: 28 }} onClick={() => actions.closeBanner()}>
-                <Icon name="close" size={14} />
-              </button>
-            </div>
-            <div className="brow2">
-              <button
-                className="bbtn"
-                onClick={() => {
-                  actions.closeBanner();
-                  nav.push("quick", { fromNotify: true });
-                }}
-              >
-                先清一张
-              </button>
-              <button
-                className="bbtn later"
-                onClick={() => {
-                  actions.snoozeBanner();
-                  toast("今晚不再提醒 · 角标保留");
-                }}
-              >
-                稍后
-              </button>
-            </div>
-          </div>
-        )}
+        {/* 通知横幅（U-05：进出场 400ms） */}
+        <BannerHost />
 
         <SheetHost />
       </div>
@@ -421,6 +431,100 @@ function Missing({ onBack }: { onBack: () => void }) {
       <button className="btn-ghost" style={{ border: "1px solid var(--hairline-strong)", maxWidth: 200 }} onClick={onBack}>
         返回
       </button>
+    </div>
+  );
+}
+
+/* 通知横幅（U-05，规格「顶部弹入 400ms」）：挂载先无 .on、双 rAF 后加类播滑入；
+   所有关闭路径（手动/稍后/60s 无操作）先摘 .on 播 400ms 收起，420ms 后再清 store——
+   「先清一张」的 320ms push 与收起并行。60s「无操作」计时也在这里（任意 pointerdown 重置，§3.14）。 */
+function BannerHost() {
+  const banner = useApp((s) => s.banner);
+  const nav = useNav();
+  const [shown, setShown] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const busyRef = useRef(false);
+  const primaryRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!banner) return;
+    busyRef.current = false;
+    setClosing(false);
+    setShown(false);
+    const raf = requestAnimationFrame(() => requestAnimationFrame(() => setShown(true)));
+    return () => cancelAnimationFrame(raf);
+  }, [banner?.at]);
+
+  /* 出现后「先清一张」成为第一顺序焦点（U-29：读屏用户可直接激活主动作） */
+  useEffect(() => {
+    if (banner && shown && !closing) primaryRef.current?.focus({ preventScroll: true });
+  }, [banner?.at, shown, closing]);
+
+  const close = useCallback((after?: () => void) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setClosing(true);
+    setTimeout(() => {
+      after?.();
+      actions.closeBanner();
+    }, 420);
+  }, []);
+
+  useEffect(() => {
+    if (!banner || closing) return;
+    let t = setTimeout(() => close(), 60000);
+    const bump = () => {
+      clearTimeout(t);
+      t = setTimeout(() => close(), 60000);
+    };
+    document.addEventListener("pointerdown", bump, true);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("pointerdown", bump, true);
+    };
+  }, [banner?.at, closing, close]);
+
+  if (!banner) return null;
+  return (
+    <div className={`banner ${shown && !closing ? "on" : ""}`} role="alert">
+      <div className="bt">
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <span className="bico">
+            <Icon name="mark" size={16} />
+          </span>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>{banner.title}</div>
+            <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 1 }}>{banner.body}</div>
+          </div>
+        </div>
+        {/* U-08：去 28×28 覆写恢复 .iconbtn 44 默认，负 margin 抵消行高位移 */}
+        <button className="iconbtn" aria-label="关闭" style={{ margin: "-8px" }} onClick={() => close()}>
+          <Icon name="close" size={14} />
+        </button>
+      </div>
+      <div className="brow2">
+        <button
+          ref={primaryRef}
+          className="bbtn"
+          onClick={() => {
+            close();
+            nav.push("quick", { fromNotify: true });
+          }}
+        >
+          先清一张
+        </button>
+        <button
+          className="bbtn later"
+          onClick={() =>
+            close(() => {
+              actions.snoozeBanner();
+              toast("今晚不再提醒 · 角标保留");
+            })
+          }
+        >
+          稍后
+        </button>
+      </div>
     </div>
   );
 }

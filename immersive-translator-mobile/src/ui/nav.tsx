@@ -26,8 +26,7 @@ export type PushName =
   | "setRemind"
   | "setLook"
   | "onboarding"
-  | "share"
-  | "spike";
+  | "share";
 
 export type PushProps = Record<string, unknown>;
 

@@ -44,10 +44,10 @@ export default function TodayScreen() {
       <div className="h1">今天</div>
 
       {!keyStored && (
-        <div className="guide" onClick={() => nav.push("setModel")}>
+        <button className="guide" style={{ width: "100%", textAlign: "left" }} onClick={() => nav.push("setModel")}>
           <Icon name="bolt" size={15} />
           <span>连上模型服务，翻译与查词就绪 · 去配置</span>
-        </div>
+        </button>
       )}
 
       {st.due > 0 ? (
@@ -65,7 +65,7 @@ export default function TodayScreen() {
           </button>
           <button
             className="btn-ghost tlink"
-            style={{ height: 40, fontSize: 14, fontWeight: 500, marginTop: 2 }}
+            style={{ height: 44, fontSize: 14, fontWeight: 500, marginTop: 2 }}
             onClick={() => nav.push("quick")}
           >
             先清一张 · 约 2 分钟
@@ -96,8 +96,10 @@ export default function TodayScreen() {
       {reading && (
         <>
           <hr className="hr" style={{ marginTop: 12 }} />
-          <div
+          {/* U-01：整卡可点 → button（热区 + 按钮语义） */}
+          <button
             className="sec press"
+            style={{ width: "100%", textAlign: "left" }}
             onClick={() => nav.push("reader", { articleId: reading.a.id })}
           >
             <div className="sec-head">
@@ -112,9 +114,9 @@ export default function TodayScreen() {
               {Math.max(1, reading.a.sentences.length - reading.sent - 1)} 分钟
             </div>
             <div className="meter">
-              <i style={{ width: `${((reading.sent + 1) / reading.a.sentences.length) * 100}%` }} />
+              <i style={{ transform: `scaleX(${(reading.sent + 1) / reading.a.sentences.length})` }} />
             </div>
-          </div>
+          </button>
         </>
       )}
 
@@ -126,11 +128,15 @@ export default function TodayScreen() {
               <span className="overline">剪贴板</span>
               <span className="when">{clipWhen(clip.ts)}</span>
             </div>
-            <div className="quote" onClick={() => nav.push("translate", { src: "剪贴板", srcText: clip.en })}>
+            <button
+              className="quote"
+              style={{ width: "100%", textAlign: "left" }}
+              onClick={() => nav.push("translate", { src: "剪贴板", srcText: clip.en })}
+            >
               “{clip.en}”
-            </div>
+            </button>
             <div className="quote-actions">
-              <span
+              <button
                 className="a"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -138,9 +144,9 @@ export default function TodayScreen() {
                 }}
               >
                 翻译
-              </span>
+              </button>
               <span className="dot">·</span>
-              <span
+              <button
                 className="b"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -175,14 +181,14 @@ export default function TodayScreen() {
                 }}
               >
                 存入书架精读
-              </span>
+              </button>
             </div>
             <hr className="hr" style={{ marginTop: 12 }} />
-            <div className="cliptwo" onClick={() => nav.push("camera")}>
+            <button className="cliptwo" style={{ width: "100%", textAlign: "left" }} onClick={() => nav.push("camera")}>
               <Icon name="cam" size={20} />
               <span className="t">拍译</span>
               <span className="s">拍照识别文字，立即翻译</span>
-            </div>
+            </button>
           </div>
         </>
       )}
@@ -191,28 +197,28 @@ export default function TodayScreen() {
       <div className="sec">
         <div className="overline">练一练</div>
         <div className="practice">
-          <div className="p-item" onClick={() => nav.push("shadow")}>
+          <button className="p-item" onClick={() => nav.push("shadow")}>
             <Icon name="wave" size={20} />
             <div>
               <div className="t">跟读</div>
               {/* 跟读句源已改为文章驱动（B 批次），不再显示写死的「4 句待练」 */}
               <div className="s">跟原文练发音</div>
             </div>
-          </div>
-          <div className="p-item" onClick={() => nav.push("scenes")}>
+          </button>
+          <button className="p-item" onClick={() => nav.push("scenes")}>
             <Icon name="chat" size={20} />
             <div>
               <div className="t">陪练</div>
               <div className="s">4 个场景</div>
             </div>
-          </div>
-          <div className="p-item" onClick={() => nav.push("caption")}>
+          </button>
+          <button className="p-item" onClick={() => nav.push("caption")}>
             <Icon name="clip" size={20} />
             <div>
               <div className="t">直译</div>
               <div className="s">双语字幕</div>
             </div>
-          </div>
+          </button>
         </div>
       </div>
 

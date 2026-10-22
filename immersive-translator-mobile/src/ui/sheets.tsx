@@ -52,59 +52,97 @@ function decodeTextFile(bytes: Uint8Array): string {
   }
 }
 
+/* sheet 种类 → 读屏名称（U-17：role=dialog 的 aria-label） */
+const SHEET_TITLES: Record<Sheet["kind"], string> = {
+  dict: "词典",
+  aa: "排版",
+  rate: "语速",
+  more: "本篇菜单",
+  search: "文内搜索",
+  confirm: "退出复习",
+  summary: "陪练小结",
+  export: "导出双语记录",
+  import: "导入",
+  diffwords: "只练差词",
+};
+
 export function SheetHost() {
   const sheet = useApp((s) => s.sheet);
-  const grabRef = useRef<HTMLDivElement>(null);
   const sheetElRef = useRef<HTMLDivElement>(null);
-  const drag = useRef({ sy: 0, dy: 0, on: false });
+  const drag = useRef({ sy: 0, dy: 0, t0: 0, on: false, taken: false });
 
-  /* 下拉跟手关闭 */
+  /* U-21（＝M-06＋P-15）：下拉关闭挂 sheet 根——iOS 半模态「任意位置下拉」；
+     scrollTop>0 让位滚动、dy<0 忽略、首次 dy>6 才接管（防点击误判），
+     释放 >120px 或 >0.4px/ms 快速轻扫即关（§1.8），否则 280ms 弹回。 */
   useEffect(() => {
-    const grab = grabRef.current;
     const el = sheetElRef.current;
-    if (!grab || !el || !sheet) return;
-    /* 打开时清掉上次拖拽中断残留的 inline 样式（治 sheets-7）：拖住 grab 期间弹层被他途
+    if (!el || !sheet) return;
+    /* 打开时清掉上次拖拽中断残留的 inline 样式（治 sheets-7）：拖拽期间弹层被他途
        关闭（如第二根手指点遮罩）时 up 永不执行，inline transition/transform 残留在
        .sheet 上——下次打开任何弹层都会错位下移且丢失开窗动画。 */
     el.style.transition = "";
     el.style.transform = "";
+
+    const swallowClick = (ev: Event) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+    };
+
     function down(e: PointerEvent) {
-      drag.current = { sy: e.clientY, dy: 0, on: true };
-      if (el) el.style.transition = "none";
-      e.preventDefault();
+      drag.current = { sy: e.clientY, dy: 0, t0: performance.now(), on: true, taken: false };
+      const scroller = (e.target as HTMLElement).closest(".sheet-body");
+      /* 内容已下滚：手势让位给滚动 */
+      if (scroller && scroller.scrollTop > 0) {
+        drag.current.on = false;
+        return;
+      }
     }
     function move(e: PointerEvent) {
       if (!drag.current.on) return;
-      drag.current.dy = Math.max(0, e.clientY - drag.current.sy);
-      if (el) el.style.transform = `translateY(${drag.current.dy}px)`;
+      const dy = e.clientY - drag.current.sy;
+      if (dy < 0) return; /* 上滑交给滚动 */
+      if (!drag.current.taken) {
+        if (dy < 6) return; /* 死区：Aa ± 等点击不误判 */
+        drag.current.taken = true;
+        if (el) el.style.transition = "none";
+      }
+      drag.current.dy = dy;
+      if (el) el.style.transform = `translateY(${dy}px)`;
     }
     function up() {
       if (!drag.current.on) return;
       drag.current.on = false;
+      const dt = performance.now() - drag.current.t0;
+      const v = drag.current.dy / Math.max(1, dt); /* px/ms */
       if (el) {
         el.style.transition = "";
         el.style.transform = "";
       }
-      if (drag.current.dy > 120) actions.setSheet(null);
+      if (drag.current.taken) {
+        /* 拖过的手势吞掉随后的 click，防误触底下按钮 */
+        window.addEventListener("click", swallowClick, { capture: true, once: true });
+      }
+      if (drag.current.dy > 120 || (drag.current.taken && v > 0.4)) actions.setSheet(null);
     }
-    grab.addEventListener("pointerdown", down);
+    el.addEventListener("pointerdown", down);
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", up);
     return () => {
-      grab.removeEventListener("pointerdown", down);
+      el.removeEventListener("pointerdown", down);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
+      window.removeEventListener("click", swallowClick, { capture: true });
     };
   }, [sheet]);
 
   const open = sheet !== null;
   return (
     <>
-      <div className={`sheet-dim ${open ? "on" : ""}`} onClick={() => actions.setSheet(null)} />
-      <div ref={sheetElRef} className={`sheet ${open ? "on" : ""}`}>
-        <div className="sheet-grab" ref={grabRef}>
+      <div className={`sheet-dim ${open ? "on" : ""}`} aria-hidden="true" onClick={() => actions.setSheet(null)} />
+      <div ref={sheetElRef} role="dialog" aria-modal="true" aria-label={sheet ? SHEET_TITLES[sheet.kind] : undefined} className={`sheet ${open ? "on" : ""}`}>
+        <div className="sheet-grab">
           <i />
         </div>
         <div className="sheet-body">{sheet && <SheetContent sheet={sheet} />}</div>
@@ -366,11 +404,11 @@ function AaSheet() {
       <div className="aa-row">
         <span className="meta2">字号</span>
         <div className="aa-steps">
-          <button aria-label="减小" onClick={() => actions.setReaderPrefs({ fs: Math.max(15, prefs.fs - 1) })}>
+          <button aria-label="减小字号" onClick={() => actions.setReaderPrefs({ fs: Math.max(15, prefs.fs - 1) })}>
             A−
           </button>
           <span className="aa-fs num">{prefs.fs}</span>
-          <button aria-label="增大" onClick={() => actions.setReaderPrefs({ fs: Math.min(24, prefs.fs + 1) })}>
+          <button aria-label="增大字号" onClick={() => actions.setReaderPrefs({ fs: Math.min(24, prefs.fs + 1) })}>
             A+
           </button>
         </div>
@@ -379,6 +417,7 @@ function AaSheet() {
         <span className="meta2">显示</span>
         <Seg
           className="aa-seg"
+          ariaLabel="显示模式"
           value={prefs.mode}
           items={[
             ["bi", "对照"],
@@ -392,6 +431,7 @@ function AaSheet() {
         <span className="meta2">阅读主题</span>
         <Seg
           className="aa-seg"
+          ariaLabel="阅读主题"
           value={prefs.topic}
           items={[
             ["paper", "纸色"],
@@ -432,20 +472,24 @@ function RateSheet() {
   return (
     <>
       <div className="sheet-title">语速</div>
-      {items.map(([v, label]) => (
-        <button
-          key={v}
-          className="menu-item"
-          onClick={() => {
-            actions.setReaderPrefs({ rate: v });
-            actions.setSheet(null);
-            toast(`语速 ${v}×`);
-          }}
-        >
-          <Icon name={rate === v ? "check" : "none"} size={17} />
-          <span style={{ flex: 1 }}>{label}</span>
-        </button>
-      ))}
+      <div role="radiogroup" aria-label="朗读语速">
+        {items.map(([v, label]) => (
+          <button
+            key={v}
+            role="radio"
+            aria-checked={rate === v}
+            className="menu-item"
+            onClick={() => {
+              actions.setReaderPrefs({ rate: v });
+              actions.setSheet(null);
+              toast(`语速 ${v}×`);
+            }}
+          >
+            <Icon name={rate === v ? "check" : "none"} size={17} />
+            <span style={{ flex: 1 }}>{label}</span>
+          </button>
+        ))}
+      </div>
     </>
   );
 }
@@ -510,7 +554,7 @@ function SearchSheet() {
       <div className="sheet-title">文内搜索</div>
       <div className="search">
         <Icon name="search" size={16} />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索词或短语" />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索词或短语" aria-label="搜索词或短语" />
       </div>
       <div style={{ marginTop: 8 }}>
         {!query && <div className="meta" style={{ padding: "10px 0" }}>输入以查找本篇的句子</div>}
@@ -890,7 +934,7 @@ function ImportSheet({ tab }: { tab: "lib" | "paste" | "link" | "file" }) {
             ["file", "文件"],
           ] as const
         ).map(([v, label]) => (
-          <button key={v} className={localTab === v ? "on" : ""} onClick={() => setLocalTab(v)}>
+          <button key={v} className={localTab === v ? "on" : ""} aria-pressed={localTab === v} onClick={() => setLocalTab(v)}>
             {label}
           </button>
         ))}
@@ -936,6 +980,7 @@ function ImportSheet({ tab }: { tab: "lib" | "paste" | "link" | "file" }) {
               <button
                 key={x}
                 className="chip"
+                aria-pressed={exam === x}
                 style={exam === x ? { background: "var(--ink)", color: "var(--on-ink)", borderColor: "var(--ink)" } : undefined}
                 onClick={() => setExam(exam === x ? null : x)}
               >
@@ -980,7 +1025,7 @@ function ImportSheet({ tab }: { tab: "lib" | "paste" | "link" | "file" }) {
             <Icon name="clip" size={13} />
             使用剪贴板内容（刚复制）
           </button>
-          <textarea className="input" rows={5} value={pasteText} onChange={(e) => setPasteText(e.target.value)} placeholder="把文章粘贴到这里" />
+          <textarea className="input" rows={5} value={pasteText} onChange={(e) => setPasteText(e.target.value)} placeholder="把文章粘贴到这里" aria-label="粘贴文章内容" />
           <button
             className="btn"
             style={{ marginTop: 12 }}
@@ -999,7 +1044,7 @@ function ImportSheet({ tab }: { tab: "lib" | "paste" | "link" | "file" }) {
       )}
       {localTab === "link" && (
         <>
-          <input className="input" value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} placeholder="https://…" />
+          <input className="input" value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} placeholder="https://…" aria-label="文章链接地址" />
           {linkState === "fail" && (
             <div className="degrade" style={{ marginTop: 10 }}>
               <Icon name="bolt" size={14} />
@@ -1028,7 +1073,7 @@ function ImportSheet({ tab }: { tab: "lib" | "paste" | "link" | "file" }) {
             </span>
             <Icon name="right" size={15} />
           </button>
-          <input ref={fileRef} type="file" accept=".txt,text/plain" className="hidden" onChange={onFile} />
+          <input ref={fileRef} type="file" accept=".txt,text/plain" className="hidden" onChange={onFile} aria-label="选择文本文件" />
         </>
       )}
       <button

@@ -29,7 +29,10 @@ export function PNav({
           left
         )}
       </div>
-      <div className="ttl">{title}</div>
+      {/* U-17：push 进栈时 App 会把焦点移到这里（tabIndex=-1），读屏先播页名 */}
+      <div className="ttl" tabIndex={-1}>
+        {title}
+      </div>
       <div className="side">{right}</div>
     </div>
   );
@@ -41,16 +44,19 @@ export function Seg<V extends string>({
   items,
   onChange,
   className,
+  ariaLabel,
 }: {
   value: V;
   items: [V, string][];
   onChange: (v: V) => void;
   className?: string;
+  /** 读屏名称（U-28：互斥组用 radiogroup/radio + aria-checked，VoiceOver 播报「已选中」） */
+  ariaLabel?: string;
 }) {
   return (
-    <div className={`seg ${className || ""}`}>
+    <div className={`seg ${className || ""}`} role="radiogroup" aria-label={ariaLabel}>
       {items.map(([v, label]) => (
-        <button key={v} className={value === v ? "on" : ""} onClick={() => onChange(v)}>
+        <button key={v} role="radio" aria-checked={value === v} className={value === v ? "on" : ""} onClick={() => onChange(v)}>
           {label}
         </button>
       ))}
@@ -72,16 +78,19 @@ export function Switch({ on, onToggle }: { on: boolean; onToggle: () => void }) 
   );
 }
 
-/* ---------- 进度墨线 ---------- */
+/* ---------- 进度墨线（U-33：transform scaleX 替代 width，播放/评分中零 layout 抖动） ---------- */
 export function Meter({ pct }: { pct: number }) {
+  const p = Math.max(0, Math.min(100, pct)) / 100;
   return (
     <div className="meter">
-      <i style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
+      <i style={{ transform: `scaleX(${p})` }} />
     </div>
   );
 }
 
-/* ---------- 左滑删除行（撤销 toast 5s，评审要点 7②） ---------- */
+/* ---------- 左滑删除行（撤销 toast 5s，评审要点 7②）
+   U-20：入场 cardin（CSS）；删除先 200ms 压扁淡出再进 store，行不再「报删」后瞬移；
+   U-45（WCAG 2.5.7）：行尾常驻「···」提供不依赖拖拽的删除路径（同一 onDelete，5s 撤销兜底）。 */
 export function SwipeRow({
   children,
   onDelete,
@@ -92,9 +101,27 @@ export function SwipeRow({
   innerClass?: "swipe-main" | "vmain";
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
   const st = useRef({ startX: 0, startY: 0, dx: 0, dragging: false, moved: false });
   const [drag, setDrag] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
+  const [collapsing, setCollapsing] = useState(false);
+
+  const remove = () => {
+    const wrap = rowRef.current;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+    if (!wrap || reduce) {
+      onDelete();
+      return;
+    }
+    wrap.style.height = `${wrap.offsetHeight}px`;
+    setCollapsing(true);
+    requestAnimationFrame(() => {
+      wrap.style.height = "0px";
+    });
+    /* 210ms 后进 store（>200ms 过渡），不依赖 transitionend */
+    setTimeout(onDelete, 210);
+  };
 
   useEffect(() => {
     const el = ref.current;
@@ -163,12 +190,12 @@ export function SwipeRow({
 
   const transform = drag === null ? (open ? "translateX(-76px)" : "translateX(0px)") : `translateX(${drag}px)`;
   return (
-    <div className="swipe-row">
+    <div ref={rowRef} className={`swipe-row ${collapsing ? "collapsing" : ""}`}>
       <button
         className="swipe-act"
         onClick={() => {
           haptic("light");
-          onDelete();
+          remove();
         }}
       >
         删除
@@ -176,6 +203,16 @@ export function SwipeRow({
       <div ref={ref} style={{ transform }} className={innerClass}>
         {children}
       </div>
+      <button
+        className="iconbtn swipe-more"
+        aria-label="删除"
+        onClick={() => {
+          haptic("light");
+          remove();
+        }}
+      >
+        ···
+      </button>
     </div>
   );
 }

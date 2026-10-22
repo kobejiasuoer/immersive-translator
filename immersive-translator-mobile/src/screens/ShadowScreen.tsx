@@ -2,7 +2,7 @@
  * 影子跟读轮（push）—— 真实链路（B2）：startPcmCapture 采集 + ShadowVad 收句
  * （套B 经验值照 mac ShadowAssessController.swift:218-251）→ 讯飞 ISE 评测 →
  * iseAlign 保序对齐词级标红。六态状态机全有「跳过」逃生门（#46）；领读默认常速
- * + 三档倍速（常速/0.8×/慢速 0.6×，store speak 云/系统自动路由）；句子出现时
+ * + 三档倍速（常速/0.8×/慢速 0.72×，store speak 云/系统自动路由）；句子出现时
  * prefetchCloud 后台拉音，点领读即命中缓存（免首次等合成）；不达标 → 词级标红
  * （唯一允许 err 大面积场景）+ [再试][听领读][跳过]；达标 → 分数胶囊；报告卡
  * 底部小卡（#57）+ 只练差词抽屉（#58）。未配置讯飞：录音/VAD 仍真实，到评测步
@@ -13,7 +13,7 @@ import { actions, speak, stopSpeak, useApp } from "../store";
 import { Icon } from "../ui/icons";
 import { PNav, Seg } from "../ui/kit";
 import { useNav } from "../ui/nav";
-import { isTauri, reportDiag } from "../services/device";
+import { isTauri, haptic, reportDiag } from "../services/device";
 import { startPcmCapture, type Capture } from "../services/audio";
 import { assessSentence, prefetchCloud } from "../services/voice";
 import { SHADOW_VAD, ShadowVad } from "../core/vad";
@@ -97,7 +97,9 @@ export default function ShadowScreen({ fromArticle, sentIdx }: ShadowProps) {
     captureRef.current = null;
   }
 
-  /** 领读倍速：常速 1（默认）/ 0.8 / 慢速 0.6——切换即预取对应语速的合成音频。 */
+  /** 领读倍速：常速 1（默认）/ 0.8 / 慢速 0.72——切换即预取对应语速的合成音频。
+      U-50：0.72 为定稿口径（docs §3.12 / 候选 A §4.12）；原代码 0.6 属漂移，按计划默认改回。
+      若团队确认 0.6 是实测新决策，须回写两份设计档案而非改此处。 */
   const [leadRate, setLeadRate] = useState(1);
 
   function lead(rate?: number) {
@@ -162,6 +164,7 @@ export default function ShadowScreen({ fromArticle, sentIdx }: ShadowProps) {
     // 手动停止入口在采集就绪后才挂（此前点不到真录音）
     stopRecRef.current = () => finish("manual");
     setPhase("rec");
+    haptic("light"); /* U-19：开麦触感（规格：开麦=light） */
     // 壁钟兜底：音频块断流时强制按手动停止收句（VAD 的上限 15s + 余量）
     watchdogRef.current = setTimeout(() => finish("manual"), SHADOW_VAD.maxRecordMs + 1500);
   }
@@ -278,7 +281,8 @@ export default function ShadowScreen({ fromArticle, sentIdx }: ShadowProps) {
       />
       <div className="sh-stage">
         {phase === "report" ? (
-          <>
+          /* U-39：报告卡 240ms 入场（cardin），结果时刻有呈现节奏 */
+          <div className="rv-card" style={{ width: "100%" }}>
             <div className="overline" style={{ textAlign: "center" }}>
               本轮跟读
             </div>
@@ -295,7 +299,7 @@ export default function ShadowScreen({ fromArticle, sentIdx }: ShadowProps) {
                 </span>
               </div>
               <div className="meter" style={{ marginTop: 10 }}>
-                <i style={{ width: `${avgScore(results)}%` }} />
+                <i style={{ transform: `scaleX(${avgScore(results) / 100})` }} />
               </div>
               {diffWords.length ? (
                 <div className="meta" style={{ marginTop: 10 }}>
@@ -321,9 +325,10 @@ export default function ShadowScreen({ fromArticle, sentIdx }: ShadowProps) {
                 </button>
               </div>
             </div>
-          </>
+          </div>
         ) : phase === "fail" ? (
-          <>
+          /* U-39：单句结果（分数胶囊）240ms 入场 */
+          <div className="rv-flip" style={{ width: "100%" }}>
             <div className="sh-words">{renderMarked(sent, marks)}</div>
             <div style={{ marginTop: 14 }}>
               <span className="score-pill">
@@ -345,9 +350,9 @@ export default function ShadowScreen({ fromArticle, sentIdx }: ShadowProps) {
                 跳过
               </button>
             </div>
-          </>
+          </div>
         ) : phase === "pass" ? (
-          <>
+          <div className="rv-flip" style={{ width: "100%" }}>
             <div className="sh-sent">{sent}</div>
             <div style={{ marginTop: 22 }}>
               <span className="score-pill">
@@ -362,7 +367,7 @@ export default function ShadowScreen({ fromArticle, sentIdx }: ShadowProps) {
                 {i >= sents.length - 1 ? "看跟读报告" : "下一句"}
               </button>
             </div>
-          </>
+          </div>
         ) : phase === "warn" ? (
           <>
             <div className="sh-sent">{sent}</div>
@@ -446,10 +451,11 @@ export default function ShadowScreen({ fromArticle, sentIdx }: ShadowProps) {
             <div style={{ display: "flex", justifyContent: "center", margin: "14px 0 0" }}>
               <Seg
                 value={String(leadRate)}
+                ariaLabel="领读倍速"
                 items={[
                   ["1", "常速"],
                   ["0.8", "0.8×"],
-                  ["0.6", "慢速 0.6×"],
+                  ["0.72", "慢速 0.72×"],
                 ]}
                 onChange={(v) => setLeadRate(Number(v))}
               />

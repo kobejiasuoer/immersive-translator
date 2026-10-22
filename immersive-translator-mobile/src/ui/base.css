@@ -94,27 +94,27 @@ textarea:focus-visible {
 /* ---------- 通用排版 ---------- */
 .h1 {
   font-family: var(--font-serif);
-  font-size: 32px;
-  line-height: 38px;
+  font-size: var(--fs-display); /* U-46：字阶令牌，随 --fs-scale 缩放 */
+  line-height: var(--lh-display);
   font-weight: 600;
   letter-spacing: 0.01em;
   margin-top: 6px;
 }
 .overline {
-  font-size: 11px;
-  line-height: 16px;
+  font-size: var(--fs-overline);
+  line-height: var(--lh-overline);
   font-weight: 500;
   letter-spacing: 0.12em;
   color: var(--ink-3);
 }
 .meta {
-  font-size: 13px;
-  line-height: 18px;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta);
   color: var(--ink-3);
 }
 .meta2 {
-  font-size: 13px;
-  line-height: 18px;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta);
   color: var(--ink-2);
 }
 .serif {
@@ -130,6 +130,32 @@ textarea:focus-visible {
   height: 1px;
   background: var(--hairline);
   border: 0;
+}
+/* U-36：按压 100ms 过渡统一补齐（不动已有过渡的 .btn/.btn-ghost/.tab/.switch/.cam-shutter） */
+.press,
+.tlink,
+.iconbtn,
+.frow,
+.menu-item,
+.grade,
+.chip,
+.tr-bottom .tb,
+.sh-actions .sb,
+.dict-actions .da,
+.aa-steps button,
+.recent .rc,
+.src-card,
+.holdbtn,
+.swipe-act,
+.art-title,
+.quote,
+.cliptwo,
+.p-item,
+.prow,
+.scene-row,
+.cap-fab,
+.lib-hero {
+  transition: opacity 100ms linear, background-color 100ms linear;
 }
 .press:active {
   opacity: 0.78;
@@ -175,15 +201,22 @@ textarea:focus-visible {
   transition: opacity 0.1s;
 }
 .btn-ghost:active {
-  opacity: 0.6;
+  opacity: 0.78; /* U-30：按压 opacity 收敛到定稿唯一档 0.78 */
 }
 .tlink {
   color: var(--accent);
   font-weight: 500;
   cursor: pointer;
+  /* U-01：文字链热区 ≥44——透明 padding 撑命中区、负 margin 收视觉（§1.5 铁律） */
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  min-height: 44px;
+  padding: 0 12px;
+  margin: 0 -12px;
 }
 .tlink:active {
-  opacity: 0.7;
+  opacity: 0.78;
 }
 .iconbtn {
   width: 44px;
@@ -197,6 +230,43 @@ textarea:focus-visible {
 }
 .iconbtn:active {
   background: var(--surface-2);
+}
+
+/* U-08：小控件透明伪元素扩热区（视觉不变，命中 ≥44×44；相邻以不碰撞为限） */
+.banner .bbtn,
+.aa-steps button,
+.switch,
+.bubble .spk,
+.chip,
+.import-tabs button {
+  position: relative;
+}
+.banner .bbtn::before,
+.aa-steps button::before,
+.switch::before,
+.bubble .spk::before,
+.chip::before,
+.import-tabs button::before {
+  content: "";
+  position: absolute;
+}
+.banner .bbtn::before {
+  inset: -5px -6px; /* 34 → 44 */
+}
+.aa-steps button::before {
+  inset: -4px; /* 36 → 44 */
+}
+.switch::before {
+  inset: -7px; /* 50×30 → 64×44（style-spec N-6） */
+}
+.bubble .spk::before {
+  inset: -7px; /* 30 → 44 */
+}
+.chip::before {
+  inset: -6px; /* ≈32 → 44 */
+}
+.import-tabs button::before {
+  inset: -3px -6px; /* ≈38 → 44 */
 }
 
 /* ---------- 分段 / 开关 / 徽章 ---------- */
@@ -217,6 +287,9 @@ textarea:focus-visible {
   align-items: center;
   justify-content: center;
   gap: 5px;
+}
+.seg button:active {
+  background: var(--surface); /* U-23：分段按压态（背景→surface 一式） */
 }
 .seg button.on {
   background: var(--surface);
@@ -250,6 +323,9 @@ textarea:focus-visible {
 .switch.on i {
   transform: translateX(20px);
 }
+.switch:active {
+  opacity: 0.78; /* U-23 */
+}
 .pos-badge {
   font-size: 10px;
   line-height: 16px;
@@ -269,6 +345,15 @@ textarea:focus-visible {
   border-radius: 999px;
   padding: 2px 9px;
   flex: none;
+}
+/* U-01：行内嵌套「需配置」小签不能 button 化（在 button 行内），透明伪元素扩热区到 ≥44 */
+.prow .warn-chip {
+  position: relative;
+}
+.prow .warn-chip::before {
+  content: "";
+  position: absolute;
+  inset: -12px -4px;
 }
 .dot-due {
   width: 6px;
@@ -308,6 +393,9 @@ textarea:focus-visible {
 .row:last-child {
   border-bottom: 0;
 }
+.row:active {
+  background: var(--surface-2); /* U-23：行按压态 */
+}
 .row .grow {
   flex: 1;
   min-width: 0;
@@ -336,7 +424,7 @@ textarea:focus-visible {
   padding: 10px 14px;
   border-bottom: 1px solid var(--hairline);
   cursor: pointer;
-  font-size: 16px;
+  font-size: var(--fs-headline); /* U-46：16→17 对齐 --fs-headline；随 --fs-scale 缩放（U-15） */
   width: 100%;
   text-align: left;
 }
@@ -416,6 +504,23 @@ textarea.input {
   display: flex;
   align-items: flex-start;
   padding: 9px 6px calc(10px + env(safe-area-inset-bottom));
+  transition: transform 320ms var(--ease); /* U-37：push 期间视差左移 */
+}
+.tabbar.behind {
+  transform: translateX(-25%);
+}
+/* U-37：push 底层压暗 scrim（z 介于 tabbar(30) 与 push(40) 之间） */
+.push-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  background: rgba(32, 29, 24, 0.12);
+  opacity: 0;
+  transition: opacity 320ms var(--ease);
+  pointer-events: none;
+}
+.push-scrim.on {
+  opacity: 1;
 }
 .tab {
   flex: 1;
@@ -424,15 +529,18 @@ textarea.input {
   align-items: center;
   gap: 3px;
   color: var(--ink-3);
-  font-size: 10px;
-  line-height: 12px;
+  font-size: var(--fs-tab); /* U-46 */
+  line-height: var(--lh-tab);
   font-weight: 500;
   cursor: pointer;
-  transition: color 0.16s;
+  transition: color 0.16s, opacity 100ms linear;
   position: relative;
   height: 46px;
   justify-content: flex-start;
   padding-top: 2px;
+}
+.tab:active {
+  opacity: 0.78; /* U-23：最高频控件按压反馈 */
 }
 .tab.on {
   color: var(--ink);
@@ -534,7 +642,7 @@ textarea.input {
      --kb-inset 由 sheets.tsx 监听 visualViewport 写入（未启用时回退 0 不影响现有布局） */
   bottom: var(--kb-inset, 0px);
   z-index: 45;
-  max-height: 76%;
+  max-height: calc(76% - var(--kb-inset, 0px)); /* U-41：键盘弹起时同步扣减，把手与标题不被裁 */
   background: var(--surface);
   border-radius: var(--r-l) var(--r-l) 0 0;
   box-shadow: var(--shadow-sheet);
@@ -568,6 +676,7 @@ textarea.input {
 }
 .sheet-body {
   overflow-y: auto;
+  overscroll-behavior: contain; /* U-24：滚到边界手势不给底层 */
   padding: 4px 20px calc(24px + env(safe-area-inset-bottom));
   scrollbar-width: none;
 }
@@ -576,7 +685,8 @@ textarea.input {
 }
 .sheet-title {
   font-family: var(--font-serif);
-  font-size: 20px;
+  font-size: var(--fs-title); /* U-46：字阶令牌 */
+  line-height: var(--lh-title); /* 28（原缺省） */
   font-weight: 600;
   margin: 4px 0 12px;
 }
@@ -584,14 +694,14 @@ textarea.input {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 50px;
-  font-size: 16px;
+  min-height: 52px; /* U-46：50→52 */
+  font-size: var(--fs-headline); /* U-46：16→17 */
   cursor: pointer;
   width: 100%;
   text-align: left;
 }
 .menu-item:active {
-  opacity: 0.7;
+  opacity: 0.78; /* U-30 */
 }
 .menu-item svg {
   color: var(--ink-2);
@@ -634,6 +744,9 @@ textarea.input {
   background: var(--ink);
   color: var(--on-ink);
 }
+.banner .bbtn:active {
+  opacity: 0.78; /* U-23 */
+}
 .banner .bbtn.later {
   background: none;
   color: var(--ink-2);
@@ -674,7 +787,7 @@ textarea.input {
 }
 .toast.on {
   opacity: 1;
-  transform: none;
+  transform: translateY(var(--toast-lift, 0px)); /* U-22：sheet 让位走变量，复用 200ms transform 过渡 */
   pointer-events: auto;
 }
 .toast .undo {
@@ -724,7 +837,7 @@ textarea.input {
 }
 .hero-num {
   font-family: var(--font-serif);
-  font-size: 62px;
+  font-size: var(--fs-numeral); /* U-46 */
   line-height: 1;
   font-weight: 500;
   letter-spacing: -0.01em;
@@ -773,14 +886,14 @@ textarea.input {
 }
 .art-title {
   font-family: var(--font-serif);
-  font-size: 20px;
-  line-height: 26px;
+  font-size: var(--fs-title); /* U-46：字阶令牌（20） */
+  line-height: var(--lh-title); /* 26→28（§4.1 目标值） */
   font-weight: 600;
   margin-top: 4px;
   cursor: pointer;
 }
 .art-title:active {
-  opacity: 0.7;
+  opacity: 0.78; /* U-30 */
 }
 .art-meta {
   margin-top: 2px;
@@ -795,9 +908,11 @@ textarea.input {
 .meter > i {
   display: block;
   height: 100%;
-  width: 0;
+  width: 100%;
   background: var(--accent); /* 进度墨线 */
-  transition: width 320ms var(--ease);
+  transform: scaleX(0); /* U-33：transform 替代 width，进度推进零 layout */
+  transform-origin: left;
+  transition: transform 320ms var(--ease);
 }
 .quote {
   margin-top: 6px;
@@ -815,7 +930,7 @@ textarea.input {
   cursor: pointer;
 }
 .quote:active {
-  opacity: 0.7;
+  opacity: 0.78; /* U-30 */
 }
 .quote-actions {
   margin-top: 4px;
@@ -824,10 +939,22 @@ textarea.input {
   font-size: 15px;
   line-height: 20px;
 }
+.quote-actions .a,
+.quote-actions .b {
+  cursor: pointer;
+}
 .quote-actions .a {
   color: var(--accent);
   font-weight: 500;
-  cursor: pointer;
+}
+/* U-01：动作行文字链接按钮化后的热区（透明 padding 撑 44、负 margin 收视觉） */
+.quote-actions .a,
+.quote-actions .b {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 8px;
+  margin: 0 -8px;
 }
 .quote-actions .dot {
   color: var(--ink-4);
@@ -847,7 +974,7 @@ textarea.input {
   font-size: 15px;
 }
 .cliptwo:active {
-  opacity: 0.7;
+  opacity: 0.78; /* U-30 */
 }
 .cliptwo .t {
   font-weight: 600;
@@ -871,7 +998,7 @@ textarea.input {
   margin: -6px 0;
 }
 .p-item:active {
-  opacity: 0.7;
+  opacity: 0.78; /* U-30 */
 }
 .p-item svg {
   color: var(--ink);
@@ -920,6 +1047,9 @@ textarea.input {
   align-items: center;
   cursor: pointer;
 }
+.guide:active {
+  opacity: 0.78; /* U-01③：引导条按压态 */
+}
 
 /* ---------- 练 ---------- */
 .prow {
@@ -933,7 +1063,7 @@ textarea.input {
   text-align: left;
 }
 .prow:active {
-  opacity: 0.75;
+  opacity: 0.78; /* U-30 */
 }
 .prow .ic {
   width: 44px;
@@ -996,6 +1126,12 @@ textarea.input {
   position: relative;
   overflow: hidden;
   border-bottom: 1px solid var(--hairline);
+  animation: cardin 240ms var(--ease); /* U-20：入场/撤销恢复 240ms 插回（一行覆盖五个调用面） */
+}
+.swipe-row.collapsing {
+  /* U-20：离场 200ms 压扁淡出（高度由 SwipeRow 先量后写 inline） */
+  transition: height 200ms var(--ease), opacity 200ms var(--ease);
+  opacity: 0;
 }
 .swipe-main {
   display: block;
@@ -1042,6 +1178,34 @@ textarea.input {
   font-size: 15px;
   font-weight: 500;
   background: var(--err-soft);
+}
+.swipe-act:active {
+  background: var(--err-soft);
+  filter: brightness(0.96); /* U-23：破坏性动作按压态 */
+}
+.swipe-more {
+  /* U-45（WCAG 2.5.7）：不依赖左滑的可见删除路径，与滑动共用同一 onDelete */
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-3);
+  font-size: 17px;
+  letter-spacing: 2px;
+  z-index: 2;
+}
+.swipe-more:active {
+  opacity: 0.78;
+}
+/* U-45：行内容右侧让出常驻 ··· 的位置 */
+.swipe-row .swipe-main,
+.swipe-row .vmain {
+  padding-right: 40px;
 }
 .pin {
   font-size: 10px;
@@ -1111,11 +1275,15 @@ textarea.input {
 .rd-prog > i {
   display: block;
   height: 100%;
+  width: 100%;
   background: var(--accent);
-  transition: width 200ms;
+  transform: scaleX(0); /* U-33：transform 替代 width */
+  transform-origin: left;
+  transition: transform 200ms var(--ease);
 }
 .rd-body {
   padding: 18px 24px 120px;
+  background: var(--bg); /* U-07：rd-black 作用域收敛后正文容器自带底色 */
 }
 .para {
   margin-bottom: 22px;
@@ -1124,11 +1292,19 @@ textarea.input {
 }
 .sent {
   cursor: pointer;
-  border-radius: 4px;
-  transition: background 200ms;
+  position: relative;
 }
-.sent.playing {
-  background: var(--accent-soft);
+/* U-12（＝P-08）：当前句只以页边 2px 墨线标记（定稿 V5/§4.6 明文），不用底色——
+   与同行 tok.known 的 accent-soft 底不再叠成两层标注 */
+.sent.playing::before {
+  content: "";
+  position: absolute;
+  left: -24px; /* 对应 .rd-body 24px 边距，墨线落在页边距里 */
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
 }
 .sent-en {
   font-family: var(--font-serif);
@@ -1140,8 +1316,10 @@ textarea.input {
   color: var(--ink); /* 纯黑主题：墨色在作用域内解析，不再继承 push 外层浅色墨（P-22） */
 }
 .sent-zh {
-  font-size: 14px;
-  line-height: 22px;
+  /* U-03：中文行随 Aa 字号档缩放（--rd-fs 由 ReaderScreen 正文容器注入），
+     且恒 ≥17px 正文下限——15 档时不再跟手缩小，属铁律对跟手性的让位（§4 取舍） */
+  font-size: max(17px, calc(var(--rd-fs, 19px) * 0.85));
+  line-height: 1.5;
   color: var(--ink-3);
   margin-top: 2px;
   transition: filter 200ms, opacity 200ms;
@@ -1239,8 +1417,13 @@ textarea.input {
   justify-content: center;
   padding: 0 24px calc(40px + env(safe-area-inset-bottom));
   overflow-y: auto;
+  overscroll-behavior: contain; /* U-24 */
 }
 .rv-card {
+  animation: cardin 240ms var(--ease);
+}
+.rv-flip {
+  /* U-18（＝M-03）：识别卡翻面/评分组 240ms 入场（规格 docs:138），不做 3D 翻转 */
   animation: cardin 240ms var(--ease);
 }
 @keyframes cardin {
@@ -1270,8 +1453,8 @@ textarea.input {
 }
 .rv-sent {
   font-family: var(--font-serif);
-  font-size: 19px;
-  line-height: 34px;
+  font-size: var(--fs-reading); /* U-46/U-15：字阶令牌，随 --fs-scale 缩放 */
+  line-height: var(--lh-reading);
 }
 .blank {
   display: inline-block;
@@ -1357,8 +1540,8 @@ textarea.input {
 }
 .diffline {
   font-family: var(--font-serif);
-  font-size: 19px;
-  line-height: 34px;
+  font-size: var(--fs-reading); /* U-46/U-15 */
+  line-height: var(--lh-reading);
   margin-top: 6px;
   word-break: break-word; /* 词间空格丢失时也能断行（P-12） */
   overflow-wrap: break-word;
@@ -1420,16 +1603,18 @@ textarea.input {
   padding: 3px 10px;
 }
 .tr-src {
-  font-size: 15px;
-  line-height: 23px;
+  /* U-13：原文区对齐契约「衬线 17px」（候选 A §4.x：done 态点按即编辑，与编辑态同级） */
+  font-family: var(--font-serif);
+  font-size: var(--fs-headline);
+  line-height: var(--lh-headline);
   color: var(--ink-2);
   margin-top: 12px;
   cursor: pointer;
 }
 .tr-zh {
   font-family: var(--font-serif);
-  font-size: 19px;
-  line-height: 32px;
+  font-size: var(--fs-reading);
+  line-height: var(--lh-reading); /* U-13：32→34，对齐 --fs-reading 19/34 */
   margin-top: 14px;
 }
 .caret {
@@ -1602,33 +1787,7 @@ textarea.input {
   border-top: 0;
   border-radius: 0 0 6px 0;
 }
-.cam-scan {
-  position: absolute;
-  left: 24px;
-  right: 24px;
-  height: 2px;
-  background: var(--accent);
-  top: 20%;
-  opacity: 0;
-  box-shadow: 0 0 12px rgba(143, 179, 212, 0.8);
-}
-.cam-scan.go {
-  animation: scan 1.15s ease-in-out forwards;
-}
-@keyframes scan {
-  0% {
-    top: 14%;
-    opacity: 1;
-  }
-  60% {
-    top: 78%;
-    opacity: 1;
-  }
-  100% {
-    top: 78%;
-    opacity: 0;
-  }
-}
+/* U-34：.cam-scan 死代码 27 行已删（grep 全 tsx 零引用）；未来恢复扫描线按 translateY 另写 */
 .cam-flash {
   position: absolute;
   inset: 0;
@@ -1721,7 +1880,7 @@ textarea.input {
   text-align: left;
 }
 .scene-row:active {
-  opacity: 0.75;
+  opacity: 0.78; /* U-30 */
 }
 .scene-ic {
   width: 44px;
@@ -1747,6 +1906,7 @@ textarea.input {
 .chat-body {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain; /* U-24 */
   padding: 16px 20px 12px;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
@@ -1789,7 +1949,9 @@ textarea.input {
   border-radius: var(--r-m) 4px var(--r-m) var(--r-m);
 }
 [data-theme="dark"] .bubble.me .zh {
-  color: var(--ink-3);
+  /* U-10：深色下「我」气泡是浅底（--ink 反转），ink-3 落浅底仅 2.74:1——
+     改墨色降透明 ≈5.2:1（§6.4 对比度清单同步项） */
+  color: rgba(26, 24, 21, 0.66);
 }
 .bubble .spk {
   color: var(--ink-3);
@@ -1859,6 +2021,10 @@ textarea.input {
   background: var(--surface-2);
   color: var(--ink);
   border: 1.5px solid var(--hairline-strong);
+}
+.holdbtn {
+  /* U-36：.holdbtn.rec 的 border/color 切换也吃 100ms（叠加组规则的两项） */
+  transition: opacity 100ms linear, background-color 100ms linear, border-color 100ms linear, color 100ms linear;
 }
 .type-row {
   display: flex;
@@ -1936,6 +2102,7 @@ textarea.input {
   padding: 0 28px calc(40px + env(safe-area-inset-bottom));
   text-align: center;
   overflow-y: auto;
+  overscroll-behavior: contain; /* U-24 */
 }
 .sh-sent {
   font-family: var(--font-serif);
@@ -1967,7 +2134,10 @@ textarea.input {
   border-bottom: 2px solid var(--err);
 }
 .sh-words .w-miss {
-  color: var(--ink-4);
+  /* U-09：结果文字不用 ink-4（2.1:1）；层级区分靠字重+删除线（非颜色线索）。
+     当前全库无挂载点（防回潮保留），接线即合规 */
+  color: var(--ink-3);
+  font-weight: 500;
   text-decoration: line-through;
 }
 .score-pill {
@@ -2102,9 +2272,16 @@ textarea.input {
   align-items: center;
   justify-content: center;
   box-shadow: var(--shadow-pop);
+  /* U-35：常挂载 + hide 类切换（保留定位 translateX），开录缩退淡出、停录回弹归位 */
+  transition: transform 200ms var(--ease), opacity 200ms var(--ease);
+}
+.cap-fab.hide {
+  transform: translateX(-50%) scale(0.9);
+  opacity: 0;
+  pointer-events: none;
 }
 .cap-fab:active {
-  opacity: 0.85;
+  opacity: 0.78; /* U-30 */
 }
 .cap-empty {
   padding: 80px 36px 0;
@@ -2157,8 +2334,10 @@ textarea.input {
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--r-m);
-  font-size: 15px;
-  line-height: 25px;
+  /* U-25：笔记正文本体 =「衬线一页纸」17/26（候选 A §4.15 + 17px 铁律） */
+  font-family: var(--font-serif);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
   min-height: 120px;
 }
 .note-body p {
@@ -2181,6 +2360,10 @@ textarea.input {
   flex-direction: column;
   padding: 0 28px calc(44px + env(safe-area-inset-bottom));
   overflow-y: auto;
+  overscroll-behavior: contain; /* U-24 */
+}
+.ob-step {
+  animation: tabin 160ms ease-out; /* U-38：步骤切换入场 */
 }
 .ob-opt {
   display: flex;
@@ -2199,8 +2382,14 @@ textarea.input {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+.ob-opt:active {
+  background: var(--surface-2); /* U-23 */
+}
+.ob-opt.on:active {
+  background: var(--accent-soft);
+}
 .ob-opt .t {
-  font-size: 16px;
+  font-size: var(--fs-headline); /* U-46：16→17 */
   font-weight: 600;
 }
 .ob-opt .d {
@@ -2347,7 +2536,7 @@ textarea.input {
   margin-top: 3px;
 }
 .src-card:active {
-  background: var(--hairline);
+  background: var(--surface-2); /* U-30：按压背景收敛（原 --hairline） */
 }
 .type-badge {
   display: inline-block;
@@ -2449,6 +2638,9 @@ textarea.input {
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
 }
+.import-tabs button:active {
+  opacity: 0.78; /* U-23 */
+}
 .import-tabs button.on {
   color: var(--ink);
   border-bottom-color: var(--ink);
@@ -2464,7 +2656,7 @@ textarea.input {
   text-align: left;
 }
 .lib-hero:active {
-  opacity: 0.85;
+  opacity: 0.78; /* U-30 */
 }
 .lib-hero .t {
   font-family: var(--font-serif);
@@ -2522,6 +2714,7 @@ textarea.input {
   justify-content: center;
   padding: 0 24px calc(50px + env(safe-area-inset-bottom));
   overflow-y: auto;
+  overscroll-behavior: contain; /* U-24 */
 }
 .qk-done {
   text-align: center;
@@ -2537,6 +2730,13 @@ textarea.input {
   font-size: 15px;
   color: var(--ink-2);
   margin-top: 8px;
+}
+
+/* U-31：换肤瞬间抑制成片颜色 transition（旧色拖影约 300ms）；store.applyThemeDom 双 rAF 后摘类 */
+html.theme-switch *,
+html.theme-switch *::before,
+html.theme-switch *::after {
+  transition: none !important;
 }
 
 @media (prefers-reduced-motion: reduce) {

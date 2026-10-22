@@ -64,11 +64,13 @@ export function SetModelScreen() {
       <PNav title="模型服务" onBack={() => nav.pop()} />
       <div className="pbody">
         <div className="overline">服务预设</div>
-        <div className="gcard" style={{ marginTop: 8 }}>
+        <div className="gcard" style={{ marginTop: 8 }} role="radiogroup" aria-label="服务预设">
           {PROVIDERS.map(([id, name, model]) => (
             <button
               key={id}
               className="frow"
+              role="radio"
+              aria-checked={settings.provider === id}
               onClick={() => {
                 if (settings.provider === id) return;
                 /* 切换预设同时清掉旧覆盖与连接状态（治 tools-5）：buildCfg 里 baseUrl/model
@@ -83,7 +85,8 @@ export function SetModelScreen() {
                 });
               }}
             >
-              <span className="ico" style={{ width: 22 }}>
+              {/* U-28：行式 radio 对勾 = 墨蓝（定稿 §3.18）；aria-checked 供读屏播报选中态 */}
+              <span className="ico" style={{ width: 22, color: "var(--accent)" }}>
                 {settings.provider === id && <Icon name="check" size={17} />}
               </span>
               <span className="grow" style={{ minWidth: 0 }}>
@@ -103,12 +106,13 @@ export function SetModelScreen() {
             </span>
             <input
               className="input"
-              style={{ flex: 1, minHeight: 34, fontSize: 14 }}
+              style={{ flex: 1 }}
               value={settings.baseUrl}
               onChange={(e) => actions.setSettings({ baseUrl: e.target.value })}
               placeholder={basePreset || "https://你的兼容接口/v1"}
               autoComplete="off"
               spellCheck={false}
+              aria-label="接口地址"
             />
           </div>
           <div className="aa-row" style={{ padding: "8px 0" }}>
@@ -117,12 +121,13 @@ export function SetModelScreen() {
             </span>
             <input
               className="input"
-              style={{ flex: 1, minHeight: 34, fontSize: 14 }}
+              style={{ flex: 1 }}
               value={settings.model}
               onChange={(e) => actions.setSettings({ model: e.target.value })}
               placeholder={modelPreset || "填入模型名"}
               autoComplete="off"
               spellCheck={false}
+              aria-label="模型名"
             />
           </div>
           <div className="meta" style={{ padding: "2px 0 8px" }}>
@@ -136,12 +141,13 @@ export function SetModelScreen() {
           <div className="aa-row" style={{ padding: "8px 0" }}>
             <input
               className="input"
-              style={{ flex: 1, minHeight: 38, fontSize: 15, fontFamily: "var(--mono, monospace)" }}
+              style={{ flex: 1, fontFamily: "var(--mono, monospace)" }}
               type={keyShown ? "text" : "password"}
               value={settings.apiKey}
               onChange={(e) => actions.setApiKey(e.target.value)}
               placeholder="sk-…"
               autoComplete="off"
+              aria-label="API Key"
             />
             <button
               className="iconbtn"
@@ -182,7 +188,8 @@ export function SetModelScreen() {
             ) : settings.conn === "ok" ? (
               <span className="statusdot ok" />
             ) : settings.conn === "fail" ? (
-              <span className="statusdot warn" />
+              /* U-49：失败=err（warn 已被「未配置」占用，三态可分） */
+              <span className="statusdot err" />
             ) : (
               <span style={{ width: 8 }} />
             )}
@@ -259,6 +266,7 @@ export function SetVoiceScreen() {
   const [testState, setTestState] = useState<"idle" | "ok" | "fail">("idle");
   const [testMsg, setTestMsg] = useState("");
   const [prevBusy, setPrevBusy] = useState(false);
+  const [voiceShown, setVoiceShown] = useState(false);
 
   /** Edge 音色试听：speakCloud 直接合成播放（与正式朗读同一条链路），失败 toast 原因。 */
   function previewEdge() {
@@ -283,10 +291,12 @@ export function SetVoiceScreen() {
       .finally(() => setPrevBusy(false));
   }
 
-  /** 三件套任一变化即重算 voice（voice = 三项齐全），去掉旧的假开关。 */
+  /** 三件套任一变化即重算 voice（voice = 三项齐全），去掉旧的假开关。
+      U-11：写入走 setVoiceCreds 唯一入口（真机三件入系统钥匙串，不再明文落 localStorage）。 */
   function updVoice(k: "voiceAppId" | "voiceApiKey" | "voiceApiSecret", v: string) {
     const next = { voiceAppId: settings.voiceAppId, voiceApiKey: settings.voiceApiKey, voiceApiSecret: settings.voiceApiSecret, [k]: v };
-    actions.setSettings({ [k]: v, voice: !!(next.voiceAppId.trim() && next.voiceApiKey.trim() && next.voiceApiSecret.trim()) });
+    actions.setVoiceCreds(next.voiceAppId, next.voiceApiKey, next.voiceApiSecret);
+    actions.setSettings({ voice: !!(next.voiceAppId.trim() && next.voiceApiKey.trim() && next.voiceApiSecret.trim()) });
   }
 
   /** 测试语音服务（B6 ②）：真发一次 xfyun_tts_speak("ok") 云合成，对齐 translate_probe 模式
@@ -357,9 +367,9 @@ export function SetVoiceScreen() {
                 <span className="meta2">Edge 音色</span>
                 <select
                   className="input"
-                  style={{ minHeight: 36, fontSize: 14 }}
                   value={settings.edgeVoice}
                   onChange={(e) => actions.setSettings({ edgeVoice: e.target.value })}
+                  aria-label="Edge 音色"
                 >
                   {EDGE_VOICE_SUGGESTIONS.map(([v, label]) => (
                     <option key={v || "auto"} value={v}>
@@ -428,19 +438,35 @@ export function SetVoiceScreen() {
           ).map(([label, field, hint]) => (
             <div key={field} className="aa-row" style={{ padding: "8px 0", flexDirection: "column", alignItems: "stretch", gap: 4 }}>
               <span className="meta2">{label}</span>
-              <input
-                className="input"
-                style={{ minHeight: 36, fontSize: 14 }}
-                value={settings[field]}
-                onChange={(e) => updVoice(field, e.target.value)}
-                placeholder={hint}
-                autoComplete="off"
-                spellCheck={false}
-              />
+              {/* U-11：Key/Secret 走 password + eye 显隐（复用模型 Key 的模式），与钥匙串存储承诺对齐 */}
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input
+                  className="input"
+                  style={{ flex: 1 }}
+                  type={field !== "voiceAppId" && !voiceShown ? "password" : "text"}
+                  value={settings[field]}
+                  onChange={(e) => updVoice(field, e.target.value)}
+                  placeholder={hint}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-label={`讯飞 ${label}`}
+                />
+                {field !== "voiceAppId" && (
+                  <button className="iconbtn" aria-label="显示或隐藏" onClick={() => setVoiceShown((v) => !v)}>
+                    <Icon name={voiceShown ? "eyeoff" : "eye"} size={17} />
+                  </button>
+                )}
+              </div>
             </div>
           ))}
           <div className="meta" style={{ padding: "2px 0 8px" }}>
-            {credFilled ? "三件套已存 · 仅存本机" : "在讯飞开放平台控制台创建应用，开通「语音听写 / 发音评估」，把三件套填到上面"}
+            {credFilled
+              ? settings.voiceKeyStored
+                ? "三件套已存 · 存在系统钥匙串（不落明文存储）"
+                : isTauri()
+                  ? "已填写 · 钥匙串暂不可用，明文兜底存本机"
+                  : "已填写 · 浏览器态仅存本机（真机上会入钥匙串）"
+              : "在讯飞开放平台控制台创建应用，开通「语音听写 / 发音评估」，把三件套填到上面"}
           </div>
           <button className="frow" onClick={testVoice}>
             <span className="ico">
@@ -463,7 +489,8 @@ export function SetVoiceScreen() {
             ) : testState === "ok" ? (
               <span className="statusdot ok" />
             ) : testState === "fail" ? (
-              <span className="statusdot warn" />
+              /* U-49：失败=err */
+              <span className="statusdot err" />
             ) : (
               <span style={{ width: 8 }} />
             )}
@@ -471,7 +498,7 @@ export function SetVoiceScreen() {
         </div>
         <div className="meta" style={{ marginTop: 12 }}>
           说明：朗读默认走 Edge 在线合成（微软神经音色，免费无凭据，失败自动回落系统语音）；
-          听写/评测为讯飞链路，经 App 内 Rust 层直连讯飞 WebSocket（凭据在本机组装随调用传入，不落盘），
+          听写/评测为讯飞链路，经 App 内 Rust 层直连讯飞 WebSocket（三件套存本机系统钥匙串、调用时组装随请求传入），
           三件套填好即启用，朗读引擎也可在上方切回讯飞合成。
         </div>
       </div>
@@ -509,13 +536,14 @@ export function SetRemindScreen() {
                 if (/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) actions.setSettings({ remindTime: v });
               }}
               style={{
-                fontSize: 15,
+                fontSize: 17, /* U-02：裸 input[type=time] 无 .input 兜底，须显式 17px（iOS <16px 聚焦自动放大） */
                 fontFamily: "var(--mono, monospace)",
                 background: "none",
                 border: "none",
                 textAlign: "right",
                 color: "var(--ink)",
               }}
+              aria-label="提醒时间"
             />
           </div>
           <div className="frow" style={{ cursor: "default" }}>
@@ -546,7 +574,7 @@ export function SetLookScreen() {
     <>
       <PNav title="外观" onBack={() => nav.pop()} />
       <div className="pbody">
-        <div className="gcard">
+        <div className="gcard" role="radiogroup" aria-label="主题">
           {(
             [
               ["system", "跟随系统"],
@@ -554,16 +582,37 @@ export function SetLookScreen() {
               ["dark", "深色 · 暖炭"],
             ] as const
           ).map(([v, label]) => (
-            <button key={v} className="frow" onClick={() => actions.setThemePref(v)}>
-              <span className="ico" style={{ width: 22 }}>
+            <button key={v} className="frow" role="radio" aria-checked={settings.themePref === v} onClick={() => actions.setThemePref(v)}>
+              {/* U-28：对勾墨蓝（定稿 §3.18）+ aria-checked */}
+              <span className="ico" style={{ width: 22, color: "var(--accent)" }}>
                 {settings.themePref === v && <Icon name="check" size={17} />}
               </span>
               <span className="grow">{label}</span>
             </button>
           ))}
         </div>
+        {/* U-15②（WCAG 1.4.4）：全局正文缩放档，写 --fs-scale 到 :root（store.applyFsDom）；
+            与移除 viewport 缩放禁用同批落地，1.4.4 才闭合 */}
+        <div className="gcard" style={{ marginTop: 14, padding: "6px 14px" }}>
+          <div className="aa-row" style={{ padding: "8px 0" }}>
+            <span className="meta2" style={{ flex: "none" }}>
+              字号
+            </span>
+            <Seg
+              className="aa-seg"
+              ariaLabel="全局字号"
+              value={String(settings.fsScale)}
+              items={[
+                ["1", "标准"],
+                ["1.15", "大"],
+                ["1.3", "特大"],
+              ] as [string, string][]}
+              onChange={(v) => actions.setSettings({ fsScale: Number(v) })}
+            />
+          </div>
+        </div>
         <div className="meta" style={{ marginTop: 12 }}>
-          阅读页里还有「纸色 / 纯黑」两种阅读主题，只影响正文。
+          字号影响正文与列表文字；阅读页里还有「纸色 / 纯黑」两种阅读主题，只影响正文。
         </div>
       </div>
     </>

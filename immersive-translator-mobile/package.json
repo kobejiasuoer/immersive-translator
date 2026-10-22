@@ -2,7 +2,7 @@
   "name": "immersive-translator-mobile",
   "private": true,
   "version": "0.1.0",
-  "description": "沉浸口语移动端（iOS 先行）· M0 spike 工程：真机验证阅读性能 / TTS / BYOK 网络 / 导入 / 键盘适配。",
+  "description": "沉浸阅读室移动端（iOS 先行）· 源自 M0 spike 工程：真机验证阅读性能 / TTS / BYOK 网络 / 导入 / 键盘适配。",
   "type": "module",
   "scripts": {
     "dev": "vite",

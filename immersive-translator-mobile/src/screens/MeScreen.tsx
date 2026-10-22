@@ -1,6 +1,6 @@
 /**
  * 我的（Tab 5）—— §3.5：六组 iOS 分组列表。
- * 硬约束保留：spike 自检入口在「我的」（收进通用组，进入独立 push 页，不外溢 debug UI）。
+ * spike 自检入口已随 M0 spike 屏一起移除（U-48，git 历史保留 SpikeScreen）；
  * demo 21/23 实化：模型服务行按 settings 动态（服务商 · 模型 · 连接态，不再写死 OpenAI 已连接）；
  * 术语表行为真实计数（readGlossary，随增删联动）；关于行与 AboutScreen 同口径。
  */
@@ -152,10 +152,6 @@ export default function MeScreen() {
         <Row icon="note" title="复习笔记" sub={notes.length ? `${notes.length} 篇笔记` : "复习后可一键生成"} onClick={() => nav.push("noteslib")} />
         <Row icon="gear" title="关于" sub={APP_VERSION_SUB} onClick={() => nav.push("about")} />
         <Row icon="bolt" title="重看首次引导" onClick={() => nav.push("onboarding")} />
-        {/* spike 自检仅 dev 构建可见（§2.1 我的页不承载 debug 自检；工作区约束保留入口本身） */}
-        {import.meta.env.DEV && (
-          <Row icon="flask" title="spike 自检" sub="S1–S7 真机观察点（开发用）" onClick={() => nav.push("spike")} />
-        )}
       </G>
       <div style={{ height: 24 }} />
     </div>

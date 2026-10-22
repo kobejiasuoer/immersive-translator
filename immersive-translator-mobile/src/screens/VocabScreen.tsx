@@ -15,9 +15,10 @@ function VocabRow({ v }: { v: VocabWord }) {
   const due = v.dueAt <= Date.now();
   return (
     <SwipeRow innerClass="vmain" onDelete={() => actions.deleteWord(v.id)}>
-      <div
+      {/* U-01：行主体可点 → button（width:100% + text-align:left，.vmain 先例） */}
+      <button
         className="grow"
-        style={{ minWidth: 0 }}
+        style={{ minWidth: 0, textAlign: "left" }}
         onClick={() => nav.push("review", { wordId: v.id, from: "vocab" })}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -25,7 +26,7 @@ function VocabRow({ v }: { v: VocabWord }) {
           <span className="pos-badge">{v.kind === "chunk" ? v.chunkType || "词块" : "单词"}</span>
         </div>
         <div className="vgloss">{v.senses[0]?.cn}</div>
-      </div>
+      </button>
       <div className="vtime">
         {due && <span className="dot-due" />}
         <span style={{ color: due ? "var(--ink-2)" : undefined }}>{due ? "现在" : dayDiffLabel(v.dueAt)}</span>
@@ -61,7 +62,7 @@ export default function VocabScreen() {
         <button
           className="iconbtn"
           aria-label="笔记库"
-          style={{ width: 40, height: 40, marginTop: 12 }}
+          style={{ marginTop: 12 }} /* U-08：去 40×40 覆写恢复 .iconbtn 44 默认 */
           onClick={() => nav.push("noteslib")}
         >
           <Icon name="note" size={19} />
@@ -87,7 +88,7 @@ export default function VocabScreen() {
       </div>
       <div className="search" style={{ marginTop: 12 }}>
         <Icon name="search" size={16} />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索生词与词块" />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索生词与词块" aria-label="搜索生词与词块" />
       </div>
 
       {vocab.length === 0 ? (
@@ -126,18 +127,18 @@ export default function VocabScreen() {
                         今天的到期已清空
                       </span>
                       {/* 清空态保留入口（治 home-8）：到期清空后组头换成 ✓ 态，
-                          「整理成笔记」随之消失，生词页再无此入口 */}
-                      <span className="tlink" style={{ fontSize: 13 }} onClick={() => nav.push("notes")}>
+                          「整理成笔记」随之消失，生词页再无此入口；U-01：span→button */}
+                      <button className="tlink" style={{ fontSize: 13 }} onClick={() => nav.push("notes")}>
                         整理成笔记
-                      </span>
+                      </button>
                     </div>
                   )
                 ) : (
                   <div className="ghead">
                     <span className="overline">今天到期 · {due.length}</span>
-                    <span className="tlink" style={{ fontSize: 13 }} onClick={() => nav.push("notes")}>
+                    <button className="tlink" style={{ fontSize: 13 }} onClick={() => nav.push("notes")}>
                       整理成笔记
-                    </span>
+                    </button>
                   </div>
                 )}
                 {due.map((v) => (

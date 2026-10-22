@@ -62,11 +62,7 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err
         <button className="btn" style={{ marginTop: 26, width: 200 }} onClick={() => this.reset(false)}>
           重试
         </button>
-        <button
-          className="btn-ghost tlink"
-          style={{ marginTop: 10, width: 200, height: 40, fontSize: 14, border: "1px solid var(--hairline-strong)" }}
-          onClick={() => this.reset(true)}
-        >
+        <button className="btn-ghost tlink" style={{ marginTop: 10, width: 200, border: "1px solid var(--hairline-strong)" }} onClick={() => this.reset(true)}>
           回今天
         </button>
       </div>
@@ -80,4 +76,12 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       <App />
     </ErrorBoundary>
   </React.StrictMode>,
+);
+
+/* WKWebView 需要页面有过触摸监听才激活 :active 按压态（U-23）——挂一个空监听即可，
+   被动不参与滚动冲突 */
+document.addEventListener(
+  "touchstart",
+  () => {},
+  { passive: true },
 );
