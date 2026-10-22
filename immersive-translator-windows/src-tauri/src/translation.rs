@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+use crate::auth::TokenManager;
 
 /// 按 tag 的取消登记。translate_stream 开始时登记在途并清掉自己旧的取消标记，
 /// cancel_translation 按需要取消的 tag 登记，流式循环据此提前退出——
@@ -316,6 +318,28 @@ fn apply_thinking_mode_compat(body: &mut serde_json::Value, endpoint: &str, mode
     }
 }
 
+/// translate_stream 的发送失败收尾：按超时/网络分类 emit error 事件。
+/// 首次发送与平台 401 刷新后的重放共用。
+fn emit_send_failure(
+    app: &AppHandle,
+    window_label: &str,
+    tag: &str,
+    request_start: Instant,
+    e: &reqwest::Error,
+) {
+    let _ = app.emit_to(
+        window_label,
+        "translation:error",
+        ErrorEvent {
+            kind: if e.is_timeout() { "timeout" } else { "network" }.into(),
+            status: None,
+            body: e.to_string(),
+            elapsed_ms: request_start.elapsed().as_millis(),
+            tag: tag.to_string(),
+        },
+    );
+}
+
 #[tauri::command]
 pub async fn translate_stream(
     app: AppHandle,
@@ -343,6 +367,37 @@ pub async fn translate_stream(
         return Err("接口地址为空".into());
     }
 
+    // 沉浸云平台请求自识别：endpoint 命中 auth 服务端的 gateway（base 派生的
+    // /v1/chat/completions）即视为平台请求——用登录令牌鉴权，免 API Key。
+    // auth 未初始化（令牌管理器构建失败的极端路径）→ 按普通第三方请求处理。
+    let auth_state = app.try_state::<Arc<TokenManager>>();
+    let is_platform = auth_state
+        .as_ref()
+        .and_then(|m| m.gateway_endpoint())
+        .map(|g| g == target)
+        .unwrap_or(false);
+    let mut platform_token: Option<String> = None;
+    if is_platform {
+        let manager = auth_state.as_ref().expect("is_platform implies auth state");
+        match manager.get_access_token().await {
+            Ok(token) => platform_token = Some(token),
+            Err(_) => {
+                let _ = app.emit_to(
+                    window_label.as_str(),
+                    "translation:error",
+                    ErrorEvent {
+                        kind: "http".into(),
+                        status: Some(401),
+                        body: "{\"error\":{\"code\":\"unauthorized\",\"message\":\"使用沉浸云服务需要先登录账号（设置 → 账号）\"}}".into(),
+                        elapsed_ms: 0,
+                        tag: tag.clone(),
+                    },
+                );
+                return Err("未登录".into());
+            }
+        }
+    }
+
     let request_start = Instant::now();
 
     // 阶段 1：connecting
@@ -365,7 +420,10 @@ pub async fn translate_stream(
         .post(&target)
         .header("Content-Type", "application/json");
 
-    if !req.api_key.trim().is_empty() {
+    // 平台请求用登录令牌；第三方请求用设置页 API Key（两态互斥，以 endpoint 识别为准）
+    if let Some(token) = &platform_token {
+        request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
+    } else if !req.api_key.trim().is_empty() {
         request_builder =
             request_builder.header("Authorization", format!("Bearer {}", req.api_key));
     }
@@ -373,37 +431,62 @@ pub async fn translate_stream(
     let body = build_body(&req, req.stream);
     let response = request_builder.json(&body).send().await;
 
-    let response = match response {
+    let mut response = match response {
         Ok(r) => r,
-        Err(e) if e.is_timeout() => {
-            let _ = app.emit_to(
-                window_label.as_str(),
-                "translation:error",
-                ErrorEvent {
-                    kind: "timeout".into(),
-                    status: None,
-                    body: e.to_string(),
-                    elapsed_ms: request_start.elapsed().as_millis(),
-                    tag: tag.clone(),
-                },
-            );
-            return Ok(());
-        }
         Err(e) => {
-            let _ = app.emit_to(
-                window_label.as_str(),
-                "translation:error",
-                ErrorEvent {
-                    kind: "network".into(),
-                    status: None,
-                    body: e.to_string(),
-                    elapsed_ms: request_start.elapsed().as_millis(),
-                    tag: tag.clone(),
-                },
-            );
+            emit_send_failure(&app, &window_label, &tag, request_start, &e);
             return Ok(());
         }
     };
+
+    // 沉浸云 401 分支（红线 4）：仅 token_expired 单飞刷新后重放一次；其余 401
+    // code（invalid/reused/unauthorized）凭据已死，不重试，原样交给前端按 code 提示。
+    if is_platform && response.status().as_u16() == 401 {
+        let body_text = response.text().await.unwrap_or_default();
+        let expired = serde_json::from_str::<serde_json::Value>(&body_text)
+            .ok()
+            .and_then(|v| v["error"]["code"].as_str().map(str::to_string))
+            .as_deref()
+            == Some("token_expired");
+        let refreshed = if expired {
+            let manager = auth_state.as_ref().expect("is_platform implies auth state");
+            manager
+                .refresh_after_401(platform_token.as_deref().unwrap_or(""))
+                .await
+                .ok()
+                .map(|stored| stored.access_token.clone())
+        } else {
+            None
+        };
+        let Some(new_token) = refreshed else {
+            let _ = app.emit_to(
+                window_label.as_str(),
+                "translation:error",
+                ErrorEvent {
+                    kind: "http".into(),
+                    status: Some(401),
+                    body: body_text,
+                    elapsed_ms: request_start.elapsed().as_millis(),
+                    tag: tag.clone(),
+                },
+            );
+            return Ok(());
+        };
+        response = match client
+            .post(&target)
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", new_token))
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                emit_send_failure(&app, &window_label, &tag, request_start, &e);
+                return Ok(());
+            }
+        };
+    }
 
     // 收到响应头：连接耗时确定
     let connect_ms = request_start.elapsed().as_millis();
@@ -614,6 +697,7 @@ pub struct ConnectivityResult {
 /// 不会翻译真实文本，避免消耗额度。
 #[tauri::command]
 pub async fn test_connectivity(
+    app: AppHandle,
     endpoint: String,
     api_key: String,
     model: String,
@@ -627,6 +711,29 @@ pub async fn test_connectivity(
             message: "接口地址为空".into(),
             elapsed_ms: start.elapsed().as_millis(),
         });
+    }
+
+    // 沉浸云平台请求自识别（与 translate_stream 同一判定）：用登录令牌探测。
+    let auth_state = app.try_state::<Arc<TokenManager>>();
+    let is_platform = auth_state
+        .as_ref()
+        .and_then(|m| m.gateway_endpoint())
+        .map(|g| g == target)
+        .unwrap_or(false);
+    let mut platform_token: Option<String> = None;
+    if is_platform {
+        let manager = auth_state.as_ref().expect("is_platform implies auth state");
+        match manager.get_access_token().await {
+            Ok(token) => platform_token = Some(token),
+            Err(_) => {
+                return Ok(ConnectivityResult {
+                    ok: false,
+                    status: None,
+                    message: "未登录：使用沉浸云服务需要先登录账号（设置 → 账号）".into(),
+                    elapsed_ms: start.elapsed().as_millis(),
+                });
+            }
+        }
     }
 
     let client = reqwest::Client::builder()
@@ -645,11 +752,13 @@ pub async fn test_connectivity(
         .post(&target)
         .header("Content-Type", "application/json")
         .json(&body);
-    if !api_key.trim().is_empty() {
+    if let Some(token) = &platform_token {
+        req = req.header("Authorization", format!("Bearer {}", token));
+    } else if !api_key.trim().is_empty() {
         req = req.header("Authorization", format!("Bearer {}", api_key));
     }
 
-    let resp = match req.send().await {
+    let mut resp = match req.send().await {
         Ok(r) => r,
         Err(e) if e.is_timeout() => {
             return Ok(ConnectivityResult {
@@ -671,6 +780,56 @@ pub async fn test_connectivity(
             });
         }
     };
+
+    // 沉浸云 401：仅 token_expired 刷新后重放一次（红线 4），其余原样透传。
+    if is_platform && resp.status().as_u16() == 401 {
+        let body_text = resp.text().await.unwrap_or_default();
+        let expired = serde_json::from_str::<serde_json::Value>(&body_text)
+            .ok()
+            .and_then(|v| v["error"]["code"].as_str().map(str::to_string))
+            .as_deref()
+            == Some("token_expired");
+        let refreshed = if expired {
+            let manager = auth_state.as_ref().expect("is_platform implies auth state");
+            manager
+                .refresh_after_401(platform_token.as_deref().unwrap_or(""))
+                .await
+                .ok()
+                .map(|stored| stored.access_token.clone())
+        } else {
+            None
+        };
+        match refreshed {
+            Some(new_token) => {
+                resp = match client
+                    .post(&target)
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", format!("Bearer {}", new_token))
+                    .json(&body)
+                    .send()
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return Ok(ConnectivityResult {
+                            ok: false,
+                            status: None,
+                            message: format!("无法连接：{e}"),
+                            elapsed_ms: start.elapsed().as_millis(),
+                        });
+                    }
+                };
+            }
+            None => {
+                return Ok(ConnectivityResult {
+                    ok: false,
+                    status: Some(401),
+                    message: format!("HTTP 401：{}", truncate(&body_text, 150)),
+                    elapsed_ms: start.elapsed().as_millis(),
+                });
+            }
+        }
+    }
 
     let status = resp.status().as_u16();
     let text = resp.text().await.unwrap_or_default();

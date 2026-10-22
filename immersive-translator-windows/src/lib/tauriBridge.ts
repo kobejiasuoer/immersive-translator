@@ -101,11 +101,6 @@ export async function takePendingReaderImport(): Promise<ReaderImportPayload | n
   return invoke<ReaderImportPayload | null>("take_pending_reader_import");
 }
 
-/** 阅读室窗口挂载时取走「打开复习页」请求（托盘「生词本」入口，窗口重建路径）。 */
-export async function takePendingOpenReview(): Promise<boolean> {
-  return invoke<boolean>("take_pending_open_review");
-}
-
 /** 阅读室窗口挂载时取走「打开书断点」请求（提醒卡「继续阅读」入口，窗口重建路径）。 */
 export async function takePendingOpenBook(): Promise<string | null> {
   return invoke<string | null>("take_pending_open_book");
@@ -504,6 +499,11 @@ export function authFetchMe(): Promise<AuthUser> {
 /** GET /v1/me/config：Rust 落盘 app_data_dir/server_config.json 后原样返回（MVP 只存不消费）。 */
 export function authFetchServerConfig(): Promise<unknown> {
   return invoke("auth_fetch_server_config");
+}
+
+/** 服务端 base URL（§4.6 两层机制解析结果，非敏感）。设置页用它拼沉浸云网关地址。 */
+export function authServerBaseUrl(): Promise<string> {
+  return invoke<string>("auth_server_base_url");
 }
 
 /** 打开（或聚焦）登录窗口。 */

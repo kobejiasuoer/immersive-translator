@@ -36,6 +36,17 @@ export interface ProviderPreset {
   hint?: string;
 }
 
+/** 沉浸云服务（官方网关）的 provider id。 */
+export const PLATFORM_PROVIDER_ID = "immersive-cloud";
+
+/** 服务端 base URL 的本地开发缺省（与 Rust auth::DEV_BASE_URL 一致；生产由 server_endpoint.json 覆盖）。 */
+export const PLATFORM_DEV_BASE_URL = "http://127.0.0.1:8090";
+
+/** 由服务端 base 拼 OpenAI 兼容网关地址（Rust 侧 gateway_endpoint 同构）。 */
+export function platformEndpoint(baseUrl: string): string {
+  return `${baseUrl.trim().replace(/\/+$/, "")}/v1/chat/completions`;
+}
+
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: "deepseek",
@@ -114,6 +125,19 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     allowEmptyApiKey: true,
     hint: "本机运行，数据不出机器。先 `ollama serve`，再 `ollama pull llama3.2`。",
   },
+  {
+    id: PLATFORM_PROVIDER_ID,
+    displayName: "沉浸云",
+    mark: "云",
+    // endpoint 由服务端 base（auth 同源）在应用时动态拼出，见 platformEndpoint()
+    endpoint: "",
+    model: "",
+    // 模型列表由 /v1/me/config 下发（设置页动态注入），此处留空
+    models: [],
+    vendor: "openai",
+    allowEmptyApiKey: true,
+    hint: "登录即用，无需 API Key，按账号额度计费；模型与上游由服务端统一管理。",
+  },
 ];
 
 /** 判断 endpoint 是否指向本地地址（允许留空 API Key）。 */
@@ -153,11 +177,19 @@ export function normalizeEndpoint(endpoint: string): string {
   }
 }
 
-/** 查找与当前 endpoint 匹配的预设（用于高亮"当前选中"）。 */
-export function findMatchingPreset(endpoint: string): ProviderPreset | undefined {
+/** 查找与当前 endpoint 匹配的预设（用于高亮"当前选中"）。
+ *  platformEndpoint：沉浸云网关地址（动态，设置页传入）；命中时返回沉浸云预设。 */
+export function findMatchingPreset(
+  endpoint: string,
+  platformEndpoint?: string,
+): ProviderPreset | undefined {
   const normalized = endpoint.trim().replace(/\/+$/, "").toLowerCase();
   if (normalized === "") return undefined;
+  const pe = platformEndpoint?.trim().replace(/\/+$/, "").toLowerCase();
+  if (pe && normalized === pe) {
+    return PROVIDER_PRESETS.find((p) => p.id === PLATFORM_PROVIDER_ID);
+  }
   return PROVIDER_PRESETS.find(
-    (p) => p.endpoint.replace(/\/+$/, "").toLowerCase() === normalized,
+    (p) => p.id !== PLATFORM_PROVIDER_ID && p.endpoint.replace(/\/+$/, "").toLowerCase() === normalized,
   );
 }
