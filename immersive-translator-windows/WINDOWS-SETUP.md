@@ -101,6 +101,14 @@ npm run tauri build
 
 OCR 模型在首次使用时下载到应用数据目录；请预留磁盘空间并保持网络可用。
 
+## 9. 目标机器运行库依赖（分发/安装时核对）
+
+安装包在**用户机器**上运行还需要以下运行库，与开发机环境无关：
+
+- **VC++ 2015-2022 x64 运行库**：exe 导入表依赖 `MSVCP140.dll`、`VCRUNTIME140.dll` 等，目标机未装时启动直接报「找不到 xxx.dll」。官方直链：https://aka.ms/vs/17/release/vc_redist.x64.exe （装一次即可）。
+- **DirectML.dll**：已随安装包分发（`tauri.conf.json` 的 `bundle.resources`），目标机无需另装。
+- **WebView2**：安装器已内嵌 WebView2 引导器（`webviewInstallMode: embedBootstrapper`），安装时自动引导安装，但需联网下载；Win11 自带免装。完全离线分发可选改为 `offlineInstaller`（安装包体积 +约 127MB）。
+
 ## 常见问题
 
 **Q: `cargo build` 报「link.exe not found」？**

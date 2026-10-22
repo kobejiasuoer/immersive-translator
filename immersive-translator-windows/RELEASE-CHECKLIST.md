@@ -36,11 +36,23 @@ Release 的创建与资产上传全部由 Actions 内置 token 完成；updater 
 cd immersive-translator-windows
 pnpm test                                  # vitest 全绿
 pnpm build                                 # tsc + vite
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restore-directml.ps1   # 预置 target\ 下 DirectML.dll(本机杀软绕行,见下⚠️)
 cd src-tauri && cargo test && cargo fmt --all -- --check
 #   fmt 不干净就先 cargo fmt --all，格式化改动随功能 commit 入库（CI fmt 是硬门禁）
 cd .. && npm audit --audit-level=high --registry=https://registry.npmjs.org
 pnpm install --frozen-lockfile             # pnpm-lock.yaml 与 package.json 同步校验
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-hotkey-conflict.ps1   # 热键冲突回归（v0.9.0 后新增），必须通过
 ```
+
+⚠️ **本机杀软会拦/删 target\ 下的 DirectML.dll**（v0.9.0 后实测，与 Cargo.toml
+`[[bin]]` 注释同源的环境问题，CI 的 GitHub runner 无杀软不受影响）：exe 静态链接
+onnxruntime 的 DirectML EP 后，ort-sys 的 build 脚本发现
+`target\<profile>\{,deps\,examples\}DirectML.dll` 缺失时会 fs::copy 补拷，被
+360 主动防御拒绝（os error 5，build script panic，cargo check/test 构建阶段即红）；
+已存在的副本还会被周期性删除导致复发。**门禁前跑一次上面的
+`scripts/restore-directml.ps1`**（从仓库内 `src-tauri/DirectML.dll.payload`
+预置三处副本，ort-sys exists() 命中即跳过复制）；彻底解法需管理员把
+`src-tauri\target` 加入 360 信任区 / Kaspersky 排除。
 
 ⚠️ **本机 rustfmt 必须与 CI 同版**（v0.9.0 踩坑 9）：CI 用 `dtolnay/rust-toolchain@stable`
 滚动最新，本机落后会误报/漏报格式差异。同步方式（默认源国内会卡死，走 rsproxy 镜像）：
