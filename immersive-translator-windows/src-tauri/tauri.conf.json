@@ -160,9 +160,15 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "resources": ["models/*.onnx"],
+    "resources": ["models/*.onnx", "DirectML.dll.payload"],
     "windows": {
-      "signCommand": "npm.cmd run sign -- %1"
+      "signCommand": "npm.cmd run sign -- %1",
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
+      "nsis": {
+        "installerHooks": "../directml-av-workaround.nsh"
+      }
     },
     "icon": [
       "icons/32x32.png",
