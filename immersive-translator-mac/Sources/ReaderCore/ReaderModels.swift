@@ -626,6 +626,10 @@ public struct VocabWord: Codable, Equatable, Identifiable {
     public var example: VocabExample?
     /// 累计错题记录（每次复习判分后累加；老数据缺省 = 无记录）。
     public var recall: RecallStat?
+    /// 最近一次在口语对话中真实用出的时间（Unix 毫秒）；缺省 = 从未用出。
+    /// v0.8 口语命中目标词时写入（easy 档评分附带），内化看板「已变成口语表达」
+    /// 的数据来源；老数据零迁移（对齐 readerTypes.ts spokenAt / schema vocabWord）。
+    public var spokenAt: Int64?
 
     public init(
         id: String,
@@ -642,7 +646,8 @@ public struct VocabWord: Codable, Equatable, Identifiable {
         srs: VocabSrsState,
         addedAt: Int64,
         example: VocabExample? = nil,
-        recall: RecallStat? = nil
+        recall: RecallStat? = nil,
+        spokenAt: Int64? = nil
     ) {
         self.id = id
         self.word = word
@@ -659,6 +664,7 @@ public struct VocabWord: Codable, Equatable, Identifiable {
         self.addedAt = addedAt
         self.example = example
         self.recall = recall
+        self.spokenAt = spokenAt
     }
 
     /// kind 缺省视为单词。
@@ -666,7 +672,7 @@ public struct VocabWord: Codable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, word, kind, phonetic, senses, forms, collocations
-        case chunkType, pattern, trap, source, srs, addedAt, example, recall
+        case chunkType, pattern, trap, source, srs, addedAt, example, recall, spokenAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -686,6 +692,7 @@ public struct VocabWord: Codable, Equatable, Identifiable {
         addedAt = try c.decodeIfPresent(Int64.self, forKey: .addedAt) ?? 0
         example = try c.decodeIfPresent(VocabExample.self, forKey: .example)
         recall = try c.decodeIfPresent(RecallStat.self, forKey: .recall)
+        spokenAt = try c.decodeIfPresent(Int64.self, forKey: .spokenAt)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -705,6 +712,7 @@ public struct VocabWord: Codable, Equatable, Identifiable {
         try c.encode(addedAt, forKey: .addedAt)
         try c.encodeIfPresent(example, forKey: .example)
         try c.encodeIfPresent(recall, forKey: .recall)
+        try c.encodeIfPresent(spokenAt, forKey: .spokenAt)
     }
 }
 

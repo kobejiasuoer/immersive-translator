@@ -53,11 +53,34 @@ public struct XfyunTtsOptions: Equatable, Sendable {
     public var vcn: String
     /// 音量 0–100，默认 50。
     public var volume: Int
+    /// 原生合成语速（business.speed 0–100，50 = 1×；v0.8 慢速示范用）。
+    /// nil = 不发送：speed 恒 50，帧与旧版逐字节一致、缓存 key 不变（变速由播放端
+    /// AVAudioPlayer 承担）；传值后 speed 映射该值，缓存 key 纳入该值。
+    /// 对齐 xfyunTts.ts:30-41 XfyunTtsOptions.rate。
+    public var rate: Int?
 
-    public init(vcn: String = XfyunTts.defaultVcn, volume: Int = 50) {
+    public init(vcn: String = XfyunTts.defaultVcn, volume: Int = 50, rate: Int? = nil) {
         self.vcn = vcn
         self.volume = volume
+        self.rate = rate
     }
+}
+
+/// SSML 百分比语速（如 "-25%"）→ 讯飞 business.speed（0–100，50 = 1×）。
+/// 非法值回落 50（对齐 xfyunTts.ts:85-90 speedFromRatePercent）。
+public func speedFromRatePercent(_ ratePercent: String) -> Int {
+    let trimmed = ratePercent.trimmingCharacters(in: .whitespaces)
+    // 与 JS parseFloat 同语义：取前导数字串（允许正负号与小数），尾随 "%" 忽略。
+    var numeric = ""
+    for ch in trimmed {
+        if ch.isNumber || ch == "." || ((ch == "+" || ch == "-") && numeric.isEmpty) {
+            numeric.append(ch)
+        } else {
+            break
+        }
+    }
+    guard let pct = Double(numeric), pct.isFinite else { return 50 }
+    return min(100, max(0, Int((50 * (1 + pct / 100)).rounded())))
 }
 
 public enum XfyunTtsError: Error, LocalizedError, Equatable {
@@ -76,7 +99,8 @@ public enum XfyunTtsError: Error, LocalizedError, Equatable {
     }
 }
 
-/// 构造一次性请求帧（单测用）。语速恒 1×，变速在播放端。
+/// 构造一次性请求帧（单测用）。缺省 1× 合成（speed 恒 50，与旧帧逐字节一致）；
+/// 传 opts.rate 才映射进 business.speed（对齐 xfyunTts.ts:92-109）。变速默认在播放端。
 public func buildTtsRequestFrame(appId: String, text: String, opts: XfyunTtsOptions) -> String {
     let payload: [String: Any] = [
         "common": ["app_id": appId],
@@ -86,7 +110,7 @@ public func buildTtsRequestFrame(appId: String, text: String, opts: XfyunTtsOpti
             "auf": "audio/L16;rate=16000",
             "vcn": opts.vcn.isEmpty ? XfyunTts.defaultVcn : opts.vcn,
             "tte": "UTF8",
-            "speed": 50,
+            "speed": min(100, max(0, opts.rate ?? 50)),
             "volume": min(100, max(0, opts.volume)),
             "pitch": 50,
         ],
@@ -98,9 +122,12 @@ public func buildTtsRequestFrame(appId: String, text: String, opts: XfyunTtsOpti
     return XfyunJSON.encode(payload)
 }
 
-/// 缓存键 = vcn|volume|text（语速不入键，变速在播放端）。
+/// 缓存键 = vcn|volume|text（缺省语速不入键，1× 变速在播放端）；传了 rate 才纳入
+/// `|r<rate>`——缺省值 key 与旧 key 完全一致，缓存不失效（对齐 xfyunTts.ts:127-135）。
 public func ttsCacheKey(text: String, opts: XfyunTtsOptions) -> String {
-    "\(opts.vcn.isEmpty ? XfyunTts.defaultVcn : opts.vcn)|\(opts.volume)|\(text)"
+    let base = "\(opts.vcn.isEmpty ? XfyunTts.defaultVcn : opts.vcn)|\(opts.volume)"
+    guard let rate = opts.rate else { return "\(base)|\(text)" }
+    return "\(base)|r\(rate)|\(text)"
 }
 
 /// L1 内存 LRU 缓存（约一篇短文逐句 + 若干重听）。

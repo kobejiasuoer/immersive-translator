@@ -82,14 +82,24 @@ final class TranslationPanelController {
     private let onLookupCard: (String) async throws -> DictCardData?
     private let onAddVocab: (String, DictCardData?, String) async throws -> CollectVocabOutcome
     private let onSendToReader: (String) -> Void
+    /// 浮窗自用的 LLM 管线（词典预取 raw 响应解析 + 快捷动作流式），
+    /// 与 App 侧共享同一 SettingsStore。既有 onLookupCard / onRunQuickAction
+    /// 回调保留不删（波 2 SHELL-CHROME 决定清理或继续接线）。
+    private lazy var chat = ReaderChatClient(settingsStore: settingsStore)
+    /// 四位置朗读器（原文/译文/动作结果/词典词条）。
+    let speaker = PanelTtsSpeaker()
     private var panel: NSPanel?
     private var frameObservers: [Any] = []
     private var dictPrefetchTask: Task<Void, Never>?
+    /// 快捷动作的流式请求（「停止」取消它；保留已生成片段）。
+    private var quickActionTask: Task<Void, Never>?
+    /// 快捷动作代数：新翻译/新动作开始时递增，过期响应按代数丢弃。
+    private var quickActionGeneration = 0
     private var autoHideTask: Task<Void, Never>?
     private var elapsedTask: Task<Void, Never>?
     private var loadingStartedAt: Date?
-    /// 「加入生词本」进行中（连点守卫；setState 异步，靠它拦截重复请求）。
-    private var vocabActionRunning = false
+    /// 最近一次翻译流程的原文（识别「新翻译开始」：换文本或从非加载态进入加载态）。
+    private var lastFlowOriginal = ""
     private var openSettingsActionOverride: (() -> Void)?
 
     init(
@@ -120,6 +130,11 @@ final class TranslationPanelController {
         self.onSendToReader = onSendToReader
         model.isPinned = UserDefaults.standard.bool(forKey: Self.pinnedKey)
         model.autoHideEnabled = UserDefaults.standard.bool(forKey: Self.autoHideKey)
+        // 朗读失败归因 → 浮窗 notice（P1：给缺凭据/网络/系统组件归因，不给原始错误串）。
+        speaker.onNotice = { [weak self] text in
+            self?.model.notice = text
+            self?.scheduleAutoHideIfNeeded()
+        }
     }
 
     private static let frameKey = "translationPanelFrame"
@@ -130,6 +145,7 @@ final class TranslationPanelController {
         autoHideTask?.cancel()
         elapsedTask?.cancel()
         dictPrefetchTask?.cancel()
+        quickActionTask?.cancel()
         frameObservers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
@@ -155,9 +171,15 @@ final class TranslationPanelController {
         self.panel = panel
         let wasVisible = panel.isVisible
 
-        let wasOCRPreview = model.mode == .ocrPreview
         let cleanOriginal = original.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanTranslation = translation.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 新翻译开始：换文本进入加载态，或从非加载态重新发起（重译同文也算）。
+        // 流式过程中的逐字 show（同文且持续加载）不算，避免打断进行中的状态。
+        let startsNewFlow = isLoading
+            && (!model.isLoading || cleanOriginal != lastFlowOriginal)
+        if startsNewFlow {
+            resetForNewFlow(original: cleanOriginal)
+        }
         model.mode = .translation
         model.original = original
         model.ocrInitialOriginal = ""
@@ -165,6 +187,7 @@ final class TranslationPanelController {
         model.translation = translation
         model.isLoading = isLoading
         model.sourceLabel = source?.displayName ?? "系统提示"
+        model.sourceChip = TranslationPanelSourceChip.make(from: source)
         model.modelLabel = settingsStore.activeProvider.model.trimmingCharacters(in: .whitespacesAndNewlines)
         model.targetLanguage = targetLanguage ?? settingsStore.displayTargetLanguage
         model.status = resolvedStatus(
@@ -200,10 +223,9 @@ final class TranslationPanelController {
         if isLoading {
             model.notice = ""
         }
-        if wasOCRPreview {
-            model.showOriginal = false
-        }
-        beginDictPrefetchIfNeeded(original: original)
+        // PANEL-11：原文块默认展开，由 resetForNewFlow 在新翻译开始时复位；
+        // 从 OCR 预览进入翻译不再折叠原文（旧逻辑 wasOCRPreview → showOriginal=false 已撤）。
+        beginDictPrefetchIfNeeded(original: cleanOriginal, source: source, startsNewFlow: startsNewFlow)
 
         DiagnosticLogger.log("translation.panel.show status=\(model.status.title) isLoading=\(isLoading) originalLength=\(original.count) translationLength=\(translation.count)")
 
@@ -226,6 +248,7 @@ final class TranslationPanelController {
         self.panel = panel
 
         let trimmedOriginal = original.trimmingCharacters(in: .whitespacesAndNewlines)
+        resetForNewFlow(original: "")
         model.mode = .ocrPreview
         model.ocrFocusToken += 1
         model.original = original
@@ -233,6 +256,7 @@ final class TranslationPanelController {
         model.translation = ""
         model.isLoading = false
         model.sourceLabel = TranslationSource.screenshotOCR.displayName
+        model.sourceChip = .ocr
         model.modelLabel = "\(outcome.usedMode.title) · \(outcome.usedPreset.title) · \(imageDescription)"
         model.ocrRecognitionFallbackHint = OCRRecognitionFallbackHint.make(from: outcome)
         model.targetLanguage = settingsStore.displayTargetLanguage
@@ -249,7 +273,8 @@ final class TranslationPanelController {
         model.allowsCancel = false
         openSettingsActionOverride = nil
         model.notice = ""
-        model.showOriginal = false
+        // OCR 预览模式不渲染原文折叠块；这里置为展开，保证预览后的任何翻译态原文默认可见（PANEL-11）。
+        model.showOriginal = true
 
         DiagnosticLogger.log("ocr.preview.show textLength=\(original.count) image=\(imageDescription)")
 
@@ -262,6 +287,7 @@ final class TranslationPanelController {
 
     func dismiss() {
         autoHideTask?.cancel()
+        speaker.stop() // 浮窗隐藏即停止朗读（对齐 Windows hidePanel）
         panel?.orderOut(nil)
     }
 
@@ -330,6 +356,7 @@ final class TranslationPanelController {
         TranslationPanelView(
             model: model,
             settingsStore: settingsStore,
+            speaker: speaker,
             onRetry: { [weak self] in
                 guard let self else { return }
                 self.autoHideTask?.cancel()
@@ -369,6 +396,22 @@ final class TranslationPanelController {
             onQuickAction: { [weak self] action in
                 self?.runQuickAction(action)
             },
+            onStopQuickAction: { [weak self] in
+                self?.stopQuickAction()
+            },
+            onDismissQuickAction: { [weak self] in
+                self?.dismissQuickAction()
+            },
+            onRetryQuickAction: { [weak self] in
+                guard let self, let current = self.model.quickAction else { return }
+                self.runQuickAction(current.action)
+            },
+            onRetryDictLookup: { [weak self] in
+                self?.retryDictLookup()
+            },
+            onSpeakToggle: { [weak self] target in
+                self?.toggleSpeaking(target)
+            },
             onAddToVocab: { [weak self] in
                 self?.addCurrentToVocab()
             },
@@ -382,6 +425,7 @@ final class TranslationPanelController {
                 self.onRetry(text)
             },
             onClose: { [weak self] in
+                self?.speaker.stop() // 关闭浮窗即停止朗读
                 self?.panel?.orderOut(nil)
             }
         )
@@ -396,7 +440,9 @@ final class TranslationPanelController {
             backing: .buffered,
             defer: false
         )
-        panel.title = "沉浸式翻译"
+        // 品牌更名 v0.9：主浮窗标题对齐 Windows（tauri.conf.json productName 面板
+        // title 为空串）；titleVisibility 已 hidden，title 只作窗口辅助名，不再携带旧品牌。
+        panel.title = ""
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.backgroundColor = .clear
@@ -471,112 +517,212 @@ final class TranslationPanelController {
         panel.setFrameOrigin(origin)
     }
 
-    // MARK: - 词典卡预取 / 快捷动作 / 生词本 / 阅读室（M5）
+    // MARK: - 新翻译复位 / 词典卡预取 / 快捷动作 / 生词本 / 阅读室 / 朗读
 
-    /// 词条类文本后台预取：原文像单词/短语且是完整译文时拉词典卡。
+    /// 新翻译开始（对齐 Windows resetQuickAction + doTranslate 复位段）：
+    /// 停止朗读、取消并清空动作区、复位生词本状态、原文块复位为展开（PANEL-11）。
+    private func resetForNewFlow(original: String) {
+        lastFlowOriginal = original
+        speaker.stop()
+        quickActionGeneration += 1
+        quickActionTask?.cancel()
+        quickActionTask = nil
+        model.quickAction = nil
+        model.vocabState = .idle
+        model.showOriginal = true
+        model.editingOriginal = false
+    }
+
+    /// 词条类文本后台预取：原文像单词/短语且是真实翻译流程时拉词典卡（与主翻译并行）。
     /// 受「词典卡片」开关控制（对齐 Windows `dictCard === "auto" && isLookupText`）；
     /// 生词本入口按文本形状出现，不跟随该开关。
-    private func beginDictPrefetchIfNeeded(original: String) {
+    private func beginDictPrefetchIfNeeded(original: String, source: TranslationSource?, startsNewFlow: Bool) {
+        guard startsNewFlow, source != nil else { return }
         let word = original.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard model.isTranslationOutput, !model.isLoading, settingsStore.dictCardAuto, isLookupText(word),
-              word != model.dictCardWord else { return }
-        model.dictCard = nil
-        model.dictCardWord = word
-        model.dictCardLoading = true
+        model.dictState.begin(
+            query: word,
+            dictEnabled: settingsStore.dictCardAuto,
+            lookupLike: isLookupText(word)
+        )
+        guard model.dictState.phase == .querying else {
+            model.showDictCard = false
+            return
+        }
         model.showDictCard = true
+        runDictPrefetch(word: word)
+    }
+
+    /// 预取失败（网络/取消/解析 invalid）后的重试入口：不影响主翻译结果。
+    func retryDictLookup() {
+        guard model.dictState.phase == .failed else { return }
+        let word = model.dictState.query
+        model.dictState.retry()
+        model.showDictCard = true
+        runDictPrefetch(word: word)
+    }
+
+    /// 执行一次词典预取：raw 响应本地解析，invalid / notAWord / card 三分路
+    /// （invalid → 可重试失败；notAWord → 收起卡片并连带收起生词本入口）。
+    private func runDictPrefetch(word: String) {
         dictPrefetchTask?.cancel()
-        let lookup = onLookupCard
+        let chatClient = chat
         dictPrefetchTask = Task { [weak self] in
             do {
-                let card = try await lookup(word)
-                guard let self, self.model.dictCardWord == word, !Task.isCancelled else { return }
-                self.model.dictCardLoading = false
-                if let card {
-                    self.model.dictCard = card
-                } else {
-                    // not_a_word：收起卡片，回落译文展示
-                    self.model.showDictCard = false
+                let raw = try await chatClient.complete(
+                    systemPrompt: buildDictionaryPrompt(
+                        targetLanguage: chatClient.resolveTarget(for: word),
+                        glossaryText: chatClient.glossaryText
+                    ),
+                    userText: word
+                )
+                guard let self, self.model.dictState.query == word, !Task.isCancelled else { return }
+                self.model.dictState.apply(parseDictResponse(raw, query: word))
+                if self.model.dictState.phase == .hidden {
+                    self.model.showDictCard = false // not_a_word：回落译文展示
                 }
-            } catch {
-                guard let self, self.model.dictCardWord == word else { return }
-                self.model.dictCardLoading = false
+            } catch is CancellationError {
+                return
+            } catch ReaderChatClient.ReaderChatError.invalidEndpoint {
+                guard let self, self.model.dictState.query == word else { return }
+                self.model.dictState.collapse() // 接口未配置：不算失败，直接收起
                 self.model.showDictCard = false
+            } catch ReaderChatClient.ReaderChatError.missingAPIKey {
+                guard let self, self.model.dictState.query == word else { return }
+                self.model.dictState.collapse()
+                self.model.showDictCard = false
+            } catch {
+                guard let self, self.model.dictState.query == word else { return }
+                self.model.dictState.fail() // 网络错误：按钮变可重试
             }
         }
     }
 
-    /// 快捷动作：润色/解释语法/总结/换种说法。结果替换译文展示，原文保留可重译。
+    /// 快捷动作：润色/解释语法/总结/换种说法。流式管线（结果增量渲染），
+    /// 结果只进译文下方独立动作区——译文与快捷动作条保持不变；动作错误只落
+    /// 动作区并提供重试；生成中可「停止」并保留已生成片段；streaming 期间
+    /// 连点全部拦截（对齐 Windows runQuickAction / QUICK_ACTIONS 禁用语义）。
     func runQuickAction(_ action: QuickAction) {
-        let source = model.original
+        guard model.quickAction?.phase != .streaming else { return }
+        let source = model.original.trimmingCharacters(in: .whitespacesAndNewlines)
         let draft = model.translationTrimmed
         guard !source.isEmpty else { return }
         if action == .polish, draft.isEmpty { return }
         autoHideTask?.cancel()
-        show(
-            original: source,
-            translation: "正在生成「\(action.label)」…",
-            isLoading: true,
-            source: .panel,
-            status: .loading,
-            message: "正在生成「\(action.label)」"
+
+        quickActionGeneration += 1
+        let generation = quickActionGeneration
+        quickActionTask?.cancel()
+        model.quickAction = PanelQuickActionState(action: action, phase: .streaming, text: "", errorMessage: "")
+
+        let chatClient = chat
+        let userText = action == .polish
+            ? buildPolishUserText(source: source, draftTranslation: draft)
+            : source
+        let systemPrompt = buildActionSystemPrompt(
+            action: action,
+            targetLanguage: chatClient.resolveTarget(for: source),
+            customStyle: chatClient.customStyle,
+            glossaryText: chatClient.glossaryText
         )
-        Task { [weak self] in
-            guard let self else { return }
+        quickActionTask = Task { [weak self] in
             do {
-                let text = try await self.onRunQuickAction(action, source, draft)
-                self.show(
-                    original: source,
-                    translation: text,
-                    isLoading: false,
-                    source: .panel,
-                    status: .success,
-                    message: "已生成「\(action.label)」· ⌘R 用原文重译",
-                    isTranslationOutput: true
-                )
+                let final = try await chatClient.completeStreaming(systemPrompt: systemPrompt, userText: userText) {
+                    [weak self] accumulated in
+                    guard let self, generation == self.quickActionGeneration,
+                          self.model.quickAction?.phase == .streaming else { return }
+                    self.model.quickAction?.text = accumulated
+                }
+                guard let self, generation == self.quickActionGeneration else { return }
+                self.model.quickAction?.phase = .done
+                self.model.quickAction?.text = final
+                self.scheduleAutoHideIfNeeded()
+            } catch is CancellationError {
+                // 用户点了「停止」：保留已生成片段，动作区进入完成态。
+                guard let self, generation == self.quickActionGeneration,
+                      self.model.quickAction?.phase == .streaming else { return }
+                self.model.quickAction?.phase = .done
+            } catch let error as URLError where error.code == .cancelled {
+                guard let self, generation == self.quickActionGeneration,
+                      self.model.quickAction?.phase == .streaming else { return }
+                self.model.quickAction?.phase = .done
             } catch {
-                self.show(
-                    original: source,
-                    translation: (error as? LocalizedError)?.errorDescription ?? "生成失败：\(error)",
-                    isLoading: false,
-                    source: .panel,
-                    status: .error,
-                    message: "「\(action.label)」没有完成"
-                )
+                // 动作失败：译文保留，错误只落动作区，可重试。
+                guard let self, generation == self.quickActionGeneration else { return }
+                self.model.quickAction?.phase = .error
+                self.model.quickAction?.errorMessage = (error as? LocalizedError)?.errorDescription ?? "生成失败，请重试。"
             }
+        }
+    }
+
+    /// 「停止」：结束本次生成，保留已生成片段（对齐 Windows cancelTranslation 分支）。
+    func stopQuickAction() {
+        quickActionTask?.cancel()
+    }
+
+    /// 「收起」：清空动作区回到纯译文态。
+    func dismissQuickAction() {
+        quickActionGeneration += 1
+        quickActionTask?.cancel()
+        quickActionTask = nil
+        model.quickAction = nil
+    }
+
+    /// 朗读位分发：原文 / 译文 / 动作结果 / 词典词条（词条词形优先）。
+    func toggleSpeaking(_ target: PanelSpeakTarget) {
+        switch target {
+        case .original:
+            speaker.toggle(.original, text: model.original)
+        case .translated:
+            speaker.toggle(.translated, text: model.translation)
+        case .actionResult:
+            guard let text = model.quickAction?.text, !text.isEmpty else { return }
+            speaker.toggle(.actionResult, text: text)
+        case .dictEntry:
+            let word = model.dictState.card?.word ?? model.dictState.query
+            guard !word.isEmpty else { return }
+            speaker.toggle(.dictEntry, text: word)
         }
     }
 
     /// 加入生词本：公共 CollectActions.addTextToVocab（词典查词条优先复用预取卡 +
     /// 例句生成并行，mergeVocabWord 合并落库，已有同名词保留 SRS 进度）。
-    /// 异步执行：进行中拦截重复点击，结果写进 notice（三态文案对齐 Windows 面板）。
+    /// 异步执行：saving 态拦截重复点击，结果写进 notice（三态文案对齐 Windows 面板）。
     func addCurrentToVocab() {
         let word = model.original.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !word.isEmpty, !vocabActionRunning else { return }
-        vocabActionRunning = true
+        guard !word.isEmpty, model.vocabState != .saving else { return }
+        model.vocabState = .saving
         autoHideTask?.cancel()
         model.notice = "正在加入生词本…"
-        let card = model.dictCard
+        let card = model.dictState.phase == .ready ? model.dictState.card : nil
         let fallbackCn = model.translationTrimmed
         Task { [weak self] in
             guard let self else { return }
-            defer { self.vocabActionRunning = false }
+            defer { self.scheduleAutoHideIfNeeded() }
             do {
                 let outcome = try await self.onAddVocab(word, card, fallbackCn)
+                self.model.vocabState = .saved
                 self.model.notice = CollectActions.vocabResultMessage(outcome)
             } catch {
+                self.model.vocabState = .error
                 let message = (error as? LocalizedError)?.errorDescription ?? "\(error)"
                 self.model.notice = "加入生词本失败：\(message)"
             }
-            self.scheduleAutoHideIfNeeded()
         }
     }
 
     /// 发送到阅读室：公共入口（可导入性校验 + 打开阅读室，建文交给阅读室导入管线）。
+    /// 送达后按长短给不同提示（对齐 Windows sendToReader 文案）；空原文按钮即禁用。
     func sendToReader() {
-        let text = model.original
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let text = model.original.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        guard buildArticleFromText(text) != nil else {
+            model.notice = "没有可发送的内容"
+            return
+        }
         autoHideTask?.cancel()
         onSendToReader(text)
+        model.notice = text.count > 200 ? "已送入阅读室" : "已发送所选内容"
+        scheduleAutoHideIfNeeded()
     }
 
     private func toggleFavorite() {
@@ -621,6 +767,7 @@ final class TranslationPanelController {
                       self.model.canAutoHideTranslation else {
                     return
                 }
+                self.speaker.stop() // 浮窗隐藏即停止朗读
                 self.panel?.orderOut(nil)
             }
         }
@@ -657,26 +804,180 @@ final class TranslationPanelModel: ObservableObject {
     @Published var ocrRecognitionFallbackHint: OCRRecognitionFallbackHint?
     @Published var targetLanguage = ""
     @Published var elapsedText = ""
-    @Published var showOriginal = false
+    /// done 态原文块默认展开（PANEL-11，对齐 Windows orig-block 常驻可见）；新翻译开始时复位为展开，
+    /// 用户可手动折叠（DisclosureGroup 绑定）。
+    @Published var showOriginal = true
+    /// 品牌行来源 chip（PANEL-12：划词 / OCR；无来源不显示）。
+    @Published var sourceChip: TranslationPanelSourceChip = .none
     @Published var isTranslationOutput = false
     @Published var allowsRetry = false
     @Published var allowsFavorite = false
     @Published var allowsOpenSettings = false
     @Published var openSettingsTitle = "打开设置"
     @Published var allowsCancel = false
-    // 词典卡（词条类译文的后台预取）
-    @Published var dictCard: DictCardData?
-    @Published var dictCardLoading = false
-    @Published var dictCardWord = ""
+    // 词典卡预取（四态 + notAWord 判定，纯逻辑在 ReaderCore.PanelDictState）
+    @Published var dictState = PanelDictState()
+    /// done 态当前展示视图：false=译文，true=词典卡片。
     @Published var showDictCard = false
+    // 快捷动作（译文下方独立动作区，不覆盖译文）
+    @Published var quickAction: PanelQuickActionState?
+    // 加入生词本三态（按钮渲染与连点守卫）
+    @Published var vocabState: PanelVocabActionState = .idle
     // 原文编辑重翻
     @Published var editingOriginal = false
     @Published var editedOriginal = ""
 }
 
+/// 快捷动作区的状态（Windows QuickActionState 的对应物）：
+/// 结果/错误只落在动作区，译文与快捷动作条保持不变。
+struct PanelQuickActionState: Equatable {
+    enum Phase: Equatable {
+        case streaming
+        case done
+        case error
+    }
+
+    var action: QuickAction
+    var phase: Phase
+    /// 已生成的文本（streaming 增量更新；「停止」保留片段）。
+    var text: String
+    /// error 态的用户文案。
+    var errorMessage: String
+}
+
+/// 「加入生词本」按钮的三态（Windows vocabState）。
+enum PanelVocabActionState: Equatable {
+    case idle
+    case saving
+    case saved
+    case error
+}
+
+/// 浮窗品牌行的来源 chip（PANEL-12，对齐 Windows TranslationPanel.tsx:1078-1103
+/// panelSource/sourceLabel：划词 → chip-blue，OCR → chip-amber；无来源（系统提示）不显示）。
+/// 色值走系统语义色：划词用系统强调色，OCR 用 warn 语义的 orange。
+enum TranslationPanelSourceChip: Equatable {
+    case none
+    case selection
+    case ocr
+
+    /// 由翻译来源推导：截图 OCR → `.ocr`；划词 / 重译 / 浮窗内发起 → `.selection`；无来源 → `.none`。
+    static func make(from source: TranslationSource?) -> TranslationPanelSourceChip {
+        guard let source else { return .none }
+        switch source {
+        case .screenshotOCR:
+            return .ocr
+        case .selection, .retry, .panel:
+            return .selection
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .none:
+            return ""
+        case .selection:
+            return "划词"
+        case .ocr:
+            return "OCR"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .none:
+            return ""
+        case .selection:
+            return "来源：划词选中的文本"
+        case .ocr:
+            return "来源：截图 OCR 识别"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .none:
+            return .secondary
+        case .selection:
+            return .accentColor
+        case .ocr:
+            return .orange
+        }
+    }
+}
+
+/// 浮窗复制文本格式（PANEL-11，对齐 Windows TranslationPanel.tsx:1112
+/// `${original}\n\n${resultText}` 与 History.tsx:481 copyBoth）：原文、空行、译文，无标签前缀。
+enum TranslationPanelCopyFormat {
+    static func bilingual(original: String, translation: String) -> String {
+        "\(original)\n\n\(translation)"
+    }
+}
+
+/// 品牌行状态点（PANEL-12）。对照 Windows `.dot-pulse`：6px 圆点，翻译中以 1.6s ease-out
+/// 循环向外扩散的光晕呼吸；Mac 侧按规格扩展为随状态变色（loading 蓝 / done 绿 / error 红，
+/// 统一取 TranslationPanelStatus.color），并尊重「减弱动态效果」：开启时只变色不呼吸。
+struct TranslationPanelStatusDot: View {
+    let status: TranslationPanelStatus
+    let pulsing: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var haloExpanded = false
+
+    static let diameter: CGFloat = 6
+    static let haloScale: CGFloat = 3.4
+    static let pulseDuration: TimeInterval = 1.6
+
+    static func color(for status: TranslationPanelStatus) -> Color {
+        status.color
+    }
+
+    var body: some View {
+        let color = Self.color(for: status)
+        ZStack {
+            Circle()
+                .fill(color)
+                .frame(width: Self.diameter, height: Self.diameter)
+                .scaleEffect(haloExpanded ? Self.haloScale : 1)
+                .opacity(haloExpanded ? 0 : 0.45)
+                .opacity(shouldPulse ? 1 : 0)
+            Circle()
+                .fill(color)
+                .frame(width: Self.diameter, height: Self.diameter)
+        }
+        .frame(width: 14, height: 14)
+        .animation(.easeInOut(duration: 0.25), value: status)
+        .help(status.title)
+        .accessibilityLabel("状态：\(status.title)")
+        .onAppear(perform: syncPulse)
+        .onChange(of: pulsing) { _ in syncPulse() }
+        .onChange(of: reduceMotion) { _ in syncPulse() }
+    }
+
+    private var shouldPulse: Bool {
+        pulsing && !reduceMotion
+    }
+
+    private func syncPulse() {
+        var noAnimation = Transaction()
+        noAnimation.disablesAnimations = true
+        withTransaction(noAnimation) {
+            haloExpanded = false
+        }
+        guard shouldPulse else { return }
+        // 先无动画归位再起循环，保证从停止态重新进入加载态时呼吸能重新开始。
+        DispatchQueue.main.async {
+            guard shouldPulse else { return }
+            withAnimation(.easeOut(duration: Self.pulseDuration).repeatForever(autoreverses: false)) {
+                haloExpanded = true
+            }
+        }
+    }
+}
+
 struct TranslationPanelView: View {
     @ObservedObject var model: TranslationPanelModel
     @ObservedObject var settingsStore: SettingsStore
+    @ObservedObject var speaker: PanelTtsSpeaker
     let onRetry: () -> Void
     let onPinChanged: () -> Void
     let onAutoHideChanged: () -> Void
@@ -687,6 +988,11 @@ struct TranslationPanelView: View {
     let onOCRConfirm: (String) -> Void
     let onOCRReselect: () -> Void
     let onQuickAction: (QuickAction) -> Void
+    let onStopQuickAction: () -> Void
+    let onDismissQuickAction: () -> Void
+    let onRetryQuickAction: () -> Void
+    let onRetryDictLookup: () -> Void
+    let onSpeakToggle: (PanelSpeakTarget) -> Void
     let onAddToVocab: () -> Void
     let onSendToReader: () -> Void
     let onRetryEdited: (String) -> Void
@@ -708,29 +1014,30 @@ struct TranslationPanelView: View {
         .onExitCommand(perform: handleExitCommand)
     }
 
+    /// 头部 = 品牌行（PANEL-12，对照 Windows panel-header：panel-title[logo+沉浸口语+状态点+来源 chip]
+    /// + panel-actions）＋ 状态行（Mac 既有状态胶囊 + 元信息，原样保留）。
+    /// 通知文案与自动隐藏/固定/关闭三个紧凑按钮留在品牌行右侧，不与状态胶囊争宽。
     private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: model.displayStatus.systemImage)
-                    .symbolRenderingMode(.hierarchical)
-                Text(model.displayStatus.title)
-                    .fontWeight(.semibold)
-                if model.isLoading {
-                    ProgressView()
-                        .scaleEffect(0.58)
-                        .frame(width: 14, height: 14)
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(model.displayStatus.color)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(model.displayStatus.color.opacity(0.13), in: Capsule())
+        VStack(alignment: .leading, spacing: 8) {
+            brandRow
+            statusRow
+        }
+    }
 
-            Text(metadataText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+    /// Windows `.panel-title` 的 gap 7px；品牌簇固定宽、通知弹性截断，保证三个动作按钮不被挤出。
+    private var brandRow: some View {
+        HStack(alignment: .center, spacing: 7) {
+            brandMark
+            Text("沉浸口语")
+                .font(.system(size: 13, weight: .bold))
                 .lineLimit(1)
+                .fixedSize()
+                .help("沉浸口语 · 拖动此处可移动浮窗")
+            TranslationPanelStatusDot(status: model.displayStatus, pulsing: model.isLoading)
+            if model.sourceChip != .none {
+                sourceChipView(model.sourceChip)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            }
 
             Spacer(minLength: 8)
 
@@ -739,6 +1046,8 @@ struct TranslationPanelView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(-1)
             }
 
             compactButton(
@@ -764,6 +1073,86 @@ struct TranslationPanelView: View {
             }
 
             compactButton(systemName: "xmark", help: "关闭浮窗", action: onClose)
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 1), value: model.sourceChip)
+    }
+
+    /// Windows `.panel-logo`（v2 覆写）：24×24、圆角 8、强调色底、白色图标、0 3px 9px 强调色投影；
+    /// 这里按紧凑行高取 22pt 等比缩放，用系统强调色而非硬编码品牌蓝，深浅色都成立。
+    private var brandMark: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.accentColor, Color.accentColor.opacity(0.78)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            Image(systemName: Self.brandSymbolName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white)
+        }
+        .frame(width: 22, height: 22)
+        .shadow(color: Color.accentColor.opacity(0.22), radius: 4, x: 0, y: 2)
+        .accessibilityHidden(true)
+    }
+
+    /// 品牌图标：优先 SF Symbols「translate」，老系统没有该符号时退到「character.bubble.fill」。
+    private static let brandSymbolName: String = {
+        for name in ["translate", "character.bubble.fill", "globe"]
+        where NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil {
+            return name
+        }
+        return "globe"
+    }()
+
+    /// Windows `.panel-title .chip`（v2 覆写）：10.5px、padding 3px 6px、圆角 5、1px 描边；
+    /// chip-blue = 强调色软底 + 强调色字，chip-amber = warn 软底 + warn 字。
+    private func sourceChipView(_ chip: TranslationPanelSourceChip) -> some View {
+        Text(chip.label)
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(chip.tint)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(chip.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .stroke(chip.tint.opacity(0.28), lineWidth: 1)
+            )
+            .help(chip.help)
+            .accessibilityLabel(chip.help)
+    }
+
+    /// 既有状态行：状态胶囊（含加载指示）+ 来源/模型/耗时元信息。
+    private var statusRow: some View {
+        HStack(alignment: .center, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: model.displayStatus.systemImage)
+                    .symbolRenderingMode(.hierarchical)
+                Text(model.displayStatus.title)
+                    .fontWeight(.semibold)
+                if model.isLoading {
+                    ProgressView()
+                        .scaleEffect(0.58)
+                        .frame(width: 14, height: 14)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(model.displayStatus.color)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(model.displayStatus.color.opacity(0.13), in: Capsule())
+
+            Text(metadataText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 0)
         }
     }
 
@@ -807,6 +1196,10 @@ struct TranslationPanelView: View {
                             systemName: "info.circle",
                             text: "如果你希望把品牌名也解释成中文含义，可以选中更完整的一句话再翻译。"
                         )
+                    }
+
+                    if let quickAction = model.quickAction {
+                        quickActionBlock(quickAction)
                     }
 
                     Divider()
@@ -862,6 +1255,12 @@ struct TranslationPanelView: View {
                             Text("\(model.originalTrimmed.count) 字符")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            if model.canSpeakOriginal {
+                                speakToggleButton(
+                                    target: .original,
+                                    help: speaker.speaking == .original ? "停止朗读原文" : "朗读原文"
+                                )
+                            }
                         }
                     }
                     .disabled(model.originalTrimmed.isEmpty)
@@ -873,87 +1272,144 @@ struct TranslationPanelView: View {
         }
     }
 
-    /// AI 词典卡片：词条类译文的后台预取结果（卡片/译文可一键切换）。
+    /// AI 词典卡片：词条类译文的后台预取结果（卡片/译文可一键切换；
+    /// 预取失败给「词典查询失败 · 重试」入口，不影响主翻译）。
     @ViewBuilder
     private var dictCardSection: some View {
-        if model.showDictCard, model.dictCardWord == model.originalTrimmed {
-            if model.dictCardLoading {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(model.dictCardWord)
-                        .font(.system(size: 17, weight: .semibold))
-                    Text("正在查询词典…")
+        let state = model.dictState
+        // 仅当查询词就是当前原文时才展示（换文本后过期状态即刻失效）。
+        if state.query == model.originalTrimmed, !model.originalTrimmed.isEmpty {
+            switch state.phase {
+            case .querying:
+                if model.showDictCard {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Text(state.query)
+                                .font(.system(size: 17, weight: .semibold))
+                            ProgressView()
+                                .scaleEffect(0.55)
+                                .frame(width: 12, height: 12)
+                            Text("正在查询词典…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("显示译文") { model.showDictCard = false }
+                                .font(.caption)
+                                .buttonStyle(.link)
+                        }
+                        // 骨架屏：就绪后自动出卡片。
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach([0.46, 0.96, 0.82], id: \.self) { width in
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(Color.primary.opacity(0.07))
+                                    .frame(width: 320 * width, height: 10)
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+            case .ready:
+                if let card = state.card {
+                    if model.showDictCard {
+                        dictCardView(card)
+                    } else {
+                        HStack {
+                            Button("显示词典卡片") { model.showDictCard = true }
+                                .font(.caption)
+                                .buttonStyle(.link)
+                            Spacer()
+                        }
+                    }
+                }
+            case .failed:
+                // 预取失败（网络/取消/解析 invalid）：给可理解原因与重试入口。
+                HStack(spacing: 8) {
+                    Label("词典查询失败", systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        onRetryDictLookup()
+                    } label: {
+                        Label("重试", systemImage: "arrow.clockwise")
+                            .font(.caption)
+                    }
+                    .controlSize(.small)
+                    Spacer()
+                }
+            case .hidden:
+                // not_a_word / 词典未开启：无卡片内容（notAWord 同时收起生词本入口）。
+                EmptyView()
+            }
+        }
+    }
+
+    /// 就绪的词典卡片（词条 + 音标 + 释义 + 例句 + 词形/记忆 + 操作行）。
+    private func dictCardView(_ card: DictCardData) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(card.word)
+                    .font(.system(size: 17, weight: .semibold))
+                ForEach(Array(card.phonetics.enumerated()), id: \.offset) { _, phonetic in
+                    Text("\(phonetic.label.isEmpty ? "" : "\(phonetic.label) ")/\(phonetic.value)/")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else if let card = model.dictCard {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(card.word)
-                            .font(.system(size: 17, weight: .semibold))
-                        ForEach(Array(card.phonetics.enumerated()), id: \.offset) { _, phonetic in
-                            Text("\(phonetic.label.isEmpty ? "" : "\(phonetic.label) ")/\(phonetic.value)/")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("显示译文") { model.showDictCard = false }
-                            .font(.caption)
-                            .buttonStyle(.link)
-                    }
-                    if !card.translation.isEmpty {
-                        Text(card.translation)
-                            .font(.system(size: 14, weight: .medium))
-                    }
-                    ForEach(Array(card.senses.enumerated()), id: \.offset) { _, sense in
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                if !sense.pos.isEmpty {
-                                    Text(sense.pos)
-                                        .font(.caption.weight(.medium))
-                                        .foregroundColor(.accentColor)
-                                }
-                                Text(sense.gloss)
-                                    .font(.system(size: 13.5))
-                            }
-                            ForEach(Array(sense.examples.enumerated()), id: \.offset) { _, example in
-                                exampleLine(example)
-                            }
-                        }
-                    }
-                    if !card.inflections.isEmpty {
-                        Text("词形：\(card.inflections)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    if !card.etymology.isEmpty {
-                        Text("记忆：\(card.etymology)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack(spacing: 8) {
-                        Button {
-                            copyToPasteboard(dictCardToText(card), notice: "已复制词条")
-                        } label: {
-                            Label("复制词条", systemImage: "doc.on.doc")
-                                .font(.caption)
-                        }
-                        .controlSize(.small)
-                        Spacer()
-                    }
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            }
-        } else if model.dictCard != nil, model.dictCardWord == model.originalTrimmed, !model.dictCardLoading {
-            HStack {
-                Button("显示词典卡片") { model.showDictCard = true }
+                speakToggleButton(
+                    target: .dictEntry,
+                    help: speaker.speaking == .dictEntry ? "停止朗读词条" : "朗读词条"
+                )
+                Spacer()
+                Button("显示译文") { model.showDictCard = false }
                     .font(.caption)
                     .buttonStyle(.link)
+            }
+            if !card.translation.isEmpty {
+                Text(card.translation)
+                    .font(.system(size: 14, weight: .medium))
+            }
+            ForEach(Array(card.senses.enumerated()), id: \.offset) { _, sense in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        if !sense.pos.isEmpty {
+                            Text(sense.pos)
+                                .font(.caption.weight(.medium))
+                                .foregroundColor(.accentColor)
+                        }
+                        Text(sense.gloss)
+                            .font(.system(size: 13.5))
+                    }
+                    ForEach(Array(sense.examples.enumerated()), id: \.offset) { _, example in
+                        exampleLine(example)
+                    }
+                }
+            }
+            if !card.inflections.isEmpty {
+                Text("词形：\(card.inflections)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if !card.etymology.isEmpty {
+                Text("记忆：\(card.etymology)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 8) {
+                Button {
+                    copyToPasteboard(dictCardToText(card), notice: "已复制词条")
+                } label: {
+                    Label("复制词条", systemImage: "doc.on.doc")
+                        .font(.caption)
+                }
+                .controlSize(.small)
+                .help("复制词条（词 + 释义 + 例句）")
                 Spacer()
             }
         }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     /// 例句：查询词命中段高亮。
@@ -979,7 +1435,7 @@ struct TranslationPanelView: View {
     }
 
     private var cardWordForHighlight: String {
-        model.dictCard?.word ?? model.originalTrimmed
+        model.dictState.card?.word ?? model.originalTrimmed
     }
 
     private var ocrPreviewContent: some View {
@@ -1092,6 +1548,7 @@ struct TranslationPanelView: View {
     }
 
     /// 译文快捷动作：润色 / 解释语法 / 总结 / 换种说法。
+    /// streaming 期间四个按钮全部禁用，防止并发请求（对齐 Windows disabled 语义）。
     private var quickActionRow: some View {
         HStack(spacing: 8) {
             Text("快捷动作")
@@ -1103,14 +1560,131 @@ struct TranslationPanelView: View {
                 }
                 .controlSize(.small)
                 .disabled(action == .polish && model.translationTrimmed.isEmpty)
+                .disabled(model.quickAction?.phase == .streaming)
+                .help(action.quickActionHelp)
             }
             Spacer(minLength: 0)
         }
     }
 
+    /// 译文下方独立动作区：动作名标签 + 停止/朗读/复制/收起；结果与错误都只落在这里，
+    /// 译文与快捷动作条保持不变（对齐 Windows action-block）。
+    private func quickActionBlock(_ state: PanelQuickActionState) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                Label(state.action.label, systemImage: state.action.systemImage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if state.phase == .streaming {
+                    ProgressView()
+                        .scaleEffect(0.55)
+                        .frame(width: 12, height: 12)
+                }
+                Spacer()
+                if state.phase == .streaming {
+                    Button {
+                        onStopQuickAction()
+                    } label: {
+                        Label("停止", systemImage: "stop.fill")
+                            .font(.caption)
+                    }
+                    .controlSize(.small)
+                    .help("结束本次生成，保留已生成内容")
+                }
+                if state.phase == .error {
+                    Button {
+                        onRetryQuickAction()
+                    } label: {
+                        Label("重试", systemImage: "arrow.clockwise")
+                            .font(.caption)
+                    }
+                    .controlSize(.small)
+                    .help("重新运行「\(state.action.label)」")
+                }
+                if state.phase == .done, !state.text.isEmpty {
+                    speakToggleButton(
+                        target: .actionResult,
+                        help: speaker.speaking == .actionResult ? "停止朗读" : "朗读结果"
+                    )
+                    Button {
+                        copyToPasteboard(state.text, notice: "已复制结果")
+                    } label: {
+                        Label("复制", systemImage: "doc.on.doc")
+                            .font(.caption)
+                    }
+                    .controlSize(.small)
+                    .help("只复制动作结果，不与译文混淆")
+                }
+                Button {
+                    onDismissQuickAction()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .help("收起结果，回到纯译文")
+            }
+
+            switch state.phase {
+            case .streaming:
+                if state.text.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("生成中…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text(state.text)
+                        .textSelection(.enabled)
+                        .font(.system(size: 14))
+                        .lineSpacing(5)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            case .done:
+                Text(state.text)
+                    .textSelection(.enabled)
+                    .font(.system(size: 14))
+                    .lineSpacing(5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            case .error:
+                Text(state.errorMessage.isEmpty ? "生成失败，请重试。" : state.errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    /// 朗读位切换按钮：朗读中变为停止图标（对齐 Windows 原文/译文/动作/词条四按钮）。
+    private func speakToggleButton(target: PanelSpeakTarget, help: String) -> some View {
+        Button {
+            onSpeakToggle(target)
+        } label: {
+            Image(systemName: speaker.speaking == target ? "stop.fill" : "speaker.wave.2")
+                .font(.caption)
+                .frame(width: 18, height: 16)
+        }
+        .buttonStyle(.borderless)
+        .help(help)
+    }
+
     private var translationActions: some View {
         HStack(spacing: 8) {
             if model.isTranslationOutput {
+                if !model.translationTrimmed.isEmpty, !model.isLoading {
+                    speakToggleButton(
+                        target: .translated,
+                        help: speaker.speaking == .translated ? "停止朗读译文" : "朗读译文"
+                    )
+                }
                 actionButton("复制译文", systemName: "doc.on.doc", prominent: true, disabled: model.translationTrimmed.isEmpty || model.isLoading) {
                     copyToPasteboard(model.translationTrimmed, notice: "已复制译文")
                 }
@@ -1120,7 +1694,7 @@ struct TranslationPanelView: View {
                     copyToPasteboard(combinedTranslationText(), notice: "已复制原文和译文")
                 }
                 .keyboardShortcut("c", modifiers: [.command, .option, .shift])
-                .help("⌘⌥⇧C 复制原文和译文")
+                .help("⌘⌥⇧C 复制原文和译文（原文、空一行、译文的纯文本，无标签）")
                 actionButton("重新翻译", systemName: "arrow.clockwise", disabled: model.isLoading || !model.allowsRetry) {
                     onRetry()
                 }
@@ -1131,6 +1705,16 @@ struct TranslationPanelView: View {
                 }
                 .keyboardShortcut("s", modifiers: [.command, .option])
                 .help("⌘⌥S 收藏/取消收藏当前译文")
+                // 加入生词本：按词条启发式出现、不受词典开关影响；词典预取明确判
+                // 非词条时与词典入口一起收起（对齐 Windows showVocabButton）。
+                if model.showsVocabButton {
+                    vocabButton
+                }
+                // 发送到阅读室：只新增不改既有动作；空原文禁用。
+                actionButton("送入阅读室", systemName: "book", disabled: model.originalTrimmed.isEmpty || model.isLoading) {
+                    onSendToReader()
+                }
+                .help("把原文送入阅读室精读")
             } else {
                 if model.allowsRetry {
                     actionButton("重新翻译", systemName: "arrow.clockwise", prominent: true, disabled: model.isLoading) {
@@ -1160,6 +1744,20 @@ struct TranslationPanelView: View {
             actionButton("历史", systemName: "clock") {
                 onShowHistory()
             }
+            .help("翻译历史")
+            // PANEL-10：常驻「设置」图标按钮（Windows TranslationPanel.tsx:1180-1182 头部 gear，
+            // 与历史按钮并排）。done 态与错误态共用同一 onOpenSettings 路径（performOpenSettingsAction）。
+            // 用无边框图标样式与行首/行尾既有图标按钮同一手感，保证窄窗下动作行不换行不被挤掉。
+            Button {
+                onOpenSettings()
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.caption)
+                    .frame(width: 22, height: 16)
+            }
+            .buttonStyle(.borderless)
+            .help("设置")
+            .accessibilityLabel("设置")
             Spacer(minLength: 0)
             Button {
                 copyToPasteboard(model.originalTrimmed, notice: "已复制原文")
@@ -1170,6 +1768,27 @@ struct TranslationPanelView: View {
             .keyboardShortcut("c", modifiers: [.command, .option])
             .help("⌘⌥C 复制原文")
             .disabled(model.originalTrimmed.isEmpty)
+        }
+    }
+
+    /// 「加入生词本」按钮（三态，对齐 Windows vocab-glyph：saving 禁用、saved 高亮）。
+    @ViewBuilder
+    private var vocabButton: some View {
+        switch model.vocabState {
+        case .idle, .error:
+            actionButton("生词本", systemName: "character.book.closed", disabled: model.originalTrimmed.isEmpty) {
+                onAddToVocab()
+            }
+            .help(model.vocabState == .error ? "上次加入失败，点按重试" : "加入生词本（查词条 + 生成例句）")
+        case .saving:
+            actionButton("加入中…", systemName: "hourglass", disabled: true) {}
+            .help("正在查询词条并生成例句…")
+        case .saved:
+            // 已加入仍可再点（幂等合并，复习进度保持不变）——对齐 Windows saved 态不禁用。
+            actionButton("已加入", systemName: "character.book.closed.fill", disabled: model.originalTrimmed.isEmpty) {
+                onAddToVocab()
+            }
+            .help("已在生词本；再点一次会补全词条信息，复习进度保持不变")
         }
     }
 
@@ -1516,14 +2135,10 @@ struct TranslationPanelView: View {
         return "\(notice) · \(compactText)"
     }
 
+    /// 复制双语文本（PANEL-11）：原文、空一行、译文的纯文本——对齐 Windows
+    /// TranslationPanel.tsx:1112 `${original}\n\n${resultText}`，不再带「原文：/译文：」标签前缀。
     private func combinedTranslationText() -> String {
-        """
-        原文：
-        \(model.originalTrimmed)
-
-        译文：
-        \(model.translationTrimmed)
-        """
+        TranslationPanelCopyFormat.bilingual(original: model.originalTrimmed, translation: model.translationTrimmed)
     }
 
     private func copyToPasteboard(_ text: String, notice: String) {
@@ -1572,6 +2187,20 @@ private extension TranslationPanelModel {
 
     var canAutoHideTranslation: Bool {
         isTranslationOutput && (status == .success || status == .unchanged)
+    }
+
+    /// 生词本入口可见性（Windows showVocabButton）：done 态 + 原文像词条 +
+    /// 词典预取未判非词条；不跟随词典卡片开关。
+    var showsVocabButton: Bool {
+        isTranslationOutput
+            && !isLoading
+            && PanelDictState.vocabEntryVisible(original: originalTrimmed, notAWord: dictState.notAWord)
+            && !originalTrimmed.isEmpty
+    }
+
+    /// 原文朗读位可见：有原文可读（原文折叠行内的朗读按钮）。
+    var canSpeakOriginal: Bool {
+        !originalTrimmed.isEmpty
     }
 
     var displayStatus: TranslationPanelStatus {

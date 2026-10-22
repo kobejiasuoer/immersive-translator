@@ -263,8 +263,9 @@ private func interleave(_ items: [ShadowDiagSegment], sep: ShadowDiagSegment) ->
 
 // MARK: - 音素纠音提示
 
-/// 常见问题音素的纠音提示（ARPAbet 码 → 人话）。
-/// 只覆盖中国学习者的高频坑；没命中的音素由弹层兜底文案处理。
+/// 常见问题音素的纠音提示（ARPAbet 码 → 人话），25 条对齐 Windows PHONE_TIPS
+/// 全量（shadowDiagnose.ts:161-187）。只覆盖中国学习者的高频坑；没命中的
+/// 音素由弹层兜底文案处理。
 private let phoneTips: [String: String] = [
     "th": "清音 th：舌尖轻放在上下齿之间送气，不是『斯』",
     "dh": "浊音 th：舌尖轻放在上下齿之间、声带振动，不是『兹』",
@@ -282,8 +283,19 @@ private let phoneTips: [String: String] = [
     "ay": "双元音『爱』，从 a 滑到 i",
     "aw": "双元音『奥』，从 a 滑到 u",
     "ow": "双元音『欧』，从 o 滑到 u",
+    "ao": "长元音『奥』：舌后部抬一点、嘴拢圆，喉咙里共鸣（thought 的元音）",
+    "ey": "双元音：从『诶』滑向『衣』，前重后轻，下巴逐渐收拢（late 的元音）",
+    "uh": "中央松元音（schwa）：舌头放松平放口中，轻而短促，不要读成饱满的『啊』",
+    "b": "浊塞音：双唇先闭紧，声带先振动再爆破放开，几乎不送气",
+    "d": "浊塞音：舌尖抵上齿龈，声带先振动再弹开；词尾不要多出一个『特』",
+    "g": "浊塞音：舌后部抵住软腭，声带先振动再放开，不送气",
+    "s": "舌尖接近上齿龈，气流细而平地摩擦出来；不要把整个舌面抬起来",
+    "sh": "舌面稍抬、双唇略撮圆，摩擦比『斯』更宽更闷（ship 的开头）",
     "z": "声带振动的 s；词尾不要读成『斯』",
 ]
+
+/// phoneTips 覆盖的音素键（25 个，对齐 Windows PHONE_TIPS 全量；单测断言用）。
+public let phoneTipKeys: Set<String> = Set(phoneTips.keys)
 
 /// 没有针对性提示时的兜底。
 public let phoneTipFallback = "对照领读慢速跟两遍，注意口型"
@@ -303,4 +315,192 @@ public func worstPhoneOf(_ word: ShadowDiagWord?) -> ShadowDiagPhone? {
         }
     }
     return worst.flatMap { $0.gwpp <= -0.4 ? $0 : nil }
+}
+
+// MARK: - 跟读异常可行动卡片（SPEAK-13，对齐 SpeakView.tsx:729-779 分类 + 1604-1669 文案）
+
+/// 跟读评测异常的四类（Windows ShadowErrorKind 去掉空串档，SpeakView.tsx:68）。
+public enum ShadowFailureKind: String, Equatable, Sendable {
+    /// 乱读：ISE 判定读的不是这句话（is_rejected）。
+    case rejected
+    /// 没听到声音：评分前峰值/时长兜底，或 ISE 28673（无语音/音量小）。
+    case novoice
+    /// 环境有点吵：ISE 28680（信噪比低）。
+    case noisy
+    /// 这次没评上：其他评测异常码 / 评测请求抛错（网络、服务）。
+    case except
+}
+
+/// 异常卡上的动作（按钮语义；标题随卡片种类变化，由 ShadowFailureCard.actions 给出）。
+public enum ShadowFailureActionKind: Equatable, Sendable {
+    /// 🔊 听领读（整句播报示范）。
+    case hearModel
+    /// 🎤 再跟读 / 重新跟读 / 再试一次（重新开麦跟读）。
+    case again
+}
+
+/// 异常卡上的一个按钮：动作语义 + 展示标题 + 是否主按钮（rc-btn.primary）。
+public struct ShadowFailureAction: Equatable, Sendable {
+    public var kind: ShadowFailureActionKind
+    public var title: String
+    public var primary: Bool
+
+    public init(kind: ShadowFailureActionKind, title: String, primary: Bool) {
+        self.kind = kind
+        self.title = title
+        self.primary = primary
+    }
+}
+
+/// 一张可行动异常卡（标题 / 正文 / 按钮组），文案逐字对齐 Windows ShadowErrorCard。
+/// 展示层只管排版：kind 决定左边线/底色变体（rejected = warn 色，其余 = 中性 novoice 变体）。
+public struct ShadowFailureCard: Equatable, Sendable {
+    public var kind: ShadowFailureKind
+    public var title: String
+    public var body: String
+    public var actions: [ShadowFailureAction]
+
+    public init(kind: ShadowFailureKind, title: String, body: String, actions: [ShadowFailureAction]) {
+        self.kind = kind
+        self.title = title
+        self.body = body
+        self.actions = actions
+    }
+}
+
+/// 评分前兜底的阈值（对齐 finishShadow 的 peak<0.01 / MIN_UTTERANCE_SAMPLES=16000×0.5，
+/// SpeakView.tsx:80-81,736-741）。
+public let shadowPrecheckMinPeak: Float = 0.01
+public let shadowPrecheckMinSamples = 16_000 / 2
+
+/// 录音峰值（每 16 个采样取一个，对齐 SpeakView.tsx:737 的步进扫描）。
+public func shadowRecordingPeak(_ samples: [Float]) -> Float {
+    var peak: Float = 0
+    var i = 0
+    while i < samples.count {
+        peak = max(peak, abs(samples[i]))
+        i += 16
+    }
+    return peak
+}
+
+/// 评分前的录音体检：静音（峰值不足）或过短 → novoice 卡，不送评测、不烧额度；
+/// 体检通过返回 nil。Mac 把 Windows 的一行「没听到声音」错误文本升级为同款 novoice 卡
+///（SPEAK-13 验收：静音跟读 →「没听到你的声音」卡＋重新跟读）。
+public func shadowPrecheckFailureCard(
+    sampleCount: Int,
+    peak: Float,
+    minSamples: Int = shadowPrecheckMinSamples,
+    minPeak: Float = shadowPrecheckMinPeak
+) -> ShadowFailureCard? {
+    guard peak < minPeak || sampleCount < minSamples else { return nil }
+    return shadowFailureCard(.novoice)
+}
+
+/// ISE 结果的异常面分类（次序对齐 SpeakView.tsx:759-779）：is_rejected → rejected；
+/// 28673 → novoice；28680 → noisy；其他 except_info → except（正文带异常码）；干净结果 nil。
+public func shadowResultFailureCard(isRejected: Bool, exceptInfo: String?) -> ShadowFailureCard? {
+    if isRejected { return shadowFailureCard(.rejected) }
+    switch exceptInfo {
+    case nil: return nil
+    case "28673"?: return shadowFailureCard(.novoice)
+    case "28680"?: return shadowFailureCard(.noisy)
+    case let code?: return shadowExceptFailureCard(detail: "评测异常（\(code)），再试一次")
+    }
+}
+
+/// 评测请求本身抛错（网络/服务/凭据以外的运行期错误）→ except 卡，正文放错误详情；
+/// 详情为空回落「再试一次应该就好。」（ShadowErrorCard：`detail || "再试一次应该就好。"`）。
+public func shadowExceptFailureCard(detail: String?) -> ShadowFailureCard {
+    let trimmed = detail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return ShadowFailureCard(
+        kind: .except,
+        title: "· 这次没评上",
+        body: trimmed.isEmpty ? "再试一次应该就好。" : trimmed,
+        actions: [ShadowFailureAction(kind: .again, title: "🎤 再试一次", primary: true)]
+    )
+}
+
+/// 四类卡的定稿文案与按钮（SpeakView.tsx:1616-1668 逐字）。
+public func shadowFailureCard(_ kind: ShadowFailureKind) -> ShadowFailureCard {
+    switch kind {
+    case .rejected:
+        return ShadowFailureCard(
+            kind: .rejected,
+            title: "✗ 读的好像不是这句话",
+            body: "不用灰心——可能句子太长跟丢了。先听一遍领读，照着文字再试一次。",
+            actions: [
+                ShadowFailureAction(kind: .hearModel, title: "🔊 听领读", primary: true),
+                ShadowFailureAction(kind: .again, title: "🎤 再跟读", primary: false),
+            ]
+        )
+    case .novoice:
+        return ShadowFailureCard(
+            kind: .novoice,
+            title: "· 没听到你的声音",
+            body: "离麦克风近一点，按住按钮读完这一句再松开。",
+            actions: [ShadowFailureAction(kind: .again, title: "🎤 重新跟读", primary: true)]
+        )
+    case .noisy:
+        return ShadowFailureCard(
+            kind: .noisy,
+            title: "· 环境有点吵",
+            body: "背景噪音偏大，评测听不清——换个安静些的地方，或离麦克风再近一点。",
+            actions: [ShadowFailureAction(kind: .again, title: "🎤 重新跟读", primary: true)]
+        )
+    case .except:
+        return shadowExceptFailureCard(detail: nil)
+    }
+}
+
+// MARK: - 逐词得分曲线（对齐 src/core/shadowDiagnose.ts wordScorePath，ts:216-253）
+
+public let wordScorePathWidth: Double = 272
+public let wordScorePathHeight: Double = 64
+
+/// 折线上的一个点（分数越高 y 越小；下标与输入词序列一致，供点圆点同步选词）。
+public struct WordScorePathPoint: Equatable, Sendable {
+    public var x: Double
+    public var y: Double
+
+    public init(x: Double, y: Double) {
+        self.x = x
+        self.y = y
+    }
+}
+
+/// 逐词得分折线的几何（SVG 视口 + 基准线 y + 点列）。
+public struct WordScorePath: Equatable, Sendable {
+    public var width: Double
+    public var height: Double
+    /// 5 分基准虚线的 y（顶部 padY 处）。
+    public var baselineY: Double
+    public var points: [WordScorePathPoint]
+
+    public init(width: Double, height: Double, baselineY: Double, points: [WordScorePathPoint]) {
+        self.width = width
+        self.height = height
+        self.baselineY = baselineY
+        self.points = points
+    }
+}
+
+/// 把 ISE 的 words[].totalScore（0–5）变成折线点列：分数越高 y 越小，
+/// 等距横排在 [12, width-12] 区间；单词只有 1 个时居中。讯飞 ISE 不返回音高
+/// F0 曲线，这里用真实逐词得分当「语调对比」的替代曲线。
+public func wordScorePath(_ words: [ShadowWord]) -> WordScorePath {
+    let w = wordScorePathWidth
+    let h = wordScorePathHeight
+    let padX = 12.0
+    let padY = 10.0
+    let innerW = w - padX * 2
+    let innerH = h - padY * 2
+    let n = words.count
+    let points = words.enumerated().map { i, word in
+        let score = min(5.0, max(0.0, word.totalScore))
+        let x = n <= 1 ? w / 2 : padX + (innerW * Double(i)) / Double(n - 1)
+        let y = padY + innerH * (1 - score / 5)
+        return WordScorePathPoint(x: x, y: y)
+    }
+    return WordScorePath(width: w, height: h, baselineY: padY, points: points)
 }

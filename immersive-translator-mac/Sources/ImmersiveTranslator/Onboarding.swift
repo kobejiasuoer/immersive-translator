@@ -1,6 +1,22 @@
 import AppKit
 import SwiftUI
 
+/// 首启引导完成标记（SET-8 时序：完成时写，不在展示时写）。
+/// - 「开始使用」/「跳过引导」→ markDone 后关窗，下次启动不再弹；
+/// - ✕ 直接关不写标记，下次启动再引导一次；
+/// - 菜单「使用引导」手动入口不受影响（标记已在时写不写都无所谓）。
+enum OnboardingCompletionFlag {
+    static let key = "didShowOnboardingV2"
+
+    static var isDone: Bool {
+        UserDefaults.standard.bool(forKey: key)
+    }
+
+    static func markDone() {
+        UserDefaults.standard.set(true, forKey: key)
+    }
+}
+
 @MainActor
 private final class OnboardingModel: ObservableObject {
     @Published var isAccessibilityTrusted = PermissionPrompter.isAccessibilityTrusted()
@@ -15,6 +31,12 @@ private final class OnboardingModel: ObservableObject {
 
     func close() {
         window?.close()
+    }
+
+    /// 完成引导（对齐 Windows finishOnboarding：写标记 + 关窗，两个按钮同一语义）。
+    func finish() {
+        OnboardingCompletionFlag.markDone()
+        close()
     }
 }
 
@@ -34,7 +56,7 @@ final class OnboardingWindowController: NSWindowController {
         )
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
-        window.title = "开始使用沉浸式翻译"
+        window.title = "欢迎使用沉浸口语"
         // 加入三大能力卡片后内容变长：加 .resizable + 滚动中段，窗口再小也不会裁掉底部按钮。
         window.styleMask = [.titled, .closable, .resizable]
         window.setContentSize(NSSize(width: 720, height: 640))
@@ -86,8 +108,13 @@ private struct OnboardingView: View {
                     onOpenSettings()
                 }
                 Spacer()
+                // 双按钮语义对齐 Windows ob-actions：开始使用（主）/ 跳过引导（次），
+                // 都写完成标记并关窗；✕ 关窗不写标记（SET-8）。
+                Button("跳过引导") {
+                    model.finish()
+                }
                 Button("开始使用") {
-                    model.close()
+                    model.finish()
                 }
                 .keyboardShortcut(.defaultAction)
             }
@@ -98,13 +125,32 @@ private struct OnboardingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    /// 刊头（对齐 Windows Onboarding.tsx:55-61 ob-hero）：「译」徽记 + 欢迎语 + 一句定位；
+    /// 下方保留 mac 侧「先跑通权限和 OCR」的任务提示。
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("先跑通权限和 OCR")
-                .font(.title2.weight(.semibold))
-            Text("新用户可以先看到本机 OCR 预览，再决定接本地模型还是云服务 API Key。")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                Text("译")
+                    .font(.system(size: 22, weight: .semibold, design: .serif))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(Color.accentColor.opacity(0.14)))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("欢迎使用沉浸口语")
+                        .font(.title2.weight(.semibold))
+                    Text("划词即译 · 截图即翻 · 长文精读")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("先跑通权限和 OCR")
+                    .font(.headline)
+                Text("新用户可以先看到本机 OCR 预览，再决定接本地模型还是云服务 API Key。")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

@@ -49,21 +49,10 @@ final class ShadowAssessController: NSObject, ObservableObject {
     /// 只在内存、不落盘；上限 15s×16k×4B≈960KB。
     private(set) var lastAttemptPcm: [Float]?
 
-    // VAD 参数（经验值，对齐 useShadowAssess.ts）：
-    // 开说/静音阈值按「运行时估计的底噪 × 信噪比倍率」自适应，
-    // 绝对下限兜住极安静房间，封顶保证开口即说话时阈值不被顶飞。
-    static let speechLevelMin: Float = 0.006
-    static let speechLevelCeiling: Float = 0.05
-    static let silenceLevelMin: Float = 0.003
-    static let speechFloorRatio: Float = 2.8
-    static let silenceFloorRatio: Float = 1.6
-    /// 迟迟未判定开说时的救援线：3.5s 后持续高于底噪 1.8× 也算开口。
-    static let rescueAfterMs = 3500
-    static let rescueFloorRatio: Float = 1.8
-    /// 一直没听到开说 → 提前收，提示检查麦克风。
-    static let noSpeechTimeoutMs = 8000
-    static let minRecordMs = 700
-    static let maxRecordMs = 15_000
+    // VAD（SPEAK-11）：开说/静音/无话/封顶的判定与阈值统一走 ReaderCore 的
+    // VadDetector 内核（阈值常量 vad* 一处定义，Vad.swift），与口语页点击开麦
+    // 同源（SpeakViewController.beginTalkRecording）；本文件不再持有常量副本。
+    // 对齐 useShadowAssess.ts:198-204 的 createVadDetector({ silenceMs, onAutoStop })。
     /// 过关后停留展示的时长，再自动进下一句。
     static let passLingerMs = 650
     /// 领读语速（比正常朗读慢，示范用）。
@@ -77,10 +66,8 @@ final class ShadowAssessController: NSObject, ObservableObject {
     var onAdvance: () -> Void = {}
 
     private var recorder: MicRecorder?
-    private var vadStarted = false
-    private var vadLastVoiceAt = 0
-    private var vadFloor: Float?
-    private var activeSilenceMs: Double = 1500
+    /// 本次录音的 VAD 检测器（开麦那一刻按当时的静音断句时长创建；换句/取消丢弃）。
+    private var vad: VadDetector?
     private var epoch = 0
     private var passWorkItem: DispatchWorkItem?
 
@@ -162,6 +149,7 @@ final class ShadowAssessController: NSObject, ObservableObject {
     func cancelAssess() {
         epoch += 1
         dropRecorder()
+        vad = nil
         clearPassTimer()
         stopLead()
         lastAttemptPcm = nil
@@ -180,14 +168,23 @@ final class ShadowAssessController: NSObject, ObservableObject {
     private func startRecording() {
         guard let idx = state.sentenceIdx else { return }
         let myEpoch = epoch
-        vadStarted = false
-        vadLastVoiceAt = 0
-        vadFloor = nil
         lastAttemptPcm = nil       // 新一轮录音作废旧留存（retry/begin 自动开麦共用此路径）
         reportDismissed = true     // 开录即视为收卡；下个干净 failed 结果再弹
         state = State(phase: .recording, sentenceIdx: idx)
         let config = configProvider()
-        activeSilenceMs = config.silenceMs
+        // 静音断句时长开麦那一刻取定（录音中途改设置不打断本次）；静音/无话/超长的
+        // 自动收麦判定与阈值全部在 ReaderCore VadDetector（与口语开麦同源）。
+        // 回调经 MainActor hop 落地，先核对仍在本次录音相位再收麦（手动「说完」已先
+        // 收走的话这里静默跳过；VadDetector 一次生命周期只触发一次）。
+        vad = VadDetector(
+            silenceMs: config.silenceMs,
+            onAutoStop: { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.epoch == myEpoch, self.state.phase == .recording else { return }
+                    self.finishRecording()
+                }
+            }
+        )
 
         Task { [weak self] in
             do {
@@ -219,35 +216,7 @@ final class ShadowAssessController: NSObject, ObservableObject {
         guard state.phase == .recording else { return }
         state.level = event.level
         state.elapsedMs = event.elapsedMs
-
-        let speechLevel = min(Self.speechLevelCeiling, max(Self.speechLevelMin, (vadFloor ?? 0) * Self.speechFloorRatio))
-        if event.level < speechLevel {
-            // 底噪估计只采信低于阈值的电平：说话块不抬高底噪，阈值不追着人声涨。
-            vadFloor = vadFloor == nil ? event.level : min(event.level, vadFloor! * 1.05)
-        }
-        let silenceLevel = max(Self.silenceLevelMin, (vadFloor ?? 0) * Self.silenceFloorRatio)
-        if event.level >= speechLevel {
-            vadStarted = true
-            vadLastVoiceAt = event.elapsedMs
-        } else if !vadStarted,
-                  event.elapsedMs >= Self.rescueAfterMs,
-                  event.level >= (vadFloor ?? 0) * Self.rescueFloorRatio {
-            // 超低电平麦克风：绝对阈值够不到，但持续高于底噪也算开口。
-            vadStarted = true
-            vadLastVoiceAt = event.elapsedMs
-        }
-        if !vadStarted, event.elapsedMs >= Self.noSpeechTimeoutMs {
-            finishRecording()
-            return
-        }
-        if vadStarted,
-           event.level < silenceLevel,
-           Double(event.elapsedMs - vadLastVoiceAt) >= activeSilenceMs,
-           event.elapsedMs >= Self.minRecordMs {
-            finishRecording()
-        } else if event.elapsedMs >= Self.maxRecordMs {
-            finishRecording()
-        }
+        vad?.feed(event.level, elapsedMs: event.elapsedMs)
     }
 
     private func finishRecording() {

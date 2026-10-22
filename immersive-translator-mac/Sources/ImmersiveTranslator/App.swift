@@ -7,10 +7,23 @@ import ReaderCore
 enum ImmersiveTranslatorMain {
     @MainActor
     static func main() {
+        // 单实例防护（对齐 Windows lib.rs single-instance 插件「最先注册」红线）：
+        // 双开的两个实例会各持同一旧 refreshToken 同时刷新，服务端判 token_reused
+        // → 该账号全部设备强制下线。第二实例启动即退出，仅把已有实例的设置窗提前。
+        // 必须先于 app.run()（即先于任何窗口创建）完成 claim。
+        let instanceGuard = SingleInstanceGuard()
+        AppDelegateHolder.instanceGuard = instanceGuard // 保活：flock 随进程存续
         let app = NSApplication.shared
         let delegate = AppDelegate()
         AppDelegateHolder.delegate = delegate
         app.delegate = delegate
+        instanceGuard.observeActivation { [weak delegate] in
+            delegate?.activateForSecondInstance()
+        }
+        guard instanceGuard.claim() else {
+            // 第二实例：已请求首实例激活设置窗，立即退出，不初始化任何其余单例。
+            exit(0)
+        }
         app.setActivationPolicy(.accessory)
         app.run()
     }
@@ -18,6 +31,7 @@ enum ImmersiveTranslatorMain {
 
 private enum AppDelegateHolder {
     static var delegate: AppDelegate?
+    static var instanceGuard: SingleInstanceGuard?
 }
 
 struct TranslationWaitStatusText {
@@ -207,6 +221,9 @@ struct TranslationWaitStatusText {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settingsStore = SettingsStore()
     private let historyStore = TranslationHistoryStore()
+    /// 服务端账号（令牌 Keychain 单槽、单飞刷新、启动预填；状态 @Published 供
+    /// 设置 chip / 账号分区 / 菜单分流订阅）。
+    let serverAuth = ServerAuthClient()
     private lazy var translator = TranslationClient(settingsStore: settingsStore)
     private lazy var panelController = TranslationPanelController(
         settingsStore: settingsStore,
@@ -249,8 +266,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 两个 lazy var 的初始化闭包互相引用成员会构成 circular reference，方法体不参与该解析。
     private lazy var settingsController = SettingsWindowController(
         settingsStore: settingsStore,
+        serverAuth: serverAuth,
         onShowOnboarding: { [weak self] in
             self?.showOnboarding()
+        },
+        onOpenLogin: { [weak self] in
+            self?.openLoginWindow()
+        },
+        // 设置热键相对快照有改动 → 整组重注册（SET-5；REVIEW-01 后由设置侧
+        // 自动保存确认触发，语义仍对齐 Windows handleSave → reregisterHotkeys）。
+        onReregisterHotKeys: { [weak self] in
+            self?.registerHotKeys()
+        },
+        // 设置内「升级到 vN」下载完成 → 接既有校验＋替换安装确认流（SET-6）。
+        onInstallUpdate: { [weak self] download, result in
+            self?.showDownloadedUpdateInstallOptions(download, result: result)
+        }
+    )
+    /// 登录窗（验证码主流程 + 密码页签）；已登录兜底卡与成功态的「进入账号管理」
+    /// 走 openAccountSettings() → 设置窗账号分区。
+    private lazy var loginController = LoginWindowController(
+        auth: serverAuth,
+        onOpenAccountSettings: { [weak self] in
+            self?.openAccountSettings()
         }
     )
     private lazy var historyController = TranslationHistoryWindowController(
@@ -295,8 +333,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activeTranslationTask: Task<Void, Never>?
     private var activeTranslationRequest: ActiveTranslationRequest?
     private var cancellables: Set<AnyCancellable> = []
+    /// 首启引导窗关闭观察者（一次性：触发后即移除，再手动打开引导不会再弹阅读室）。
+    private var onboardingCloseObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 启动静默续登录（§4.4）：Keychain 预填 → 广播已登录（离线也显示）→
+        // 后台单飞刷新校验存活；fatal 才转未登录。
+        serverAuth.bootstrap()
         configureMenuBar()
         hotKeyManager = HotKeyManager { [weak self] action in
             Task { @MainActor in
@@ -312,9 +355,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         registerHotKeys()
         observeSettings()
-        showWelcomeIfNeeded()
+        let onboardingShown = showWelcomeIfNeeded()
         scheduleAutomaticUpdateCheck()
         startReviewTouchpoints()
+        // 阅读室是唯一主工作台（v0.8 Phase 1，对齐 Windows lib.rs:1540-1553）：引导已完成
+        // → 每次启动直接打开阅读室并聚焦；首启先出引导，引导窗关闭（完成/跳过/✕）后再进。
+        // 放在角标调度之后：开窗不改变 30s 提醒调度与到期角标的启动时序。
+        if !onboardingShown {
+            readerController.show()
+        }
     }
 
     /// 复习触点：30s 调度（角标 + 到点弹提醒卡）；菜单文案随到期数动态变。
@@ -349,8 +398,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configureMenuBar() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "译"
+        // SHELL-9 原地复用：NSStatusItem 只创建一次；后续刷新只重建 NSMenu 赋回
+        // item.menu。removeStatusItem + 重建会把图标挪到菜单栏最右（位移/闪烁），
+        // 到期角标高频刷新时尤其明显（对齐 Windows TrayHandles 存句柄只 set_icon/set_text）。
+        if statusItem == nil {
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            item.button?.title = "译"
+            // 菜单栏按钮 tooltip（对齐 Windows 托盘 TrayIconBuilder tooltip）：品牌名常驻。
+            item.button?.toolTip = "沉浸口语"
+            statusItem = item
+        }
+        rebuildStatusMenu()
+    }
+
+    /// 只重建菜单内容并赋给既有 status item；不触碰 button（角标 attributedTitle
+    /// 由 onDueCountChange 维护，重赋菜单不能把它冲掉）。
+    private func rebuildStatusMenu() {
+        guard let item = statusItem else { return }
 
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "翻译选中文本  \(settingsStore.selectionHotKeyShortcut.title)", action: #selector(menuTranslateSelection), keyEquivalent: ""))
@@ -363,6 +427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: quickTitle, action: #selector(openQuickReview), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "录音直译...", action: #selector(toggleLiveCaption), keyEquivalent: ""))
         menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "账号登录...", action: #selector(openAccount), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "翻译历史...", action: #selector(openHistory), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "检查更新...", action: #selector(menuCheckForUpdates), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "设置...", action: #selector(openSettings), keyEquivalent: ","))
@@ -372,15 +437,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q"))
         menu.items.forEach { $0.target = self }
         item.menu = menu
-        statusItem = item
     }
 
+    /// 菜单刷新入口（到期数变化 / 热键设置变化）：原地复用 status item，无重建位移。
     private func refreshMenu() {
-        if let statusItem {
-            NSStatusBar.system.removeStatusItem(statusItem)
+        if statusItem == nil {
+            configureMenuBar()
+        } else {
+            rebuildStatusMenu()
         }
-        statusItem = nil
-        configureMenuBar()
     }
 
     private func registerHotKeys() {
@@ -430,10 +495,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
     }
 
-    private func showWelcomeIfNeeded() {
-        guard !UserDefaults.standard.bool(forKey: "didShowOnboardingV2") else { return }
-        UserDefaults.standard.set(true, forKey: "didShowOnboardingV2")
+    /// 首启引导：标记未写时弹引导窗并返回 true；引导窗关闭（「开始使用」/「跳过引导」
+    /// 完成路径或 ✕）后立即进阅读室——首启也不让用户去菜单栏找入口（Windows 引导
+    /// 完成后同样直接开主窗）。已写标记返回 false，调用方直接开阅读室。
+    /// SET-8 时序：标记改在引导完成时写（OnboardingModel.finish，对齐 Windows
+    /// finish_onboarding 命令）；✕ 直接关不写 → 下次启动再引导一次。
+    @discardableResult
+    private func showWelcomeIfNeeded() -> Bool {
+        guard !OnboardingCompletionFlag.isDone else { return false }
         onboardingController.show()
+        if let window = onboardingController.window {
+            onboardingCloseObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    if let token = self.onboardingCloseObserver {
+                        NotificationCenter.default.removeObserver(token)
+                        self.onboardingCloseObserver = nil
+                    }
+                    self.readerController.show()
+                }
+            }
+        }
+        return true
     }
 
     @objc private func menuTranslateSelection() {
@@ -445,6 +532,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
+        settingsController.show()
+    }
+
+    /// 菜单「账号登录」分流（对齐 Windows lib.rs:1510-1525 托盘 "account"）：
+    /// 未登录 → 开登录窗；已登录 → 打开设置并定位「账号」分区。
+    @objc private func openAccount() {
+        if serverAuth.status.loggedIn {
+            openAccountSettings()
+        } else {
+            openLoginWindow()
+        }
+    }
+
+    func openLoginWindow() {
+        loginController.show()
+    }
+
+    func openAccountSettings() {
+        settingsController.showAccountSection()
+    }
+
+    /// 第二实例启动时由 SingleInstanceGuard 激活通知触发：前置设置窗
+    /// （Windows 同款：聚焦 settings 窗）。
+    func activateForSecondInstance() {
         settingsController.show()
     }
 

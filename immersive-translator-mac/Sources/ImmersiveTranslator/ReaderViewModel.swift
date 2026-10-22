@@ -8,6 +8,49 @@ struct ToastAction {
     let handler: () -> Void
 }
 
+/// 带入口语的语境意图（Windows PendingSpeak：book / vocab 两形态）。
+/// 每次点击生成新 id；消费端按 id 去重（同一 intent 不重复开会）。
+/// 过期规则（ReaderApp.tsx:530-543）：book 形态切文章即作废；vocab 形态
+/// 离开口语页即清（一次性消费）。
+struct PendingSpeakIntent: Equatable {
+    enum Kind: Equatable {
+        /// 阅读室句行「用这句练口语」：以该句为锚带本章语境。
+        case book(articleId: String, sentenceIdx: Int)
+        /// 手账/看板「去口语里用一次」：目标词提到队首的造句闯关。
+        case vocab(wordId: String)
+    }
+
+    let id = UUID()
+    let kind: Kind
+
+    static func == (lhs: PendingSpeakIntent, rhs: PendingSpeakIntent) -> Bool {
+        lhs.id == rhs.id && lhs.kind == rhs.kind
+    }
+}
+
+/// 阅读室 LLM 通道的最小使用面（ReaderChatClient 被 vm 用到的 6 个成员）。
+/// 抽成协议只为可注入：vm 级单测用替身通道（闸门控制在途请求、不碰 Keychain/网络），
+/// 生产仍是 ReaderChatClient；行为与签名零变化。
+protocol ReaderChatChannel: AnyObject {
+    @MainActor var glossaryText: String { get }
+    @MainActor var customStyle: String { get }
+    @MainActor func configuration() throws -> ReaderChatClient.Configuration
+    @MainActor func resolveTarget(for sample: String) -> String
+    func complete(systemPrompt: String, userText: String) async throws -> String
+    func completeStreaming(
+        systemPrompt: String,
+        userText: String,
+        onDelta: @escaping (String) -> Void
+    ) async throws -> String
+}
+
+extension ReaderChatClient: ReaderChatChannel {
+    /// 协议见证：vm 只用非流式默认档（stream: false），与此前调用等价。
+    func complete(systemPrompt: String, userText: String) async throws -> String {
+        try await complete(systemPrompt: systemPrompt, userText: userText, stream: false)
+    }
+}
+
 /// 沉浸阅读室组合根（ReaderApp.tsx 的 Mac 对应物）。
 ///
 /// 职责：加载数据（文章/生词/设置）、驱动翻译管线（段级流式 + 单段重试 +
@@ -15,11 +58,43 @@ struct ToastAction {
 /// 文章保存带 700ms 防抖。
 @MainActor
 final class ReaderViewModel: ObservableObject {
+    /// 阅读室内部路由。v0.8 起书架是首页（启动落 shelf，点书卡/短文进 reading）；
+    /// 顶部导航岛三档由 `islandSurface` 归并高亮（shelf/reading→阅读、review/notes→笔记与复习）。
     enum Route: Equatable {
+        case shelf
         case reading
         case review
         case notes
         case speak
+
+        /// ReaderCore 的纯数据镜像（导航岛归并 / 面名计算走核心函数，可单测）。
+        var kind: ReaderRouteKind {
+            switch self {
+            case .shelf: return .shelf
+            case .reading: return .reading
+            case .review: return .review
+            case .notes: return .notes
+            case .speak: return .speak
+            }
+        }
+    }
+
+    /// 「笔记与复习」三档玩法（v0.8 VaultPlayMode）：记忆胶带手账 /
+    /// 3 分钟快刷闯关 / Markdown 笔记导出。跨视图进入保留上次档位；
+    /// 显式入口各自落档——复习类入口落挑战档（对齐 Windows goReview），
+    /// 笔记库入口落 md 档（goNotes），托盘「生词本」→ 挑战档。
+    enum VaultPlayMode: String, Equatable {
+        case tape
+        case challenge
+        case md
+
+        var label: String {
+            switch self {
+            case .tape: return "记忆胶带手账（点按自测）"
+            case .challenge: return "3 分钟快刷闯关（填空 / 听音 / 开口）"
+            case .md: return "Markdown 笔记导出"
+            }
+        }
     }
 
     /// 词典栏状态（DictPanelState）。
@@ -103,10 +178,38 @@ final class ReaderViewModel: ObservableObject {
     @Published var articleList: [ArticleSummary] = []
     /// 书架的书（索引与元信息，不含章正文；按最近阅读倒序）。
     @Published var bookList: [BookMeta] = []
-    @Published var article: Article?
+    /// 带入口语的语境意图（SPEAK-14）。book 形态切文章即作废；vocab 形态
+    /// 离开口语页即清；消费在 openSpeak（同一 intent 只开会一次）。
+    @Published private(set) var pendingSpeak: PendingSpeakIntent?
+    @Published var article: Article? {
+        didSet {
+            // 带入句过期清理：切到别的文章后旧 book 意图不再有效（消费前保证新鲜）。
+            if let current = article,
+               case .book(let articleId, _) = pendingSpeak?.kind,
+               articleId != current.id {
+                pendingSpeak = nil
+            }
+        }
+    }
     @Published var vocabWords: [VocabWord] = []
     @Published var reviewLog: ReviewLogFile = .empty
-    @Published var route: Route = .reading
+    @Published var route: Route = .shelf {
+        didSet {
+            // vocab 意图一次性消费：离开口语页即清（再次进口语不重开旧造句会话）。
+            if route != .speak, case .vocab = pendingSpeak?.kind {
+                pendingSpeak = nil
+            }
+        }
+    }
+    /// 「笔记与复习」当前玩法档（三合一容器顶栏高亮来源；Windows 初始 tape）。
+    @Published var vaultPlayMode: VaultPlayMode = .tape
+    /// 口语会话快照（手账口语改进行与 Markdown 导出的数据源；进 vault 时刷新）。
+    @Published var speakSessions: [SpeakSession] = []
+    /// 弹出式书架浮层（v0.8 FolioSheet）：由顶栏左上「书架 · 书名」触发；
+    /// 选中书目 / 发起导入 / 切档位 / Esc / 外点都会收起，删除后保持打开。
+    @Published var folioOpen = false
+    /// 书架首页「查看目录」指定的书（nil = 回落当前文章所属书）。
+    @Published var tocBookId: String?
     @Published var toast: String = ""
     /// toast 行内动作（与 toast 同生同灭；nil = 无按钮）。
     @Published var toastAction: ToastAction?
@@ -130,8 +233,34 @@ final class ReaderViewModel: ObservableObject {
     /// 今日已读秒数（每日阅读目标追踪，书架今日卡进度条用；recordReading 返回值镜像）。
     @Published private(set) var readSecondsToday: Double = 0
 
+    // ---- v0.8 透镜卡（句子解析 / 查词 双 Tab）----
+
+    /// 右栏透镜卡页签：解析请求/切回 xray；查词动作切 lex（DictColumn.tsx lensMode）。
+    enum LensTab: Equatable {
+        case xray
+        case lex
+    }
+
+    /// 句子解析状态（会话内承载，不落盘：句子没变就不用重查）。
+    struct XrayLensState: Equatable {
+        enum Status: Equatable {
+            case loading
+            case error
+            case ready
+        }
+
+        var status: Status
+        var sentenceIdx: Int
+        var data: SentenceXray?
+    }
+
+    @Published var lensTab: LensTab = .xray
+    @Published var xray: XrayLensState?
+    /// 透镜卡结构拆解悬停中的片段（优先级高于词块着色，回标正文原文）。
+    @Published var hoveredClause: String?
+
     let store: ReaderStore
-    private let chat: ReaderChatClient
+    private let chat: any ReaderChatChannel
     let playback = ReaderPlaybackEngine()
     private var cancellables = Set<AnyCancellable>()
     private var saveTask: Task<Void, Never>?
@@ -183,9 +312,17 @@ final class ReaderViewModel: ObservableObject {
     let speak = SpeakViewController()
 
 
-    init(settingsStore: SettingsStore, store: ReaderStore = .shared) {
+    /// 生产入口（ReaderWindowController）：LLM 通道由 SettingsStore 驱动的 ReaderChatClient。
+    convenience init(settingsStore: SettingsStore, store: ReaderStore = .shared) {
+        self.init(chat: ReaderChatClient(settingsStore: settingsStore), store: store)
+    }
+
+    /// 指定初始化器：注入 LLM 通道。单测用替身通道——`SettingsStore()` 初始化会读
+    /// Keychain，xctest 不在钥匙串条目 ACL 上时会弹授权窗把测试挂死（R2-READ 实测），
+    /// 所以 vm 级用例一律走这里，不碰 Keychain / 网络。
+    init(chat: any ReaderChatChannel, store: ReaderStore = .shared) {
         self.store = store
-        self.chat = ReaderChatClient(settingsStore: settingsStore)
+        self.chat = chat
         self.globalSettings = store.loadGlobalReaderSettings()
 
         playback.$playing
@@ -326,6 +463,20 @@ final class ReaderViewModel: ObservableObject {
     var currentBook: BookMeta? {
         guard let bookId = article?.bookId else { return nil }
         return bookList.first { $0.id == bookId }
+    }
+
+    /// 目录弹层要展示的书：书架首页「查看目录」指定的那本优先，否则当前文章所属书。
+    var tocBook: BookMeta? {
+        if let tocBookId, let book = bookList.first(where: { $0.id == tocBookId }) {
+            return book
+        }
+        return currentBook
+    }
+
+    /// 书架首页「查看目录」：不必先打开这本书的章就能看目录（对齐 Windows onOpenBookToc）。
+    func openBookToc(bookId: String) {
+        tocBookId = bookId
+        bookTocShown = true
     }
 
     /// 正文末「读完本章/读完本篇」按钮（纯手动阅读路径）：光标到末句且没在
@@ -588,6 +739,16 @@ final class ReaderViewModel: ObservableObject {
         jumpTo(idx: idx, autoplay: true)
     }
 
+    /// 折叠卡「朗读本句」：读完自动停，不连读（Windows once 语义）；
+    /// 播放中点当前句 = 停止朗读（ReadingView.tsx:299 speakButton 同一套切换）。
+    func speakSentenceOnce(_ idx: Int) {
+        if playback.playing && idx == activeSentenceIdx {
+            stopPlayback()
+        } else {
+            jumpTo(idx: idx, autoplay: true, once: true)
+        }
+    }
+
     /// 单词/词块发音（独立音轨，不打断句子朗读）。
     func speakWord(_ text: String) {
         playback.speakWord(text)
@@ -615,10 +776,14 @@ final class ReaderViewModel: ObservableObject {
 
     // MARK: - 启动加载
 
+    /// 首次打开窗口：加载数据后默认落在整页书架（书架是首页，对齐 Windows
+    /// ReaderApp.tsx:206 / 1148）；只有外部推入——热键导入 / 托盘「生词本」/
+    /// 提醒卡「继续阅读」——才直接进对应视图。
     func bootstrap(pendingImportText: String? = nil, openReview: Bool = false, openBookId: String? = nil) {
         globalSettings = store.loadGlobalReaderSettings()
         refreshVocab()
         refreshBooks()
+        refreshNotes()  // 「笔记与复习」角标（到期 + 未整理）启动即准
         let list = (try? store.listArticles()) ?? []
         articleList = list
         if let text = pendingImportText, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -626,7 +791,7 @@ final class ReaderViewModel: ObservableObject {
             return
         }
         if openReview {
-            route = .review
+            self.openReview()  // 参数名遮蔽了同名方法，显式 self
             return
         }
         if let openBookId {
@@ -634,12 +799,21 @@ final class ReaderViewModel: ObservableObject {
             openBookAt(bookId: openBookId)
             return
         }
-        if let first = list.first {
+        openShelf()
+    }
+
+    /// 上次打开过的内容（书架为空时 nil）：短文按最近阅读倒序取首篇，否则最近读的书。
+    /// 点导航岛「阅读」而当前没有打开的文章时用它续读，而不是让人面对空页。
+    private func openMostRecentIfAny() -> Bool {
+        if let first = articleList.first {
             openArticle(id: first.id)
-        } else if let book = bookList.first {
-            // 只有书没有短文：打开最近读的那本（断点章）。
-            openBookAt(bookId: book.id)
+            return true
         }
+        if let book = bookList.first {
+            openBookAt(bookId: book.id)
+            return true
+        }
+        return false
     }
 
     func refreshVocab() {
@@ -671,11 +845,17 @@ final class ReaderViewModel: ObservableObject {
         translationTask?.cancel()
         translationRunID += 1
         route = .reading
+        folioOpen = false   // 选中书目即收起书架浮层
+        tocBookId = nil     // 目录弹层回落到当前文章所属书
         dict = .closed
         searchMatchIdx = nil
         bookTocShown = false
         chapterEnd = nil
         finishCard = nil
+        // 透镜卡整卡复位：切文章后旧解析/悬停回标不再有效（结果不落盘）。
+        xray = nil
+        hoveredClause = nil
+        lensTab = .xray
         article = full
         activeSentenceIdx = min(full.progress.sentenceIdx, max(0, full.sentences.count - 1))
         sourceCache[full.id] = full
@@ -699,20 +879,36 @@ final class ReaderViewModel: ObservableObject {
         runTranslationPipeline(for: full.id)
     }
 
+    /// 删短文：删的是当前打开的那篇 → 清空阅读态并回整页书架（对齐 Windows
+    /// ReaderApp.tsx:1282-1287 goShelf），不替用户自动翻到另一篇；书架浮层保持打开。
     func deleteArticle(id: String) {
         _ = try? store.deleteArticle(id: id)
         refreshArticleList()
         refreshVocab()
         if article?.id == id {
-            article = nil
-            activeSentenceIdx = 0
-            playback.reset(startIdx: 0)
-            syncPlaybackContext()
-            if let first = articleList.first {
-                openArticle(id: first.id)
-            }
+            clearOpenArticle()
+            openShelf(keepFolio: true)
         }
         showToast("文章已删除")
+    }
+
+    /// 关闭当前文章的阅读态（删文/删书共用）：停播、清光标、关联弹层一并收起。
+    private func clearOpenArticle() {
+        translationTask?.cancel()
+        translationRunID += 1
+        bookTocShown = false
+        tocBookId = nil
+        chapterEnd = nil
+        finishCard = nil
+        dict = .closed
+        searchMatchIdx = nil
+        xray = nil
+        hoveredClause = nil
+        lensTab = .xray
+        article = nil
+        activeSentenceIdx = 0
+        playback.reset(startIdx: 0)
+        syncPlaybackContext()
     }
 
     // MARK: - 整本书（书卡 / 断点直达 / 删书）
@@ -775,25 +971,20 @@ final class ReaderViewModel: ObservableObject {
     }
 
     /// 删除书 = 删书卡与全部章文章（进度不可恢复），生词一律保留。
+    /// 删的是正在读的书 → 回整页书架（与删短文同口径）。
     func deleteBook(bookId: String) {
         let removed = (try? store.deleteBook(bookId: bookId)) ?? false
         guard removed else { return }
         refreshBooks()
         refreshArticleList()
         refreshVocab()
-        if article?.bookId == bookId {
+        if tocBookId == bookId {
+            tocBookId = nil
             bookTocShown = false
-            chapterEnd = nil
-            finishCard = nil
-            article = nil
-            activeSentenceIdx = 0
-            playback.reset(startIdx: 0)
-            syncPlaybackContext()
-            if let first = articleList.first {
-                openArticle(id: first.id)
-            } else if let book = bookList.first {
-                openBookAt(bookId: book.id)
-            }
+        }
+        if article?.bookId == bookId {
+            clearOpenArticle()
+            openShelf(keepFolio: true)
         }
         showToast("这本书已删除（生词保留）")
     }
@@ -1254,11 +1445,11 @@ final class ReaderViewModel: ObservableObject {
         }
     }
 
-    func jumpTo(idx: Int, autoplay: Bool = false) {
+    func jumpTo(idx: Int, autoplay: Bool = false, once: Bool = false) {
         guard let total = article?.sentences.count, total > 0 else { return }
         readingSession.noteInteraction(now: Date.timeIntervalSinceReferenceDate)
         let clamped = min(max(0, idx), total - 1)
-        playback.jumpTo(clamped, autoplay: autoplay)
+        playback.jumpTo(clamped, autoplay: autoplay, once: once)
         if !playback.playing {
             // 未播放：引擎只移动光标；这里同步高亮（播放中由引擎事件驱动）。
             if clamped != activeSentenceIdx {
@@ -1324,23 +1515,51 @@ final class ReaderViewModel: ObservableObject {
 
     // MARK: - 词典（屏 C）
 
+    /// 在途查词请求（READ-9）：新查词先 cancel 旧 Task 再领新票根。
+    private var dictTask: Task<Void, Never>?
+    /// 查词序号守卫（READ-9）：Windows `rd${++translateSeqRef}` tag 的 Mac 对应物，
+    /// 纯逻辑在 ReaderCore/DictPanelCore 供单测。
+    private var dictSequence = DictLookupSequence()
+
     func lookup(query raw: String, sentenceIdx: Int) {
         guard let cleaned = extractSelectionText(raw) else { return }
         let articleID = article?.id ?? ""
         dictLookupCounts[articleID, default: 0] += 1
+        // 查词发生 → 透镜卡切到「查词」Tab（ReaderApp.tsx:1389 setLensMode("lex")）。
+        lensTab = .lex
+        // READ-9 防串扰：新查词先掐掉在途旧请求（Windows requestTranslate 同 tag
+        // 前缀自动取消旧请求），再领号；迟到结果由票根在写回前统一过滤。
+        dictTask?.cancel()
+        let ticket = DictLookupSequence.Ticket(
+            runID: dictSequence.begin(),
+            query: cleaned,
+            sentenceIdx: sentenceIdx,
+            articleID: article?.id
+        )
         dict = .loading(query: cleaned, sentenceIdx: sentenceIdx)
-        Task { [weak self] in
-            await self?.performLookup(query: cleaned, sentenceIdx: sentenceIdx)
+        dictTask = Task { [weak self] in
+            await self?.performLookup(ticket)
         }
     }
 
-    private func performLookup(query: String, sentenceIdx: Int) async {
+    /// 写回守卫：仍是最新请求（序号）＋面板仍是该请求的 loading 态＋文章未切走。
+    /// 任一不成立即迟到/被取消结果，丢弃（对齐 xray 守卫的双重判定）。
+    private func dictWritebackAllowed(_ ticket: DictLookupSequence.Ticket) -> Bool {
+        var panelLoading: (query: String, sentenceIdx: Int)?
+        if case .loading(let q, let i) = dict { panelLoading = (q, i) }
+        return dictSequence.accepts(ticket, panelLoading: panelLoading, currentArticleID: article?.id)
+    }
+
+    private func performLookup(_ ticket: DictLookupSequence.Ticket) async {
+        let query = ticket.query
+        let sentenceIdx = ticket.sentenceIdx
         let target = chat.resolveTarget(for: query)
         do {
             let raw = try await chat.complete(
                 systemPrompt: buildReaderDictPrompt(targetLanguage: target, glossaryText: chat.glossaryText),
                 userText: query
             )
+            guard dictWritebackAllowed(ticket) else { return } // 迟到/被取代：不覆盖新状态
             switch parseReaderDictResponse(raw) {
             case .entry(let entry):
                 dict = .ready(query: query, entry: entry, sentenceIdx: sentenceIdx)
@@ -1350,6 +1569,9 @@ final class ReaderViewModel: ObservableObject {
                 dict = .error(query: query, sentenceIdx: sentenceIdx, message: "返回格式无法解析，请重试")
             }
         } catch {
+            // 被新查词 cancel：新请求已接管面板，静默退出（Windows cancelled 分支不写错误态）。
+            if Task.isCancelled { return }
+            guard dictWritebackAllowed(ticket) else { return }
             dict = .error(query: query, sentenceIdx: sentenceIdx, message: (error as? LocalizedError)?.errorDescription ?? "\(error)")
         }
     }
@@ -1359,9 +1581,123 @@ final class ReaderViewModel: ObservableObject {
         return vocabWords.contains { $0.id == normalizeWordKey(key) }
     }
 
-    /// 点正文词块下划线 → 即时卡（无 LLM 调用）。
+    /// 点正文词块下划线 → 即时卡（无 LLM 调用）；透镜卡同步切「查词」页签。
+    /// 面板易主：在途查词请求顺手掐掉（迟到结果本就会被票根守卫丢弃，提前取消省 token）。
     func openChunkCard(chunk: SentenceChunk, sentenceIdx: Int) {
+        dictTask?.cancel()
+        lensTab = .lex
         dict = .chunkCard(chunk: chunk, sentenceIdx: sentenceIdx)
+    }
+
+    /// 透镜卡「查词」页签的关闭：结果收起、页签回落「句子解析」
+    ///（DictColumn onClose → setDict(closed) + setLensMode("xray")）。
+    /// 关闭即不再需要结果：在途请求一并取消。
+    func closeDictLens() {
+        dictTask?.cancel()
+        dict = .closed
+        lensTab = .xray
+    }
+
+    // MARK: - 句子解析（v0.8 透镜卡「句子解析」Tab）
+
+    /// 当前句 en 走 chat 通道（Windows translateStream，tag 前缀 rx）请求
+    /// 主干/结构拆解/句型。失败只提示不阻塞阅读；结果不落盘；请求期间切文章
+    /// 则作废。光标移句后旧数据由展示层按 sentenceIdx == activeSentenceIdx 失效。
+    func openXray(idx: Int) {
+        guard let current = article,
+              let en = current.sentences[safe: idx]?.en,
+              !en.isEmpty else { return }
+        lensTab = .xray
+        xray = XrayLensState(status: .loading, sentenceIdx: idx, data: nil)
+        // 未配置翻译接口：可操作提示，不阻塞阅读（ReaderApp.tsx:1425 hasValidSettings 分支）。
+        guard (try? chat.configuration()) != nil else {
+            xray = XrayLensState(status: .error, sentenceIdx: idx, data: nil)
+            showToast("先在设置里配置翻译接口，才能解析句子")
+            return
+        }
+        let articleID = current.id
+        let target = chat.resolveTarget(for: en)
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let raw = try await self.chat.complete(
+                    systemPrompt: buildSentenceXraySystemPrompt(targetLang: target),
+                    userText: buildSentenceXrayInput(sentence: en)
+                )
+                guard self.article?.id == articleID else { return } // 切文章，作废
+                guard self.xray?.sentenceIdx == idx, self.xray?.status == .loading else { return } // 已被新请求取代
+                if let parsed = parseSentenceXrayResponse(raw, sentence: en) {
+                    self.xray = XrayLensState(status: .ready, sentenceIdx: idx, data: parsed)
+                } else {
+                    self.xray = XrayLensState(status: .error, sentenceIdx: idx, data: nil)
+                    self.showToast("句子解析结果无法解析，请重试")
+                }
+            } catch {
+                guard self.article?.id == articleID else { return }
+                guard self.xray?.sentenceIdx == idx, self.xray?.status == .loading else { return }
+                self.xray = XrayLensState(status: .error, sentenceIdx: idx, data: nil)
+                self.showToast("句子解析失败，稍后再试")
+            }
+        }
+    }
+
+    /// 透镜卡 / 折叠卡 / 刊头「用这句（围绕本章）练口语」：记 pendingSpeak book
+    /// 意图再进口语（ReaderApp.tsx:1625 practiceSentence 的 pendingSpeak 通道，
+    /// 消费在 openSpeak）：该句进摘要首位，口语侧开场白自然从这句聊起。
+    func practiceSentence(idx: Int) {
+        guard let current = article,
+              let en = current.sentences[safe: idx]?.en,
+              !en.isEmpty else { return }
+        pendingSpeak = PendingSpeakIntent(kind: .book(articleId: current.id, sentenceIdx: idx))
+        openSpeak()
+        showToast("已带入第 \(idx + 1) 句进入口语对话")
+    }
+
+    /// pendingSpeak book 语境（对齐 ReaderApp.tsx:1931-1948 speakBookContext 的
+    /// focus 拼装：带入句放摘要首位，其后按章内顺序补到 3 句，去重不重复带入句）。
+    /// 短文也允许 book 语境（书名回落文章标题）——比 Windows 仅书章可用更宽，只增不删。
+    private func pendingBookContext(focusIdx: Int) -> SpeakSessionContext? {
+        guard let current = article,
+              let focus = current.sentences[safe: focusIdx]?.en,
+              !focus.isEmpty else { return nil }
+        let book = currentBook
+        let chapterIdx = current.chapterIdx
+            ?? book.map { bookChapterIndexOf(book: $0, chapterId: current.id) }
+            ?? 0
+        var excerpt = [focus]
+        for en in current.sentences.map(\.en) where !en.isEmpty && en != focus && excerpt.count < 3 {
+            excerpt.append(en)
+        }
+        return .book(
+            bookTitle: book?.title ?? current.title,
+            chapterArticleId: current.id,
+            chapterIdx: chapterIdx,
+            excerpt: excerpt
+        )
+    }
+
+    /// pendingSpeak 消费（进口语面时执行一次；对齐 SpeakView.tsx:617-638 的挂载消费）：
+    /// book 形态过期（当前文章不是意图所指）不触发、意图保留等文章切回或被清理；
+    /// vocab 形态目标词已不在生词本则丢弃意图；同一 intent 由 SpeakViewController
+    /// 按 id 去重，绝不重复开会。
+    private func consumePendingSpeak() {
+        guard let intent = pendingSpeak else { return }
+        switch intent.kind {
+        case .book(let articleId, let sentenceIdx):
+            guard article?.id == articleId,
+                  let context = pendingBookContext(focusIdx: sentenceIdx) else { return }
+            speak.start(pending: intent, context: context)
+        case .vocab(let wordId):
+            guard vocabWords.contains(where: { $0.id == wordId }) else {
+                pendingSpeak = nil
+                return
+            }
+            var ids = [wordId]
+            for due in dueWords.prefix(8) where due.id != wordId {
+                ids.append(due.id)
+            }
+            speak.start(pending: intent, context: .vocab(wordIds: ids))
+        }
     }
 
     /// 词块即时卡「收藏词块」/ 搭配收藏共用。
@@ -1502,6 +1838,33 @@ final class ReaderViewModel: ObservableObject {
         }
     }
 
+    /// 开口命中目标词：按 easy 档落 SRS 并记 spokenAt（内化三阶最高阶的
+    /// 数据来源；对齐 Windows gradeSpokenVocab = gradeVocab({...word, spokenAt}, "easy")）。
+    /// 评分/打卡/统计刷新全部复用 gradeVocab 的普通链路。
+    func gradeSpoken(_ word: VocabWord) {
+        var spoken = word
+        spoken.spokenAt = Int64(Date().timeIntervalSince1970 * 1000)
+        gradeVocab(spoken, .easy, mode: .recognition, verdict: nil)
+    }
+
+    /// 手账/看板「去口语里用一次」：pendingSpeak 置 vocab 形态再进口语造句闯关
+    /// （Windows pendingSpeak {kind:"vocab"} 通道）。目标词提到队首，再并入今日
+    /// 到期词，最多 9 个；vocab 形态一次性消费（离开口语页即清）。
+    func practiceVocabSpeak(_ word: VocabWord) {
+        pendingSpeak = PendingSpeakIntent(kind: .vocab(wordId: word.id))
+        openSpeak()
+        showToast("已带「\(word.word)」进入口语造句闯关")
+    }
+
+    // MARK: - 路由（v0.8 导航岛三档 + 书架首页 + 书架浮层）
+
+    /// 回整页书架（首页）。keepFolio = 删除后保持浮层打开（Windows 删除契约）。
+    func openShelf(keepFolio: Bool = false) {
+        focusReviewIds = nil
+        if !keepFolio { folioOpen = false }
+        route = .shelf
+    }
+
     func openReading() {
         focusReviewIds = nil
         route = .reading
@@ -1509,10 +1872,92 @@ final class ReaderViewModel: ObservableObject {
 
     func openReview() {
         focusReviewIds = nil
+        // 复习类入口统一落挑战档（对齐 Windows goReview → vault·challenge；
+        // 托盘/菜单「生词本」经 bootstrap(openReview:) 走到这里）。
+        vaultPlayMode = .challenge
         route = .review
         reviewPos = 0
         loadSourceArticles(ids: vocabWords.map(\.source.articleId))
         refreshNotes()  // 「N 未整理」角标需要笔记覆盖数据
+        refreshSpeakSessions()  // 手账口语改进行
+    }
+
+    /// 进入「笔记与复习」档但保留上次玩法档（导航岛第三档；Windows
+    /// navigateSurface(vault) 已在 vault 内不重置模式）。
+    func openVault() {
+        route = .review
+        loadSourceArticles(ids: vocabWords.map(\.source.articleId))
+        refreshNotes()
+        refreshSpeakSessions()
+    }
+
+    /// 导航岛三档路由（对齐 ReaderApp.tsx:1647 navigateSurface）：切档先收书架浮层；
+    /// 阅读档没有打开的文章时续读最近一篇/一本（都没有才落空态）；
+    /// 「笔记与复习」档已在 review/notes 内时不重置（Windows「已在 vault 不重置玩法档」）。
+    func navigate(to surface: IslandSurface) {
+        folioOpen = false
+        switch surface {
+        case .reading:
+            if article != nil {
+                openReading()
+            } else if !openMostRecentIfAny() {
+                openReading()
+            }
+        case .speak:
+            openSpeak()
+        case .vault:
+            if route == .review || route == .notes { return }
+            openVault()
+        }
+    }
+
+    /// 导航岛当前高亮档（shelf/reading→阅读、speak→口语、review/notes→笔记与复习）。
+    var islandSurface: IslandSurface {
+        IslandSurface(folding: route.kind)
+    }
+
+    /// 「笔记与复习」档角标 = 到期数 + 未整理数；收藏 / 评分 / 生成笔记后随 @Published 数据实时变。
+    var vaultBadge: Int {
+        vaultBadgeCount(dueNow: stats.dueNow, unnotedCount: unnotedWordCount)
+    }
+
+    /// 顶栏左上触发器文案「书架 · X」的 X：书架页 / 口语陪练 / 笔记与复习 / 当前文章名。
+    var surfaceTitle: String? {
+        route.kind.surfaceTitle(articleTitle: article?.title)
+    }
+
+    /// 左上书卷胶囊完整文案（书架页自身只写「书架」）。
+    var folioTriggerLabel: String {
+        route.kind.folioTriggerLabel(articleTitle: article?.title)
+    }
+
+    func toggleFolio() {
+        folioOpen.toggle()
+    }
+
+    func closeFolio() {
+        folioOpen = false
+    }
+
+    /// 书架浮层「＋ 导入文件」：开导入向导并收起浮层（Windows FolioSheet onOpenImport + onClose）。
+    func openImportFromFolio() {
+        folioOpen = false
+        importSheetShown = true
+    }
+
+    // MARK: - 关窗（✕ = 先停播再隐藏；对齐 Windows ReaderApp.tsx:1218-1235 onCloseRequested）
+
+    /// 阅读室窗口即将关闭：停朗读 / 收麦 / 取消在途评测与口语对话 / 落盘阅读秒数。
+    /// 窗口只隐藏不销毁，文章、进度、光标位置全部保留，重开即续。
+    func handleWindowWillClose() {
+        playback.stop()            // 句子朗读 + 云播放立刻停；shadowingWait 复位
+        leadSpeaker.stop()         // 跟读领读
+        shadowPlayer.stop()        // 「听我的录音」回放
+        drill.close()              // 差词抽屉（含其录音）
+        assess.cancelAssess()      // 跟读评测：弃录音、掐领读、回 idle（收麦）
+        speak.cancelAll()          // 口语陪练：在途 ASR/LLM/ISE 与录音一并掐掉
+        folioOpen = false
+        flushReadingSeconds()      // 未落盘的阅读秒数不丢
     }
 
     /// 笔记复盘区「只测仍错的词」：只排这批词，不等到期。
@@ -1523,6 +1968,8 @@ final class ReaderViewModel: ObservableObject {
         }
         focusReviewIds = ids
         reviewPos = 0
+        // 弱项加练直落挑战档（对齐 Windows onStartFocusReview → vaultMode challenge）。
+        vaultPlayMode = .challenge
         route = .review
     }
 
@@ -1530,14 +1977,25 @@ final class ReaderViewModel: ObservableObject {
 
     func openNotes() {
         focusReviewIds = nil
+        // 笔记库入口落 md 档（对齐 Windows goNotes → vault·md），.notes 路由兼容保留。
+        vaultPlayMode = .md
         route = .notes
         refreshNotes()
+        refreshSpeakSessions()
     }
 
+    /// 口语会话快照（手账口语行 / Markdown 导出 / 内化看板共用）。
+    func refreshSpeakSessions() {
+        speakSessions = (try? speak.store.listSessions()) ?? []
+    }
+
+    /// 进口语面（导航岛 / 带入意图共用入口）：切路由后消费 pendingSpeak——
+    /// 这是意图开会的唯一落点，保证「带入 → 进面 → 开会」一条链。
     func openSpeak() {
         focusReviewIds = nil
         route = .speak
         speak.refreshRecent()
+        consumePendingSpeak()
     }
 
     func refreshNotes() {
@@ -1588,7 +2046,13 @@ final class ReaderViewModel: ObservableObject {
     @discardableResult
     func saveSpeakReviewCandidate(_ candidate: SpeakVocabCandidate) async throws -> CollectVocabOutcome {
         do {
-            return try await CollectActions.addTextToVocab(chat: chat, rawText: candidate.word)
+            // CollectActions.addTextToVocab 收具体 ReaderChatClient（CollectActions.swift:71，
+            // 第 2 波可放宽为 ReaderChatChannel）；生产通道即 ReaderChatClient，转型恒成立。
+            // 替身通道（单测）转型失败 → 与词典查询失败同路降级为裸词保存。
+            guard let client = chat as? ReaderChatClient else {
+                throw ReaderChatClient.ReaderChatError.missingAPIKey
+            }
+            return try await CollectActions.addTextToVocab(chat: client, rawText: candidate.word)
         } catch {
             let now = Int64(Date().timeIntervalSince1970 * 1000)
             let word = speakCandidateToVocab(candidate, entry: nil, now: now)
@@ -1683,14 +2147,99 @@ final class ReaderViewModel: ObservableObject {
         return dueWords
     }
 
-    // MARK: - 键盘（空格仅阅读器内生效；J/K/L 备选；H 暂显全部译文）
+    // MARK: - 键盘（空格仅阅读器内生效；J/K/L 备选；H 暂显全部译文；Esc 统一收浮层；
+    //         滑杆聚焦时方向键/翻页键/Home/End 翻句）
+
+    /// Esc 的 keyCode（NSEvent.keyCode；字符层面 Esc 不可靠，按键码判）。
+    private static let escapeKeyCode: UInt16 = 53
+    /// READ-6 键盘滑杆的键码（NSEvent.keyCode；Fn+方向键在便携键盘上同样落这些码）。
+    private static let leftArrowKeyCode: UInt16 = 123
+    private static let rightArrowKeyCode: UInt16 = 124
+    private static let downArrowKeyCode: UInt16 = 125
+    private static let upArrowKeyCode: UInt16 = 126
+    private static let homeKeyCode: UInt16 = 115
+    private static let endKeyCode: UInt16 = 119
+    private static let pageUpKeyCode: UInt16 = 116
+    private static let pageDownKeyCode: UInt16 = 121
+
+    /// 播放条进度条是否持有键盘焦点（READ-6）。PlayBarView 的 FocusState 双向同步；
+    /// 聚焦时方向键/翻页键/Home/End 由 handleKeyDown 接管为翻句，失焦后照旧交给
+    /// 正文滚动。非 @Published：不驱动渲染，避免焦点变化引发全树重渲。
+    var playScrubberFocused = false
+
+    /// 输入焦点守卫（对齐 useEscapeClose.ts:12-13 注释：输入中按 Esc 是「撤销输入」
+    /// 而非「关浮层」）。窗口控制器派发层已挡第一道（ReaderWindowController 的本地
+    /// 监听对 NSTextView/NSTextField 聚焦时直接放行系统），这里挡第二道——
+    /// vm 被单测或其他入口直接调用时语义一致。
+    static func textInputHasFocus(in window: NSWindow?) -> Bool {
+        guard let responder = window?.firstResponder else { return false }
+        return responder is NSTextView || responder is NSTextField
+    }
+
+    /// 浮层 Esc 统一收尾（SHELL-10 / READ-10）：一次只收最上层，层序按 ReaderRootView
+    /// 的 overlay 叠放——差词抽屉（ShadowDrill.tsx:161）→ 阅读设置抽屉
+    ///（SettingsDrawer.tsx:141）→ 书架浮层（ReaderShelf.tsx:45，第一轮已落地）。
+    /// 返回 true = 已消费；false = 没有可收的浮层。
+    @discardableResult
+    func dismissTopOverlayOnEscape() -> Bool {
+        if drill.state.shown {
+            drill.close()
+            return true
+        }
+        if settingsDrawerShown {
+            settingsDrawerShown = false
+            return true
+        }
+        if folioOpen {
+            closeFolio()
+            return true
+        }
+        return false
+    }
+
+    /// READ-6 键盘滑杆按键 → 目标语（已夹到 0...total-1；nil = 不是滑杆键或无句子）：
+    /// →/↑ +1、←/↓ −1（PlayBar.tsx:227-244 的四方向同义）、PageUp/PageDown ±10、
+    /// Home 首句、End 末句。
+    static func scrubberTarget(for event: NSEvent, idx: Int, total: Int) -> Int? {
+        guard total > 0 else { return nil }
+        switch event.keyCode {
+        case rightArrowKeyCode, upArrowKeyCode:
+            return min(total - 1, idx + 1)
+        case leftArrowKeyCode, downArrowKeyCode:
+            return max(0, idx - 1)
+        case pageDownKeyCode:
+            return min(total - 1, idx + 10)
+        case pageUpKeyCode:
+            return max(0, idx - 10)
+        case homeKeyCode:
+            return 0
+        case endKeyCode:
+            return total - 1
+        default:
+            return nil
+        }
+    }
 
     func handleKeyDown(_ event: NSEvent) -> Bool {
-        if route == .review {
+        if event.keyCode == Self.escapeKeyCode {
+            // 焦点在输入框：不收浮层，交还系统行为（撤销输入/取消编辑）。
+            if Self.textInputHasFocus(in: attachedWindow) { return false }
+            if dismissTopOverlayOnEscape() { return true }
+        }
+        if route == .review || route == .notes {
+            // 「笔记与复习」三合一容器（review/notes 两条兼容路由共用一套键盘处理，
+            // 由当前档位的视图注入）。
             return reviewKeyHandler?(event) ?? false
         }
         guard route == .reading else { return false }
         readingSession.noteInteraction(now: Date.timeIntervalSinceReferenceDate)
+        // READ-6 键盘滑杆：进度条聚焦时接管翻句键，复用 jumpTo（播放中跳读、
+        // 未播放只移光标）；未聚焦时方向键照旧流向正文滚动。
+        if playScrubberFocused, let total = article?.sentences.count, total > 0,
+           let target = Self.scrubberTarget(for: event, idx: activeSentenceIdx, total: total) {
+            jumpTo(idx: target)
+            return true
+        }
         guard let key = event.charactersIgnoringModifiers?.lowercased() else { return false }
         if key == " " || key == "k" {
             togglePlayback()

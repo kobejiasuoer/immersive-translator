@@ -253,6 +253,160 @@ private extension Array where Element == String {
     }
 }
 
+// MARK: - 浮窗词典预取状态机（TranslationPanel.tsx 的 dictStatus/dictNotAWord）
+
+/// 浮窗词典预取的阶段（Windows dictStatus 的四态）。
+public enum PanelDictPhase: Equatable {
+    /// 非词条文本 / 词典卡未开启 / 模型判非词条 / 接口未配置。
+    case hidden
+    /// 后台查询中（骨架屏）。
+    case querying
+    /// 预取完成，卡片就绪可秒开。
+    case ready
+    /// 预取失败（网络错误 / 请求被取消 / 模型返回畸形 JSON 即解析 invalid），
+    /// 提供「词典查询失败 · 重试」入口。
+    case failed
+}
+
+/// 浮窗词典预取的纯状态机：把预取事件流折叠成面板需要的四态 + notAWord 判定。
+///
+/// 与解析层 `parseDictResponse` 的契约（对齐 Windows TranslationPanel.tsx:326-343）：
+/// - `.card` → ready（卡片就绪）；
+/// - `.notAWord` → hidden 且 notAWord=true（词典入口与生词本入口一起收起）；
+/// - `.invalid` → failed（畸形 JSON 是可重试的失败，不是「非词条」静默收起）；
+/// - 网络/取消抛错 → failed（重试入口），不影响主翻译结果。
+public struct PanelDictState: Equatable {
+    public private(set) var phase: PanelDictPhase = .hidden
+    /// 模型对本次文本的「非词条」判定；为 true 时生词本入口一并收起
+    /// （Windows dictNotAWord，与 phase=hidden 分开记：后者还承担「词典未开启」）。
+    public private(set) var notAWord = false
+    /// 预取成功的词典卡。
+    public private(set) var card: DictCardData?
+    /// 当前（或最近一次）查询词；空串表示没有查询。
+    public private(set) var query = ""
+
+    public init() {}
+
+    /// 新一次翻译流程开始：词典开启且文本像词条才进入查询，否则收起。
+    /// 无论走哪条分支，上一次的 notAWord 判定都随新流程复位。
+    public mutating func begin(query: String, dictEnabled: Bool, lookupLike: Bool) {
+        notAWord = false
+        card = nil
+        guard dictEnabled, lookupLike, !query.isEmpty else {
+            phase = .hidden
+            self.query = ""
+            return
+        }
+        self.query = query
+        phase = .querying
+    }
+
+    /// 用户点击「重试」：仅在失败态生效，保持查询词重新查询。
+    public mutating func retry() {
+        guard phase == .failed, !query.isEmpty else { return }
+        card = nil
+        phase = .querying
+    }
+
+    /// 应用一次预取响应的解析结果（仅查询中态接收，过期响应被忽略）。
+    public mutating func apply(_ result: DictParseResult) {
+        guard phase == .querying else { return }
+        switch result {
+        case .card(let card):
+            self.card = card
+            phase = .ready
+        case .notAWord:
+            notAWord = true
+            card = nil
+            phase = .hidden
+        case .invalid:
+            card = nil
+            phase = .failed
+        }
+    }
+
+    /// 预取失败（网络错误 / 请求被取消）→ 可重试态。
+    public mutating func fail() {
+        guard phase == .querying else { return }
+        card = nil
+        phase = .failed
+    }
+
+    /// 接口未配置：不视为失败，直接收起（对齐 Windows lookupDict 的
+    /// hasValidSettings 分支），notAWord 判定保持不变。
+    public mutating func collapse() {
+        phase = .hidden
+        query = ""
+        card = nil
+    }
+
+    /// 生词本入口可见性（Windows TranslationPanel.tsx:1075）：按文本形状
+    /// （isLookupText）出现，不跟随词典卡片开关；仅当词典管道明确判
+    /// 「非词条」时一并收起——两个入口对同一个词讲同一个故事。
+    public static func vocabEntryVisible(original: String, notAWord: Bool) -> Bool {
+        isLookupText(original) && !notAWord
+    }
+}
+
+// MARK: - 阅读室查词序号守卫（READ-9，ReaderApp.tsx:1377-1420 的 translateSeqRef 语义）
+
+/// 阅读室查词防串扰的纯判定：每次 lookup 领一个递增序号（Windows 侧
+/// `rd${++translateSeqRef.current}` 的 tag，同前缀新请求自动取消旧请求），
+/// 写回前对「票根」三重校验——
+/// 1. 序号仍是最新（期间没有更新的查词开始）；
+/// 2. 面板仍停在该请求发起时的 loading 态（query + sentenceIdx 一致；
+///    切句重查 / 点词块即时卡 / 手动关闭接管面板都算「被取代」）；
+/// 3. 文章没被切走（articleID 一致；对齐 xray 守卫 ReaderViewModel 的
+///    「切文章，作废」判定）。
+/// 任一不成立即迟到/被取消结果，丢弃不写回。与浮窗词典预取的 `PanelDictState`
+/// 互不相干：那是 TranslationPanel 的预取状态机，本类型只服务阅读室透镜卡。
+public struct DictLookupSequence: Equatable {
+    /// 最近一次发出的序号；0 = 尚未发过任何查词。
+    public private(set) var latest = 0
+
+    public init() {}
+
+    /// 新查词开始：领号并使之成为最新（调用方应同时 cancel 上一个在途 Task）。
+    @discardableResult
+    public mutating func begin() -> Int {
+        latest += 1
+        return latest
+    }
+
+    /// 一次查词的「票根」：发起时刻的序号与请求参数。
+    public struct Ticket: Equatable {
+        public let runID: Int
+        public let query: String
+        public let sentenceIdx: Int
+        /// 发起时的文章 id（切文章即作废）；nil = 发起时无文章，按 nil 比对。
+        public let articleID: String?
+
+        public init(runID: Int, query: String, sentenceIdx: Int, articleID: String?) {
+            self.runID = runID
+            self.query = query
+            self.sentenceIdx = sentenceIdx
+            self.articleID = articleID
+        }
+    }
+
+    /// 写回前校验。
+    /// - Parameters:
+    ///   - panelLoading: 面板当前若为 loading 态则给其 (query, sentenceIdx)，否则 nil。
+    ///   - currentArticleID: 当前文章 id。
+    public func accepts(
+        _ ticket: Ticket,
+        panelLoading: (query: String, sentenceIdx: Int)?,
+        currentArticleID: String?
+    ) -> Bool {
+        guard ticket.runID == latest else { return false }              // 已被更新的查词取代
+        guard let panelLoading,
+              panelLoading.query == ticket.query,
+              panelLoading.sentenceIdx == ticket.sentenceIdx else { return false } // 面板已易主
+        guard currentArticleID == ticket.articleID else { return false } // 切文章，作废
+        return true
+    }
+}
+
 // MARK: - 例句高亮切分（dictCard.splitByWord）
 
 public struct SplitPart: Equatable {
@@ -353,6 +507,26 @@ public enum QuickAction: String, CaseIterable, Equatable {
         case .grammar: return "解释语法"
         case .summarize: return "总结"
         case .rephrase: return "换种说法"
+        }
+    }
+
+    /// 动作按钮提示（对齐 Windows QUICK_ACTIONS 的 title）。
+    public var quickActionHelp: String {
+        switch self {
+        case .polish: return "在保持原意的前提下让译文更通顺自然"
+        case .grammar: return "拆解原文句子结构与语法点"
+        case .summarize: return "用要点概括原文内容"
+        case .rephrase: return "给出 3 种不同风格的备选译文"
+        }
+    }
+
+    /// 动作区标签/按钮的 SF Symbol（对齐 Windows QUICK_ACTIONS 图标语义）。
+    public var systemImage: String {
+        switch self {
+        case .polish: return "sparkles"
+        case .grammar: return "book"
+        case .summarize: return "list.bullet"
+        case .rephrase: return "shuffle"
         }
     }
 }

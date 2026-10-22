@@ -51,6 +51,62 @@ final class XfyunCoreTests: XCTestCase {
         XCTAssertNotEqual(a, ttsCacheKey(text: "hello", opts: XfyunTtsOptions(vcn: "catherine", volume: 50)))
     }
 
+    // MARK: SPEAK-8 - 原生慢速（rate → business.speed）：对齐 xfyunTts.ts:85-109,127-135
+
+    /// SSML 百分比 → business.speed：-25% → 38；+0% → 50；非法回落 50；两端钳位 0–100。
+    func testSpeedFromRatePercent() {
+        XCTAssertEqual(speedFromRatePercent("-25%"), 38)   // Math.round(37.5) = 38
+        XCTAssertEqual(speedFromRatePercent("+0%"), 50)
+        XCTAssertEqual(speedFromRatePercent("0%"), 50)
+        XCTAssertEqual(speedFromRatePercent("+50%"), 75)
+        XCTAssertEqual(speedFromRatePercent("-50%"), 25)
+        XCTAssertEqual(speedFromRatePercent("+100%"), 100)
+        XCTAssertEqual(speedFromRatePercent("+150%"), 100)  // 上钳 100
+        XCTAssertEqual(speedFromRatePercent("-200%"), 0)    // 下钳 0
+        XCTAssertEqual(speedFromRatePercent("abc"), 50)     // parseFloat NaN → 50
+        XCTAssertEqual(speedFromRatePercent(""), 50)
+        XCTAssertEqual(speedFromRatePercent("-12.5%"), 44)  // 43.75 → 44
+    }
+
+    /// 缺省不传 rate：帧 speed 恒 50，与旧帧逐字节一致；传 rate 才映射进 business.speed。
+    func testBuildTtsRequestFrameSpeedDefaultsAndNativeRate() throws {
+        let legacy = buildTtsRequestFrame(appId: "app1", text: "hello", opts: XfyunTtsOptions(vcn: "catherine"))
+        let legacyObj = try XCTUnwrap(XfyunJSON.parse(legacy))
+        XCTAssertEqual((legacyObj["business"] as? [String: Any])?["speed"] as? Int, 50)
+        // 与「不知道 rate 字段」的旧构造完全同一帧
+        XCTAssertEqual(legacy, buildTtsRequestFrame(appId: "app1", text: "hello", opts: XfyunTtsOptions(vcn: "catherine", volume: 50, rate: nil)))
+
+        let slow = buildTtsRequestFrame(
+            appId: "app1", text: "hello",
+            opts: XfyunTtsOptions(vcn: "catherine", rate: speedFromRatePercent("-25%"))
+        )
+        let slowObj = try XCTUnwrap(XfyunJSON.parse(slow))
+        XCTAssertEqual((slowObj["business"] as? [String: Any])?["speed"] as? Int, 38)
+        // 钳位：越界 rate 不会写出非法 speed
+        let clamped = buildTtsRequestFrame(appId: "a", text: "x", opts: XfyunTtsOptions(vcn: "catherine", rate: 999))
+        XCTAssertEqual((XfyunJSON.parse(clamped)?["business"] as? [String: Any])?["speed"] as? Int, 100)
+    }
+
+    /// 缓存键：缺省 rate 不入键（与旧 key 完全一致，老缓存不失效）；传 rate 才拼 `|r<rate>`，
+    /// 同词常速/慢速可共存互不污染。
+    func testTtsCacheKeyWithNativeRateIsDistinct() {
+        let legacy = "catherine|50|hello"
+        XCTAssertEqual(ttsCacheKey(text: "hello", opts: XfyunTtsOptions(vcn: "catherine")), legacy)
+        XCTAssertEqual(ttsCacheKey(text: "hello", opts: XfyunTtsOptions(vcn: "catherine", volume: 50, rate: nil)), legacy)
+        let slow = ttsCacheKey(text: "hello", opts: XfyunTtsOptions(vcn: "catherine", rate: 38))
+        XCTAssertEqual(slow, "catherine|50|r38|hello")
+        XCTAssertNotEqual(slow, legacy)
+        XCTAssertNotEqual(slow, ttsCacheKey(text: "hello", opts: XfyunTtsOptions(vcn: "catherine", rate: 50)))
+        // 显式 rate 50 虽与缺省合成等价，但按 Windows 语义仍是独立键（`opts.rate === undefined` 才省略）
+        XCTAssertEqual(ttsCacheKey(text: "hello", opts: XfyunTtsOptions(vcn: "catherine", rate: 50)), "catherine|50|r50|hello")
+        // L1 LRU 两份并存
+        let cache = TtsLruCache(limit: 8)
+        cache.set(legacy, Data([1]))
+        cache.set(slow, Data([2]))
+        XCTAssertEqual(cache.get(legacy), Data([1]))
+        XCTAssertEqual(cache.get(slow), Data([2]))
+    }
+
     func testTtsLruCacheEviction() {
         let cache = TtsLruCache(limit: 3)
         cache.set("a", Data([1]))

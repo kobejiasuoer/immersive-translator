@@ -248,6 +248,8 @@ struct ShadowDrillOverlay: View {
                     Color.black.opacity(0.32)
                         .contentShape(Rectangle())
                         // 点击遮罩不关闭（Windows backdrop 无点击关闭）：退出走 ✕/结束
+                        // 或 Esc（SHELL-10：vm.handleKeyDown 统一派发链的 drill 分支，
+                        // 对齐 ShadowDrill.tsx:161 useEscapeClose；焦点在输入框时除外）。
                     ShadowDrillSheet(vm: vm)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -292,6 +294,10 @@ private struct ShadowDrillSheet: View {
                         Rectangle().fill(palette.border).frame(height: 1)
                     }
             )
+            // role="dialog" aria-modal aria-label="只练差的词"（ShadowDrill.tsx:163）的可读对应物。
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("只练差的词")
+            .accessibilityAddTraits(.isModal)
         }
     }
 
@@ -322,6 +328,7 @@ private struct ShadowDrillSheet: View {
             }
             .buttonStyle(.plain)
             .help("退出词练")
+            .accessibilityLabel("退出词练")
         }
     }
 

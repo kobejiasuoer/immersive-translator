@@ -97,4 +97,79 @@ final class ReaderSettingsEdgeTests: XCTestCase {
         XCTAssertEqual(merged.edgeVoiceZh, "zh-CN-YunyangNeural")
         XCTAssertEqual(merged.edgeVoiceEn, "en-US-GuyNeural")
     }
+
+    // MARK: - v0.8 画报字段（spotlightMode / spreadLayout）三向量
+
+    /// 向量 1：缺省回落——老 JSON 无这两个字段，读出来 nil，生效值 false / prose。
+    func testSpreadAndSpotlightDefaultToNilAndFallBack() throws {
+        XCTAssertNil(ReaderSettings.default.spotlightMode)
+        XCTAssertNil(ReaderSettings.default.spreadLayout)
+        XCTAssertEqual(ReaderSettings.default.spotlightEnabled, false)
+        XCTAssertEqual(ReaderSettings.default.effectiveSpreadLayout, .prose)
+
+        // 老数据：JSON 完全没有 v0.8 字段 → 双向兼容，合并后仍是缺省。
+        let legacy = #"{"contrastMode":"en","fontSize":19}"#
+        let override = try ReaderFileCodec.decode(ReaderSettingsOverride.self, from: Data(legacy.utf8))
+        XCTAssertNil(override.spotlightMode)
+        XCTAssertNil(override.spreadLayout)
+        let merged = mergeReaderSettings(.default, override)
+        XCTAssertEqual(merged.spotlightEnabled, false)
+        XCTAssertEqual(merged.effectiveSpreadLayout, .prose)
+        XCTAssertEqual(merged.contrastMode, .en)
+    }
+
+    /// 向量 2：合法覆盖——merge 应用、patch 产出、全局落盘回读闭环。
+    func testSpreadAndSpotlightLegalOverrideRoundtrip() throws {
+        var override = ReaderSettingsOverride()
+        override.spreadLayout = "parallel"
+        override.spotlightMode = true
+        let merged = mergeReaderSettings(.default, override)
+        XCTAssertTrue(merged.spotlightEnabled)
+        XCTAssertEqual(merged.effectiveSpreadLayout, .parallel)
+
+        // patch 只含变化字段，apply 回覆盖后再合并保持。
+        var base = ReaderSettings.default
+        base.spotlightMode = true
+        base.spreadLayout = .parallel
+        let patch = readerSettingsPatch(from: ReaderSettings.default, to: base)
+        XCTAssertEqual(patch["spotlightMode"] as? Bool, true)
+        XCTAssertEqual(patch["spreadLayout"] as? String, "parallel")
+
+        var applied = ReaderSettingsOverride()
+        applied.apply(patch: patch)
+        XCTAssertEqual(mergeReaderSettings(.default, applied), mergeReaderSettings(.default, override))
+
+        // 全局设置真实落盘路径：存 ReaderSettings → 读 ReaderSettingsOverride → 合并。
+        let data = try ReaderFileCodec.encode(base)
+        let reread = try ReaderFileCodec.decode(ReaderSettingsOverride.self, from: data)
+        let remerged = mergeReaderSettings(.default, reread)
+        XCTAssertTrue(remerged.spotlightEnabled)
+        XCTAssertEqual(remerged.effectiveSpreadLayout, .parallel)
+
+        // 归位回 nil 时 patch 写出生效默认值（false / prose）。
+        let resetPatch = readerSettingsPatch(from: base, to: ReaderSettings.default)
+        XCTAssertEqual(resetPatch["spotlightMode"] as? Bool, false)
+        XCTAssertEqual(resetPatch["spreadLayout"] as? String, "prose")
+    }
+
+    /// 向量 3：非法值忽略——spreadLayout 非法字符串不落，回落缺省 prose。
+    func testSpreadLayoutIllegalValueIgnored() throws {
+        var override = ReaderSettingsOverride()
+        override.spreadLayout = "diagonal"  // schema 枚举外
+        let merged = mergeReaderSettings(.default, override)
+        XCTAssertEqual(merged.effectiveSpreadLayout, .prose)
+        XCTAssertNil(merged.spreadLayout)
+
+        // 坏 JSON 字段解码不炸、类型不符也不落（Bool 塞 String 位 / 反之）。
+        let raw = #"{"spreadLayout":42,"spotlightMode":"yes"}"#
+        let bad = try ReaderFileCodec.decode(ReaderSettingsOverride.self, from: Data(raw.utf8))
+        XCTAssertNil(bad.spreadLayout)
+        XCTAssertNil(bad.spotlightMode)
+
+        // 枚举与标签（刊头开关文案对齐 Windows ReadingView.tsx:585）。
+        XCTAssertEqual(SpreadLayout.prose.label, "段落")
+        XCTAssertEqual(SpreadLayout.parallel.label, "双语对照")
+        XCTAssertEqual(SpreadLayout.prose.next, .parallel)
+        XCTAssertEqual(SpreadLayout.parallel.next, .prose)
+    }
 }
