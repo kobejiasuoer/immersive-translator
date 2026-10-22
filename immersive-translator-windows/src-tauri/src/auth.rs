@@ -132,8 +132,16 @@ pub trait AuthTransport: Send + Sync {
 /// dev/联调缺省（§4.6 第 2 层）；生产由 `app_data_dir/server_endpoint.json` 覆盖。
 const DEV_BASE_URL: &str = "http://127.0.0.1:8090";
 
+/// 沉浸云是否对公众开放：**服务端公开部署上线后改为 `true`（唯一开关）**，
+/// 同时把 `DEV_BASE_URL` 换成生产域名（开发机再用 server_endpoint.json
+/// 指回本地）。在此之前仅本机显式配置了 override 的开发/内测机可见入口。
+const PLATFORM_PUBLIC: bool = false;
+
 struct ReqwestTransport {
     base_url: String,
+    /// 沉浸云入口开放性（PLATFORM_PUBLIC || 本机 override 存在）。
+    /// 关闭时 `base_url()` 返回 None——网关派生、设置页展示与预设匹配整体退出。
+    platform_available: bool,
     client: reqwest::Client,
 }
 
@@ -141,6 +149,26 @@ struct ReqwestTransport {
 #[serde(rename_all = "camelCase")]
 struct EndpointOverride {
     base_url: String,
+}
+
+/// 读 §4.6 第 1 层覆盖文件：存在且 baseUrl 非空返回 Some(baseUrl)。
+fn endpoint_override(app: &AppHandle) -> Option<String> {
+    let from_file = app.path().app_data_dir().ok().and_then(|dir| {
+        std::fs::read_to_string(dir.join("server_endpoint.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<EndpointOverride>(&text).ok())
+            .map(|e| e.base_url)
+    });
+    from_file
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty())
+}
+
+/// 沉浸云入口开放判定：公众开关 OR 本机 override（开发/内测机）。
+/// v0.10.1 事故修正：服务端未公开部署前，公众机器上入口必须不可见，
+/// 避免给出选中即失败的配置。
+fn platform_available(app: &AppHandle) -> bool {
+    PLATFORM_PUBLIC || endpoint_override(app).is_some()
 }
 
 impl ReqwestTransport {
@@ -151,29 +179,29 @@ impl ReqwestTransport {
             .map_err(|e| AuthError::local("unknown", format!("构建 HTTP 客户端失败: {e}")))?;
         Ok(Self {
             base_url: base_url.trim_end_matches('/').to_string(),
+            platform_available: false,
             client,
         })
+    }
+
+    /// 生产构造：base 经 §4.6 两层机制解析，并按沉浸云开放性决定
+    /// 是否对外暴露 base（网关派生用）。auth 登录链路不受此开关影响。
+    fn from_app(app: &AppHandle) -> Result<Self, AuthError> {
+        let mut t = Self::new(Self::resolve_base_url(app))?;
+        t.platform_available = platform_available(app);
+        Ok(t)
     }
 
     /// §4.6 base_url 两层机制：`app_data_dir/server_endpoint.json`
     /// （`{"baseUrl":"https://..."}`，明文非敏感）存在则覆盖 dev 缺省。
     fn resolve_base_url(app: &AppHandle) -> String {
-        let from_file = app.path().app_data_dir().ok().and_then(|dir| {
-            std::fs::read_to_string(dir.join("server_endpoint.json"))
-                .ok()
-                .and_then(|text| serde_json::from_str::<EndpointOverride>(&text).ok())
-                .map(|e| e.base_url)
-        });
-        from_file
-            .map(|u| u.trim().to_string())
-            .filter(|u| !u.is_empty())
-            .unwrap_or_else(|| DEV_BASE_URL.to_string())
+        endpoint_override(app).unwrap_or_else(|| DEV_BASE_URL.to_string())
     }
 }
 
 impl AuthTransport for ReqwestTransport {
     fn base_url(&self) -> Option<String> {
-        Some(self.base_url.clone())
+        self.platform_available.then(|| self.base_url.clone())
     }
 
     fn send(
@@ -769,7 +797,9 @@ impl TokenManager {
     }
 
     /// 沉浸云 gateway endpoint（OpenAI 兼容别名 `/v1/chat/completions`）。
-    /// 由 transport 的 base_url 派生；测试桩等无 base 实现返回 None。
+    /// 由 transport 的 base_url 派生；沉浸云未开放（PLATFORM_PUBLIC=false
+    /// 且本机无 override）或测试桩等无 base 实现时返回 None——
+    /// translate_stream 据此把请求按普通第三方 endpoint 处理。
     pub fn gateway_endpoint(&self) -> Option<String> {
         self.transport
             .base_url()
@@ -796,7 +826,7 @@ fn device_payload() -> serde_json::Value {
 /// 构造生产用 TokenManager（ReqwestTransport + DpapiTokenStore）。
 /// base_url 经 §4.6 两层机制解析。需在 setup（有 AppHandle）里 manage。
 pub(crate) fn build_token_manager(app: &AppHandle) -> Result<Arc<TokenManager>, AuthError> {
-    let transport = ReqwestTransport::new(ReqwestTransport::resolve_base_url(app))?;
+    let transport = ReqwestTransport::from_app(app)?;
     let store = DpapiTokenStore::new(app.clone());
     Ok(Arc::new(TokenManager::new(
         Arc::new(transport),
@@ -982,10 +1012,11 @@ pub async fn auth_fetch_server_config(
 }
 
 /// 服务端 base URL（§4.6 两层机制：server_endpoint.json 覆盖 dev 缺省）。
-/// 前端设置页用它拼沉浸云 gateway endpoint（展示 + 预设匹配），只读非敏感。
+/// 沉浸云未开放（服务端未公开部署且本机无 override）时返回 None——
+/// 前端据此隐藏沉浸云入口，不再给出选中即失败的配置。只读非敏感。
 #[tauri::command]
-pub fn auth_server_base_url(app: AppHandle) -> String {
-    ReqwestTransport::resolve_base_url(&app)
+pub fn auth_server_base_url(app: AppHandle) -> Option<String> {
+    platform_available(&app).then(|| ReqwestTransport::resolve_base_url(&app))
 }
 
 /// 启动静默续登录（§4.4）：预填内存态 → emit 已登录（离线也显示已登录）

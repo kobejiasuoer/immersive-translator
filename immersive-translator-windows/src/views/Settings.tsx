@@ -17,7 +17,6 @@ import {
   PROVIDER_PRESETS,
   isLocalhostEndpoint,
   PLATFORM_PROVIDER_ID,
-  PLATFORM_DEV_BASE_URL,
   platformEndpoint,
   type ProviderPreset,
 } from "../core/providerPresets";
@@ -145,7 +144,9 @@ export function Settings() {
   // ---- 沉浸云（平台网关）----
   // endpoint = auth 同源 base + /v1/chat/completions（Rust 侧同构派生与识别）；
   // 模型列表来自 /v1/me/config（登录后才可拉），作为模型下拉建议。
-  const [platformBase, setPlatformBase] = useState<string>("");
+  // platformBase === null = 沉浸云未开放（服务端未公开部署且本机无
+  // server_endpoint.json）：整个「官方云服务」分组隐藏，不给可选即失败的配置。
+  const [platformBase, setPlatformBase] = useState<string | null>(null);
   const [platformModels, setPlatformModels] = useState<string[]>([]);
   useEffect(() => {
     let active = true;
@@ -153,12 +154,12 @@ export function Settings() {
       .then((base) => {
         if (active) setPlatformBase(base);
       })
-      .catch(() => setPlatformBase(PLATFORM_DEV_BASE_URL));
+      .catch(() => setPlatformBase(null));
     return () => {
       active = false;
     };
   }, []);
-  const platformEp = platformBase ? platformEndpoint(platformBase) : "";
+  const platformEp = platformBase ? platformEndpoint(platformBase) : undefined;
   const loggedIn = accountStatus?.loggedIn ?? false;
   useEffect(() => {
     if (!loggedIn) {
@@ -223,7 +224,7 @@ export function Settings() {
   }
 
   /** 当前服务商 id（与 vault 桶一致）。 */
-  const activeProviderId = providerIdFor(settings, platformEp || undefined);
+  const activeProviderId = providerIdFor(settings, platformEp);
   const activePreset = PROVIDER_PRESETS.find((p) => p.id === activeProviderId);
   const isPlatform = activeProviderId === PLATFORM_PROVIDER_ID;
   const currentIsLocal = isPlatform || (activePreset?.allowEmptyApiKey ?? isLocalhostEndpoint(settings.endpoint));
@@ -242,8 +243,10 @@ export function Settings() {
   /** 点服务商行：切换 endpoint + 模型 + 该服务商自己的 Key。 */
   function applyPreset(p: ProviderPreset) {
     if (p.id === PLATFORM_PROVIDER_ID) {
-      // 沉浸云：endpoint 由 auth 同源 base 动态拼出；模型取服务端下发列表第一个
-      const ep = platformEp || platformEndpoint(PLATFORM_DEV_BASE_URL);
+      // 沉浸云：endpoint 由 auth 同源 base 动态拼出；模型取服务端下发列表第一个。
+      // 未开放时入口已隐藏，这里防御性直接返回（不回退本地联调地址）。
+      const ep = platformEp;
+      if (!ep) return;
       setSettings((prev) => ({
         ...prev,
         providerId: p.id,
@@ -544,6 +547,7 @@ export function Settings() {
             <div className="provider-workspace">
               <section className="provider-selection">
                 <div role="radiogroup" aria-label="翻译服务商">
+                  {platformBase !== null && (
                   <div className="provider-group">
                     <div className="settings-section-heading">
                       <div>
@@ -583,6 +587,7 @@ export function Settings() {
                       )}
                     </button>
                   </div>
+                  )}
 
                   <div className="provider-group">
                     <div className="settings-section-heading">
