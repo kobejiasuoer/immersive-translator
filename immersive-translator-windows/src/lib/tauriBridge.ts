@@ -501,9 +501,10 @@ export function authFetchServerConfig(): Promise<unknown> {
   return invoke("auth_fetch_server_config");
 }
 
-/** 服务端 base URL（§4.6 两层机制解析结果，非敏感）。设置页用它拼沉浸云网关地址。 */
-export function authServerBaseUrl(): Promise<string> {
-  return invoke<string>("auth_server_base_url");
+/** 服务端 base URL（§4.6 两层机制解析结果，非敏感）。沉浸云未开放（服务端
+ *  未公开部署且本机无 server_endpoint.json）时返回 null——设置页据此隐藏入口。 */
+export function authServerBaseUrl(): Promise<string | null> {
+  return invoke<string | null>("auth_server_base_url");
 }
 
 /** 打开（或聚焦）登录窗口。 */
