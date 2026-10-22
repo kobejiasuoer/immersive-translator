@@ -23,7 +23,9 @@ import {
 import type { Article, ReaderSettings, SentenceChunk, SentencePair } from "../core/readerTypes";
 import type { WordMark } from "../core/pronunciation";
 import { extractSelectionText } from "../core/readerDict";
-import { buildSentenceSpans, findChunkRange, splitBySpans, type ChunkSpan } from "../core/chunkAnnotate";
+import { buildSentenceSpans, findChunkRange, splitBySpans, type ChunkSpan, type SpanSegment } from "../core/chunkAnnotate";
+import { firstLetters, judgeCloze, type RecallVerdict } from "../core/recallJudge";
+import { pickClozeSlots, type ClozeSlot } from "../core/clozeSlots";
 
 interface Props {
   article: Article | null;
@@ -78,12 +80,24 @@ interface Props {
   onPracticeChapter?: () => void;
   /** 透镜卡结构拆解悬停中的片段（优先级高于词块着色，回标原文）。 */
   hoveredClause: string | null;
+  /** 随读抽查：读到哪的水位线（progress.sentenceIdx，单调递增）——只挖已读句。 */
+  readWatermark: number;
+  /** 随读抽查判分回调：known 槽联动 SRS 与错题桶（ReaderApp 侧限幅）。 */
+  onClozeVerdict?: (slot: ClozeSlot, verdict: RecallVerdict) => void;
 }
 
 const WORD_CHARS = /[A-Za-z0-9'’-]/;
 
 const NO_SPANS: ChunkSpan[] = [];
 const NO_IDS: ReadonlySet<string> = new Set<string>();
+
+/** 随读抽查印章文案（judgeCloze 四档）。 */
+const VERDICT_LABEL: Record<RecallVerdict, string> = {
+  perfect: "命中",
+  close: "接近",
+  trap: "陷阱",
+  wrong: "未中",
+};
 
 export function ReadingView(props: Props) {
   const { article, settings, activeIdx, translating, chunking, peekAll, searchMatchIdx } = props;
@@ -116,6 +130,36 @@ export function ReadingView(props: Props) {
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [article?.id, article?.sentences, settings.chunkHighlight, settings.showVocabMarks, props.knownIds]);
+
+  // ---- 随读抽查（原位挖空微测）----
+  const quizOn = settings.spotQuizMode ?? false;
+  /** 已读句的挖空槽（每段一槽；开关关闭时恒为空集，正文零残留）。 */
+  const clozeSlots = useMemo(() => {
+    if (!quizOn || !article) return new Map<number, ClozeSlot>();
+    return pickClozeSlots(spansBySentence, article.sentences, props.readWatermark);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quizOn, article, spansBySentence, props.readWatermark]);
+
+  /** 槽位作答状态（usedHint 在判分前就要记，verdict 判分后写入）。 */
+  const [clozeState, setClozeState] = useState<Record<string, { usedHint: boolean; verdict?: RecallVerdict; input?: string }>>({});
+  const [clozeToasts, setClozeToasts] = useState<{ key: number; word: string; label: string; tone: RecallVerdict }[]>([]);
+  const clozeToastSeq = useRef(0);
+
+  const clozeTally = useMemo(() => {
+    let hit = 0;
+    let close = 0;
+    let trap = 0;
+    let done = 0;
+    for (const slot of clozeSlots.values()) {
+      const v = clozeState[slot.id]?.verdict;
+      if (!v) continue;
+      done += 1;
+      if (v === "perfect") hit += 1;
+      else if (v === "close") close += 1;
+      else if (v === "trap") trap += 1;
+    }
+    return { hit, close, trap, done, todo: clozeSlots.size - done };
+  }, [clozeSlots, clozeState]);
 
   // 当前句滚动跟随（播放或光标移动时）。
   useEffect(() => {
@@ -184,6 +228,8 @@ export function ReadingView(props: Props) {
   }, [article?.id]);
 
   function handleMouseUp(e: ReactMouseEvent<HTMLDivElement>) {
+    // 挖空输入框内的选词不是划选查词，先让路。
+    if ((e.target as HTMLElement).closest("input, textarea, .cloze")) return;
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed) return;
     const text = extractSelectionText(sel.toString());
@@ -248,6 +294,109 @@ export function ReadingView(props: Props) {
   const showResume = resumeIdx > 0 && resumeIdx < total;
   const readMinutes = Math.max(1, Math.round(article.wordCount / 200));
 
+  /** 随读抽查：提交判分（judgeCloze 本地判；用过提示的 perfect 降档为 close）。 */
+  function commitCloze(slot: ClozeSlot, raw: string) {
+    const verdict0 = judgeCloze(raw, slot.answer, slot.trap ? { trap: slot.trap } : undefined);
+    if (!verdict0) return;
+    const usedHint = !!clozeState[slot.id]?.usedHint;
+    const verdict: RecallVerdict = usedHint && verdict0 === "perfect" ? "close" : verdict0;
+    setClozeState((prev) => ({ ...prev, [slot.id]: { usedHint, verdict, input: raw.trim() } }));
+    pushClozeToast(slot, verdict);
+    props.onClozeVerdict?.(slot, verdict);
+  }
+
+  /** 判分后的胶带小条（左下角，最多 3 条，3.2s 自动退场）。 */
+  function pushClozeToast(slot: ClozeSlot, verdict: RecallVerdict) {
+    const key = ++clozeToastSeq.current;
+    const label = slot.isKnown
+      ? verdict === "perfect" || verdict === "close"
+        ? "已记入复习 · 良好"
+        : "已记入复习 · 需复习"
+      : "抽查完成";
+    setClozeToasts((t) => [...t.slice(-2), { key, word: slot.answer, label, tone: verdict }]);
+    window.setTimeout(() => setClozeToasts((t) => t.filter((x) => x.key !== key)), 3200);
+  }
+
+  /**
+   * 词块/生词跨度段的渲染：随读抽查开启且该段命中本句槽位时，
+   * 渲染行内挖空输入（未答）或印章结果（已答）；其余照旧 chunk-hl。
+   * 输入为非受控（defaultValue 不设、Enter 时现读 value），避免重绘打断打字。
+   */
+  const renderSpanSeg = (s: SentencePair, seg: SpanSegment, i: number): ReactNode => {
+    if (!seg.span) return seg.text;
+    const slot = quizOn ? clozeSlots.get(s.idx) : undefined;
+    if (slot && slot.start === seg.span.start && slot.end === seg.span.end) {
+      const st = clozeState[slot.id];
+      if (st?.verdict) {
+        const bad = st.verdict === "trap" || st.verdict === "wrong";
+        return (
+          <span className="cloze" key={i}>
+            <span className={`cloze-done verdict-${st.verdict}`}>
+              {bad && st.input ? <span className="cloze-wrong">{st.input}</span> : null}
+              {seg.text}
+            </span>
+            <span className={`cloze-stamp s-${st.verdict}`}>{VERDICT_LABEL[st.verdict]}</span>
+            {bad && (slot.trap || slot.gloss) ? (
+              <span className="cloze-note">{slot.trap ? `陷阱 · ${slot.trap}` : `释义 · ${slot.gloss}`}</span>
+            ) : null}
+          </span>
+        );
+      }
+      return (
+        <span className={`cloze${props.peekAll ? " peeked" : ""}`} key={i} data-answer={slot.answer}>
+          <input
+            className="cloze-input"
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            aria-label={`补全挖空的${slot.isKnown ? "生词" : "词块"}：${firstLetters(slot.answer)}`}
+            style={{ width: `calc(${Math.max(slot.answer.length, 5)}ch * 0.62 + 18px)` }}
+            onKeyDown={(e) => {
+              // 输入槽自接管按键：空格打字不触发全局连播，Enter 判分。
+              e.stopPropagation();
+              if (e.key === "Enter") commitCloze(slot, e.currentTarget.value);
+              else if (e.key === "Escape") e.currentTarget.blur();
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            className="cloze-hint-btn"
+            type="button"
+            title="首字母提示（命中会降档为「接近」）"
+            aria-label="首字母提示"
+            onClick={(e) => {
+              e.stopPropagation();
+              const wrap = e.currentTarget.closest(".cloze");
+              const inp = wrap?.querySelector("input") as HTMLInputElement | null;
+              if (inp) {
+                inp.value = firstLetters(slot.answer);
+                inp.focus();
+              }
+              setClozeState((prev) => ({ ...prev, [slot.id]: { usedHint: true } }));
+            }}
+          >
+            ?
+          </button>
+        </span>
+      );
+    }
+    return (
+      <span
+        key={i}
+        className={`chunk-hl${seg.span.kind === "known" ? " known" : ""}`}
+        title={seg.span.chunk ? "词块 · 点击查看" : "生词再现 · 点击查词典"}
+        onClick={(e) => {
+          // 词块 span 自接管点击，避免触发句级点词查词/定位。
+          e.stopPropagation();
+          if (seg.span!.chunk) props.onChunkClick(s.idx, seg.span!.chunk);
+          else props.onSelection(s.idx, seg.text);
+        }}
+      >
+        {seg.text}
+      </span>
+    );
+  };
+
   /** 正文英文的装饰渲染（悬停意群 > 跟读着色 > 词块/生词跨度 > 纯文本）。 */
   const decorateEn = (s: SentencePair, withDropCap: boolean): ReactNode[] => {
     const hovered = props.hoveredClause;
@@ -270,27 +419,7 @@ export function ReadingView(props: Props) {
     } else {
       const spans = spansBySentence.get(s.idx) ?? NO_SPANS;
       nodes =
-        spans.length === 0
-          ? [s.en]
-          : splitBySpans(s.en, spans).map((seg, i) =>
-              seg.span ? (
-                <span
-                  key={i}
-                  className={`chunk-hl${seg.span.kind === "known" ? " known" : ""}`}
-                  title={seg.span.chunk ? "词块 · 点击查看" : "生词再现 · 点击查词典"}
-                  onClick={(e) => {
-                    // 词块 span 自接管点击，避免触发句级点词查词/定位。
-                    e.stopPropagation();
-                    if (seg.span!.chunk) props.onChunkClick(s.idx, seg.span!.chunk);
-                    else props.onSelection(s.idx, seg.text);
-                  }}
-                >
-                  {seg.text}
-                </span>
-              ) : (
-                seg.text
-              ),
-            );
+        spans.length === 0 ? [s.en] : splitBySpans(s.en, spans).map((seg, i) => renderSpanSeg(s, seg, i));
     }
     return withDropCap ? applyDropCap(nodes) : nodes;
   };
@@ -591,6 +720,13 @@ export function ReadingView(props: Props) {
               >
                 译文：{maskOn ? "隐藏" : "显示"}
               </button>
+              <button
+                className={`text-action-btn${quizOn ? " cloze-switch-on" : ""}`}
+                onClick={() => props.onPatchSettings({ spotQuizMode: !quizOn })}
+                title="已读句的词块/生词变行内填空：Enter 判分 · ? 首字母提示 · 按住 H 显影。只考读过的句子，本地判分不耗流量"
+              >
+                随读抽查：{quizOn ? "开" : "关"}
+              </button>
             </div>
           </div>
 
@@ -614,6 +750,14 @@ export function ReadingView(props: Props) {
               </div>
             ) : (
               <span className="masthead-cn-text" />
+            )}
+            {quizOn && clozeSlots.size > 0 && (
+              <span
+                className="cloze-meter tabular"
+                title="随读抽查战绩：命中 · 接近 · 陷阱 · 待答"
+              >
+                抽查 {clozeTally.hit} 命中 · {clozeTally.close} 接近 · {clozeTally.trap} 陷阱 · 剩 {clozeTally.todo}
+              </span>
             )}
             {props.onPracticeChapter && (
               <button className="pill-Ghost-btn active-lens" onClick={props.onPracticeChapter} title="带着本章内容去口语陪练">
@@ -680,6 +824,15 @@ export function ReadingView(props: Props) {
             </div>
           )}
         </article>
+      </div>
+
+      <div className="cloze-toast-layer" aria-live="polite">
+        {clozeToasts.map((t) => (
+          <span key={t.key} className={`cloze-toast tone-${t.tone}`}>
+            <i className="t-dot" aria-hidden />
+            {t.word} · {t.label}
+          </span>
+        ))}
       </div>
     </div>
   );

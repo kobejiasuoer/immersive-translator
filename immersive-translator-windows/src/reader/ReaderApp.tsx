@@ -15,7 +15,6 @@ import {
   onTranslationError,
   takePendingOpenBook,
   takePendingReaderImport,
-  takePendingOpenReview,
   translateStream,
 } from "../lib/tauriBridge";
 import { loadSettingsAsync, hasValidSettings } from "../lib/settingsStore";
@@ -74,6 +73,7 @@ import {
   type VocabWord,
 } from "../core/readerTypes";
 import type { RecallVerdict } from "../core/recallJudge";
+import { clozeVerdictToGrade, type ClozeSlot } from "../core/clozeSlots";
 import type { ReviewLogFile } from "../core/readerSrs";
 import {
   buildParagraphRequestInput,
@@ -1117,16 +1117,6 @@ export function ReaderApp() {
       } catch (error) {
         console.error("[reader] take pending import failed", error);
       }
-      // 托盘「生词本」路径：窗口重建时取走「打开复习页」请求（v0.8 落地 vault 挑战模式）。
-      try {
-        if (await takePendingOpenReview()) {
-          setVaultMode("challenge");
-          setView("vault");
-          return;
-        }
-      } catch (error) {
-        console.error("[reader] take pending open review failed", error);
-      }
       // 提醒卡「继续阅读」路径：窗口重建时取走书级断点直达请求。
       try {
         const bookId = await takePendingOpenBook();
@@ -1165,17 +1155,6 @@ export function ReaderApp() {
       else u();
     });
 
-    // 托盘「生词本」（窗口已存在时）：切到复习页（v0.8 = vault 挑战模式）
-    let unlistenOpenReview: (() => void) | undefined;
-    listen("reader:open-review", () => {
-      setFocusIds(null);
-      setVaultMode("challenge");
-      setView("vault");
-    }).then((u) => {
-      if (active) unlistenOpenReview = u;
-      else u();
-    });
-
     // 划词浮窗「加入生词本」：刷新生词与到期徽标
     let unlistenVocab: (() => void) | undefined;
     listen("reader:vocab-added", () => {
@@ -1207,7 +1186,6 @@ export function ReaderApp() {
       active = false;
       unlistenArticle?.();
       unlistenImport?.();
-      unlistenOpenReview?.();
       unlistenVocab?.();
       unlistenCreds?.();
       unlistenOpenBook?.();
@@ -1576,6 +1554,23 @@ export function ReaderApp() {
     [],
   );
 
+  /**
+   * 随读抽查判分：只有生词再现槽联动 SRS（限幅：即时回忆最高只记 good，
+   * 防刚见过的词推高间隔——见 clozeSlots.clozeVerdictToGrade）；
+   * 词块槽不进生词本，纯在正文里给反馈。
+   */
+  const clozeVerdict = useCallback(
+    (slot: ClozeSlot, verdict: RecallVerdict) => {
+      if (!slot.isKnown || !slot.vocabId) return;
+      const word = vocabWords.find((w) => w.id === slot.vocabId);
+      if (!word) return;
+      const g = clozeVerdictToGrade(verdict);
+      gradeVocab(word, g);
+      handleRecall(word.id, "cloze", verdict, g);
+    },
+    [vocabWords, gradeVocab, handleRecall],
+  );
+
   /** 加练判分后把词移出队列（与到期队列「评完即走」同一语义）。 */
   const gradeAndDrainFocus = useCallback(
     (word: VocabWord, g: ReviewGrade) => {
@@ -1884,7 +1879,7 @@ export function ReaderApp() {
         playback.toggle();
       } else if (e.key === "l" || e.key === "L") {
         playback.step(-1);
-      } else if ((e.key === "h" || e.key === "H") && effectiveSettings.maskTranslation) {
+      } else if ((e.key === "h" || e.key === "H") && (effectiveSettings.maskTranslation || effectiveSettings.spotQuizMode)) {
         setPeekAll(true);
       }
     }
@@ -1897,7 +1892,7 @@ export function ReaderApp() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [view, playback, effectiveSettings.maskTranslation]);
+  }, [view, playback, effectiveSettings.maskTranslation, effectiveSettings.spotQuizMode]);
 
   // ---- 渲染 ----
   /** 光标已停在末句（自然播完/跳读/滚动到底都会到这）且还没确认读完。 */
@@ -2261,6 +2256,8 @@ export function ReaderApp() {
               onPracticeSentence={practiceSentence}
               onPracticeChapter={article ? () => practiceChapter(playback.activeIdx) : undefined}
               hoveredClause={hoveredClause}
+              readWatermark={article?.progress.sentenceIdx ?? 0}
+              onClozeVerdict={clozeVerdict}
             />
             <DictColumn
               state={dict}

@@ -288,6 +288,8 @@ export interface ReaderSettings {
   spotlightMode?: boolean;
   /** 画报排版（v0.8）：prose 段落式英文流 / parallel 双语对照（默认 prose）。 */
   spreadLayout?: SpreadLayout;
+  /** 随读抽查（v0.8）：已读句的词块/生词变行内挖空，本地判分联动 SRS（默认关）。 */
+  spotQuizMode?: boolean;
 }
 
 export const DEFAULT_READER_SETTINGS: ReaderSettings = {
@@ -318,6 +320,7 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   reviewMode: "smart",
   spotlightMode: false,
   spreadLayout: "prose",
+  spotQuizMode: false,
 };
 
 /** 屏 B 字号步进器范围。 */
@@ -404,6 +407,7 @@ export function mergeReaderSettings(
   // 字段名不一致会被 serde 静默剥离，文章保存即丢设置。
   merged.spotlightMode = bool(override.spotlightMode) ?? merged.spotlightMode;
   merged.spreadLayout = oneOf(override.spreadLayout, ["prose", "parallel"]) ?? merged.spreadLayout;
+  merged.spotQuizMode = bool(override.spotQuizMode) ?? merged.spotQuizMode;
   return merged;
 }
 

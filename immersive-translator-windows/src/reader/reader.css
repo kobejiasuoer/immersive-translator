@@ -8182,3 +8182,235 @@ button.notes-word:hover { color: var(--accent); }
   .reader-root .floating-top-stage { padding-top: 8px; padding-bottom: 6px; }
   .reader-root .floating-sonic-dock { height: 54px; }
 }
+
+/* ============================================================
+   v0.8 随读抽查（原位句内挖空微测）——「揭下的铅字 · 胶带槽 · 印章」
+   原型：prototypes/reading-room-cloze-2026-10-18.html。
+   视觉语言与生词库「记忆胶带手账」同源（--tape-* 三主题齐备）。
+   【阶段协议】只追加，不回写上方任何段落。
+   ============================================================ */
+
+/* 胶带小条的定位锚（.cloze-toast-layer 挂在 .reader-stage 内） */
+.reader-root .reader-stage { position: relative; }
+
+/* ---------- 行内挖空槽 ---------- */
+.reader-root .cloze {
+  position: relative;
+  display: inline-block;
+  vertical-align: baseline;
+  margin: 0 2px;
+}
+.reader-root .cloze-input {
+  font-family: var(--font-serif);
+  font-style: italic;            /* 手迹感：作答是你的手写 */
+  font-size: 0.92em;
+  line-height: 1.2;
+  color: var(--ink-1);
+  background: var(--tape-bg);
+  border: none;
+  border-bottom: 2px dashed var(--tape-ink);
+  border-radius: 3px 3px 0 0;
+  padding: 0 7px 1px;
+  height: 1.32em;
+  min-width: 5ch;
+  text-align: center;
+  vertical-align: baseline;
+  caret-color: var(--accent);
+  transition: background 180ms, border-color 180ms, box-shadow 180ms;
+}
+.reader-root .cloze-input:focus {
+  outline: none;
+  background: var(--glass-elevated);
+  border-bottom-color: var(--accent);
+  border-bottom-style: solid;
+  box-shadow: 0 2px 0 var(--accent-soft);
+  font-style: normal;
+}
+.reader-root .cloze-hint-btn {
+  position: absolute;
+  top: -13px;
+  right: -15px;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--tape-border);
+  border-radius: 50%;
+  background: var(--glass-elevated);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  display: none;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+}
+.reader-root .cloze:hover .cloze-hint-btn,
+.reader-root .cloze:focus-within .cloze-hint-btn { display: grid; }
+.reader-root .cloze-hint-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+/* 按住 H：未答槽位透出答案（幽灵浮层，不改动判分状态） */
+.reader-root .cloze.peeked .cloze-input { color: transparent; }
+.reader-root .cloze.peeked::after {
+  content: attr(data-answer);
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.92em;
+  color: var(--ink-3);
+  pointer-events: none;
+}
+
+/* ---------- 判定结果：词「印」回正文 + 印章 + 朱批 ---------- */
+.reader-root .cloze-done {
+  border-radius: 3px;
+  padding: 0 2px;
+  background: var(--tape-bg);
+}
+.reader-root .cloze-done.verdict-perfect {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--ok);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+.reader-root .cloze-done.verdict-close {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--warn);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+.reader-root .cloze-done.verdict-trap,
+.reader-root .cloze-done.verdict-wrong {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--err);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+/* 答错时的原输入：删除线对比 */
+.reader-root .cloze-wrong {
+  color: var(--err);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  margin-right: 4px;
+  opacity: 0.85;
+}
+.reader-root .cloze-stamp {
+  position: absolute;
+  top: -0.72em;
+  right: -8px;
+  z-index: 3;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border: 1.5px solid currentColor;
+  border-radius: 4px;
+  transform: rotate(-7deg);
+  background: var(--glass-elevated);
+  animation: cloze-stamp-in 420ms var(--ease-spring);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.reader-root .cloze-stamp.s-perfect { color: var(--ok); background: var(--ok-soft); }
+.reader-root .cloze-stamp.s-close { color: var(--warn); background: var(--warn-soft); }
+.reader-root .cloze-stamp.s-trap { color: var(--err); background: var(--err-soft); }
+.reader-root .cloze-stamp.s-wrong { color: var(--ink-3); background: var(--surface-2); }
+@keyframes cloze-stamp-in {
+  0% { opacity: 0; transform: rotate(-16deg) scale(1.9); }
+  60% { opacity: 1; transform: rotate(-5deg) scale(0.94); }
+  100% { opacity: 1; transform: rotate(-7deg) scale(1); }
+}
+/* 朱批：陷阱讲解/释义，挂在判定词下方（与折叠卡同级行为，不撑宽槽位） */
+.reader-root .cloze-note {
+  display: block;
+  margin: 2px 0 8px 26px;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--accent);
+}
+
+/* ---------- 刊头：开关点亮与抽查计数 ---------- */
+.reader-root .text-action-btn.cloze-switch-on {
+  color: var(--ink-1);
+  font-weight: 600;
+  background: var(--tape-bg);
+  padding: 2px 9px;
+  margin: -2px -9px;
+  border-radius: 3px;
+  box-shadow: 0 1px 0 var(--tape-border);
+}
+.reader-root .text-action-btn.cloze-switch-on::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: 5px;
+  flex: none;
+}
+.reader-root .cloze-meter {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* ---------- 左下角胶带小条（SRS 反馈） ---------- */
+.reader-root .cloze-toast-layer {
+  position: absolute;
+  left: 64px;
+  bottom: 20px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  max-width: min(340px, 60vw);
+}
+.reader-root .cloze-toast {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--tape-bg);
+  border: 1px solid var(--tape-border);
+  border-radius: 3px;
+  box-shadow: var(--shadow-pill);
+  padding: 7px 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--tape-ink);
+  transform: rotate(-1.2deg);
+  animation: cloze-tape-in 360ms var(--ease-spring);
+}
+.reader-root .cloze-toast .t-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--ink-3);
+}
+.reader-root .cloze-toast.tone-perfect .t-dot { background: var(--ok); }
+.reader-root .cloze-toast.tone-close .t-dot { background: var(--warn); }
+.reader-root .cloze-toast.tone-trap .t-dot { background: var(--err); }
+@keyframes cloze-tape-in {
+  from { opacity: 0; transform: rotate(-4deg) translateY(14px); }
+  to { opacity: 1; transform: rotate(-1.2deg) translateY(0); }
+}
+
+/* ---------- 无障碍与窄窗 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .reader-root .cloze-stamp,
+  .reader-root .cloze-toast { animation: none; }
+}
+@media (max-width: 1080px) {
+  .reader-root .cloze-toast-layer { left: 16px; }
+}
