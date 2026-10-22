@@ -103,7 +103,7 @@ export default function PracticeScreen() {
         )}
       </div>
       <div className="meta" style={{ marginTop: 10 }}>
-        跟读评测走讯飞 ISE；未配置时录音与收句真实生效、评分需配置后可用（不假打分）。
+        跟读评分使用讯飞语音评测；未配置时可以录音跟读，但不给出评分。
       </div>
     </div>
   );

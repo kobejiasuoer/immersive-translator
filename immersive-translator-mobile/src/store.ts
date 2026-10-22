@@ -11,7 +11,7 @@ import type { Article, VocabWord } from "./core/types";
 import { DEMO_VOCAB } from "./core/data";
 import { DEMO_SLOW, DEMO_TREES, type ChatTurn } from "./core/demo";
 import { GRADE_INTERVALS, type ReviewGrade } from "./core/srs";
-import { invokeRaw, isTauri, reportDiag, scheduleDailyReminder } from "./services/device";
+import { haptic, invokeRaw, isTauri, reportDiag, scheduleDailyReminder } from "./services/device";
 import { cloudAvailable, speakCloud } from "./services/voice";
 
 export type Theme = "light" | "dark";
@@ -38,10 +38,11 @@ export interface Settings {
   baseUrl: string;
   /** 模型名覆盖；空 = 用 provider 预设 */
   model: string;
-  /** 讯飞三件套（语音链路；真实链路接入前仅存储） */
+  /** 讯飞三件套（语音链路）；三件是否已入系统钥匙串：true 时 localStorage 不落明文（U-11 与模型 Key 同路径） */
   voiceAppId: string;
   voiceApiKey: string;
   voiceApiSecret: string;
+  voiceKeyStored: boolean;
   /** 云朗读引擎：edge = 微软 Edge 在线（神经音色，免费无凭据，默认）；xfyun = 讯飞合成（需三件套） */
   ttsEngine: "edge" | "xfyun";
   /** Edge 音色 ShortName；空 = 按文本语言自动（中文晓晓 / 英文 Ava） */
@@ -50,6 +51,8 @@ export interface Settings {
   connMsg: string;
   dir: "e2c" | "c2e" | "auto";
   style: "plain" | "faith" | "eleg";
+  /** 全局正文缩放档（U-15/WCAG 1.4.4）：1=标准 1.15=大 1.3=特大；写 --fs-scale 到 :root 供正文类 calc 消费 */
+  fsScale: number;
   stream: boolean;
   voice: boolean;
   daily: boolean;
@@ -208,12 +211,14 @@ function demoState(): AppState {
       voiceAppId: "",
       voiceApiKey: "",
       voiceApiSecret: "",
+      voiceKeyStored: false,
       ttsEngine: "edge",
       edgeVoice: "",
       conn: "idle",
       connMsg: "",
       dir: "e2c",
       style: "plain",
+      fsScale: 1,
       stream: true,
       voice: false,
       daily: true,
@@ -246,6 +251,10 @@ const STORE_KEY = "ita.v3.state";
 const STORE_VERSION = 3;
 /** API Key 的钥匙串条目 key（Rust keychain.rs service="ita.secrets"，account 即此值）。 */
 const KEYCHAIN_APIKEY = "apiKey";
+/** 讯飞三件套的钥匙串条目 key（U-11：与模型 Key 同路径，不再明文落 localStorage）。 */
+const KEYCHAIN_VOICE_APPID = "voiceAppId";
+const KEYCHAIN_VOICE_KEY = "voiceApiKey";
+const KEYCHAIN_VOICE_SECRET = "voiceApiSecret";
 
 function persistable(s: AppState) {
   return {
@@ -256,8 +265,15 @@ function persistable(s: AppState) {
     articles: s.articles,
     progress: s.progress,
     /* B6 ①：API Key 只存钥匙串——keyStored（已入钥匙串）时落盘置空，localStorage 不再明文；
-       未入钥匙串（浏览器态/迁移失败）保留明文兜底，Key 不丢（见 setApiKey/启动迁移）。 */
-    settings: { ...s.settings, apiKey: s.settings.keyStored ? "" : s.settings.apiKey },
+       未入钥匙串（浏览器态/迁移失败）保留明文兜底，Key 不丢（见 setApiKey/启动迁移）。
+       U-11：讯飞三件套同路径，voiceKeyStored 时三件一并置空。 */
+    settings: {
+      ...s.settings,
+      apiKey: s.settings.keyStored ? "" : s.settings.apiKey,
+      voiceAppId: s.settings.voiceKeyStored ? "" : s.settings.voiceAppId,
+      voiceApiKey: s.settings.voiceKeyStored ? "" : s.settings.voiceApiKey,
+      voiceApiSecret: s.settings.voiceKeyStored ? "" : s.settings.voiceApiSecret,
+    },
     history: s.history,
     notes: s.notes,
     stats: s.stats,
@@ -357,9 +373,9 @@ function hydrate(): AppState {
   } catch {
     /* 坏数据兜底演示态 */
   }
-  /* B6 ①：浏览器态无钥匙串——keyStored 复位 false，防老数据 keyStored=true 时
+  /* B6 ①：浏览器态无钥匙串——keyStored/voiceKeyStored 复位 false，防老数据 stored=true 时
      persistable 置空把 localStorage 里唯一一份明文 Key 抹掉（真机由启动迁移维护）。 */
-  if (!isTauri()) s.settings = { ...s.settings, keyStored: false };
+  if (!isTauri()) s.settings = { ...s.settings, keyStored: false, voiceKeyStored: false };
   return s;
 }
 
@@ -463,7 +479,20 @@ if (typeof window !== "undefined" && window.matchMedia) {
 }
 
 function applyThemeDom(theme: Theme) {
-  document.documentElement.dataset.theme = theme;
+  const root = document.documentElement;
+  /* U-31：换肤瞬间抑制成片颜色 transition（否则旧色拖影约 300ms）；双 rAF 后恢复普通交互动画 */
+  root.classList.add("theme-switch");
+  root.dataset.theme = theme;
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      root.classList.remove("theme-switch");
+    }),
+  );
+}
+
+/** 全局正文缩放档落 DOM（U-15/WCAG 1.4.4）：正文类尺寸经 calc(px * var(--fs-scale)) 消费。 */
+function applyFsDom(scale: number) {
+  document.documentElement.style.setProperty("--fs-scale", String(scale));
 }
 
 /* ---------- 派生：reviewStats（#52 今天页 folio / hero / 生词页组头同源） ---------- */
@@ -540,6 +569,7 @@ export const actions = {
     if (patch.remindTime !== undefined || patch.daily !== undefined) {
       scheduleDailyReminder(settings.remindTime, settings.daily);
     }
+    if (patch.fsScale !== undefined) applyFsDom(patch.fsScale);
     emit();
   },
 
@@ -580,6 +610,55 @@ export const actions = {
     }
   },
 
+  /* ---------- U-11：讯飞三件套唯一写入口（与模型 Key 同路径） ----------
+     真机：任一凭据非空即三件 secret_put 入钥匙串，成功后 voiceKeyStored=true（落盘置空）；
+     失败 → voiceKeyStored=false 明文兜底 + 诊断。清空：三件同步 secret_delete。
+     浏览器：无钥匙串，明文 localStorage 兜底（hydrate 已把 voiceKeyStored 复位 false）。 */
+  setVoiceCreds(voiceAppId: string, voiceApiKey: string, voiceApiSecret: string) {
+    const prev = [
+      state.settings.voiceAppId.trim(),
+      state.settings.voiceApiKey.trim(),
+      state.settings.voiceApiSecret.trim(),
+    ];
+    const next = [voiceAppId.trim(), voiceApiKey.trim(), voiceApiSecret.trim()];
+    state = { ...state, settings: { ...state.settings, voiceAppId, voiceApiKey, voiceApiSecret, voiceKeyStored: false } };
+    emit();
+    if (!isTauri()) return;
+    if (next[1] || next[2]) {
+      void Promise.all([
+        invokeRaw<void>("secret_put", { key: KEYCHAIN_VOICE_APPID, value: voiceAppId }),
+        invokeRaw<void>("secret_put", { key: KEYCHAIN_VOICE_KEY, value: voiceApiKey }),
+        invokeRaw<void>("secret_put", { key: KEYCHAIN_VOICE_SECRET, value: voiceApiSecret }),
+      ])
+        .then(() => {
+          /* 输入又变了（旧请求晚到）→ 放弃本次标记，以最新输入为准 */
+          const cur = getState().settings;
+          if (cur.voiceAppId.trim() !== next[0] || cur.voiceApiKey.trim() !== next[1] || cur.voiceApiSecret.trim() !== next[2]) return;
+          state = { ...state, settings: { ...state.settings, voiceKeyStored: true } };
+          emit();
+        })
+        .catch((err: unknown) => {
+          actions.pushDiag({
+            time: Date.now(),
+            kind: "keychain",
+            msg: `讯飞凭据存入钥匙串失败，暂以明文保存在本机：${err instanceof Error ? err.message : String(err)}`,
+          });
+        });
+    } else if (prev[1] || prev[2]) {
+      void Promise.all([
+        invokeRaw<void>("secret_delete", { key: KEYCHAIN_VOICE_APPID }),
+        invokeRaw<void>("secret_delete", { key: KEYCHAIN_VOICE_KEY }),
+        invokeRaw<void>("secret_delete", { key: KEYCHAIN_VOICE_SECRET }),
+      ]).catch((err: unknown) => {
+        actions.pushDiag({
+          time: Date.now(),
+          kind: "keychain",
+          msg: `讯飞凭据钥匙串清理失败（下次启动可能回填旧值）：${err instanceof Error ? err.message : String(err)}`,
+        });
+      });
+    }
+  },
+
   /* 收词：出处为真实参数（§6.3④，替代 spike 的 sourceArticleId:"trees" 硬编码） */
   saveWord(
     entry: {
@@ -614,6 +693,8 @@ export const actions = {
       stats: { ...state.stats, week: { ...state.stats.week, add: state.stats.week.add + 1 } },
     };
     emit();
+    /* U-19：收词触感（规格：收词=light；真机轻微单脉冲，浏览器 vibrate 静默失败） */
+    haptic("light");
     toast(`已收藏「${entry.word}」`, { action: "去看看", onAction: () => actions.setTab("vocab") });
   },
 
@@ -851,17 +932,21 @@ export interface ToastOpts {
   duration?: number;
 }
 /* sheet 打开时 toast 上移让位，关闭时复位（验收 #4：不与 sheet 文字互相遮挡）。
-   用 offsetHeight 量 sheet：它不受 transform 影响，下拉跟手/过渡中也是最终高度。 */
+   U-22：让位量改走 --toast-lift（.toast.on 的 translateY 消费），复用 200ms transform 过渡，
+   不再直写 style.bottom 瞬移；sheet 的 offsetHeight 已含其安全区 padding，与 bottom 常量
+   96+12 相减抵消，无需读 env。 */
 function repositionToasts() {
   const sheet = document.querySelector<HTMLElement>(".sheet.on");
   document.querySelectorAll<HTMLElement>(".toast").forEach((t) => {
-    t.style.bottom = sheet ? `${sheet.offsetHeight + 12}px` : "";
+    t.style.setProperty("--toast-lift", sheet ? `${Math.round(84 - sheet.offsetHeight)}px` : "0px");
   });
 }
 export function toast(msg: string, opts: ToastOpts = {}) {
   document.querySelectorAll(".toast").forEach((t) => t.remove());
   const t = document.createElement("div");
   t.className = "toast";
+  /* U-29（WCAG 4.1.3）：读屏播报动态消息；中性/成功用 status（收藏、撤销、跳转提示） */
+  t.setAttribute("role", "status");
   const span = document.createElement("span");
   span.textContent = msg;
   t.appendChild(span);
@@ -997,8 +1082,9 @@ export function stopSpeak() {
   if ("speechSynthesis" in window) speechSynthesis.cancel();
 }
 
-/* ---------- 首次主题落 DOM ---------- */
+/* ---------- 首次主题/字号档落 DOM ---------- */
 applyThemeDom(state.theme);
+applyFsDom(state.settings.fsScale);
 
 /* 启动标记：随诊断汇落盘（每次启动一条）——拉库时既证明持久化链路工作，
    又能把后续 TTS 事件对上具体哪次会话（真机无声问题的分阶段定位依赖它）。 */
@@ -1039,6 +1125,41 @@ if (isTauri()) {
         time: Date.now(),
         kind: "keychain",
         msg: `钥匙串读取失败：${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  })();
+
+  /* U-11：讯飞三件套启动迁移/回填（与模型 Key 同款逻辑；三件任一在即整组入钥匙串）。 */
+  void (async () => {
+    try {
+      const s = getState().settings;
+      const local = [s.voiceAppId, s.voiceApiKey, s.voiceApiSecret];
+      if (local.some((v) => v.trim())) {
+        await Promise.all([
+          invokeRaw<void>("secret_put", { key: KEYCHAIN_VOICE_APPID, value: local[0] }),
+          invokeRaw<void>("secret_put", { key: KEYCHAIN_VOICE_KEY, value: local[1] }),
+          invokeRaw<void>("secret_put", { key: KEYCHAIN_VOICE_SECRET, value: local[2] }),
+        ]);
+        const cur = getState().settings;
+        if (cur.voiceAppId === local[0] && cur.voiceApiKey === local[1] && cur.voiceApiSecret === local[2]) {
+          state = { ...state, settings: { ...state.settings, voiceKeyStored: true } };
+          emit();
+        }
+      } else {
+        const stored = await Promise.all([
+          invokeRaw<string | null>("secret_get", { key: KEYCHAIN_VOICE_APPID }),
+          invokeRaw<string | null>("secret_get", { key: KEYCHAIN_VOICE_KEY }),
+          invokeRaw<string | null>("secret_get", { key: KEYCHAIN_VOICE_SECRET }),
+        ]);
+        if (stored[1] || stored[2]) {
+          actions.setSettings({ voiceAppId: stored[0] || "", voiceApiKey: stored[1] || "", voiceApiSecret: stored[2] || "", voiceKeyStored: true });
+        }
+      }
+    } catch (err) {
+      actions.pushDiag({
+        time: Date.now(),
+        kind: "keychain",
+        msg: `讯飞凭据钥匙串迁移失败，继续以明文保存在本机：${err instanceof Error ? err.message : String(err)}`,
       });
     }
   })();

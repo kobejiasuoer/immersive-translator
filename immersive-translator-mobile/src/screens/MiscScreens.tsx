@@ -26,7 +26,7 @@ export function HistoryScreen() {
       <div className="pbody">
         <div className="search">
           <Icon name="search" size={16} />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索历史记录" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索历史记录" aria-label="搜索历史记录" />
         </div>
         <div style={{ marginTop: 10 }}>
           {list.map((x) => (
@@ -122,6 +122,7 @@ export function GlossaryScreen() {
               onChange={(e) => setPasteText(e.target.value)}
               placeholder={"每行一条，支持：\n结账流程 → checkout flow\n流失，drop off"}
               spellCheck={false}
+              aria-label="粘贴术语对照（每行一条）"
             />
             <div className="meta" style={{ marginTop: 6 }}>
               {"分隔符支持 → / -> / => / 全角冒号 / 冒号 / 制表符 / 半角逗号；同原文视为更新译法。"}
@@ -275,7 +276,7 @@ export function AboutScreen() {
       <div className="pbody">
         <div style={{ textAlign: "center", padding: "26px 0 10px" }}>
           <div className="serif" style={{ fontSize: 30, fontWeight: 600 }}>
-            沉浸口语
+            沉浸阅读室
           </div>
           <div className="meta" style={{ marginTop: 6 }}>
             你的AI沉浸式英语搭子
@@ -347,10 +348,11 @@ export function ShareScreen() {
           <div className="share-head">
             <div className="share-app">译</div>
             <div className="grow">
-              <div style={{ fontSize: 15, fontWeight: 600 }}>存入 沉浸口语</div>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>存入 沉浸阅读室</div>
               <div className="meta">等待分享文本</div>
             </div>
-            <button className="iconbtn" aria-label="取消" style={{ width: 32, height: 32 }} onClick={() => nav.pop()}>
+            {/* U-08：去 32×32 覆写恢复 .iconbtn 44 默认 */}
+            <button className="iconbtn" aria-label="取消" onClick={() => nav.pop()}>
               <Icon name="close" size={16} />
             </button>
           </div>
@@ -415,13 +417,12 @@ export function ShareScreen() {
         <div className="share-head">
           <div className="share-app">译</div>
           <div className="grow">
-            <div style={{ fontSize: 15, fontWeight: 600 }}>存入 沉浸口语</div>
+            <div style={{ fontSize: 15, fontWeight: 600 }}>存入 沉浸阅读室</div>
             <div className="meta">{shareSourceLabel(shareIn.source)}</div>
           </div>
           <button
             className="iconbtn"
             aria-label="取消"
-            style={{ width: 32, height: 32 }}
             onClick={() => {
               actions.setShareIn(null);
               nav.pop();

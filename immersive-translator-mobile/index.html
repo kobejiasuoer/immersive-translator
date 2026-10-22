@@ -2,9 +2,23 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>沉浸口语</title>
+    <script>
+      /* 首帧主题（U-16）：在 CSS 绘制前设好 data-theme，深色用户冷启动不闪白一帧。
+         读持久化主题（ita.v3.state.theme 是上次落盘时的解析值）；无持久化时跟系统。 */
+      try {
+        var t = null;
+        var raw = localStorage.getItem("ita.v3.state");
+        if (raw) t = (JSON.parse(raw) || {}).theme;
+        if (t !== "dark" && t !== "light") {
+          t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

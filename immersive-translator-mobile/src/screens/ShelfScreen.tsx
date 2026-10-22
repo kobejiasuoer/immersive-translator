@@ -64,7 +64,8 @@ export default function ShelfScreen() {
           const isReading = a.id === pinId;
           return (
             <SwipeRow key={a.id} onDelete={() => actions.deleteArticle(a.id)}>
-              <div onClick={() => nav.push("reader", { articleId: a.id })}>
+              {/* U-01：行主体可点 → button（width:100% + text-align:left） */}
+              <button style={{ width: "100%", textAlign: "left" }} onClick={() => nav.push("reader", { articleId: a.id })}>
                 {isReading && <div className="pin">继续读</div>}
                 <div className="art-title" style={{ marginTop: isReading ? 6 : 0 }}>
                   {a.title}
@@ -74,7 +75,7 @@ export default function ShelfScreen() {
                   {raw === undefined ? "未开始" : pct >= 100 ? "已读完" : `读到第 ${sent + 1} 句`}
                 </div>
                 <Meter pct={pct} />
-              </div>
+              </button>
             </SwipeRow>
           );
         })}

@@ -171,6 +171,7 @@ export default function TranslateScreen({ src = "剪贴板", srcText = "" }: Tra
               value={editVal}
               onChange={(e) => setEditVal(e.target.value)}
               placeholder="输入要翻译的原文"
+              aria-label="要翻译的原文"
             />
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <button className="btn" style={{ flex: 1 }} disabled={!editVal.trim()} onClick={retranslate}>
@@ -232,9 +233,8 @@ export default function TranslateScreen({ src = "剪贴板", srcText = "" }: Tra
         )}
         {phase === "fail" && (
           <>
-            <div className="tr-zh" style={{ fontSize: 16 }}>
-              {out || "这次没连上模型服务。"}
-            </div>
+            {/* U-13：失败信号由 --err 状态行承担，译文不再缩字号（19px 与 done/streaming 一致） */}
+            <div className="tr-zh">{out || "这次没连上模型服务。"}</div>
             <div className="tr-status">
               <span className="st on" style={{ color: "var(--err)" }}>失败 · {failMsg || "网络异常"}</span>
             </div>
@@ -251,7 +251,8 @@ export default function TranslateScreen({ src = "剪贴板", srcText = "" }: Tra
         )}
         {phase === "unconfigured" && (
           <>
-            <div className="tr-zh" style={{ fontSize: 16, color: "var(--ink-4)" }}>
+            {/* U-13＋U-09：引导句走正文字号 + ink-3（ink-4 仅 2.1:1，此处是唯一说明文字） */}
+            <div className="tr-zh" style={{ color: "var(--ink-3)" }}>
               连接模型服务后开始翻译
             </div>
             <div className="meta" style={{ marginTop: 8 }}>
@@ -264,7 +265,7 @@ export default function TranslateScreen({ src = "剪贴板", srcText = "" }: Tra
               </button>
             </div>
             <div className="tr-status">
-              <span className="st on" style={{ color: "var(--ink-4)" }}>未配置模型 · 无译文产出</span>
+              <span className="st on" style={{ color: "var(--ink-3)" }}>未配置模型 · 无译文产出</span>
             </div>
           </>
         )}

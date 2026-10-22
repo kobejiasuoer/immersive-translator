@@ -7,6 +7,7 @@
 
 :root,
 [data-theme="light"] {
+  color-scheme: light; /* U-26：系统键盘/滚轮/表单控件随主题（深色下不再浅色割裂） */
   --bg: #faf8f3;            /* 全局纸底 */
   --surface: #ffffff;       /* sheet、菜单、模态 */
   --surface-2: #f3f0e9;     /* 按压态、分段轨道、输入框底 */
@@ -31,6 +32,7 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --bg: #1a1815;
   --surface: #24211d;
   --surface-2: #2e2a25;
@@ -60,6 +62,25 @@
   --font-sans: -apple-system, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  /* §1.4 字阶 token（U-46 落地，值 = style-spec §4.1 表）；全部随 --fs-scale 缩放
+     （U-15/WCAG 1.4.4：外观页「字号」档写 --fs-scale 到 :root，store.applyFsDom） */
+  --fs-display: calc(32px * var(--fs-scale, 1));
+  --lh-display: calc(38px * var(--fs-scale, 1));
+  --fs-numeral: calc(62px * var(--fs-scale, 1));
+  --fs-title: calc(20px * var(--fs-scale, 1));
+  --lh-title: calc(28px * var(--fs-scale, 1));
+  --fs-headline: calc(17px * var(--fs-scale, 1));
+  --lh-headline: calc(24px * var(--fs-scale, 1));
+  --fs-body: calc(17px * var(--fs-scale, 1));
+  --lh-body: calc(26px * var(--fs-scale, 1));
+  --fs-reading: calc(19px * var(--fs-scale, 1));
+  --lh-reading: calc(34px * var(--fs-scale, 1));
+  --fs-meta: calc(13px * var(--fs-scale, 1));
+  --lh-meta: calc(18px * var(--fs-scale, 1));
+  --fs-overline: calc(11px * var(--fs-scale, 1));
+  --lh-overline: calc(16px * var(--fs-scale, 1));
+  --fs-tab: calc(10px * var(--fs-scale, 1));
+  --lh-tab: calc(12px * var(--fs-scale, 1));
   /* §1.5 间距 */
   --sp-1: 4px;
   --sp-2: 8px;
@@ -77,8 +98,10 @@
   --r-l: 16px;
 }
 
-/* 阅读主题「纯黑」——只作用于阅读正文区（§1.2 主题范围；纸色=全局默认） */
+/* 阅读主题「纯黑」——只作用于阅读正文容器（§1.2 主题范围；纸色=全局默认。
+   U-07：作用域已从 push 根收敛到 .rd-body，顶栏/进度线/播放条保持全局主题） */
 .rd-black {
+  color-scheme: dark;
   --bg: #000000;
   --surface: #0a0a0b;
   --surface-2: #141416;
@@ -88,5 +111,10 @@
   --hairline: #212126;
   --hairline-strong: #2f2f36;
   --tb-bg: rgba(10, 10, 11, 0.86);
+  --accent: #8fb3d4; /* 补全（U-07）：链接/点状下划线/页边墨线在纯黑上 ≈9.6:1（原缺省落墨蓝仅 2.7:1） */
   --accent-soft: rgba(143, 179, 212, 0.16); /* 亮色高亮：已收藏词底/播放高亮在纯黑上可见（P-22） */
+  --on-ink: #0a0a0b; /* 防御项：正文内若出现墨底钮，near-white 底配深字 */
+  --ok: #85ac90;
+  --warn: #c9a15c;
+  --err: #d98376;
 }

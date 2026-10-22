@@ -15,6 +15,7 @@ import { actions, speak, stopSpeak, toast } from "../store";
 import { Icon } from "../ui/icons";
 import { PNav, Seg, useHold } from "../ui/kit";
 import { useNav } from "../ui/nav";
+import { haptic } from "../services/device";
 import { SPEAK_SCENES, type ChatTurn } from "../core/demo";
 import {
   buildSpeakSystemPrompt,
@@ -281,6 +282,7 @@ export function SpeakChat({ scene = "ordering", resumeSession }: ChatProps) {
     setReply(null);
     holdRef.current = { phase: "holding", startAt: Date.now() };
     setRecording(true);
+    haptic("light"); /* U-19：开麦触感（规格：开麦=light） */
     const asr = createAsrSession("en_us", { onDelta: (t) => setHeard(t) });
     asrRef.current = asr;
     void startPcmCapture({ onChunk: (b64) => asr.push(b64) }).then((cap) => {
@@ -491,6 +493,7 @@ export function SpeakChat({ scene = "ordering", resumeSession }: ChatProps) {
                 onKeyDown={(e) => e.key === "Enter" && send()}
                 placeholder="打字回复"
                 autoComplete="off"
+                aria-label="打字回复"
               />
               <button className="iconbtn" aria-label="发送" style={{ background: "var(--ink)", color: "var(--on-ink)", borderRadius: 12, flex: "none" }} onClick={send}>
                 <Icon name="right" size={18} />

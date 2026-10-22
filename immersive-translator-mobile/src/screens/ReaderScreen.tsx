@@ -5,7 +5,7 @@
  * 遮罩按句揭底 + 长按 peek（#37）；Aa 面板（#36/#38/#48）；滚动即写进度（治 I5）；
  * 逐句 TTS 连播（#44，onend + 兜底双保险）；段级翻译重试（#35，导入文章 zh=null）。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import { actions, speak, stopSpeak, useApp } from "../store";
 import { Icon } from "../ui/icons";
 import { PNav } from "../ui/kit";
@@ -51,7 +51,7 @@ export default function ReaderScreen({ article }: { article: Article }) {
   /* 打开即恢复断点 */
   useEffect(() => {
     actions.setReading(article.id);
-    const t = setTimeout(() => scrollToSent(Math.min(savedSent, article.sentences.length - 1)), 60);
+    const t = setTimeout(() => scrollToSent(Math.min(savedSent, article.sentences.length - 1), true), 60);
     return () => {
       clearTimeout(t);
       play.current.active = false;
@@ -66,11 +66,26 @@ export default function ReaderScreen({ article }: { article: Article }) {
   }, [article.id]);
 
   const scrollToSent = useCallback(
-    (i: number) => {
+    (i: number, instant = false) => {
       /* 程序性滚动（断点恢复/词典定位/播放跳句/上下句）：600ms 内 onScroll 不回写（治 P-21） */
       progLockUntil.current = Date.now() + 600;
       const el = bodyRef.current?.querySelector(`[data-si="${i}"]`);
-      el?.scrollIntoView({ block: "center" });
+      if (!el) return;
+      if (instant) {
+        el.scrollIntoView({ block: "center", behavior: "auto" });
+        return;
+      }
+      /* U-06：目标句在视口 25%–65% 舒适带内不滚——连播推进不再逐句拽动视口；
+         带外才回中。JS 滚动不受 CSS reduced-motion 兜底管辖，显式 matchMedia 分支 */
+      const body = bodyRef.current;
+      if (body) {
+        const rect = el.getBoundingClientRect();
+        const bodyRect = body.getBoundingClientRect();
+        const rel = bodyRect.height > 0 ? (rect.top - bodyRect.top) / bodyRect.height : 0;
+        if (rel >= 0.25 && rel <= 0.65) return;
+      }
+      const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+      el.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
     },
     [],
   );
@@ -79,7 +94,7 @@ export default function ReaderScreen({ article }: { article: Article }) {
   useEffect(() => {
     if (readerTarget && readerTarget.articleId === article.id) {
       setSent(readerTarget.sent);
-      setTimeout(() => scrollToSent(readerTarget.sent), 40);
+      setTimeout(() => scrollToSent(readerTarget.sent, true), 40);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readerTarget?.nonce]);
@@ -320,12 +335,20 @@ export default function ReaderScreen({ article }: { article: Article }) {
         }
       />
       <div className="rd-prog">
-        <i style={{ width: `${((sent + 1) / total) * 100}%` }} />
+        <i style={{ transform: `scaleX(${(sent + 1) / total})` }} />
       </div>
       <div
         ref={bodyRef}
-        className={`pbody rd-body ${prefs.mask ? "reader-mask" : ""}`}
-        style={{ paddingLeft: 24, paddingRight: 24, paddingBottom: 140 }}
+        className={`pbody rd-body ${prefs.topic === "black" ? "rd-black" : ""} ${prefs.mask ? "reader-mask" : ""}`}
+        style={
+          {
+            paddingLeft: 24,
+            paddingRight: 24,
+            paddingBottom: 140,
+            /* U-03：Aa 字号档注入正文容器——中文行与英文行同源缩放（.sent-zh 消费 --rd-fs） */
+            "--rd-fs": `${prefs.fs}px`,
+          } as CSSProperties
+        }
         onClick={onBodyClick}
         onPointerDown={onBodyPointerDown}
         onPointerUp={clearPeek}
@@ -340,11 +363,7 @@ export default function ReaderScreen({ article }: { article: Article }) {
                 <SentEn s={s} savedKeys={savedKeys} prefs={prefs} />
                 {prefs.mode !== "en" &&
                   (s.zh ? (
-                    <span
-                      className={`sent-zh ${revealed.has(s.idx) ? "reveal" : ""}`}
-                      data-zh={s.idx}
-                      style={{ fontSize: 14 }}
-                    >
+                    <span className={`sent-zh ${revealed.has(s.idx) ? "reveal" : ""}`} data-zh={s.idx}>
                       {s.zh}
                     </span>
                   ) : translating.has(s.idx) ? (
@@ -353,9 +372,10 @@ export default function ReaderScreen({ article }: { article: Article }) {
                       <span className="caret" style={{ height: 12 }} />
                     </span>
                   ) : uncfg.has(s.idx) ? (
-                    /* 未配置引导：非译文，不用 .sent-zh（避免被遮罩 blur / 进揭示逻辑） */
+                    /* 未配置引导：非译文，不用 .sent-zh（避免被遮罩 blur / 进揭示逻辑）；
+                       U-09：状态说明不用 ink-4（2.1:1），改 ink-3（≥4.5:1） */
                     <span style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0", flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 13, color: "var(--ink-4)" }}>未配置模型服务 · 无译文产出</span>
+                      <span style={{ fontSize: 13, color: "var(--ink-3)" }}>未配置模型服务 · 无译文产出</span>
                       <button
                         className="chip"
                         onClick={(e) => {

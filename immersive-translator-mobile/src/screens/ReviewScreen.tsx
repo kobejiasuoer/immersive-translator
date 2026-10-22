@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { actions, reviewStats, speak, stopSpeak, toast, useApp } from "../store";
 import { Icon } from "../ui/icons";
 import { useNav } from "../ui/nav";
+import { haptic } from "../services/device";
 import { judge, wordDiff, JUDGE_SUGGEST, type Verdict } from "../core/judge";
 import { GRADE_INTERVALS, type ReviewGrade } from "../core/srs";
 import { buildReviewQueue, cardForWord, type ReviewCard } from "../core/queue";
@@ -180,6 +181,7 @@ export default function ReviewScreen({ wordId, from, cards }: ReviewProps) {
     undone.current = false;
     gradedPos.current = pos;
     snap.current = { ...cs };
+    haptic("light"); /* U-19：评分触感（规格：评分=light，真机轻微单脉冲） */
     /* 识别卡无判分输入：按所选档位映射摘要判定（easy/good→写对，hard→接近，forgot→未想起） */
     const judged: Verdict | null =
       card.mode === "recognition"
@@ -262,7 +264,7 @@ export default function ReviewScreen({ wordId, from, cards }: ReviewProps) {
             />
           )}
           {(cs.phase === "graded" || (card.mode === "recognition" && cs.phase === "answer")) && (
-            <div className="grades">
+            <div className="grades rv-flip">
               {GRADES.map(([g, g1, g2]) => (
                 <button
                   key={g}
@@ -290,7 +292,7 @@ function ReviewTop({ pos, total, onExit, plain }: { pos: number; total: number; 
       </button>
       <div className="rv-prog">
         <div className="meter">
-          <i style={{ width: `${total ? (pos / total) * 100 : 100}%` }} />
+          <i style={{ transform: `scaleX(${total ? pos / total : 1})` }} />
         </div>
       </div>
       <span className="meta num">
@@ -319,14 +321,17 @@ function RecogCard({ card, cs, flip }: { card: ReviewCard; cs: CardState; flip: 
       {card.phonetic && <div className="rv-pho">{card.phonetic}</div>}
       {cs.phase === "front" ? (
         <div style={{ textAlign: "center", marginTop: 22 }}>
-          <span className="tlink" onClick={flip}>
+          <button className="tlink" onClick={flip}>
             点按翻面
-          </span>
+          </button>
         </div>
       ) : (
         <>
-          <div style={{ textAlign: "center", fontSize: 16, lineHeight: "24px", marginTop: 14 }}>{card.hint}</div>
-          {card.pattern && <div className="pattern" style={{ textAlign: "center" }}>{card.pattern}</div>}
+          {/* U-18：翻面 240ms 入场（规格 docs:138），与下一张 cardin 衔接 */}
+          <div className="rv-flip">
+            <div style={{ textAlign: "center", fontSize: 16, lineHeight: "24px", marginTop: 14 }}>{card.hint}</div>
+            {card.pattern && <div className="pattern" style={{ textAlign: "center" }}>{card.pattern}</div>}
+          </div>
         </>
       )}
     </>
@@ -427,18 +432,20 @@ function ClozeCard({
             autoComplete="off"
             autoCapitalize="off"
             spellCheck={false}
+            aria-label="输入答案（完形）"
           />
           <button className="iconbtn" aria-label="提交" style={{ background: "var(--ink)", color: "var(--on-ink)", borderRadius: 12 }} onClick={onSubmit}>
             <Icon name="check" size={19} />
           </button>
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12 }}>
-          <span className="tlink" style={{ fontSize: 14 }} onClick={onHint}>
+          {/* U-01：可点文字一律 button（热区 + 按钮语义） */}
+          <button className="tlink" style={{ fontSize: 14 }} onClick={onHint}>
             给点提示
-          </span>
-          <span className="meta" style={{ cursor: "pointer" }} onClick={onGiveUp}>
+          </button>
+          <button className="meta" onClick={onGiveUp}>
             直接看答案
-          </span>
+          </button>
         </div>
         {hintLadder(card, cs.hints)}
       </>
@@ -504,18 +511,19 @@ function DictCard({
             autoComplete="off"
             autoCapitalize="off"
             spellCheck={false}
+            aria-label="输入答案（听写）"
           />
           <button className="iconbtn" aria-label="提交" style={{ background: "var(--ink)", color: "var(--on-ink)", borderRadius: 12 }} onClick={onSubmit}>
             <Icon name="check" size={19} />
           </button>
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12 }}>
-          <span className="tlink" style={{ fontSize: 14 }} onClick={onHint}>
+          <button className="tlink" style={{ fontSize: 14 }} onClick={onHint}>
             给点提示
-          </span>
-          <span className="meta" style={{ cursor: "pointer" }} onClick={onGiveUp}>
+          </button>
+          <button className="meta" onClick={onGiveUp}>
             直接看答案
-          </span>
+          </button>
         </div>
         {hintLadder(card, cs.hints)}
       </>

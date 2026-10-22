@@ -40,114 +40,128 @@ export default function OnboardingScreen() {
         <span className="meta num">{step}/3</span>
       </div>
       <div className="ob-stage">
-        {step === 1 && (
-          <>
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-              <div className="overline">第一步</div>
-              <div className="serif" style={{ fontSize: 30, lineHeight: "42px", fontWeight: 600, marginTop: 8 }}>
-                你想把英语
-                <br />
-                用在哪里？
+        {/* U-38：步骤切换 160ms tabin 入场（key={step} 重放）；不做左右滑移（守 tab 定案精神） */}
+        <div key={step} className="ob-step" style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+          {step === 1 && (
+            <>
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+                <div className="overline">第一步</div>
+                <div className="serif" style={{ fontSize: 30, lineHeight: "42px", fontWeight: 600, marginTop: 8 }}>
+                  你想把英语
+                  <br />
+                  用在哪里？
+                </div>
+                <div role="radiogroup" aria-label="学习目标">
+                  {(
+                    [
+                      ["读外刊与原版书", "阅读为主，生词管理优先"],
+                      ["职场沟通", "会议、邮件与日常口语"],
+                      ["备考冲刺", "雅思托福，真题节奏"],
+                    ] as const
+                  ).map(([t, d]) => (
+                    <button key={t} className={`ob-opt ${goal === t ? "on" : ""}`} role="radio" aria-checked={goal === t} onClick={() => setGoal(t)}>
+                      <span className="ob-check">
+                        <Icon name="check" size={13} />
+                      </span>
+                      <span className="grow">
+                        <span className="t" style={{ display: "block" }}>
+                          {t}
+                        </span>
+                        <span className="d" style={{ display: "block" }}>
+                          {d}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
-              {(
-                [
-                  ["读外刊与原版书", "阅读为主，生词管理优先"],
-                  ["职场沟通", "会议、邮件与日常口语"],
-                  ["备考冲刺", "雅思托福，真题节奏"],
-                ] as const
-              ).map(([t, d]) => (
-                <button key={t} className={`ob-opt ${goal === t ? "on" : ""}`} onClick={() => setGoal(t)}>
-                  <span className="ob-check">
-                    <Icon name="check" size={13} />
-                  </span>
-                  <span className="grow">
-                    <span className="t" style={{ display: "block" }}>
-                      {t}
-                    </span>
-                    <span className="d" style={{ display: "block" }}>
-                      {d}
-                    </span>
-                  </span>
-                </button>
-              ))}
-            </div>
-            <button className="btn" onClick={() => setStep(2)}>
-              下一步
-            </button>
-          </>
-        )}
-        {step === 2 && (
-          <>
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-              <div className="overline">第二步</div>
-              <div className="serif" style={{ fontSize: 30, lineHeight: "42px", fontWeight: 600, marginTop: 8 }}>
-                连上你的
-                <br />
-                模型服务
-              </div>
-              <div className="meta" style={{ marginTop: 10 }}>
-                填入任一服务商的 Key 即可；Key 只存钥匙串。
-              </div>
-              <input
-                className="input"
-                style={{ marginTop: 18 }}
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-                placeholder="sk-…"
-                autoComplete="off"
-              />
-              <button className="btn-ghost" style={{ border: "1px solid var(--hairline-strong)", marginTop: 12 }} onClick={finish}>
-                先跳过，用演示数据转一圈
+              <button className="btn" onClick={() => setStep(2)}>
+                下一步
               </button>
-            </div>
-            <button
-              className="btn"
-              onClick={() => {
-                if (!key.trim()) {
-                  /* 空 Key 不静默放行：提示可跳过，停在本步（P-04） */
-                  toast("未填写 Key · 可跳过");
-                  return;
-                }
-                /* Key 走唯一写入口 setApiKey（真机 secret_put 入钥匙串，成功才 keyStored=true；
-                   失败明文兜底不丢）。此前直写 setSettings({apiKey, keyStored:true}) 绕过钥匙串，
-                   persistable 又把明文剔除——Key 既没进钥匙串也没落盘，重启即丢（治 shell-1）。
-                   连接状态留给设置页的「测试连接」真实验证，不再假装已连上 */
-                actions.setApiKey(key.trim());
-                actions.setSettings({ conn: "idle", connMsg: "" });
-                setStep(3);
-              }}
-            >
-              连接并继续
-            </button>
-            <button
-              className="tlink"
-              style={{ marginTop: 12, alignSelf: "center", fontSize: 14 }}
-              onClick={() => setStep(1)}
-            >
-              上一步
-            </button>
-          </>
-        )}
-        {step === 3 && (
-          <>
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-              <div className="overline">准备完成</div>
-              <div className="serif" style={{ fontSize: 30, lineHeight: "42px", fontWeight: 600, marginTop: 8 }}>
-                今天该读什么、
-                <br />
-                该复习什么，
-                <br />
-                都替你排好了。
+            </>
+          )}
+          {step === 2 && (
+            <>
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+                <div className="overline">第二步</div>
+                <div className="serif" style={{ fontSize: 30, lineHeight: "42px", fontWeight: 600, marginTop: 8 }}>
+                  连上你的
+                  <br />
+                  模型服务
+                </div>
+                <div className="meta" style={{ marginTop: 10 }}>
+                  填入任一服务商的 Key 即可；Key 只存钥匙串。
+                </div>
+                <input
+                  className="input"
+                  style={{ marginTop: 18 }}
+                  value={key}
+                  onChange={(e) => setKey(e.target.value)}
+                  placeholder="sk-…"
+                  autoComplete="off"
+                  aria-label="API Key（可跳过）"
+                />
+                <button className="btn-ghost" style={{ border: "1px solid var(--hairline-strong)", marginTop: 12 }} onClick={finish}>
+                  先跳过，用演示数据转一圈
+                </button>
               </div>
-              <div className="meta" style={{ marginTop: 12 }}>
-                {readyLine}
+              <button
+                className="btn"
+                onClick={() => {
+                  if (!key.trim()) {
+                    /* 空 Key 不静默放行：提示可跳过，停在本步（P-04） */
+                    toast("未填写 Key · 可跳过");
+                    return;
+                  }
+                  /* Key 走唯一写入口 setApiKey（真机 secret_put 入钥匙串，成功才 keyStored=true；
+                     失败明文兜底不丢）。此前直写 setSettings({apiKey, keyStored:true}) 绕过钥匙串，
+                     persistable 又把明文剔除——Key 既没进钥匙串也没落盘，重启即丢（治 shell-1）。
+                     连接状态留给设置页的「测试连接」真实验证，不再假装已连上 */
+                  actions.setApiKey(key.trim());
+                  actions.setSettings({ conn: "idle", connMsg: "" });
+                  setStep(3);
+                }}
+              >
+                连接并继续
+              </button>
+              <button
+                className="tlink"
+                style={{ marginTop: 12, alignSelf: "center", fontSize: 14 }}
+                onClick={() => setStep(1)}
+              >
+                上一步
+              </button>
+            </>
+          )}
+          {step === 3 && (
+            <>
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+                <div className="overline">准备完成</div>
+                <div className="serif" style={{ fontSize: 30, lineHeight: "42px", fontWeight: 600, marginTop: 8 }}>
+                  今天该读什么、
+                  <br />
+                  该复习什么，
+                  <br />
+                  都替你排好了。
+                </div>
+                <div className="meta" style={{ marginTop: 12 }}>
+                  {readyLine}
+                </div>
               </div>
-            </div>
-            <button className="btn" onClick={finish}>
-              进今天
-            </button>
-          </>
-        )}
+              <button className="btn" onClick={finish}>
+                进今天
+              </button>
+              {/* U-51：第 3 步补「上一步」，填错 Key 不再只能提交 */}
+              <button
+                className="tlink"
+                style={{ marginTop: 12, alignSelf: "center", fontSize: 14 }}
+                onClick={() => setStep(2)}
+              >
+                上一步
+              </button>
+            </>
+          )}
+        </div>
       </div>
       {onboarded && (
         <button className="tlink" style={{ position: "absolute", top: "calc(env(safe-area-inset-top) + 14px)", left: 20, fontSize: 15 }} onClick={() => nav.pop()}>

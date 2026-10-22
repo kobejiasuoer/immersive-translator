@@ -101,12 +101,13 @@ async function gradeCurrentCard() {
       continue;
     }
     if (p.querySelector("input.input")) {
-      const giveUp = [...p.querySelectorAll("span")].find((el) => text(el) === "直接看答案");
+      /* U-01 后「直接看答案」由 span 改为 button：选择器两者都收 */
+      const giveUp = [...p.querySelectorAll("span, button")].find((el) => text(el) === "直接看答案");
       click(giveUp);
       await wait(250);
       continue;
     }
-    const flip = [...p.querySelectorAll("span")].find((el) => text(el) === "点按翻面");
+    const flip = [...p.querySelectorAll("span, button")].find((el) => text(el) === "点按翻面");
     if (flip) {
       click(flip);
       await wait(250);

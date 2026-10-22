@@ -18,6 +18,7 @@ import { useNav } from "../ui/nav";
 import { startPcmCapture, type Capture } from "../services/audio";
 import { createAsrSession, voiceConfigured, type AsrSession } from "../services/voice";
 import { startTranslate } from "../services/translate";
+import { haptic } from "../services/device";
 import { LiveSegmenter } from "../core/vad";
 
 interface CapCard {
@@ -254,6 +255,7 @@ export default function CaptionScreen() {
     segmenterRef.current = new LiveSegmenter();
     /* 乐观置位：UI 立即进录音态；拿不到麦在回调里复位（mac :81 口径） */
     setRec(true);
+    haptic("light"); /* U-19：开麦触感（规格：开麦=light） */
     const capture = await startPcmCapture({
       /* 真麦电平：驱动电平条（熄/亮灯数）并随块喂 VAD */
       onLevel: (level) => {
@@ -404,15 +406,17 @@ export default function CaptionScreen() {
           </>
         )}
       </div>
-      {!rec && (
-        <button
-          className="cap-fab"
-          aria-label={cards.length ? "继续录音" : "开始录音"}
-          onClick={() => void start()}
-        >
-          <Icon name="mic" size={28} />
-        </button>
-      )}
+      {/* U-35：FAB 常挂载 + hide 类切换（200ms 缩退淡出），rec 期间禁用——不再卸载硬切 */}
+      <button
+        className={`cap-fab ${rec ? "hide" : ""}`}
+        aria-label={cards.length ? "继续录音" : "开始录音"}
+        aria-hidden={rec || undefined}
+        tabIndex={rec ? -1 : undefined}
+        disabled={rec}
+        onClick={() => void start()}
+      >
+        <Icon name="mic" size={28} />
+      </button>
     </>
   );
 }
