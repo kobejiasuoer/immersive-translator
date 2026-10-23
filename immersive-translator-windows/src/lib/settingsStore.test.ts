@@ -1,18 +1,84 @@
-import { describe, expect, it, vi } from "vitest";
+// @vitest-environment jsdom
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_SETTINGS,
   CUSTOM_PROVIDER_ID,
   adoptMisplacedSingleKey,
+  hasValidSettings,
+  loadSettingsFullAsync,
   parseKeyVault,
   persistHotkeyField,
   persistSettingsTransaction,
   providerIdFor,
+  saveSettingsFullAsync,
   type AppSettings,
 } from "./settingsStore";
+import { PLATFORM_PROVIDER_ID } from "../core/providerPresets";
+import { authServerBaseUrl, secretGet, secretSet } from "./tauriBridge";
+
+vi.mock("./tauriBridge", () => ({
+  authServerBaseUrl: vi.fn(),
+  secretGet: vi.fn(),
+  secretSet: vi.fn(),
+}));
 
 function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
   return { ...DEFAULT_SETTINGS, ...overrides };
 }
+
+const STORAGE_KEY = "immersive-translator-settings";
+const PROD_BASE = "https://www.prismspace.online";
+const PROD_GATEWAY = `${PROD_BASE}/v1/chat/completions`;
+
+describe("沉浸云 providerId 识别（load/save 全链路）", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    vi.mocked(authServerBaseUrl).mockResolvedValue(PROD_BASE);
+    vi.mocked(secretGet).mockResolvedValue("");
+    vi.mocked(secretSet).mockResolvedValue(undefined);
+  });
+
+  it("读取时把沉浸云 endpoint 识别为 immersive-cloud 并通过 hasValidSettings（v0.10.3 曾降级为 custom 导致划词被挡）", async () => {
+    // 模拟 v0.10.3 落盘的坏数据：endpoint 是生产网关，providerId 却被写成 custom
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ endpoint: PROD_GATEWAY, providerId: "custom", model: "glm-4.7" }),
+    );
+
+    const { settings } = await loadSettingsFullAsync();
+
+    expect(settings.providerId).toBe(PLATFORM_PROVIDER_ID);
+    expect(hasValidSettings(settings)).toBe(true);
+  });
+
+  it("保存时持久化 immersive-cloud（而非 custom），空 Key 落在沉浸云桶", async () => {
+    await saveSettingsFullAsync(
+      makeSettings({ providerId: PLATFORM_PROVIDER_ID, endpoint: PROD_GATEWAY, apiKey: "" }),
+      {},
+    );
+
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY)!);
+    expect(raw.providerId).toBe(PLATFORM_PROVIDER_ID);
+    expect(raw).not.toHaveProperty("apiKey");
+    expect(secretSet).toHaveBeenLastCalledWith(
+      JSON.stringify({ [PLATFORM_PROVIDER_ID]: "" }),
+    );
+  });
+
+  it("沉浸云未开放（base 为 null）时按自定义接口处理，维持旧行为", async () => {
+    vi.mocked(authServerBaseUrl).mockResolvedValue(null);
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ endpoint: PROD_GATEWAY, providerId: "custom" }),
+    );
+
+    const { settings } = await loadSettingsFullAsync();
+
+    expect(settings.providerId).toBe(CUSTOM_PROVIDER_ID);
+    expect(hasValidSettings(settings)).toBe(false);
+  });
+});
 
 describe("parseKeyVault", () => {
   it("returns an empty vault for empty content", () => {
