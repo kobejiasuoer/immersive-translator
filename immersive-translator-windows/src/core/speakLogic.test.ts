@@ -1,18 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   BUILTIN_SCENARIO_UPDATED_AT,
   buildSpeakSystemPrompt,
   buildSpeakUserInput,
   computeCoachDiff,
   difficultyOf,
+  isSpeakScenarioLike,
   lastAssistantText,
+  listOfficialScenarios,
+  listUserScenarios,
   newSpeakSession,
   parseAssistantReply,
+  registerOfficialScenarios,
+  registerUserScenarios,
   scenarioOf,
   SPEAK_DIFFICULTIES,
   SPEAK_SCENARIOS,
   textHitsTarget,
   type ShadowAttempt,
+  type SpeakScenario,
 } from "./speakLogic";
 
 describe("场景/难度元数据", () => {
@@ -309,5 +315,104 @@ describe("内置场景迁移逐字基线（A1：label→title、brief→aiRole�
     expect(buildSpeakSystemPrompt("interview", "easy")).toBe(EXPECTED_PROMPT_EASY.interview);
     expect(buildSpeakSystemPrompt("travel", "easy")).toBe(EXPECTED_PROMPT_EASY.travel);
     expect(buildSpeakSystemPrompt("smalltalk", "easy")).toBe(EXPECTED_PROMPT_EASY.smalltalk);
+  });
+});
+
+// ---------- A1：三桶合并查找与回退 ----------
+
+/** 合法场景构造器（合并查找/注册表用例共用；必填字段给默认值，overrides 覆盖）。 */
+function makeScenario(overrides: Partial<SpeakScenario> & { id: string }): SpeakScenario {
+  return {
+    source: "official",
+    title: `title-${overrides.id}`,
+    category: "daily",
+    aiRole: `aiRole-${overrides.id}`,
+    opener: `opener-${overrides.id}`,
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+describe("合并查找与回退（A1 注册表）", () => {
+  beforeEach(() => {
+    registerOfficialScenarios([]);
+    registerUserScenarios([]);
+  });
+
+  it("官方桶命中：registerOfficialScenarios 后 scenarioOf 查到 off_demo", () => {
+    registerOfficialScenarios([makeScenario({ id: "off_demo", title: "官方演示" })]);
+    expect(scenarioOf("off_demo").title).toBe("官方演示");
+    expect(scenarioOf("off_demo").source).toBe("official");
+  });
+
+  it("用户桶命中：同步来的 usr_xxx 场景可被 resume 查找", () => {
+    registerUserScenarios([makeScenario({ id: "usr_uuid-1", source: "user", title: "我的机场值机" })]);
+    expect(scenarioOf("usr_uuid-1").title).toBe("我的机场值机");
+    expect(scenarioOf("usr_uuid-1").source).toBe("user");
+  });
+
+  it("撞车优先级：内置 > official > user", () => {
+    // official 注册与内置同 id 的伪造场景 → 内置赢
+    registerOfficialScenarios([makeScenario({ id: "ordering", title: "伪造点餐" })]);
+    expect(scenarioOf("ordering").title).toBe("点餐");
+    // official 与 user 同 id → official 赢
+    registerOfficialScenarios([makeScenario({ id: "off_dup", title: "official 版" })]);
+    registerUserScenarios([makeScenario({ id: "off_dup", source: "user", title: "user 版" })]);
+    expect(scenarioOf("off_dup").title).toBe("official 版");
+  });
+
+  it("未知 id 回退第一个内置（注册表非空时同样回退）", () => {
+    expect(scenarioOf("nope").id).toBe("ordering");
+    registerOfficialScenarios([makeScenario({ id: "off_demo" })]);
+    registerUserScenarios([makeScenario({ id: "usr_x", source: "user" })]);
+    expect(scenarioOf("nope").id).toBe("ordering");
+  });
+
+  it("非法项过滤：缺必填的项不进桶，scenarioOf 走回退", () => {
+    registerOfficialScenarios([
+      { id: "off_x" } as unknown as SpeakScenario, // 缺 source/title/category/aiRole/opener/updatedAt
+      makeScenario({ id: "off_ok" }),
+    ]);
+    expect(listOfficialScenarios().map((s) => s.id)).toEqual(["off_ok"]);
+    expect(scenarioOf("off_x").id).toBe("ordering");
+  });
+
+  it("listOfficialScenarios/listUserScenarios 返回注册序；桶内同 id 保留先出现者", () => {
+    registerOfficialScenarios([makeScenario({ id: "off_a" }), makeScenario({ id: "off_b" })]);
+    registerUserScenarios([
+      makeScenario({ id: "usr_1", source: "user" }),
+      makeScenario({ id: "usr_2", source: "user" }),
+    ]);
+    expect(listOfficialScenarios().map((s) => s.id)).toEqual(["off_a", "off_b"]);
+    expect(listUserScenarios().map((s) => s.id)).toEqual(["usr_1", "usr_2"]);
+    // 桶内同 id：先出现的赢
+    registerOfficialScenarios([
+      makeScenario({ id: "off_a", title: "第一" }),
+      makeScenario({ id: "off_a", title: "第二" }),
+    ]);
+    expect(listOfficialScenarios()).toHaveLength(1);
+    expect(scenarioOf("off_a").title).toBe("第一");
+  });
+
+  it("isSpeakScenarioLike：全字段合法 true；缺任一必填/类型错 false；可选项缺失仍 true", () => {
+    expect(isSpeakScenarioLike(makeScenario({ id: "off_full", emoji: "🍜", openerZh: "zh" }))).toBe(true);
+    // 只给必填（可选项全缺）仍合法
+    expect(isSpeakScenarioLike(makeScenario({ id: "off_min" }))).toBe(true);
+    // 缺任一必填
+    const base = makeScenario({ id: "off_t" });
+    for (const key of ["id", "source", "title", "category", "aiRole", "opener", "updatedAt"] as const) {
+      const broken: Record<string, unknown> = { ...base };
+      delete broken[key];
+      expect(isSpeakScenarioLike(broken), `缺 ${key} 应判非法`).toBe(false);
+    }
+    // 类型错
+    expect(isSpeakScenarioLike({ ...base, id: 42 })).toBe(false);
+    expect(isSpeakScenarioLike({ ...base, source: "unknown" })).toBe(false);
+    expect(isSpeakScenarioLike({ ...base, category: "other" })).toBe(false);
+    expect(isSpeakScenarioLike({ ...base, updatedAt: "1767225600000" })).toBe(false);
+    // 空串/非对象
+    expect(isSpeakScenarioLike({ ...base, title: "" })).toBe(false);
+    expect(isSpeakScenarioLike(null)).toBe(false);
+    expect(isSpeakScenarioLike("ordering")).toBe(false);
   });
 });

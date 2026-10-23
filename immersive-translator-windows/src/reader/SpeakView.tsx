@@ -2,7 +2,8 @@
  * 屏 E · 口语陪练（v0.8 场景中心版）：选场景 → 免长按开麦对话 → 表达改进。
  *
  * 入口页 .scenario-hub-scroll：置顶「聊刚读的章节」「今日生词造句闯关」两张
- * 语境卡（真实数据：bookContext / dueVocabWords），下接四个日常场景卡。
+ * 语境卡（真实数据：bookContext / dueVocabWords），下接四个日常场景卡与
+ * 「官方场景库」「我的场景」分组（A1 场景目录，装载失败/为空时分组不渲染）。
  * 对话页 .sonic-studio-grid：#harmonicCanvas 60fps 声波（振幅吃真实麦克风
  * 电平与播报状态）+ 免长按点击开麦（core/vad.ts 静音自动收）→ 讯飞听写
  * → LLM 四行回复（EN/ZH/BETTER/TIP）→ 用户气泡下渲染词级增删对比
@@ -21,6 +22,8 @@ import {
   computeCoachDiff,
   difficultyOf,
   lastAssistantText,
+  listOfficialScenarios,
+  listUserScenarios,
   newSpeakSession,
   parseAssistantReply,
   scenarioOf,
@@ -29,6 +32,8 @@ import {
   type ShadowAttempt,
   type SpeakContextTarget,
   type SpeakDifficulty,
+  type SpeakScenario,
+  type SpeakScenarioCategory,
   type SpeakScenarioId,
   type SpeakSession,
   type SpeakSessionContext,
@@ -44,6 +49,7 @@ import { createVadDetector, type VadDetector } from "../core/vad";
 import { loadAsrCredentials, loadIseCredentials } from "../lib/iseCredentials";
 import { track } from "../lib/analytics";
 import { speakListSessions, speakSaveSession } from "../lib/speakStore";
+import { preloadScenarioCatalog, refreshOfficialScenarioCatalog } from "../lib/scenarioCatalog";
 import { cancelTranslation, openSettings } from "../lib/tauriBridge";
 import { phoneTip, wordScorePath } from "../core/shadowDiagnose";
 import type { VocabWord } from "../core/readerTypes";
@@ -123,8 +129,17 @@ const SCENARIO_CARD_ICONS: Record<SpeakScenarioId, ComponentType<{ size?: number
   smalltalk: IconClock,
 };
 
+/** 官方/用户场景卡 tag 位的分类词（无法穷举图标映射，tag 位放 emoji 或分类词兜底）。 */
+const CATEGORY_TAG_ZH: Record<SpeakScenarioCategory, string> = {
+  daily: "日常",
+  travel: "旅行",
+  workplace: "职场",
+  academic: "学术",
+  custom: "自定义",
+};
+
 /** 语境会话（book/vocab）的开场白：模板 + 真实数据插值（与 SPEAK_SCENARIOS
- * 的静态开场白同一性质，不引入演示内容）。 */
+ * 内置场景及 A1 场景目录的 opener 同一性质，不引入演示内容）。 */
 function contextOpener(context: SpeakSessionContext): { text: string; hintZh: string } {
   if (context.kind === "book") {
     const lead = context.excerpt[0] ? ` Starting from: “${context.excerpt[0]}”` : "";
@@ -206,6 +221,12 @@ export function SpeakView({
   const [level, setLevel] = useState(0);
   /** 发音详情：选中的词/音素下标（换 pron 时自动跳到最差词）。 */
   const [pronSel, setPronSel] = useState<{ wordIdx: number; phoneIdx: number } | null>(null);
+  /** 官方/用户场景分组的数据（A1 场景目录；装载失败/为空=不显示分组，
+   *  resume 旧会话的场景名由 scenarioOf 兜底，不依赖这里的 state）。 */
+  const [extraLists, setExtraLists] = useState<{ official: SpeakScenario[]; user: SpeakScenario[] }>({
+    official: [],
+    user: [],
+  });
 
   const recorderRef = useRef<MicRecorderHandle | null>(null);
   const shadowRecorderRef = useRef<MicRecorderHandle | null>(null);
@@ -247,6 +268,18 @@ export function SpeakView({
     void speakListSessions()
       .then((list) => setRecent(list.slice(0, 5)))
       .catch(() => undefined);
+  }, []);
+
+  // 挂载时装载场景目录（A1）：先 preload（官方缓存+同步的用户场景），后台再
+  // refresh 官方目录（15 分钟节流；404/断网全静默）。装载前后各 set 一次，
+  // 保证目录到达后入口网格刷新出「官方场景库」「我的场景」分组。
+  useEffect(() => {
+    void (async () => {
+      await preloadScenarioCatalog();
+      setExtraLists({ official: listOfficialScenarios(), user: listUserScenarios() });
+      await refreshOfficialScenarioCatalog();
+      setExtraLists({ official: listOfficialScenarios(), user: listUserScenarios() });
+    })();
   }, []);
 
   // 新消息后贴底
@@ -339,10 +372,10 @@ export function SpeakView({
       // 开场白直接播报
       speakRound(s.turns[0].text);
       persist(s);
-      // 云端埋点（Phase 0 §8）：新会话开始。当前场景均为内置场景；
-      // official/user 来源随 A 阶段场景中心引入。
+      // 云端埋点（Phase 0 §8）：新会话开始。scenarioSource 取场景真实来源
+      // （A1 官方/用户场景；查不到的场景回退内置，source 天然是 builtin）。
       trackedStartIdRef.current = s.id;
-      track("speak_session_start", { scenarioId: scenario, scenarioSource: "builtin" });
+      track("speak_session_start", { scenarioId: scenario, scenarioSource: scenarioOf(scenario).source });
     },
     [persist, speakRound, stopSpeak],
   );
@@ -992,10 +1025,15 @@ export function SpeakView({
   const scorePath = useMemo(() => wordScorePath(pronWords), [pronWords]);
 
   // ---- 场景标题（舞台状态行 / 最近会话行共用） ----
+  // 内置场景直取本地卡文案（输出与旧版逐字一致）；off_/usr_ 未知 id 走合并查找
+  // （目录未装载/已删的场景短暂显示「自定义场景」，装载后重渲染显真名，绝不崩）。
   const sceneTitleOf = useCallback((s: SpeakSession): string => {
     if (s.context?.kind === "book") return `聊刚读的《${s.context.bookTitle}》第 ${s.context.chapterIdx + 1} 章`;
     if (s.context?.kind === "vocab") return "今日生词造句闯关";
-    return SCENARIO_CARDS[s.scenario].title;
+    const known = SCENARIO_CARDS[s.scenario];
+    if (known) return known.title;
+    const sc = scenarioOf(s.scenario);
+    return sc.id === s.scenario ? sc.title : "自定义场景";
   }, []);
 
   /** 今日收集的词块数（场景中心组标签右侧的真实计数）。 */
@@ -1145,6 +1183,62 @@ export function SpeakView({
             );
           })}
         </div>
+
+        {extraLists.official.length > 0 && (
+          <>
+            <div className="scenario-group-label">
+              <span>官方场景库</span>
+              <span>云端目录</span>
+            </div>
+            <div className="scenario-daily-grid">
+              {extraLists.official.map((sc) => (
+                <button
+                  key={sc.id}
+                  className="scenario-card"
+                  onClick={() => start(sc.id, sc.defaultDifficulty ?? difficulty)}
+                >
+                  <div>
+                    <span className="sc-tag neutral">
+                      {CATEGORY_TAG_ZH[sc.category] ?? "官方场景"}
+                      {sc.emoji ? ` ${sc.emoji}` : ""}
+                    </span>
+                    <div className="sc-title">{sc.title}</div>
+                    <p className="sc-desc">{sc.aiRole}</p>
+                  </div>
+                  <div className="sc-opener-preview">“{sc.opener}”</div>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {extraLists.user.length > 0 && (
+          <>
+            <div className="scenario-group-label">
+              <span>我的场景</span>
+              <span>多端同步</span>
+            </div>
+            <div className="scenario-daily-grid">
+              {extraLists.user.map((sc) => (
+                <button
+                  key={sc.id}
+                  className="scenario-card"
+                  onClick={() => start(sc.id, sc.defaultDifficulty ?? difficulty)}
+                >
+                  <div>
+                    <span className="sc-tag neutral">
+                      {CATEGORY_TAG_ZH[sc.category] ?? "自定义场景"}
+                      {sc.emoji ? ` ${sc.emoji}` : ""}
+                    </span>
+                    <div className="sc-title">{sc.title}</div>
+                    <p className="sc-desc">{sc.aiRole}</p>
+                  </div>
+                  <div className="sc-opener-preview">“{sc.opener}”</div>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
 
         {recent.length > 0 && (
           <>
