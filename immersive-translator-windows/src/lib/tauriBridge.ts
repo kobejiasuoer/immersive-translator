@@ -501,6 +501,16 @@ export function authFetchServerConfig(): Promise<unknown> {
   return invoke("auth_fetch_server_config");
 }
 
+/** POST /v1/events（Phase 0 埋点，计划书 §8）：Bearer 会话 token 由 Rust 附带，
+ *  ts(毫秒) 由 Rust 发送时打上；properties 整体 JSON 上报。失败 reject AuthError
+ *  （unauthorized=未登录），由 lib/analytics.ts 的 track() 静默吞掉。 */
+export function authTrackEvent(
+  event: string,
+  properties: Record<string, unknown>,
+): Promise<void> {
+  return invoke("auth_track_event", { event, properties });
+}
+
 /** 服务端 base URL（§4.6 两层机制解析结果，非敏感）。沉浸云未开放（服务端
  *  未公开部署且本机无 server_endpoint.json）时返回 null——设置页据此隐藏入口。 */
 export function authServerBaseUrl(): Promise<string | null> {

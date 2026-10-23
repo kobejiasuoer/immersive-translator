@@ -40,6 +40,7 @@ import {
   readerSaveVocabWord,
 } from "../lib/readerStore";
 import { trackEvent } from "../lib/telemetry";
+import { track } from "../lib/analytics";
 import { reminderGetConfig } from "../lib/reminder";
 import {
   buildReplayInput,
@@ -1027,6 +1028,9 @@ export function ReaderApp() {
             chapterIdx: full.chapterIdx ?? 0,
             sentenceIdx: full.progress.sentenceIdx,
           });
+          // 云端埋点（Phase 0 §8）：同一触发点补发云端事件（口径与本地
+          // book_open 一致：打开书的一章；chapterIdx 缺省归 0）。
+          track("book_open", { bookId: full.bookId, chapterIdx: full.chapterIdx ?? 0 });
           scheduleBookMetaSave((b) => (b.id === full.bookId ? { ...b, lastReadAt: Date.now() } : b));
         }
         void ensureTranslated(full);

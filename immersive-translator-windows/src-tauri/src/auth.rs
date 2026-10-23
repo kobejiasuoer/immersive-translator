@@ -805,6 +805,36 @@ impl TokenManager {
             .map_err(|e| AuthError::local("parse_error", format!("解析 me/config 失败: {e}")))
     }
 
+    /// POST /v1/events（Phase 0 埋点，计划书 §8）：body `{ event, properties, ts }`，
+    /// ts 为毫秒。2xx 即成功（正文不消费）；失败由命令层静默——埋点绝不打断主流程。
+    pub async fn track_event(
+        self: &Arc<Self>,
+        event: &str,
+        properties: serde_json::Value,
+    ) -> Result<(), AuthError> {
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let body = serde_json::json!({
+            "event": event,
+            "properties": properties,
+            "ts": ts_ms,
+        });
+        let resp = self
+            .with_auth(
+                reqwest::Method::POST,
+                "/v1/events",
+                Some(body.to_string()),
+            )
+            .await?;
+        if (200..300).contains(&resp.status) {
+            Ok(())
+        } else {
+            Err(error_from_response(&resp))
+        }
+    }
+
     /// 沉浸云 gateway endpoint（OpenAI 兼容别名 `/v1/chat/completions`）。
     /// 由 transport 的 base_url 派生；沉浸云未开放（PLATFORM_PUBLIC=false
     /// 且本机无 override）或测试桩等无 base 实现时返回 None——
@@ -1013,6 +1043,25 @@ pub async fn auth_fetch_server_config(
 ) -> Result<serde_json::Value, AuthError> {
     match fetch_server_config_and_persist(&app, manager.inner()).await {
         Ok(value) => Ok(value),
+        Err(e) => {
+            emit_fatal_if_needed(&app, &e);
+            Err(e)
+        }
+    }
+}
+
+/// POST /v1/events（埋点上报，Phase 0 计划书 §8）：与 auth_fetch_me 同构的
+/// 带鉴权请求；区别是失败由前端 track() 静默吞掉（埋点绝不打断主流程），
+/// 仅致命码照常广播失效态（与 fetch_me 一致，不产生 UI 之外的额外动作）。
+#[tauri::command]
+pub async fn auth_track_event(
+    app: AppHandle,
+    manager: tauri::State<'_, Arc<TokenManager>>,
+    event: String,
+    properties: serde_json::Value,
+) -> Result<(), AuthError> {
+    match manager.track_event(&event, properties).await {
+        Ok(()) => Ok(()),
         Err(e) => {
             emit_fatal_if_needed(&app, &e);
             Err(e)
@@ -1678,6 +1727,56 @@ mod tests {
         assert!(status.logged_in);
         assert_eq!(status.user, Some(fixture_user()));
         assert_eq!(status.notice, None);
+    }
+
+    /// Phase 0 埋点：track_event 发 POST /v1/events，带 Bearer，body 契约
+    /// `{ event, properties, ts(毫秒) }`；2xx 即 Ok（正文不消费）。
+    #[tokio::test]
+    async fn track_event_posts_contract_body_with_bearer() {
+        let seq = Arc::new(AtomicU64::new(0));
+        let transport = FakeTransport::new(seq.clone(), |req| {
+            assert_eq!(req.method.as_str(), "POST");
+            Ok(resp(204, ""))
+        });
+        let store = FakeTokenStore::new(Arc::new(AtomicU64::new(0)));
+        store.preload(fixture_stored(now_unix() + 1000));
+        let manager = make_manager(transport.clone(), store);
+
+        manager
+            .track_event(
+                "speak_session_start",
+                serde_json::json!({ "scenarioId": "interview", "scenarioSource": "builtin" }),
+            )
+            .await
+            .expect("204 应视为成功");
+
+        let reqs = transport.requests("/v1/events");
+        assert_eq!(reqs.len(), 1, "恰好一次上报");
+        assert_eq!(reqs[0].bearer.as_deref(), Some("old-access"));
+        let body: serde_json::Value = serde_json::from_str(reqs[0].body.as_deref().unwrap()).unwrap();
+        assert_eq!(body["event"], "speak_session_start");
+        assert_eq!(body["properties"]["scenarioId"], "interview");
+        assert_eq!(body["properties"]["scenarioSource"], "builtin");
+        let ts = body["ts"].as_i64().expect("ts 必须是数字");
+        assert!(
+            (now_unix() * 1000 - 60_000..=now_unix() * 1000 + 60_000).contains(&ts),
+            "ts 应为当前毫秒时间戳，实际 {ts}"
+        );
+    }
+
+    /// 未登录：get_access_token 报 unauthorized，不发任何网络请求。
+    #[tokio::test]
+    async fn track_event_not_logged_in_sends_nothing() {
+        let seq = Arc::new(AtomicU64::new(0));
+        let transport = FakeTransport::new(seq, |_req| {
+            panic!("未登录时不应发出请求");
+        });
+        let store = FakeTokenStore::new(Arc::new(AtomicU64::new(0)));
+        let manager = make_manager(transport.clone(), store);
+
+        let err = manager.track_event("book_open", serde_json::json!({})).await.unwrap_err();
+        assert_eq!(err.code, "unauthorized");
+        assert_eq!(transport.count("/v1/events"), 0);
     }
 }
 

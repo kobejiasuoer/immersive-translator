@@ -1448,6 +1448,7 @@ pub fn run() {
             auth::auth_fetch_me,
             auth::auth_fetch_server_config,
             auth::auth_server_base_url,
+            auth::auth_track_event,
             open_login_window,
             settings_open_tab,
             settings_take_pending_tab,
