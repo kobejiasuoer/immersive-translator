@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://immersive-translator.local/contracts/speak-scenario.schema.json",
+  "title": "口语陪练场景卡契约（Mac / Windows 共享）",
+  "description": "口语陪练场景卡的完整定义：内置兜底场景（ordering / interview / travel / smalltalk，随客户端代码分发）、官方目录场景（off_ 前缀，GET /v1/scenarios 下发）与用户自建场景（usr_ 前缀，经云同步 speak-scenarios 集合分发）。Windows A1 起接入运行时：src/core/speakLogic.ts 的 SpeakScenario 接口与本文件 $defs/speakScenario 一字对应，官方目录缓存 official_speak_scenarios.json 的 scenarios 数组元素即该定义。约束职责两侧分工：本文件的 maxLength / maxItems 是写入端约束（服务端与 A2 场景编辑器在落库 / 下发前校验），客户端读侧只做必填字段存在性校验（isSpeakScenarioLike 宽容读取），不按 maxLength 拒收。",
+  "version": "1.0.0",
+  "$defs": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "缓存文件（official_speak_scenarios.json）顶层的 schemaVersion。主版本号不同视为不兼容：读取方应向用户友好提示升级，不得静默失败或清空数据。"
+    },
+    "scenarioSource": {
+      "type": "string",
+      "enum": [
+        "builtin",
+        "official",
+        "user"
+      ],
+      "description": "场景来源：builtin=客户端代码内置兜底（不落盘）、official=官方目录下发、user=用户自建（usr_ 前缀）。与 Windows 端 src/lib/analytics.ts 的 ScenarioSource 字面量保持一致。"
+    },
+    "scenarioCategory": {
+      "type": "string",
+      "enum": [
+        "daily",
+        "travel",
+        "workplace",
+        "academic",
+        "custom"
+      ],
+      "description": "场景分类：日常 / 旅行 / 职场 / 学术 / 自定义（用户自建场景用 custom）。"
+    },
+    "speakScenario": {
+      "type": "object",
+      "required": [
+        "id",
+        "source",
+        "title",
+        "category",
+        "aiRole",
+        "opener",
+        "updatedAt"
+      ],
+      "description": "场景卡。id 前缀约定（约定而非硬校验，读侧只要求非空 string）：内置场景沿用 ordering / interview / travel / smalltalk，官方目录场景以 off_ 前缀，用户自建场景以 usr_ 前缀（usr_<uuid>）。同 id 冲突时三桶查找顺序为：内置 → 官方 → 用户，先出现者生效（内置场景不可被目录覆盖）。",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "场景 id，会话记录（reading-room.schema.json 的 speakSession.scenario）直接引用此值"
+        },
+        "source": {
+          "$ref": "#/$defs/scenarioSource"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "场景标题（Windows 内置场景由原 label 字段逐字迁移）"
+        },
+        "emoji": {
+          "type": "string",
+          "description": "场景卡 emoji（可选；内置场景照给值）"
+        },
+        "category": {
+          "$ref": "#/$defs/scenarioCategory"
+        },
+        "aiRole": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "LLM 的场景角色设定（你扮演…），直接拼进 system prompt，改写即改变对话行为；Windows 内置场景由原 brief 字段逐字并入。≤300 字为写入端约束，客户端读侧不按此拒收。"
+        },
+        "userRole": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "用户侧角色设定（可选）。≤200 字为写入端约束。"
+        },
+        "goal": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "本次会话的目标（可选）。≤200 字为写入端约束。"
+        },
+        "keyPhrases": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string"
+          },
+          "description": "目标表达短语（可选，≤8 条），供命中检测（textHitsTarget）消费；Windows A1 仅入契约与类型，消费接线归 A2 场景编辑器。≤8 条为写入端约束。"
+        },
+        "opener": {
+          "type": "string",
+          "minLength": 1,
+          "description": "英文开场白（AI 第一轮，避免用户先开口冷启动），逐字进入会话首条 assistant 轮"
+        },
+        "openerZh": {
+          "type": "string",
+          "description": "开场白中文提示（可选；内置场景照给值）"
+        },
+        "defaultDifficulty": {
+          "type": "string",
+          "enum": [
+            "easy",
+            "medium",
+            "hard"
+          ],
+          "description": "默认难度（可选；取值域与 reading-room.schema.json 的 speakDifficulty 一致）"
+        },
+        "updatedAt": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "最后更新时间，Unix 毫秒；Windows 内置场景统一取固定值 Date.UTC(2026, 0, 1)"
+        }
+      }
+    },
+    "speakScenarioList": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/speakScenario"
+      },
+      "description": "场景卡集合：官方目录接口 GET /v1/scenarios 的载荷形态（数组或 { scenarios: [...] } 包装，客户端宽容解析）、缓存文件 official_speak_scenarios.json 的 scenarios 字段，以及云同步 speak-scenarios 集合中每条记录的 payload。"
+    }
+  }
+}

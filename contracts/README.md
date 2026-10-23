@@ -20,6 +20,7 @@ Mac 端实现阅读室时应直接采用此 schema；版本不兼容时按下方
 ## 文件
 
 - `reading-room.schema.json`（v1，已接入 Windows 运行时）：阅读室的文章/句对/生词 SRS/阅读设置。
+- `speak-scenario.schema.json`（v1，Windows A1 起接入运行时——前端场景注册表 + 官方目录缓存）：口语陪练场景卡（内置 / 官方 / 用户自建）。scenario id 已放开为 string，Mac 端实现时不应再按四值闭枚举建模。
 - `provider-presets.json`（计划）：Provider 预设表（OpenAI / DeepSeek / 智谱 / Gemini 等），用于避免模型名与接口地址漂移。
 - `history.schema.json`（计划）：对外历史记录 JSON schema，并配套两端导入迁移器与兼容性测试。
 

@@ -2,8 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://immersive-translator.local/contracts/reading-room.schema.json",
   "title": "沉浸阅读室数据契约（Mac / Windows 共享）",
-  "description": "阅读室的文章、句对、生词（SRS）与阅读设置。Windows 落盘为 reader_articles.json / reader_vocab.json（顶层各带 schemaVersion），Mac 端按同一 schema 实现。1.1.0 起新增书级载体：书章文章带可选 bookId/chapterIdx，整本书落 books/<bookId>.json，索引与元信息落 reader_books.json；可选字段对老数据零破坏，schemaVersion 维持 1。",
-  "version": "1.1.0",
+  "description": "阅读室的文章、句对、生词（SRS）与阅读设置。Windows 落盘为 reader_articles.json / reader_vocab.json（顶层各带 schemaVersion），Mac 端按同一 schema 实现。1.1.0 起新增书级载体：书章文章带可选 bookId/chapterIdx，整本书落 books/<bookId>.json，索引与元信息落 reader_books.json；可选字段对老数据零破坏，schemaVersion 维持 1。1.2.0 起口语场景 id（$defs/speakScenarioId）放开为 string，场景卡完整定义移至 speak-scenario.schema.json：四个内置 id 仍是合法值，旧会话数据零破坏，schemaVersion 维持 1。",
+  "version": "1.2.0",
   "$defs": {
     "schemaVersion": {
       "type": "integer",
@@ -591,13 +591,7 @@
     },
     "speakScenarioId": {
       "type": "string",
-      "enum": [
-        "ordering",
-        "interview",
-        "travel",
-        "smalltalk"
-      ],
-      "description": "口语陪练场景：点餐 / 面试 / 旅行 / 寒暄"
+      "description": "口语陪练场景 id（1.2.0 起放开为 string，场景卡完整定义见 speak-scenario.schema.json 的 $defs/speakScenario）。四个内置 id（ordering=点餐 / interview=面试 / travel=旅行 / smalltalk=寒暄）仍是合法值子集，旧会话数据零破坏；官方目录场景 id 以 off_ 前缀、用户自建场景 id 以 usr_ 前缀（usr_<uuid>）约定区分。"
     },
     "speakDifficulty": {
       "type": "string",
@@ -814,7 +808,7 @@
     },
     "speakSessionContext": {
       "type": "object",
-      "description": "会话语境（v0.8 场景中心）：book=聊刚读的章节，vocab=生词造句闯关。场景枚举 speakScenarioId 保持四值不动，新场景由此可选字段承载；会话级字段全可选。",
+      "description": "会话语境（v0.8 场景中心）：book=聊刚读的章节，vocab=生词造句闯关。1.2.0 起 speakScenarioId 已放开为 string（场景卡定义见 speak-scenario.schema.json），本字段继续承载场景之外的会话级语境（读哪本书 / 复习哪些生词）；会话级字段全可选。",
       "oneOf": [
         {
           "type": "object",
