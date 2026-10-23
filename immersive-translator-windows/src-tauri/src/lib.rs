@@ -9,6 +9,7 @@ mod review_reminder;
 mod screenshot;
 mod secret_store;
 mod speak_store;
+mod sync;
 mod telemetry;
 mod translation;
 mod tray_badge;
@@ -1449,6 +1450,12 @@ pub fn run() {
             auth::auth_fetch_server_config,
             auth::auth_server_base_url,
             auth::auth_track_event,
+            sync::sync_pull,
+            sync::sync_push,
+            sync::sync_store_list,
+            sync::sync_store_put,
+            sync::sync_store_cursor_get,
+            sync::sync_store_cursor_set,
             open_login_window,
             settings_open_tab,
             settings_take_pending_tab,

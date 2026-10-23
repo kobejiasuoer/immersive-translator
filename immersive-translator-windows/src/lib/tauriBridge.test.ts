@@ -23,9 +23,15 @@ import {
   openLoginWindow,
   settingsOpenTab,
   settingsTakePendingTab,
+  syncPull,
+  syncPush,
+  syncStoreCursorGet,
+  syncStoreCursorSet,
+  syncStoreList,
+  syncStorePut,
   ttsSpeakAdvanced,
 } from "./tauriBridge";
-import type { AuthStatus, AuthUser } from "./tauriBridge";
+import type { AuthStatus, AuthUser, StoredSyncEntity, SyncHttpText } from "./tauriBridge";
 
 const mockedInvoke = invoke as unknown as Mock;
 const mockedListen = listen as unknown as Mock;
@@ -180,6 +186,69 @@ describe("ttsSpeakAdvanced 载荷回归（v0.8 ReaderSpeakOptions 增可选 nati
       rate: null,
       voice: null,
       target: null,
+    });
+  });
+});
+
+describe("sync IPC 命令封装（A0 云同步：命令名/参数 camelCase 与 generate_handler! 登记对齐）", () => {
+  const HTTP: SyncHttpText = { status: 200, body: "{}", retryAfterSeconds: null };
+  const ENTITY: StoredSyncEntity = {
+    id: "usr_1",
+    baseVersion: 3,
+    updatedAt: 1700000000000,
+    deleted: false,
+    schemaVersion: 1,
+    originDevice: "windows",
+    payload: { title: "t" },
+    dirty: true,
+  };
+
+  it("sync_pull(collection, since, limit) → SyncHttpText（非 2xx 也是正常返回）", async () => {
+    mockedInvoke.mockResolvedValueOnce(HTTP);
+    await expect(syncPull("speak-scenarios", 7, 500)).resolves.toEqual(HTTP);
+    expect(mockedInvoke).toHaveBeenCalledWith("sync_pull", {
+      collection: "speak-scenarios",
+      since: 7,
+      limit: 500,
+    });
+  });
+
+  it("sync_push(collection, entitiesJson) → SyncHttpText", async () => {
+    mockedInvoke.mockResolvedValueOnce(HTTP);
+    await expect(syncPush("speak-scenarios", '{"entities":[]}')).resolves.toEqual(HTTP);
+    expect(mockedInvoke).toHaveBeenCalledWith("sync_push", {
+      collection: "speak-scenarios",
+      entitiesJson: '{"entities":[]}',
+    });
+  });
+
+  it("sync_store_list(collection) → StoredSyncEntity[]", async () => {
+    mockedInvoke.mockResolvedValueOnce([ENTITY]);
+    await expect(syncStoreList("speak-scenarios")).resolves.toEqual([ENTITY]);
+    expect(mockedInvoke).toHaveBeenCalledWith("sync_store_list", { collection: "speak-scenarios" });
+  });
+
+  it("sync_store_put(collection, entities) → void", async () => {
+    mockedInvoke.mockResolvedValueOnce(undefined);
+    await expect(syncStorePut("speak-scenarios", [ENTITY])).resolves.toBeUndefined();
+    expect(mockedInvoke).toHaveBeenCalledWith("sync_store_put", {
+      collection: "speak-scenarios",
+      entities: [ENTITY],
+    });
+  });
+
+  it("sync_store_cursor_get(collection) → number", async () => {
+    mockedInvoke.mockResolvedValueOnce(42);
+    await expect(syncStoreCursorGet("speak-scenarios")).resolves.toBe(42);
+    expect(mockedInvoke).toHaveBeenCalledWith("sync_store_cursor_get", { collection: "speak-scenarios" });
+  });
+
+  it("sync_store_cursor_set(collection, cursor) → void", async () => {
+    mockedInvoke.mockResolvedValueOnce(undefined);
+    await expect(syncStoreCursorSet("speak-scenarios", 42)).resolves.toBeUndefined();
+    expect(mockedInvoke).toHaveBeenCalledWith("sync_store_cursor_set", {
+      collection: "speak-scenarios",
+      cursor: 42,
     });
   });
 });

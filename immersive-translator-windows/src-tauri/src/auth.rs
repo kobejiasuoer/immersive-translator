@@ -880,7 +880,8 @@ fn emit_auth_state(app: &AppHandle, status: &AuthStatus) {
 }
 
 /// 命令层公共收尾：致命错误（凭据已清）时广播失效态，前端状态条据此显示。
-fn emit_fatal_if_needed(app: &AppHandle, err: &AuthError) {
+/// pub(crate)：sync.rs 的传输命令与 auth 命令共用同一收尾。
+pub(crate) fn emit_fatal_if_needed(app: &AppHandle, err: &AuthError) {
     if let Some(notice) = notice_for_code(&err.code) {
         emit_auth_state(
             app,
