@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  BUILTIN_SCENARIO_UPDATED_AT,
   buildSpeakSystemPrompt,
   buildSpeakUserInput,
   computeCoachDiff,
@@ -242,5 +243,71 @@ describe("lastAssistantText", () => {
     ];
     expect(lastAssistantText(turns)).toBe("Second");
     expect(lastAssistantText([])).toBeNull();
+  });
+});
+
+// ---------- A1：内置场景迁移逐字基线（label→title、brief→aiRole） ----------
+
+/** 迁移前（label/brief 版本）真实跑出的 buildSpeakSystemPrompt(id, "easy") 全串
+ *  快照（JSON 序列化形态逐字贴入；施工流程：迁移前 console.log 取真值）。
+ *  迁移后输出必须与这四条全串相等——system prompt 逐字不变的最后防线。 */
+const EXPECTED_PROMPT_EASY = {
+  ordering: JSON.parse(
+    `"你是用户的英语口语陪练伙伴。场景：在英语餐厅点餐，你扮演友善的服务员，帮用户完成点单、推荐菜品、确认订单。难度：用最简单的词汇和短句，放慢节奏，多给鼓励。\\n\\n对话规则：\\n- 每轮回复 1–3 句地道口语英文，像真人一样自然推进场景，结尾尽量给用户留出接话的空间（提问或等待回应）。\\n- 回复格式必须严格四行：第一行以 \\"EN: \\" 开头，是你的英文回复；第二行以 \\"ZH: \\" 开头，是一句简短中文提示（你这句的意思 + 用户可以怎么接）；第三行以 \\"BETTER: \\" 开头，把用户刚才的发言改写成一个更地道的完整英文句子（保留用户原意，用户已说得地道时可在其基础上小幅润色）；第四行以 \\"TIP: \\" 开头，是一句中文点评（点出改写的关键点）。\\n- 用户的话来自语音识别，可能有错词，结合上下文善意理解；用户说了中文时，用简单英语温和提醒 TA 试着用英语说。\\n- 不要输出这四行以外的任何内容（不要代码块、不要解释）。"`,
+  ),
+  interview: JSON.parse(
+    `"你是用户的英语口语陪练伙伴。场景：英文面试模拟，你扮演温和的面试官，围绕自我介绍、经历、优缺点提问，一次只问一个问题。难度：用最简单的词汇和短句，放慢节奏，多给鼓励。\\n\\n对话规则：\\n- 每轮回复 1–3 句地道口语英文，像真人一样自然推进场景，结尾尽量给用户留出接话的空间（提问或等待回应）。\\n- 回复格式必须严格四行：第一行以 \\"EN: \\" 开头，是你的英文回复；第二行以 \\"ZH: \\" 开头，是一句简短中文提示（你这句的意思 + 用户可以怎么接）；第三行以 \\"BETTER: \\" 开头，把用户刚才的发言改写成一个更地道的完整英文句子（保留用户原意，用户已说得地道时可在其基础上小幅润色）；第四行以 \\"TIP: \\" 开头，是一句中文点评（点出改写的关键点）。\\n- 用户的话来自语音识别，可能有错词，结合上下文善意理解；用户说了中文时，用简单英语温和提醒 TA 试着用英语说。\\n- 不要输出这四行以外的任何内容（不要代码块、不要解释）。"`,
+  ),
+  travel: JSON.parse(
+    `"你是用户的英语口语陪练伙伴。场景：旅行场景（机场、酒店、问路、购物），你扮演当地工作人员或热心路人。难度：用最简单的词汇和短句，放慢节奏，多给鼓励。\\n\\n对话规则：\\n- 每轮回复 1–3 句地道口语英文，像真人一样自然推进场景，结尾尽量给用户留出接话的空间（提问或等待回应）。\\n- 回复格式必须严格四行：第一行以 \\"EN: \\" 开头，是你的英文回复；第二行以 \\"ZH: \\" 开头，是一句简短中文提示（你这句的意思 + 用户可以怎么接）；第三行以 \\"BETTER: \\" 开头，把用户刚才的发言改写成一个更地道的完整英文句子（保留用户原意，用户已说得地道时可在其基础上小幅润色）；第四行以 \\"TIP: \\" 开头，是一句中文点评（点出改写的关键点）。\\n- 用户的话来自语音识别，可能有错词，结合上下文善意理解；用户说了中文时，用简单英语温和提醒 TA 试着用英语说。\\n- 不要输出这四行以外的任何内容（不要代码块、不要解释）。"`,
+  ),
+  smalltalk: JSON.parse(
+    `"你是用户的英语口语陪练伙伴。场景：朋友间日常寒暄闲聊（天气、周末、近况、兴趣），你扮演老朋友，语气轻松。难度：用最简单的词汇和短句，放慢节奏，多给鼓励。\\n\\n对话规则：\\n- 每轮回复 1–3 句地道口语英文，像真人一样自然推进场景，结尾尽量给用户留出接话的空间（提问或等待回应）。\\n- 回复格式必须严格四行：第一行以 \\"EN: \\" 开头，是你的英文回复；第二行以 \\"ZH: \\" 开头，是一句简短中文提示（你这句的意思 + 用户可以怎么接）；第三行以 \\"BETTER: \\" 开头，把用户刚才的发言改写成一个更地道的完整英文句子（保留用户原意，用户已说得地道时可在其基础上小幅润色）；第四行以 \\"TIP: \\" 开头，是一句中文点评（点出改写的关键点）。\\n- 用户的话来自语音识别，可能有错词，结合上下文善意理解；用户说了中文时，用简单英语温和提醒 TA 试着用英语说。\\n- 不要输出这四行以外的任何内容（不要代码块、不要解释）。"`,
+  ),
+};
+
+describe("内置场景迁移逐字基线（A1：label→title、brief→aiRole，文案一字不动）", () => {
+  it("4 内置 title/aiRole/opener/openerZh 硬编码逐字断言", () => {
+    const byId = (id: string) => SPEAK_SCENARIOS.find((s) => s.id === id)!;
+    // ordering
+    expect(byId("ordering").title).toBe("点餐");
+    expect(byId("ordering").aiRole).toBe("在英语餐厅点餐，你扮演友善的服务员，帮用户完成点单、推荐菜品、确认订单");
+    expect(byId("ordering").opener).toBe("Hi there! Welcome in. What can I get started for you today?");
+    expect(byId("ordering").openerZh).toBe("你好，欢迎光临！今天想吃点什么？（试着说：I'd like… / Can I have…）");
+    // interview
+    expect(byId("interview").title).toBe("面试");
+    expect(byId("interview").aiRole).toBe("英文面试模拟，你扮演温和的面试官，围绕自我介绍、经历、优缺点提问，一次只问一个问题");
+    expect(byId("interview").opener).toBe("Good morning, thanks for coming in. Could you start by telling me a little about yourself?");
+    expect(byId("interview").openerZh).toBe("早上好，先做个自我介绍吧。（提示：I'm currently… / I used to work…）");
+    // travel
+    expect(byId("travel").title).toBe("旅行");
+    expect(byId("travel").aiRole).toBe("旅行场景（机场、酒店、问路、购物），你扮演当地工作人员或热心路人");
+    expect(byId("travel").opener).toBe("Good afternoon! You look a little lost — is there anything I can help you with?");
+    expect(byId("travel").openerZh).toBe("下午好！看你想问路？（提示：Excuse me, how can I get to…）");
+    // smalltalk
+    expect(byId("smalltalk").title).toBe("寒暄");
+    expect(byId("smalltalk").aiRole).toBe("朋友间日常寒暄闲聊（天气、周末、近况、兴趣），你扮演老朋友，语气轻松");
+    expect(byId("smalltalk").opener).toBe("Hey! Long time no see. How has your week been going?");
+    expect(byId("smalltalk").openerZh).toBe("嘿，好久不见！这周过得怎么样？（提示：Pretty good, I… / Not bad, just…）");
+  });
+
+  it("4 内置 source 均为 builtin、category 按拍板归类、updatedAt 统一基准值", () => {
+    const byId = (id: string) => SPEAK_SCENARIOS.find((s) => s.id === id)!;
+    for (const s of SPEAK_SCENARIOS) {
+      expect(s.source).toBe("builtin");
+      expect(s.updatedAt).toBe(BUILTIN_SCENARIO_UPDATED_AT);
+      expect(BUILTIN_SCENARIO_UPDATED_AT).toBe(Date.UTC(2026, 0, 1));
+    }
+    expect(byId("ordering").category).toBe("daily");
+    expect(byId("interview").category).toBe("workplace");
+    expect(byId("travel").category).toBe("travel");
+    expect(byId("smalltalk").category).toBe("daily");
+  });
+
+  it("buildSpeakSystemPrompt 4 内置 × easy 全串快照（迁移前后逐字节相等）", () => {
+    expect(buildSpeakSystemPrompt("ordering", "easy")).toBe(EXPECTED_PROMPT_EASY.ordering);
+    expect(buildSpeakSystemPrompt("interview", "easy")).toBe(EXPECTED_PROMPT_EASY.interview);
+    expect(buildSpeakSystemPrompt("travel", "easy")).toBe(EXPECTED_PROMPT_EASY.travel);
+    expect(buildSpeakSystemPrompt("smalltalk", "easy")).toBe(EXPECTED_PROMPT_EASY.smalltalk);
   });
 });

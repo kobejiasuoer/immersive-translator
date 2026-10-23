@@ -21,15 +21,6 @@ pub enum SpeakRole {
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum SpeakScenarioId {
-    Ordering,
-    Interview,
-    Travel,
-    Smalltalk,
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
 pub enum SpeakDifficulty {
     Easy,
     Medium,
@@ -106,8 +97,9 @@ pub struct CoachDiff {
     pub note: Option<String>,
 }
 
-/// 会话语境（v0.8 场景中心）：book=聊刚读的章节，vocab=生词造句闯关。
-/// 场景枚举保持四值不动，新场景由这个可选字段承载（老会话无此字段）。
+/// 会话语境（v0.8 场景中心）：book=聊刚读的章节，vocab=生词造句闯关（老会话无此字段）。
+/// 场景 id 自 A1 起放开为 string（内置四值 + off_/usr_ 前缀，契约
+/// contracts/speak-scenario.schema.json）；context 仍是 book/vocab 语境承载。
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum SpeakSessionContext {
@@ -154,7 +146,7 @@ pub struct SpeakTurn {
 #[serde(rename_all = "camelCase")]
 pub struct SpeakSession {
     pub id: String,
-    pub scenario: SpeakScenarioId,
+    pub scenario: String,
     pub difficulty: SpeakDifficulty,
     pub turns: Vec<SpeakTurn>,
     pub created_at: i64,
@@ -321,7 +313,7 @@ mod tests {
             "createdAt": 0, "updatedAt": 3
         }"#;
         let s: SpeakSession = serde_json::from_str(json).expect("会话反序列化");
-        assert_eq!(s.scenario, SpeakScenarioId::Ordering);
+        assert_eq!(s.scenario, "ordering");
         assert_eq!(s.difficulty, SpeakDifficulty::Easy);
         assert_eq!(s.turns.len(), 3);
         assert_eq!(s.turns[0].hint_zh.as_deref(), Some("你好"));
@@ -337,6 +329,28 @@ mod tests {
         assert_eq!(legacy.hint_zh, None);
         assert_eq!(legacy.shadow_score, None);
         assert!(legacy.shadow_attempts.is_none());
+    }
+
+    #[test]
+    fn unknown_scenario_id_survives_roundtrip() {
+        // A1 起场景 id 放开为 string：官方 off_/用户 usr_ 前缀的会话必须能存取
+        // （闭枚举时代未知 id 会让整个会话库报「数据损坏」全库打不开）。
+        for scenario in ["off_demo", "usr_550e8400-e29b-41d4-a716-446655440000"] {
+            let json = format!(
+                r#"{{
+                    "id": "s9", "scenario": "{scenario}", "difficulty": "easy",
+                    "turns": [{{ "role": "assistant", "text": "Hello!", "hintZh": "你好", "at": 1 }}],
+                    "createdAt": 0, "updatedAt": 1
+                }}"#
+            );
+            let s: SpeakSession = serde_json::from_str(&json).expect("未知场景 id 会话可加载");
+            assert_eq!(s.scenario, scenario);
+            let out = serde_json::to_value(&s).unwrap();
+            assert_eq!(out["scenario"], scenario);
+            // roundtrip 回读仍保持（speak_save_session 的载荷同构）
+            let back: SpeakSession = serde_json::from_value(out).expect("roundtrip");
+            assert_eq!(back.scenario, scenario);
+        }
     }
 
     #[test]

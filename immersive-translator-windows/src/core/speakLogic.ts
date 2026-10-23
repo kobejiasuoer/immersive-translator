@@ -12,52 +12,94 @@ import type { WordScore } from "./pronunciation";
 
 export const SPEAK_SCHEMA_VERSION = 1;
 
-export type SpeakScenarioId = "ordering" | "interview" | "travel" | "smalltalk";
+/** 场景 id：内置沿用 "ordering"|"interview"|"travel"|"smalltalk"；官方 "off_" 前缀；
+ *  用户 "usr_" 前缀（usr_<uuid>）。A1（契约 v1.2.0）起放开为 string，旧会话 JSON
+ *  与 Rust 存储/契约零破坏（4 个内置 id 仍是合法值）。 */
+export type SpeakScenarioId = string;
 export type SpeakDifficulty = "easy" | "medium" | "hard";
 
+/** 场景来源（与 src/lib/analytics.ts 的 ScenarioSource 字面量一致；core 不
+ *  import lib，故本地定义，analytics.ts 本身不动）。 */
+export type SpeakScenarioSource = "builtin" | "official" | "user";
+/** 场景分类（契约 $defs/scenarioCategory）。 */
+export type SpeakScenarioCategory = "daily" | "travel" | "workplace" | "academic" | "custom";
+
+/** 内置 4 场景统一的迁移基准 updatedAt（Unix 毫秒；测试逐字基线断言用）。 */
+export const BUILTIN_SCENARIO_UPDATED_AT = Date.UTC(2026, 0, 1);
+
+/**
+ * 口语场景（contracts/speak-scenario.schema.json $defs/speakScenario 的 TS 镜像）。
+ * A1 迁移：label→title、brief 并入 aiRole、新增 source/category/updatedAt，
+ * 4 个内置场景文案逐字搬运（system prompt 与开场白输出不变）。
+ */
 export interface SpeakScenario {
-  id: SpeakScenarioId;
-  label: string;
-  emoji: string;
-  /** LLM 的场景角色设定（你扮演…）。 */
-  brief: string;
+  id: string;
+  source: SpeakScenarioSource;
+  /** 场景名（原 label 逐字迁移）。 */
+  title: string;
+  emoji?: string;
+  category: SpeakScenarioCategory;
+  /** LLM 的场景角色设定（你扮演…；原 brief 逐字并入，≤300 字）。 */
+  aiRole: string;
+  /** 用户角色设定（≤200 字）。 */
+  userRole?: string;
+  /** 本场景的练习目标（≤200 字）。 */
+  goal?: string;
+  /** 关键表达（≤8 条；A1 仅入契约与类型，消费接线归 A2 编辑器）。 */
+  keyPhrases?: string[];
   /** 开场白（AI 第一轮，避免用户先开口冷启动）。 */
   opener: string;
-  openerZh: string;
+  /** 开场白中文提示。 */
+  openerZh?: string;
+  defaultDifficulty?: SpeakDifficulty;
+  /** Unix 毫秒。 */
+  updatedAt: number;
 }
 
 export const SPEAK_SCENARIOS: SpeakScenario[] = [
   {
     id: "ordering",
-    label: "点餐",
+    source: "builtin",
+    title: "点餐",
     emoji: "🍜",
-    brief: "在英语餐厅点餐，你扮演友善的服务员，帮用户完成点单、推荐菜品、确认订单",
+    category: "daily",
+    aiRole: "在英语餐厅点餐，你扮演友善的服务员，帮用户完成点单、推荐菜品、确认订单",
     opener: "Hi there! Welcome in. What can I get started for you today?",
     openerZh: "你好，欢迎光临！今天想吃点什么？（试着说：I'd like… / Can I have…）",
+    updatedAt: BUILTIN_SCENARIO_UPDATED_AT,
   },
   {
     id: "interview",
-    label: "面试",
+    source: "builtin",
+    title: "面试",
     emoji: "💼",
-    brief: "英文面试模拟，你扮演温和的面试官，围绕自我介绍、经历、优缺点提问，一次只问一个问题",
+    category: "workplace",
+    aiRole: "英文面试模拟，你扮演温和的面试官，围绕自我介绍、经历、优缺点提问，一次只问一个问题",
     opener: "Good morning, thanks for coming in. Could you start by telling me a little about yourself?",
     openerZh: "早上好，先做个自我介绍吧。（提示：I'm currently… / I used to work…）",
+    updatedAt: BUILTIN_SCENARIO_UPDATED_AT,
   },
   {
     id: "travel",
-    label: "旅行",
+    source: "builtin",
+    title: "旅行",
     emoji: "✈️",
-    brief: "旅行场景（机场、酒店、问路、购物），你扮演当地工作人员或热心路人",
+    category: "travel",
+    aiRole: "旅行场景（机场、酒店、问路、购物），你扮演当地工作人员或热心路人",
     opener: "Good afternoon! You look a little lost — is there anything I can help you with?",
     openerZh: "下午好！看你想问路？（提示：Excuse me, how can I get to…）",
+    updatedAt: BUILTIN_SCENARIO_UPDATED_AT,
   },
   {
     id: "smalltalk",
-    label: "寒暄",
+    source: "builtin",
+    title: "寒暄",
     emoji: "☕️",
-    brief: "朋友间日常寒暄闲聊（天气、周末、近况、兴趣），你扮演老朋友，语气轻松",
+    category: "daily",
+    aiRole: "朋友间日常寒暄闲聊（天气、周末、近况、兴趣），你扮演老朋友，语气轻松",
     opener: "Hey! Long time no see. How has your week been going?",
     openerZh: "嘿，好久不见！这周过得怎么样？（提示：Pretty good, I… / Not bad, just…）",
+    updatedAt: BUILTIN_SCENARIO_UPDATED_AT,
   },
 ];
 
@@ -100,8 +142,8 @@ export interface CoachDiff {
 
 /**
  * 会话语境（v0.8 场景中心）：book=聊刚读的章节，vocab=生词造句闯关。
- * 场景枚举 SpeakScenarioId 保持四值不动（Rust 闭枚举整文件兼容），新场景
- * 由这个可选字段承载，老会话无 context 原样可读。
+ * A1 起 SpeakScenarioId 已放开为 string（官方/用户场景可作会话场景），
+ * 语境仍由这个可选字段承载，老会话无 context 原样可读。
  */
 export type SpeakSessionContext =
   | {
@@ -198,7 +240,7 @@ export function buildSpeakSystemPrompt(
   const sc = scenarioOf(scenario);
   const diff = difficultyOf(difficulty);
   const lines = [
-    `你是用户的英语口语陪练伙伴。场景：${sc.brief}。难度：${diff.note}。`,
+    `你是用户的英语口语陪练伙伴。场景：${sc.aiRole}。难度：${diff.note}。`,
   ];
   if (context?.kind === "book") {
     const excerpt = context.excerpt.join(" ").trim();
