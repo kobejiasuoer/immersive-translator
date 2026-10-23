@@ -42,6 +42,7 @@ import {
 import { startMicRecorder, type MicRecorderHandle } from "../core/micRecorder";
 import { createVadDetector, type VadDetector } from "../core/vad";
 import { loadAsrCredentials, loadIseCredentials } from "../lib/iseCredentials";
+import { track } from "../lib/analytics";
 import { speakListSessions, speakSaveSession } from "../lib/speakStore";
 import { cancelTranslation, openSettings } from "../lib/tauriBridge";
 import { phoneTip, wordScorePath } from "../core/shadowDiagnose";
@@ -225,6 +226,9 @@ export function SpeakView({
   const vadRef = useRef<VadDetector | null>(null);
   const sessionRef = useRef<SpeakSession | null>(null);
   sessionRef.current = session;
+  /** 已上报 speak_session_start 的会话 id（云端埋点，Phase 0 §8）：end 事件只对
+   *  本次组件生命周期内 start() 过的会话发；resume 的旧会话不算（没发过 start）。 */
+  const trackedStartIdRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   /** 本组件最近一次朗读的代数；null = 当前没有由本组件发起、尚未终结的朗读。 */
   const speakGenRef = useRef<number | null>(null);
@@ -335,6 +339,10 @@ export function SpeakView({
       // 开场白直接播报
       speakRound(s.turns[0].text);
       persist(s);
+      // 云端埋点（Phase 0 §8）：新会话开始。当前场景均为内置场景；
+      // official/user 来源随 A 阶段场景中心引入。
+      trackedStartIdRef.current = s.id;
+      track("speak_session_start", { scenarioId: scenario, scenarioSource: "builtin" });
     },
     [persist, speakRound, stopSpeak],
   );
@@ -350,18 +358,34 @@ export function SpeakView({
       setDrill(null);
       setMineReady(false);
       setPronSel(null);
+      // 重开的旧会话没有配对的 start 事件，不发 end（Phase 0 口径）
+      trackedStartIdRef.current = null;
     },
     [stopSpeak],
   );
+
+  /** 云端埋点（Phase 0 §8）：会话结束（回场景中心/卸载共用）。只对已上报
+   *  start 的会话发一次 end；turns 取会话 turns 数组长度，时长自 createdAt 起算。 */
+  const trackSessionEnd = useCallback(() => {
+    const s = sessionRef.current;
+    if (!s || trackedStartIdRef.current !== s.id) return;
+    trackedStartIdRef.current = null;
+    track("speak_session_end", {
+      scenarioId: s.scenario,
+      turns: s.turns.length,
+      durationSeconds: Math.max(0, Math.round((Date.now() - s.createdAt) / 1000)),
+    });
+  }, []);
 
   /** 回场景中心（「← 切换场景」）：旧轮丢弃。 */
   const backToHub = useCallback(() => {
     epochRef.current += 1;
     stopSpeak();
+    trackSessionEnd();
     setSession(null);
     setPhase("idle");
     setRoundError("");
-  }, [stopSpeak]);
+  }, [stopSpeak, trackSessionEnd]);
 
   // ---- 语境目标词（chips / 系统提示 / 自动过关共用） ----
   const contextTargets = useMemo<(VocabWord & { zh: string })[]>(() => {
@@ -925,6 +949,9 @@ export function SpeakView({
       recorderRef.current?.cancel();
       shadowRecorderRef.current?.cancel();
       stopSpeakRef.current();
+      // 切走视图 = 会话离开屏幕（SpeakView 条件渲染，session 态随之丢失），
+      // 补发 end 埋点；trackSessionEnd 依赖恒为 []、只读 ref，身份稳定。
+      trackSessionEnd();
     };
   }, []);
 
