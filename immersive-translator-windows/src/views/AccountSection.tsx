@@ -2,7 +2,8 @@
  * 设置页「账号」tab（docs/windows-auth-design-2026-09-26.md §6/§8.2）。
  * - 未登录：空态卡 + 「登录」按钮（open_login_window）；notice 失效状态条（D8 warn 条）
  * - 已登录：头像/昵称/邮箱/plan 徽标、当前设备行（只读）、注册时间、
- *   云端配置手动重拉（D7：登录后自动拉取在 Rust 侧 fire-and-forget，失败仅 log）
+ *   云端配置手动重拉（D7：登录后自动拉取在 Rust 侧 fire-and-forget，失败仅 log）、
+ *   口语场景云同步（升级计划 A0：双向同步 speak-scenarios 集合，手动触发）
  * - 登出：auth_logout；clear 失败（storage_error）保持登录态 + 红条（§5.3/P13）
  * - 状态机：挂载 auth_get_status + 监听 auth-state-changed（启动静默续登录 /
  *   登录/登出后的状态更新由 Rust 事件驱动，前端不建第二份账号存储）
@@ -17,6 +18,7 @@ import {
   openLoginWindow,
   type AuthStatus,
 } from "../lib/tauriBridge";
+import { syncNow, type SyncSummary } from "../lib/syncEngine";
 import { IconAlert, IconCheck } from "../ui/icons";
 
 export interface AccountStatusState {
@@ -78,6 +80,16 @@ function formatDate(iso: string): string {
   return `${y}-${m}-${d}`;
 }
 
+/** 口语场景同步结果一句话（成功给计数，失败给原因；跳过项只报数量）。 */
+function syncSummaryText(s: SyncSummary): string {
+  if (!s.ok) return `同步失败：${s.error ?? "未知错误"}`;
+  const parts = [`拉取 ${s.pulled} 项`, `推送 ${s.pushed} 项`];
+  if (s.conflicts > 0) parts.push(`冲突处理 ${s.conflicts} 次`);
+  if (s.keptLocal > 0) parts.push(`本地较新保留 ${s.keptLocal} 项`);
+  if (s.skipped.length > 0) parts.push(`跳过 ${s.skipped.length} 项`);
+  return `同步完成（${parts.join("，")}）`;
+}
+
 export function AccountSection() {
   const { status, refresh } = useAccountStatus();
   const [loggingOut, setLoggingOut] = useState(false);
@@ -86,6 +98,9 @@ export function AccountSection() {
   /** 云端配置手动重拉结果。 */
   const [configMsg, setConfigMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [syncingConfig, setSyncingConfig] = useState(false);
+  /** 口语场景云同步（A0）状态。 */
+  const [scenarioSyncing, setScenarioSyncing] = useState(false);
+  const [scenarioSyncMsg, setScenarioSyncMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
   async function handleLogout(): Promise<void> {
     if (loggingOut) return;
@@ -116,6 +131,16 @@ export function AccountSection() {
     } finally {
       setSyncingConfig(false);
     }
+  }
+
+  async function handleSyncScenarios(): Promise<void> {
+    if (scenarioSyncing) return;
+    setScenarioSyncing(true);
+    setScenarioSyncMsg(null);
+    // syncNow 不抛错（失败汇总带回）；未登录/网络失败在 summary.error 里。
+    const summary = await syncNow("speak-scenarios");
+    setScenarioSyncMsg({ text: syncSummaryText(summary), ok: summary.ok });
+    setScenarioSyncing(false);
   }
 
   if (status === null) {
@@ -219,6 +244,33 @@ export function AccountSection() {
               <div className={`msg-bar ${configMsg.ok ? "ok" : "err"}`}>
                 {configMsg.ok ? <IconCheck size={14} /> : <IconAlert size={14} />}
                 {configMsg.text}
+              </div>
+            )}
+          </section>
+
+          <section className="group-card acct-sync-panel">
+            <div className="acct-card-title">口语场景云同步</div>
+            <div className="field-row">
+              <div className="field-text">
+                <span className="field-label-v2">跨设备同步自定义口语场景</span>
+                <span className="field-hint">
+                  升级计划 A0：先拉取云端变更再推送本地改动；场景编辑器上线后将自动接入
+                </span>
+              </div>
+              <div className="field-ctrl">
+                <button
+                  className="btn btn-secondary btn-sm"
+                  disabled={scenarioSyncing}
+                  onClick={() => void handleSyncScenarios()}
+                >
+                  {scenarioSyncing ? "同步中…" : "立即同步"}
+                </button>
+              </div>
+            </div>
+            {scenarioSyncMsg && (
+              <div className={`msg-bar ${scenarioSyncMsg.ok ? "ok" : "err"}`}>
+                {scenarioSyncMsg.ok ? <IconCheck size={14} /> : <IconAlert size={14} />}
+                {scenarioSyncMsg.text}
               </div>
             )}
           </section>

@@ -517,6 +517,67 @@ export function authServerBaseUrl(): Promise<string | null> {
   return invoke<string | null>("auth_server_base_url");
 }
 
+// ---------------------------------------------------------------------------
+// 云同步（升级计划 A0）：传输桥（Rust 附带鉴权）+ 本地同步存储桥。
+// 协议逻辑（游标/LWW/409/429）在 lib/syncEngine.ts，这里只做 IPC 封装。
+// ---------------------------------------------------------------------------
+
+/** 一次 /v1/sync 请求的原始应答。非 2xx 也是正常返回（404/409/413/429 是协议
+ *  数据，由 syncEngine 处置）；仅网络/致命鉴权错误 reject（AuthError）。 */
+export interface SyncHttpText {
+  status: number;
+  body: string;
+  retryAfterSeconds: number | null;
+}
+
+/** 本地同步实体（Rust sync.rs StoredSyncEntity 的镜像，camelCase 一字不差）：
+ *  多 baseVersion/dirty、少服务端 version。 */
+export interface StoredSyncEntity {
+  id: string;
+  /** 上次同步到的服务端版本；0 = 本地新建从未推送 */
+  baseVersion: number;
+  /** 客户端逻辑时间（毫秒）——LWW 比较基准，服务端只透传 */
+  updatedAt: number;
+  deleted: boolean;
+  schemaVersion: number;
+  originDevice?: string;
+  /** 活实体业务数据；tombstone 为 undefined */
+  payload?: unknown;
+  /** 本地新建/修改/软删除置 true；push accepted 后清零 */
+  dirty: boolean;
+}
+
+/** GET /v1/sync/{collection}/pull?since=&limit=。since 是版本号游标（非时间戳）。 */
+export function syncPull(collection: string, since: number, limit: number): Promise<SyncHttpText> {
+  return invoke("sync_pull", { collection, since, limit });
+}
+
+/** POST /v1/sync/{collection}/push。entitiesJson 是完整请求体 `{ entities: [...] }`
+ *  的序列化串（服务端 zod 校验为准）。 */
+export function syncPush(collection: string, entitiesJson: string): Promise<SyncHttpText> {
+  return invoke("sync_push", { collection, entitiesJson });
+}
+
+/** 列出集合的全部本地实体（含 tombstone 与 dirty；updatedAt 倒序）。 */
+export function syncStoreList(collection: string): Promise<StoredSyncEntity[]> {
+  return invoke("sync_store_list", { collection });
+}
+
+/** 按 id 整体替换（存在即覆盖、不存在即追加）。合并/过滤决策在 syncEngine。 */
+export function syncStorePut(collection: string, entities: StoredSyncEntity[]): Promise<void> {
+  return invoke("sync_store_put", { collection, entities });
+}
+
+/** 读取集合游标（版本号；无记录默认 0 = 首次全量拉取）。 */
+export function syncStoreCursorGet(collection: string): Promise<number> {
+  return invoke("sync_store_cursor_get", { collection });
+}
+
+/** 写入集合游标（每集合必须各存各的——版本号空间跨集合共享）。 */
+export function syncStoreCursorSet(collection: string, cursor: number): Promise<void> {
+  return invoke("sync_store_cursor_set", { collection, cursor });
+}
+
 /** 打开（或聚焦）登录窗口。 */
 export function openLoginWindow(): Promise<void> {
   return invoke("open_login_window");
