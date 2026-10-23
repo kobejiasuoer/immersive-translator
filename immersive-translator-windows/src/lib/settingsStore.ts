@@ -1,6 +1,11 @@
 import type { TranslationMode } from "../core/languageDetect";
-import { findMatchingPreset, isLocalhostEndpoint, PLATFORM_PROVIDER_ID } from "../core/providerPresets";
-import { secretGet, secretSet } from "./tauriBridge";
+import {
+  findMatchingPreset,
+  isLocalhostEndpoint,
+  platformEndpoint,
+  PLATFORM_PROVIDER_ID,
+} from "../core/providerPresets";
+import { authServerBaseUrl, secretGet, secretSet } from "./tauriBridge";
 
 /** 词典卡片模式：auto = 选中单词/短语时自动切换；off = 始终普通翻译。 */
 export type DictCardMode = "auto" | "off";
@@ -151,6 +156,18 @@ export function providerIdFor(
   return findMatchingPreset(settings.endpoint, platformEndpoint)?.id ?? CUSTOM_PROVIDER_ID;
 }
 
+/** 解析沉浸云网关地址（与 Rust 侧 gateway_endpoint 同构派生）。
+ *  沉浸云未开放（auth_server_base_url 返回 null）或调用失败（非 Tauri 环境）
+ *  时返回 undefined：此时沉浸云 endpoint 无法识别，按自定义接口处理。 */
+async function resolvePlatformEndpoint(): Promise<string | undefined> {
+  try {
+    const base = await authServerBaseUrl();
+    return base ? platformEndpoint(base) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * 旧版迁移自愈：单 key 时代的数据可能被归在错误的桶里。
  * 若整库只有一个 key、不在当前服务商的桶、且当前桶为空，则视为旧数据，归还给当前服务商。
@@ -238,7 +255,7 @@ export async function loadSettingsFullAsync(): Promise<{
   vault: KeyVault;
 }> {
   const { settings: persisted, legacyApiKey } = loadPersistedState();
-  const providerId = providerIdFor(persisted);
+  const providerId = providerIdFor(persisted, await resolvePlatformEndpoint());
 
   if (legacyApiKey !== undefined) {
     // 迁移：旧版明文 key（localStorage）搬进 vault 对应服务商的桶
@@ -272,7 +289,7 @@ export async function saveSettingsFullAsync(
   settings: AppSettings,
   vault: KeyVault,
 ): Promise<void> {
-  const providerId = providerIdFor(settings);
+  const providerId = providerIdFor(settings, await resolvePlatformEndpoint());
   const merged: KeyVault = { ...vault, [providerId]: settings.apiKey };
   const { apiKey: _omitted, ...rest } = settings;
 
@@ -306,7 +323,7 @@ export async function loadSettingsAsync(): Promise<AppSettings> {
  * 保存设置（异步）。apiKey 写入当前服务商桶，其余桶保持 DPAPI 里已有的值。
  */
 export async function saveSettingsAsync(settings: AppSettings): Promise<void> {
-  const providerId = providerIdFor(settings);
+  const providerId = providerIdFor(settings, await resolvePlatformEndpoint());
   const raw = await secretGet();
   const vault = parseKeyVault(raw, providerId);
   await saveSettingsFullAsync(settings, vault);
