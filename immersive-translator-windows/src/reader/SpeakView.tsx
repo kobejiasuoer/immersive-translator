@@ -1272,7 +1272,7 @@ export function SpeakView({
               return (
                 <div key={i} className="dialogue-turn">
                   <div className="turn-speaker-line">
-                    <span>AI 陪练 · {sc.label}</span>
+                    <span>AI 陪练 · {sc.title}</span>
                     <button
                       className="text-action-btn"
                       disabled={busy}
