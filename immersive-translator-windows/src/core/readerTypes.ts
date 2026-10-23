@@ -9,7 +9,7 @@
 
 export const READER_SCHEMA_VERSION = 1;
 
-/** 一篇文章的来源。pdf / docx 为本地文件导入；epub 未实现，仅预留枚举。 */
+/** 一篇文章的来源。pdf / docx 为本地文件导入；epub 为整本书导入（按章分 Article）。 */
 export type ArticleSourceType = "paste" | "url" | "epub" | "pdf" | "docx";
 
 /** 单句译文的翻译状态。 */
