@@ -21,6 +21,9 @@ import {
   listenAuthStateChanged,
   listenSettingsNavigateTab,
   openLoginWindow,
+  scenarioCacheRead,
+  scenarioCacheWrite,
+  scenarioFetchOfficial,
   settingsOpenTab,
   settingsTakePendingTab,
   syncPull,
@@ -250,5 +253,26 @@ describe("sync IPC 命令封装（A0 云同步：命令名/参数 camelCase 与 
       collection: "speak-scenarios",
       cursor: 42,
     });
+  });
+});
+
+describe("scenario IPC 命令封装（A1 场景目录：命令名/参数 camelCase 对齐）", () => {
+  it("scenario_fetch_official() → SyncHttpText（404 也是正常返回，处置归 scenarioCatalog）", async () => {
+    const http: SyncHttpText = { status: 404, body: "Not Found", retryAfterSeconds: null };
+    mockedInvoke.mockResolvedValueOnce(http);
+    await expect(scenarioFetchOfficial()).resolves.toEqual(http);
+    expect(mockedInvoke).toHaveBeenCalledWith("scenario_fetch_official");
+  });
+
+  it("scenario_cache_read() → unknown[]（空数组=无缓存）", async () => {
+    mockedInvoke.mockResolvedValueOnce([]);
+    await expect(scenarioCacheRead()).resolves.toEqual([]);
+    expect(mockedInvoke).toHaveBeenCalledWith("scenario_cache_read");
+  });
+
+  it("scenario_cache_write(scenariosJson) → void", async () => {
+    mockedInvoke.mockResolvedValueOnce(undefined);
+    await expect(scenarioCacheWrite("[]")).resolves.toBeUndefined();
+    expect(mockedInvoke).toHaveBeenCalledWith("scenario_cache_write", { scenariosJson: "[]" });
   });
 });

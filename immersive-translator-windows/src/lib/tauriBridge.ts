@@ -578,6 +578,27 @@ export function syncStoreCursorSet(collection: string, cursor: number): Promise<
   return invoke("sync_store_cursor_set", { collection, cursor });
 }
 
+// ---------------------------------------------------------------------------
+// 场景目录（升级计划 A1）：官方目录拉取 + 本地缓存桥。
+// 装载/节流/静默降级逻辑在 lib/scenarioCatalog.ts，这里只做 IPC 封装。
+// ---------------------------------------------------------------------------
+
+/** GET /v1/scenarios（官方场景目录）。非 2xx 也是正常返回（404=服务端 A3 尚未
+ *  部署该端点，由 scenarioCatalog 静默处置）；仅网络/致命鉴权错误 reject。 */
+export function scenarioFetchOfficial(): Promise<SyncHttpText> {
+  return invoke("scenario_fetch_official");
+}
+
+/** 读取官方目录本地缓存（unknown[]；空数组=无缓存。形状校验交给 isSpeakScenarioLike）。 */
+export function scenarioCacheRead(): Promise<unknown[]> {
+  return invoke<unknown[]>("scenario_cache_read");
+}
+
+/** 整体写入官方目录缓存（scenariosJson=已过滤数组的 JSON 文本）。 */
+export function scenarioCacheWrite(scenariosJson: string): Promise<void> {
+  return invoke("scenario_cache_write", { scenariosJson });
+}
+
 /** 打开（或聚焦）登录窗口。 */
 export function openLoginWindow(): Promise<void> {
   return invoke("open_login_window");

@@ -6,6 +6,7 @@ mod history;
 mod ocr;
 mod reader_store;
 mod review_reminder;
+mod scenario_catalog;
 mod screenshot;
 mod secret_store;
 mod speak_store;
@@ -1456,6 +1457,9 @@ pub fn run() {
             sync::sync_store_put,
             sync::sync_store_cursor_get,
             sync::sync_store_cursor_set,
+            scenario_catalog::scenario_fetch_official,
+            scenario_catalog::scenario_cache_read,
+            scenario_catalog::scenario_cache_write,
             open_login_window,
             settings_open_tab,
             settings_take_pending_tab,

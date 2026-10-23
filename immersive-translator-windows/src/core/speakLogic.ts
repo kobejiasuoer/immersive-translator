@@ -109,8 +109,83 @@ export const SPEAK_DIFFICULTIES: { id: SpeakDifficulty; label: string; note: str
   { id: "hard", label: "进阶", note: "表达丰富地道，可以自然追问细节，接近母语者" },
 ];
 
+// ---- 场景合并注册表（A1：官方目录 + 用户自建场景的内存载体，仅内存不落盘） ----
+
+/** 官方桶（id → 场景；scenarioCatalog 装载缓存/拉取结果后全量替换）。 */
+const officialScenarios = new Map<string, SpeakScenario>();
+/** 用户桶（来源 A0 syncStoreList("speak-scenarios") 的 payload）。 */
+const userScenarios = new Map<string, SpeakScenario>();
+
+/** 内置 id 集合：官方/用户桶与内置撞车的项直接丢弃（防目录脏数据带 ordering
+ *  进来导致入口网格重复渲染；id 前缀 off_/usr_ 天然不撞，规则纯防御）。 */
+const builtinScenarioIds = new Set(SPEAK_SCENARIOS.map((s) => s.id));
+
+/** 全量替换一个桶：逐项 isSpeakScenarioLike 过滤 + 内置撞车过滤 + 桶内同 id 保留先出现者。 */
+function replaceScenarioBucket(map: Map<string, SpeakScenario>, list: SpeakScenario[]): void {
+  map.clear();
+  for (const sc of list) {
+    if (!isSpeakScenarioLike(sc)) continue;
+    if (builtinScenarioIds.has(sc.id)) continue;
+    if (map.has(sc.id)) continue;
+    map.set(sc.id, sc);
+  }
+}
+
+/** 全量替换官方场景桶（scenarioCatalog 装载缓存/拉取结果用）。 */
+export function registerOfficialScenarios(list: SpeakScenario[]): void {
+  replaceScenarioBucket(officialScenarios, list);
+}
+
+/** 全量替换用户场景桶（A0 同步来的 speak-scenarios 实体 payload）。 */
+export function registerUserScenarios(list: SpeakScenario[]): void {
+  replaceScenarioBucket(userScenarios, list);
+}
+
+/** 官方桶注册序快照（SpeakView「官方场景库」分组渲染用；=缓存文件序=服务端目录序）。 */
+export function listOfficialScenarios(): SpeakScenario[] {
+  return [...officialScenarios.values()];
+}
+
+/** 用户桶注册序快照（「我的场景」分组渲染用；=sync store 实体序）。 */
+export function listUserScenarios(): SpeakScenario[] {
+  return [...userScenarios.values()];
+}
+
+/** 运行时形状守卫（缓存/同步来的数据进门校验；可选字段不严格校验，宽容读取）。 */
+export function isSpeakScenarioLike(v: unknown): v is SpeakScenario {
+  if (typeof v !== "object" || v === null) return false;
+  const sc = v as Record<string, unknown>;
+  return (
+    typeof sc.id === "string" &&
+    sc.id.length > 0 &&
+    (sc.source === "builtin" || sc.source === "official" || sc.source === "user") &&
+    typeof sc.title === "string" &&
+    sc.title.length > 0 &&
+    (sc.category === "daily" ||
+      sc.category === "travel" ||
+      sc.category === "workplace" ||
+      sc.category === "academic" ||
+      sc.category === "custom") &&
+    typeof sc.aiRole === "string" &&
+    sc.aiRole.length > 0 &&
+    typeof sc.opener === "string" &&
+    sc.opener.length > 0 &&
+    typeof sc.updatedAt === "number"
+  );
+}
+
+/**
+ * 按 id 查场景（同步签名，语义为三桶合并查找）：内置（代码常量，永远就绪）→
+ * 官方桶 → 用户桶 → 兜底第一个内置场景（与既有 ?? SPEAK_SCENARIOS[0] 行为一致，
+ * 未知 id 的旧会话 resume 不崩）。
+ */
 export function scenarioOf(id: SpeakScenarioId): SpeakScenario {
-  return SPEAK_SCENARIOS.find((s) => s.id === id) ?? SPEAK_SCENARIOS[0];
+  return (
+    SPEAK_SCENARIOS.find((s) => s.id === id) ??
+    officialScenarios.get(id) ??
+    userScenarios.get(id) ??
+    SPEAK_SCENARIOS[0]
+  );
 }
 
 export function difficultyOf(id: SpeakDifficulty): { id: SpeakDifficulty; label: string; note: string } {
