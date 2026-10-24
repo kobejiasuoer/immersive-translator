@@ -599,6 +599,69 @@ export function scenarioCacheWrite(scenariosJson: string): Promise<void> {
   return invoke("scenario_cache_write", { scenariosJson });
 }
 
+// ---------------------------------------------------------------------------
+// 发现书库（升级计划 B2）：公版书目目录 + 镜像 EPUB 下载。
+// 目录匿名只读、下载走 Rust 附带的镜像请求；字节以 base64 文本跨 IPC
+// （膨胀 1.33x，公版书 0.3~5MB 量级可行），解码与校验在 lib/discoverCatalog.ts。
+// 协议/文案决策在 DiscoverTab，这里只做 IPC 封装。
+// ---------------------------------------------------------------------------
+
+/** GET /v1/books 筛选参数（全可选；缺省经 invoke 序列化丢弃 → Rust Option=None，
+ *  服务端默认 page=1 / perPage=20，perPage 上限 100）。 */
+export interface BooksListQuery {
+  q?: string;
+  language?: string;
+  category?: string;
+  source?: string;
+  grade?: string;
+  page?: number;
+  perPage?: number;
+}
+
+/** GET /v1/books/{id}/download 的应答（与 Rust BooksDownloadResult 一字不差）：
+ *  status===200 时 body 为 EPUB 字节的 base64 文本；非 200 为服务端 AppError
+ *  错误信封 JSON 文本（400/404 是数据不是异常）。 */
+export interface BooksDownloadResult {
+  status: number;
+  body: string;
+  retryAfterSeconds: number | null;
+}
+
+/** 下载进度事件（books:download:progress）。total=0 表示响应无 content-length。 */
+export interface BooksDownloadProgress {
+  bookId: string;
+  received: number;
+  total: number;
+}
+
+/** GET /v1/books 目录。非 2xx 也是正常返回（400/429 由 DiscoverTab 处置）；
+ *  仅网络 / platform_unavailable reject（AuthError），口径同 syncPull。 */
+export function booksList(query: BooksListQuery): Promise<SyncHttpText> {
+  return invoke("books_list", {
+    q: query.q,
+    language: query.language,
+    category: query.category,
+    source: query.source,
+    grade: query.grade,
+    page: query.page,
+    perPage: query.perPage,
+  });
+}
+
+/** GET /v1/books/{id}/download（镜像 EPUB 字节，base64 跨 IPC）。 */
+export function booksDownload(bookId: string): Promise<BooksDownloadResult> {
+  return invoke("books_download", { bookId });
+}
+
+/** 下载进度事件监听（Rust 非 command，事件名 books:download:progress）。 */
+export function onBooksDownloadProgress(
+  handler: (p: BooksDownloadProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<BooksDownloadProgress>("books:download:progress", (event) =>
+    handler(event.payload),
+  );
+}
+
 /** 打开（或聚焦）登录窗口。 */
 export function openLoginWindow(): Promise<void> {
   return invoke("open_login_window");
