@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 // 导入弹窗（B2 发现页接入）全链路组件测试：发现 → 下载 → 自动切 epub tab →
 // parseEpub 真实解析 → 预览 → 「导入所选」draft 含 sourceBookId；
-// parse 失败 / 下载 404 的失败形态；既有四导入通道回归冒烟与六 tab 渲染。
+// parse 失败 / 下载 404 的失败形态；既有四导入通道回归冒烟与七 tab 渲染；
+// B3 资讯订阅 tab 集成链（推荐添加 → 点文章 → 预览 → onImport url 参数）。
 // mock ../lib/tauriBridge（booksList/booksDownload/onBooksDownloadProgress +
-// authTrackEvent——track 走真实 analytics）；parseEpub/bookImport 用真实实现
-// （bookImport.test.ts 同款 buildEpub 帮手生成最小 EPUB 字节）。
+// authTrackEvent——track 走真实 analytics；readerFetchFeed——B3 feed 拉取）；
+// @tauri-apps/api/core（B3 本地埋点 telemetry_log_event）与 ../lib/webExtract
+// （readerFetchUrl——FeedTab 点开文章的正文抓取，漏它会在 jsdom 真发 invoke 悬挂）；
+// parseEpub/bookImport/feedCatalog/feedStore 用真实实现。
 import { createHash, webcrypto } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
@@ -12,6 +15,7 @@ import { createRoot, type Root } from "react-dom/client";
 import JSZip from "jszip";
 import { ImportDialog } from "./ImportDialog";
 import type { BookImportDraft } from "../core/bookImport";
+import { normalizeFeedUrl, RECOMMENDED_FEEDS } from "../lib/feedCatalog";
 
 // jsdom 的 window.crypto 无 SubtleCrypto 时挂 node webcrypto（sha256 校验可算）。
 if (!globalThis.crypto?.subtle) {
@@ -24,9 +28,19 @@ const mocks = vi.hoisted(() => ({
   booksDownload: vi.fn(),
   onBooksDownloadProgress: vi.fn(),
   authTrackEvent: vi.fn(),
+  readerFetchFeed: vi.fn(),
+}));
+
+// B3 专帮手：@tauri-apps/api/core（telemetry_log_event 本地埋点）与
+// webExtract.readerFetchUrl（文章正文抓取）——既有用例不经这两条链路。
+const feedMocks = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  readerFetchUrl: vi.fn(),
 }));
 
 vi.mock("../lib/tauriBridge", () => mocks);
+vi.mock("@tauri-apps/api/core", () => ({ invoke: feedMocks.invoke }));
+vi.mock("../lib/webExtract", () => ({ readerFetchUrl: feedMocks.readerFetchUrl }));
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -101,6 +115,9 @@ function httpOk(body: string): { status: number; body: string; retryAfterSeconds
 interface DialogProps {
   /** onImportBook 测试桩：与真实签名做交集（渲染传参 + 断言两头都可用）。 */
   onImportBook: ((draft: BookImportDraft) => void) & ReturnType<typeof vi.fn>;
+  /** onImport 测试桩（B3 集成用例断言；既有用例不传＝不触发）。 */
+  onImport?: ((text: string, title?: string, meta?: Record<string, unknown>) => void) &
+    ReturnType<typeof vi.fn>;
 }
 
 /** vi.fn 的 Mock 类型与交集签名之间 variance 繁琐，创建处统一收口断言。 */
@@ -123,7 +140,7 @@ function mountDialog(props: DialogProps): Mount {
       <ImportDialog
         vocabWords={[]}
         articles={[]}
-        onImport={vi.fn()}
+        onImport={props.onImport ?? vi.fn()}
         onImportBook={props.onImportBook}
         onClose={vi.fn()}
       />,
@@ -164,9 +181,14 @@ beforeEach(() => {
   mocks.booksDownload.mockReset();
   mocks.onBooksDownloadProgress.mockReset();
   mocks.authTrackEvent.mockReset();
+  mocks.readerFetchFeed.mockReset();
   mocks.onBooksDownloadProgress.mockImplementation(async () => () => undefined);
   mocks.booksList.mockResolvedValue(httpOk(JSON.stringify({ data: [], total: 0, page: 1, perPage: 20 })));
   mocks.booksDownload.mockResolvedValue({ status: 200, body: "", retryAfterSeconds: null });
+  feedMocks.invoke.mockReset();
+  feedMocks.readerFetchUrl.mockReset();
+  feedMocks.invoke.mockResolvedValue(undefined);
+  localStorage.clear();
 });
 
 afterEach(() => {
@@ -286,11 +308,84 @@ describe("ImportDialog 发现书库（B2 全链路）", () => {
     m.unmount();
   });
 
-  it("六 tab 标签均渲染", async () => {
+  it("七 tab 标签均渲染", async () => {
     const m = mountDialog({ onImportBook: importBookMock() });
-    for (const label of ["内置文库", "EPUB / 长书", "本地文件", "网页链接", "粘贴文本", "发现书库"]) {
+    for (const label of ["内置文库", "EPUB / 长书", "本地文件", "网页链接", "粘贴文本", "发现书库", "资讯订阅"]) {
       expect(findButton(m.container, label)).toBeTruthy();
     }
+    m.unmount();
+  });
+
+  it("资讯订阅（B3）：点开一篇文章走导入管线 → 「加入书架并开始阅读」onImport 带 url 链参数", async () => {
+    const RSS_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<title>NASA News Releases</title>
+<link>https://www.nasa.gov/</link>
+<item>
+  <title>Artemis II Crew Named</title>
+  <link>https://www.nasa.gov/artemis-ii</link>
+  <description>Artemis II crew announcement detail.</description>
+  <pubDate>Wed, 21 Oct 2026 10:00:00 GMT</pubDate>
+</item>
+</channel></rss>`;
+    const FETCH_TEXT = "Artemis II will fly around the Moon. The crew of four is ready for the mission.";
+    mocks.readerFetchFeed.mockResolvedValueOnce(RSS_XML);
+    feedMocks.readerFetchUrl.mockResolvedValueOnce({
+      url: "https://www.nasa.gov/artemis-ii",
+      host: "www.nasa.gov",
+      title: "Artemis II Crew Named",
+      text: FETCH_TEXT,
+    });
+    const onImport = vi.fn() as unknown as NonNullable<DialogProps["onImport"]>;
+    const m = mountDialog({ onImportBook: importBookMock(), onImport });
+
+    // 进入资讯订阅 tab → FeedTab 挂载：本地曝光埋点（telemetry_log_event）。
+    act(() => findButton(m.container, "资讯订阅").click());
+    await flush();
+    expect(feedMocks.invoke).toHaveBeenCalledWith("telemetry_log_event", {
+      name: "feed_view",
+      props: {},
+    });
+    // 推荐列表勾选 NASA 源 → 同一添加链拉回 feed 并入库（feedCatalog/feedStore 真实现）。
+    const nasa = RECOMMENDED_FEEDS.find((r) => r.url.includes("nasa.gov")) ?? RECOMMENDED_FEEDS[0];
+    const recoRow = [...m.container.querySelectorAll(".feed-reco-item")].find((el) =>
+      (el.textContent ?? "").includes(nasa.title),
+    );
+    expect(recoRow).toBeTruthy();
+    await act(async () => {
+      (recoRow!.querySelector("button") as HTMLButtonElement).click();
+    });
+    await until(() => (m.container.textContent ?? "").includes("Artemis II Crew Named"));
+    // 添加链发起拉取的是归一化地址（推荐源 URL 去尾部斜杠）。
+    expect(mocks.readerFetchFeed).toHaveBeenCalledWith(normalizeFeedUrl(nasa.url));
+
+    // 点文章标题 → readerFetchUrl 抓正文 → UrlTab 同款预览卡。
+    await act(async () => {
+      findButton(m.container, "Artemis II Crew Named").click();
+    });
+    await until(() => (m.container.textContent ?? "").includes("www.nasa.gov"));
+    expect(m.container.textContent).toContain("加入书架并开始阅读");
+
+    // 确认导入：onImport 收到正文/标题与 url 源 meta（ImportDialog 接线为真）。
+    await act(async () => {
+      findButton(m.container, "加入书架并开始阅读").click();
+    });
+    expect(onImport).toHaveBeenCalledTimes(1);
+    const [text, title, meta] = onImport.mock.calls[0] as [
+      string,
+      string,
+      { sourceType?: string; sourceUrl?: string; level?: string },
+    ];
+    expect(text).toBe(FETCH_TEXT);
+    expect(title).toBe("Artemis II Crew Named");
+    expect(meta.sourceType).toBe("url");
+    expect(meta.sourceUrl).toBe("https://www.nasa.gov/artemis-ii");
+    expect(typeof meta.level).toBe("string");
+    // 同帧埋 feed_import（本地轨，零网络）。
+    expect(feedMocks.invoke).toHaveBeenCalledWith("telemetry_log_event", {
+      name: "feed_import",
+      props: { host: "www.nasa.gov" },
+    });
     m.unmount();
   });
 });
