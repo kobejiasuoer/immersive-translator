@@ -26,8 +26,9 @@ import {
 /** 官方目录拉取节流间隔（15 分钟）：窗口内的重复刷新直接跳过。 */
 export const SCENARIO_FETCH_INTERVAL_MS = 15 * 60 * 1000;
 
-/** 用户场景所在的同步集合（A0 syncEngine 已登记，与云端目录对齐）。 */
-const USER_SCENARIO_COLLECTION = "speak-scenarios";
+/** 用户场景所在的同步集合（A0 syncEngine 已登记，与云端目录对齐）。
+ *  A2 起导出：场景编辑器保存/读回 baseVersion 共用，杜绝字面量漂移。 */
+export const USER_SCENARIO_COLLECTION = "speak-scenarios";
 
 /** preload 单飞缓存（once 语义：装载失败也只发生一次，之后保持空注册表）。 */
 let preloadPromise: Promise<void> | null = null;

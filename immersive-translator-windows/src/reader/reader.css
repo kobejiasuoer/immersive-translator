@@ -8414,3 +8414,250 @@ button.notes-word:hover { color: var(--accent); }
 @media (max-width: 1080px) {
   .reader-root .cloze-toast-layer { left: 16px; }
 }
+
+/* ============================================================
+   A2 场景编辑器（前缀 scgen-；只追加不改既有规则）
+   骨架复用 .modal-overlay（styles.css，fixed 全屏）+ .reader-import-modal
+   ============================================================ */
+
+/* 「我的场景」标签行右侧工具位（「＋ 新建场景」入口） */
+.reader-root .scenario-group-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.reader-root .sc-new-btn {
+  border: 1px solid var(--glass-border-strong);
+  background: var(--glass-elevated);
+  color: var(--ink-1);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 99px;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+.reader-root .sc-new-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* 用户场景卡 wrapper：grid 直接子从 button 变 div，卡片尺寸补齐；
+   「编辑」pill 定位在卡右上（HTML 不允许 button 嵌 button） */
+.reader-root .sc-card-wrap {
+  position: relative;
+}
+.reader-root .sc-card-wrap .scenario-card {
+  width: 100%;
+  height: 100%;
+}
+.reader-root .sc-edit-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  border: 1px solid var(--glass-border);
+  background: var(--canvas-bg);
+  color: var(--ink-2);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 99px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+.reader-root .sc-card-wrap:hover .sc-edit-btn,
+.reader-root .sc-edit-btn:focus-visible {
+  opacity: 1;
+}
+.reader-root .sc-edit-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* 编辑器对话框本体（三态：input 一句话 / generating / form 表单） */
+.reader-root .scgen-dialog {
+  width: 640px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 64px);
+}
+.scgen-body {
+  padding: 16px 24px 8px;
+  overflow-y: auto;
+}
+.scgen-idea-area {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-1);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+}
+.scgen-idea-area:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--surface);
+}
+.scgen-idea-area::placeholder {
+  color: var(--text-4);
+}
+.scgen-idea-meta {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-4);
+  text-align: right;
+}
+.scgen-error {
+  margin-top: 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--err);
+  background: var(--warn-soft);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.scgen-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 16px 0 16px;
+}
+.scgen-generating {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 40px 24px 24px;
+}
+.scgen-generating .scgen-foot {
+  justify-content: center;
+  padding: 0;
+}
+.scgen-spinner {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 3px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  animation: scgen-spin 0.9s linear infinite;
+}
+@keyframes scgen-spin {
+  to { transform: rotate(360deg); }
+}
+.scgen-generating-text {
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--text-2);
+  text-align: center;
+}
+.scgen-generating-echo {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.scgen-field {
+  margin-bottom: 12px;
+}
+.scgen-field > label {
+  display: block;
+  margin: 0 0 5px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.scgen-input,
+.scgen-select {
+  width: 100%;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-1);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 7px 10px;
+  box-sizing: border-box;
+}
+.scgen-textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-1);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-sizing: border-box;
+}
+.scgen-input:focus,
+.scgen-select:focus,
+.scgen-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--surface);
+}
+.scgen-input::placeholder,
+.scgen-textarea::placeholder {
+  color: var(--text-4);
+}
+.scgen-field-row {
+  display: flex;
+  gap: 12px;
+}
+.scgen-field-row > div {
+  width: 40%;
+}
+.scgen-field-row > .scgen-grow {
+  flex: 1;
+  width: auto;
+}
+.scgen-phrase-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.scgen-phrase-remove {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: pointer;
+}
+.scgen-phrase-remove:hover {
+  color: var(--err);
+  border-color: var(--err);
+}
+.scgen-phrase-add {
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 5px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.scgen-phrase-add:not(:disabled):hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.scgen-phrase-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
