@@ -3,6 +3,7 @@ import {
   classifyTranslationError,
   buildSanitizedCurl,
   buildDiagnosticReport,
+  readerParagraphErrorText,
   sanitizeDiagnosticText,
 } from "./errorMessageFormatter";
 
@@ -427,5 +428,21 @@ describe("buildDiagnosticReport", () => {
     expect(report).toContain("curl");
     expect(report).toContain("REDACTED");
     expect(report).toContain("目标：English");
+  });
+});
+
+describe("readerParagraphErrorText", () => {
+  it("429 → 限流定稿文案（题设原文）", () => {
+    expect(readerParagraphErrorText(429)).toBe("翻译请求太频繁，已重试仍被限流，稍后点重试");
+  });
+
+  it("401 → 登录失效文案（对齐 PLATFORM_CODE_HINTS.token_invalid 既有措辞）", () => {
+    expect(readerParagraphErrorText(401)).toBe("登录状态已失效，请到 设置 → 账号 重新登录");
+  });
+
+  it("500/null/undefined → 通用兜底桶（绝不透传上游消息文本）", () => {
+    expect(readerParagraphErrorText(500)).toBe("翻译服务暂时不可用，请稍后点重试");
+    expect(readerParagraphErrorText(null)).toBe("翻译服务暂时不可用，请稍后点重试");
+    expect(readerParagraphErrorText(undefined)).toBe("翻译服务暂时不可用，请稍后点重试");
   });
 });

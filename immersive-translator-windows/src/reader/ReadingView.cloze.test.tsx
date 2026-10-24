@@ -186,3 +186,66 @@ describe("ReadingView · 随读抽查", () => {
     expect(el.querySelector(".cloze-meter")?.textContent).toContain("剩 1");
   });
 });
+
+describe("ReadingView · 段落失败行", () => {
+  const ZH_ERROR_429 = "翻译请求太频繁，已重试仍被限流，稍后点重试";
+  const failedArticle = (zhError: string | undefined): Article => ({
+    ...ARTICLE,
+    titleCn: "小镇",
+    titleCnState: "done",
+    sentences: [
+      {
+        idx: 0,
+        paragraphIdx: 0,
+        en: "The tide is still making up its mind.",
+        zh: null,
+        zhState: "failed",
+        ...(zhError !== undefined ? { zhError } : {}),
+      },
+    ],
+  });
+  const plainSettings = { ...DEFAULT_READER_SETTINGS, spotQuizMode: false };
+
+  it("prose 分支：failed 行渲染原因小字，重试按钮回调收到 paragraphIdx", () => {
+    const onRetryParagraph = vi.fn();
+    const el = render(
+      baseProps({
+        article: failedArticle(ZH_ERROR_429),
+        settings: plainSettings,
+        activeIdx: 0, // prose 模式只有当前句渲染行间折叠卡
+        onRetryParagraph,
+      }),
+    );
+    expect(el.textContent).toContain("本段翻译失败");
+    expect(el.textContent).toContain(ZH_ERROR_429);
+    const btn = el.querySelector(".pair-failed-row button") as HTMLButtonElement;
+    expect(btn.textContent).toBe("重试本段");
+    act(() => btn.click());
+    expect(onRetryParagraph).toHaveBeenCalledTimes(1);
+    expect(onRetryParagraph).toHaveBeenCalledWith(0);
+  });
+
+  it("parallel 分支：failed 行渲染原因小字，重试按钮回调收到 paragraphIdx", () => {
+    const onRetryParagraph = vi.fn();
+    const el = render(
+      baseProps({
+        article: failedArticle(ZH_ERROR_429),
+        settings: { ...plainSettings, spreadLayout: "parallel" },
+        onRetryParagraph,
+      }),
+    );
+    expect(el.textContent).toContain("本段翻译失败");
+    expect(el.textContent).toContain(ZH_ERROR_429);
+    const btn = el.querySelector(".pair-failed-row button") as HTMLButtonElement;
+    act(() => btn.click());
+    expect(onRetryParagraph).toHaveBeenCalledTimes(1);
+    expect(onRetryParagraph).toHaveBeenCalledWith(0);
+  });
+
+  it("zhError 缺省：failed 行与现状一致（只有原文案与按钮，无原因小字）", () => {
+    const el = render(baseProps({ article: failedArticle(undefined), settings: plainSettings }));
+    expect(el.textContent).toContain("本段翻译失败");
+    expect(el.textContent).not.toContain(ZH_ERROR_429);
+    expect(el.querySelector(".pair-failed-row button")).not.toBeNull();
+  });
+});

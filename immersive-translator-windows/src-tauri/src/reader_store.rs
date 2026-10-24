@@ -84,6 +84,9 @@ pub struct SentencePair {
     pub revealed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chunks: Option<Vec<SentenceChunk>>,
+    /// 段落失败原因（按 HTTP 状态码定稿的中文文案；重试成功后清空）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zh_error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1705,6 +1708,46 @@ mod tests {
         .expect("老文章无 chunk 字段可加载");
         assert_eq!(legacy.chunk_state, None);
         assert_eq!(legacy.sentences[0].chunks, None);
+    }
+
+    #[test]
+    fn zh_error_roundtrip_and_legacy_load() {
+        // 前端会把失败段落整体覆盖回 Article，zhError 必须完整往返（serde default 读 None）。
+        let article_json = r#"{
+            "id": "a1", "title": "T", "titleCnState": "done", "sourceType": "paste",
+            "wordCount": 10, "createdAt": 0, "lastReadAt": 0,
+            "progress": { "sentenceIdx": 0, "percent": 0, "secondsListened": 0 },
+            "sentences": [
+                { "idx": 0, "paragraphIdx": 0, "en": "Hi.", "zh": null, "zhState": "failed",
+                  "zhError": "翻译服务暂时不可用，请稍后点重试" },
+                { "idx": 1, "paragraphIdx": 0, "en": "Bye.", "zh": "再见", "zhState": "done" }
+            ]
+        }"#;
+        let article: Article = serde_json::from_str(article_json).expect("zhError 文章反序列化");
+        assert_eq!(
+            article.sentences[0].zh_error.as_deref(),
+            Some("翻译服务暂时不可用，请稍后点重试")
+        );
+        assert_eq!(article.sentences[1].zh_error, None);
+        // 序列化回 JSON：camelCase 键名对齐前端，None 键不落盘（skip_serializing_if）。
+        let out = serde_json::to_value(&article).unwrap();
+        assert_eq!(
+            out["sentences"][0]["zhError"],
+            "翻译服务暂时不可用，请稍后点重试"
+        );
+        assert!(out["sentences"][1].get("zhError").is_none());
+
+        // 老数据（无 zhError 字段）必须照常加载（#[serde(default)]）。
+        let legacy: Article = serde_json::from_str(
+            r#"{
+                "id": "a2", "title": "T", "titleCnState": "done", "sourceType": "paste",
+                "wordCount": 1, "createdAt": 0, "lastReadAt": 0,
+                "progress": { "sentenceIdx": 0, "percent": 0, "secondsListened": 0 },
+                "sentences": [{ "idx": 0, "paragraphIdx": 0, "en": "Hi.", "zh": null, "zhState": "pending" }]
+            }"#,
+        )
+        .expect("老文章无 zhError 字段可加载");
+        assert_eq!(legacy.sentences[0].zh_error, None);
     }
 
     fn vocab(id: &str, due_at: i64, interval_days: f64) -> VocabWord {
