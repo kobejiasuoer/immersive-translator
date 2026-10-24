@@ -102,3 +102,28 @@ export function buildTitleTranslateSystemPrompt(target: string): string {
     `只输出译文本身，不要解释、不要引号、不要保留原文。`,
   ].join("\n");
 }
+
+// ---- 429 自动退避（阅读室段级管线专用） ----
+
+/** 单次退避等待时长：固定 20s（服务端 Retry-After 本轮不接线，见蓝图）。 */
+export const TRANSLATE_BACKOFF_WAIT_MS = 20_000;
+/** 每段最多自动重试次数（不含首次尝试）。 */
+export const TRANSLATE_MAX_GROUP_RETRIES = 1;
+/** 整篇自动退避等待总次数上限（最坏 +2 分钟）。 */
+export const TRANSLATE_MAX_RUN_BACKOFFS = 6;
+
+/**
+ * 决定是否对该段做一次 429 自动退避重试；返回等待毫秒数，null = 不重试。
+ * 判定只用结构化 HTTP 状态码（ErrorEvent.status），绝不匹配响应文本；
+ * 每段最多重试 1 次，整篇退避总次数封顶，防止限流期间无限空转。
+ */
+export function planTranslateRetry(input: {
+  httpStatus: number | null;
+  groupRetries: number;
+  runBackoffs: number;
+}): number | null {
+  if (input.httpStatus !== 429) return null;
+  if (input.groupRetries >= TRANSLATE_MAX_GROUP_RETRIES) return null;
+  if (input.runBackoffs >= TRANSLATE_MAX_RUN_BACKOFFS) return null;
+  return TRANSLATE_BACKOFF_WAIT_MS;
+}

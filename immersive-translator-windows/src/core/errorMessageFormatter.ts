@@ -458,3 +458,14 @@ export function buildDiagnosticReport(input: DiagnosticInput): string {
   ];
   return lines.join("\n");
 }
+
+/** 阅读室段落失败行文案：按 HTTP 状态码定稿（绝不透传/匹配上游消息文本）。
+ *  401 含平台未登录合成 401（translation.rs 客户端自拟信封）与上游真 401，统一按登录失效给文案。
+ *  null/其余兜底桶同时覆盖未配置与 180s 超时——已接受的取舍：未配置场景 ReaderApp
+ *  在发起翻译前已有专属 toast（「先在设置里配置翻译接口」），失败行文案略宽泛无害。
+ */
+export function readerParagraphErrorText(status: number | null | undefined): string {
+  if (status === 429) return "翻译请求太频繁，已重试仍被限流，稍后点重试";
+  if (status === 401) return "登录状态已失效，请到 设置 → 账号 重新登录";
+  return "翻译服务暂时不可用，请稍后点重试";
+}

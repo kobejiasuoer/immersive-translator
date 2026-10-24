@@ -109,6 +109,10 @@
           "items": {
             "$ref": "#/$defs/sentenceChunk"
           }
+        },
+        "zhError": {
+          "type": "string",
+          "description": "段落失败原因（按 HTTP 状态码定稿的中文文案；重试成功后清空）"
         }
       }
     },

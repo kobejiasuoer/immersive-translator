@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  TRANSLATE_BACKOFF_WAIT_MS,
+  TRANSLATE_MAX_GROUP_RETRIES,
+  TRANSLATE_MAX_RUN_BACKOFFS,
   buildParagraphRequestInput,
   buildParagraphTranslateSystemPrompt,
   joinChineseLines,
   parseParagraphResponse,
+  planTranslateRetry,
 } from "./paragraphTranslate";
 
 describe("parseParagraphResponse", () => {
@@ -68,5 +72,40 @@ describe("buildParagraphTranslateSystemPrompt", () => {
     });
     expect(prompt).toContain("[N]");
     expect(prompt).toContain("相同数量");
+  });
+});
+
+describe("planTranslateRetry", () => {
+  it("429 且两重配额未满 → 等待 20s", () => {
+    expect(
+      planTranslateRetry({ httpStatus: 429, groupRetries: 0, runBackoffs: 0 }),
+    ).toBe(TRANSLATE_BACKOFF_WAIT_MS);
+    expect(TRANSLATE_BACKOFF_WAIT_MS).toBe(20_000);
+  });
+
+  it("每段自动重试最多 1 次：groupRetries 已满 → 不再重试", () => {
+    expect(
+      planTranslateRetry({ httpStatus: 429, groupRetries: 1, runBackoffs: 0 }),
+    ).toBeNull();
+  });
+
+  it("整篇退避总次数上限 6：runBackoffs 已满 → 不再重试", () => {
+    expect(
+      planTranslateRetry({ httpStatus: 429, groupRetries: 0, runBackoffs: 6 }),
+    ).toBeNull();
+    expect(TRANSLATE_MAX_GROUP_RETRIES).toBe(1);
+    expect(TRANSLATE_MAX_RUN_BACKOFFS).toBe(6);
+  });
+
+  it("非 429（结构化状态码判定，如 500）→ 不重试", () => {
+    expect(
+      planTranslateRetry({ httpStatus: 500, groupRetries: 0, runBackoffs: 0 }),
+    ).toBeNull();
+  });
+
+  it("状态码未知（null：超时/未配置等非 HTTP 失败）→ 不重试", () => {
+    expect(
+      planTranslateRetry({ httpStatus: null, groupRetries: 0, runBackoffs: 0 }),
+    ).toBeNull();
   });
 });

@@ -62,6 +62,8 @@ interface Props {
   onViewportIdx: (idx: number) => void;
   onOpenImport: () => void;
   onRetryTitle: () => void;
+  /** 标题失败原因小字（瞬态；缺省 = 无原因，与旧行为一致）。 */
+  titleCnError?: string;
   /** 光标已到末句且未确认读完：正文末尾显示「读完本篇/本章」按钮（纯手动阅读路径）。 */
   showFinishAction: boolean;
   finishLabel: string;
@@ -524,6 +526,9 @@ export function ReadingView(props: Props) {
         ) : s.zhState === "failed" ? (
           <span className="pair-failed-row">
             本段翻译失败
+            {s.zhError ? (
+              <span style={{ fontSize: 11, opacity: 0.8 }}>{s.zhError}</span>
+            ) : null}
             <button onClick={() => props.onRetryParagraph(s.paragraphIdx)}>重试本段</button>
           </span>
         ) : editingIdx === s.idx ? (
@@ -555,6 +560,9 @@ export function ReadingView(props: Props) {
         ) : s.zhState === "failed" ? (
           <span className="pair-failed-row">
             本段翻译失败
+            {s.zhError ? (
+              <span style={{ fontSize: 11, opacity: 0.8 }}>{s.zhError}</span>
+            ) : null}
             <button onClick={() => props.onRetryParagraph(s.paragraphIdx)}>重试本段</button>
           </span>
         ) : (
@@ -737,6 +745,7 @@ export function ReadingView(props: Props) {
             ) : article.titleCnState === "failed" ? (
               <span className="masthead-cn-text" style={{ color: "var(--err)", fontSize: 13 }}>
                 标题翻译失败
+                {props.titleCnError ? <span style={{ opacity: 0.85 }}>（{props.titleCnError}）</span> : null}
                 <button
                   style={{ marginLeft: 8, border: "none", background: "none", color: "var(--accent)", cursor: "pointer", fontFamily: "inherit", fontSize: 13 }}
                   onClick={props.onRetryTitle}

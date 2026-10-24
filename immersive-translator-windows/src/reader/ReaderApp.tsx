@@ -82,7 +82,9 @@ import {
   buildTitleTranslateSystemPrompt,
   parseParagraphResponse,
   parsePartialNumbered,
+  planTranslateRetry,
 } from "../core/paragraphTranslate";
+import { readerParagraphErrorText } from "../core/errorMessageFormatter";
 import { dueVocab, gradeSrs, isDue, recordReview, reviewStats, type ReviewGrade } from "../core/readerSrs";
 import {
   buildReaderDictPrompt,
@@ -181,7 +183,8 @@ interface ArticleFinishCard {
 interface PendingTranslate {
   onDelta?: (text: string) => void;
   onDone: (text: string) => void;
-  onError: (message: string) => void;
+  /** httpStatus：结构化 HTTP 状态码（429 退避判定只用它，绝不匹配响应文本）；非 HTTP 失败为 undefined。 */
+  onError: (message: string, httpStatus?: number | null) => void;
   onCancelled: (partial: string) => void;
 }
 
@@ -217,6 +220,8 @@ export function ReaderApp() {
   /** 加练队列：非空时复习只排这批词（笔记复盘区「开始复习/只测仍错的词」入口）。 */
   const [focusIds, setFocusIds] = useState<string[] | null>(null);
   const [translating, setTranslating] = useState<{ done: number; total: number } | null>(null);
+  /** 标题失败原因（瞬态，不持久化——重启后仅显「标题翻译失败」，与现状一致）。 */
+  const [titleCnError, setTitleCnError] = useState<string | null>(null);
   const [chunking, setChunking] = useState<{ done: number; total: number } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -458,7 +463,7 @@ export function ReaderApp() {
       const p = pendingTranslateRef.current.get(e.tag);
       if (p) {
         pendingTranslateRef.current.delete(e.tag);
-        p.onError(e.body || `HTTP ${e.status ?? ""}`);
+        p.onError(e.body || `HTTP ${e.status ?? ""}`, e.status);
       }
     }).then((u) => uns.push(u));
     onTranslationCancelled((e) => {
@@ -473,35 +478,39 @@ export function ReaderApp() {
     };
   }, []);
 
-  /** 发一次翻译请求并等待其完成（tag 路由，超时保护）。 */
+  /** 发一次翻译请求并等待其完成（tag 路由，超时保护）。httpStatus 供 429 自动退避与失败文案分桶。 */
   const requestTranslate = useCallback(
     (
       input: string,
       systemPrompt: string,
       tag: string,
       onDelta?: (text: string) => void,
-    ): Promise<{ status: "done" | "error" | "cancelled"; text: string }> => {
+    ): Promise<{ status: "done" | "error" | "cancelled"; text: string; httpStatus: number | null }> => {
       return new Promise((resolve) => {
         let settled = false;
         let timer = 0;
-        const finish = (r: { status: "done" | "error" | "cancelled"; text: string }) => {
+        const finish = (r: {
+          status: "done" | "error" | "cancelled";
+          text: string;
+          httpStatus: number | null;
+        }) => {
           if (settled) return;
           settled = true;
           window.clearTimeout(timer);
           pendingTranslateRef.current.delete(tag);
           resolve(r);
         };
-        timer = window.setTimeout(() => finish({ status: "error", text: "翻译请求超时" }), 180_000);
+        timer = window.setTimeout(() => finish({ status: "error", text: "翻译请求超时", httpStatus: null }), 180_000);
         pendingTranslateRef.current.set(tag, {
           onDelta,
-          onDone: (text) => finish({ status: "done", text }),
-          onError: (message) => finish({ status: "error", text: message }),
-          onCancelled: (partial) => finish({ status: "cancelled", text: partial }),
+          onDone: (text) => finish({ status: "done", text, httpStatus: null }),
+          onError: (message, httpStatus) => finish({ status: "error", text: message, httpStatus: httpStatus ?? null }),
+          onCancelled: (partial) => finish({ status: "cancelled", text: partial, httpStatus: null }),
         });
         void loadSettingsAsync()
           .then((s) => {
             if (!hasValidSettings(s)) {
-              finish({ status: "error", text: "未配置翻译接口" });
+              finish({ status: "error", text: "未配置翻译接口", httpStatus: null });
               return;
             }
             return translateStream({
@@ -514,10 +523,10 @@ export function ReaderApp() {
               windowLabel: "reader",
               tag,
             }).catch((error) => {
-              finish({ status: "error", text: error instanceof Error ? error.message : String(error) });
+              finish({ status: "error", text: error instanceof Error ? error.message : String(error), httpStatus: null });
             });
           })
-          .catch((error) => finish({ status: "error", text: String(error) }));
+          .catch((error) => finish({ status: "error", text: String(error), httpStatus: null }));
       });
     },
     [],
@@ -719,6 +728,7 @@ export function ReaderApp() {
         const tag = `rt${++translateSeqRef.current}`;
         const res = await requestTranslate(input.title, buildTitleTranslateSystemPrompt(target), tag);
         if (res.status === "done") {
+          setTitleCnError(null);
           const cn = res.text.trim().split(/\r?\n/)[0]?.trim();
           patchArticle((a) => ({
             ...a,
@@ -727,37 +737,66 @@ export function ReaderApp() {
               : { titleCnState: "failed" as const }),
           }));
         } else if (res.status === "error") {
+          setTitleCnError(readerParagraphErrorText(res.httpStatus));
           patchArticle((a) => ({ ...a, titleCnState: "failed" }));
         }
       }
 
       let done = 0;
+      // 整篇自动退避计数（429 等待次数，跨段共享；手动重试发起的新 run 从 0 重新起算）。
+      let runBackoffs = 0;
       for (const [, sentences] of pendingGroups) {
-        const tag = `rp${++translateSeqRef.current}`;
+        // B1 修复：中途切到别的文章时旧 run 必须先清掉「翻译中 N/M 段」chip 再退出——
+        // ensureAnnotated 有 try/finally 兜底，本函数没有，裸 return 会让 chip 永久卡死。
+        if (articleRef.current?.id !== input.id) {
+          setTranslating(null);
+          return;
+        }
         const paraInput = buildParagraphRequestInput(sentences.map((x) => x.en));
         const expected = sentences.length;
-        const res = await requestTranslate(
-          paraInput,
-          buildParagraphTranslateSystemPrompt({
-            targetLanguage: target,
-            customStyle: s.customStyle,
-            glossaryText: s.glossaryText,
-          }),
-          tag,
-          (delta) => {
-            const partial = parsePartialNumbered(delta, expected);
-            partial.forEach((text, i) => {
-              if (text === null) return;
-              const idx = sentences[i].idx;
-              patchArticle((a) => ({
-                ...a,
-                sentences: a.sentences.map((st) =>
-                  st.idx === idx && st.zhState === "pending" ? { ...st, zh: text } : st,
-                ),
-              }));
-            });
-          },
-        );
+        const systemPrompt = buildParagraphTranslateSystemPrompt({
+          targetLanguage: target,
+          customStyle: s.customStyle,
+          glossaryText: s.glossaryText,
+        });
+        const onDelta = (delta: string) => {
+          const partial = parsePartialNumbered(delta, expected);
+          partial.forEach((text, i) => {
+            if (text === null) return;
+            const idx = sentences[i].idx;
+            patchArticle((a) => ({
+              ...a,
+              sentences: a.sentences.map((st) =>
+                st.idx === idx && st.zhState === "pending" ? { ...st, zh: text } : st,
+              ),
+            }));
+          });
+        };
+        let groupRetries = 0;
+        let tag = `rp${++translateSeqRef.current}`;
+        let res = await requestTranslate(paraInput, systemPrompt, tag, onDelta);
+        // 429 自动退避：仅结构化状态码 429 触发；每段最多 1 次，整篇 ≤6 次。
+        for (
+          let wait;
+          (wait = planTranslateRetry({
+            httpStatus: res.status === "error" ? res.httpStatus : null,
+            groupRetries,
+            runBackoffs,
+          })) !== null;
+
+        ) {
+          groupRetries += 1;
+          runBackoffs += 1;
+          await new Promise<void>((r) => window.setTimeout(r, wait));
+          if (articleRef.current?.id !== input.id) {
+            // 退避期间切走文章：同款先清 chip 再退出（B1 修复）。
+            setTranslating(null);
+            return;
+          }
+          // 重试用新 tag，避免事件路由按旧 tag 误路由；systemPrompt/onDelta 与首次尝试相同。
+          tag = `rp${++translateSeqRef.current}`;
+          res = await requestTranslate(paraInput, systemPrompt, tag, onDelta);
+        }
         if (res.status === "done") {
           const parsed = parseParagraphResponse(res.text, expected);
           if (parsed) {
@@ -788,7 +827,7 @@ export function ReaderApp() {
             }),
           }));
         } else {
-          markParagraphFailed(sentences);
+          markParagraphFailed(sentences, readerParagraphErrorText(res.httpStatus));
         }
         done += 1;
         setTranslating(done < pendingGroups.length ? { done, total: pendingGroups.length } : null);
@@ -797,11 +836,13 @@ export function ReaderApp() {
       // 翻译完成后紧接词块标注（同一请求路由顺序执行，不与翻译并发）。
       void ensureAnnotated();
 
-      function markParagraphFailed(group: SentencePair[]) {
+      function markParagraphFailed(group: SentencePair[], errorText?: string) {
         patchArticle((a) => ({
           ...a,
           sentences: a.sentences.map((st) =>
-            group.some((x) => x.idx === st.idx) ? { ...st, zhState: "failed" as const } : st,
+            group.some((x) => x.idx === st.idx)
+              ? { ...st, zhState: "failed" as const, zhError: errorText }
+              : st,
           ),
         }));
       }
@@ -815,7 +856,7 @@ export function ReaderApp() {
         ...a,
         sentences: a.sentences.map((st) =>
           st.paragraphIdx === paragraphIdx && st.zhState === "failed"
-            ? { ...st, zh: null, zhState: "pending" as const }
+            ? { ...st, zh: null, zhState: "pending" as const, zhError: undefined }
             : st,
         ),
       }));
@@ -832,6 +873,7 @@ export function ReaderApp() {
   );
 
   const retryTitle = useCallback(() => {
+    setTitleCnError(null);
     patchArticle((a) => ({ ...a, titleCnState: "pending", titleCn: undefined }));
     const current = articleRef.current;
     if (current) void ensureTranslated({ ...current, titleCnState: "pending", sentences: [] });
@@ -2245,6 +2287,7 @@ export function ReaderApp() {
               }}
               onOpenImport={() => setImportOpen(true)}
               onRetryTitle={retryTitle}
+              titleCnError={titleCnError ?? undefined}
               showFinishAction={showFinishAction}
               finishLabel={article?.bookId ? "读完本章" : "读完本篇"}
               onFinishRead={confirmFinish}

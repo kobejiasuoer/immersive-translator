@@ -63,6 +63,8 @@ export interface SentencePair {
   revealed?: boolean;
   /** LLM 标注的词块（en 定稿后写入）。 */
   chunks?: SentenceChunk[];
+  /** 段落失败原因（按 HTTP 状态码定稿的中文文案；重试成功后清空）。 */
+  zhError?: string;
 }
 
 /** 阅读进度（持久化在文章记录里）。 */
