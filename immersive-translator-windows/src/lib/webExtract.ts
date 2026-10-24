@@ -15,6 +15,8 @@ export interface FetchedArticle {
   title: string;
   /** 正文纯文本，段落以空行分隔。 */
   text: string;
+  /** 正文超过 50,000 字符被整段截断时为 true。 */
+  truncated?: boolean;
 }
 
 export function readerFetchUrl(url: string): Promise<FetchedArticle> {

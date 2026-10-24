@@ -449,6 +449,31 @@ describe("FeedTab（资讯订阅 · 点开文章导入链）", () => {
     m.unmount();
   });
 
+  it("正文截断：FetchedArticle.truncated=true → 预览卡显示「原文过长」；无标记不显示", async () => {
+    seedFeed({ id: "feed-1" });
+    mocks.readerFetchUrl.mockResolvedValueOnce({ ...fetchedArticle(), truncated: true });
+    const m = mountTab(importMock());
+    await flush();
+    await act(async () => {
+      findButton(m.container, "Artemis II Crew Named", "button.feed-item-title").click();
+    });
+    await flush();
+    expect(mocks.readerFetchUrl).toHaveBeenCalledWith("https://www.nasa.gov/artemis-ii");
+    expect(m.container.textContent ?? "").toContain("原文过长，仅导入前 50,000 字符");
+    m.unmount();
+
+    // 现状回归：Rust 未截断（无 truncated 字段）→ 不渲染提示。
+    mocks.readerFetchUrl.mockResolvedValueOnce(fetchedArticle());
+    const m2 = mountTab(importMock());
+    await flush();
+    await act(async () => {
+      findButton(m2.container, "Artemis II Crew Named", "button.feed-item-title").click();
+    });
+    await flush();
+    expect(m2.container.textContent ?? "").not.toContain("原文过长");
+    m2.unmount();
+  });
+
   it("文章抓取失败：intake-fail 显示 Rust 中文 message，「返回列表」可回到文章列表", async () => {
     seedFeed({ id: "feed-1" });
     mocks.readerFetchUrl.mockRejectedValueOnce(new Error("这个页面需要登录才能阅读"));

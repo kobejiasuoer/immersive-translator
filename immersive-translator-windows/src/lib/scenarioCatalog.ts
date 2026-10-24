@@ -30,6 +30,21 @@ export const SCENARIO_FETCH_INTERVAL_MS = 15 * 60 * 1000;
  *  A2 起导出：场景编辑器保存/读回 baseVersion 共用，杜绝字面量漂移。 */
 export const USER_SCENARIO_COLLECTION = "speak-scenarios";
 
+/** 官方目录来源三态（catalogBadge）。不变式：fallback ⟺ 官方桶为空（只剩内置场景）。
+ *  server=refresh 2xx 且装载进非空官方桶（2xx 但内容==缓存也算 server/已同步）；
+ *  cache=preload 命中非空本地缓存、尚无成功 refresh；fallback=官方桶空。 */
+export type OfficialCatalogSource = "server" | "cache" | "fallback";
+export const OFFICIAL_CATALOG_BADGE: Record<OfficialCatalogSource, string> = {
+  server: "云端目录·已同步",
+  cache: "云端目录·本地缓存",
+  fallback: "内置场景",
+};
+let officialSource: OfficialCatalogSource = "fallback";
+/** 当前官方目录来源（纯读取；SpeakView 渲染时随 setExtraLists 的重渲染读到最新值）。 */
+export function officialCatalogSource(): OfficialCatalogSource {
+  return officialSource;
+}
+
 /** preload 单飞缓存（once 语义：装载失败也只发生一次，之后保持空注册表）。 */
 let preloadPromise: Promise<void> | null = null;
 /** refresh 单飞（in-flight 期并发调用共享同一次请求）。 */
@@ -47,6 +62,8 @@ async function loadScenarioCatalogOnce(): Promise<void> {
   const official = cached.filter(isSpeakScenarioLike);
   registerOfficialScenarios(official);
   loadedOfficialJson = JSON.stringify(official);
+  // 缓存读失败被 catch 成 [] → 官方桶空 → fallback（三态不变式）。
+  officialSource = official.length > 0 ? "cache" : "fallback";
   // 本地用户场景（A0 同步实体；tombstone 跳过）
   const stored = await syncStoreList(USER_SCENARIO_COLLECTION).catch(() => []);
   const user = stored
@@ -96,6 +113,9 @@ export function refreshOfficialScenarioCatalog(): Promise<void> {
       if (res.status >= 200 && res.status < 300) {
         const list = parseOfficialScenariosBody(res.body);
         if (list) {
+          // 2xx 即视为已与云端同步（内容==缓存也算 server）；2xx 但目录为空 →
+          // 桶空 → fallback（不变式保持）。404/断网/reject 不改状态（保留 cache）。
+          officialSource = list.length > 0 ? "server" : "fallback";
           const json = JSON.stringify(list);
           if (json !== loadedOfficialJson) {
             await scenarioCacheWrite(json).catch(() => undefined);

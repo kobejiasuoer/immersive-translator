@@ -70,6 +70,7 @@ interface UrlPreview {
   host: string;
   title: string;
   text: string;
+  truncated?: boolean;
 }
 
 function estimateLevel(text: string, sentences: number): string {
@@ -563,7 +564,7 @@ function UrlTab({
     setError("");
     try {
       const res = await readerFetchUrl(target);
-      setPreview({ url: target, host: res.host, title: res.title, text: res.text });
+      setPreview({ url: target, host: res.host, title: res.title, text: res.text, truncated: res.truncated });
       setPhase("preview");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -635,6 +636,7 @@ function UrlTab({
               {stats.words.toLocaleString()} 词 · {stats.paras} 段 · 约 {stats.minutes} 分钟
             </span>
           </div>
+          {preview.truncated && <div className="epub-pv-note">原文过长，仅导入前 50,000 字符</div>}
           <div className="intake-pv-cov">
             覆盖{EXAM_GOAL_LABELS[goal]}大纲词 <b>{cov.total}</b>
             {cov.unmastered > 0 && (

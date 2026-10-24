@@ -260,6 +260,24 @@ describe("RECOMMENDED_FEEDS：推荐源清单", () => {
       expect(f.note.trim()).not.toBe("");
     }
   });
+
+  it("清单规模 ≥ 4（NASA/CDC/NIST 既有 + DOE 施工复测收编；LoC/NOAA/JPL 复测未过如实剔除）", () => {
+    expect(RECOMMENDED_FEEDS.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("实测存活源逐条精确收录（URL 不得漂移）", () => {
+    const urls = RECOMMENDED_FEEDS.map((f) => f.url);
+    expect(urls).toContain("https://www.nasa.gov/news-release/feed/");
+    expect(urls).toContain("https://tools.cdc.gov/api/v2/resources/media/132608.rss");
+    expect(urls).toContain("https://www.nist.gov/news-events/news/rss.xml");
+    expect(urls).toContain("https://www.energy.gov/rss");
+  });
+
+  it("每条 host 都以 .gov 结尾（美国政府源口径）", () => {
+    for (const f of RECOMMENDED_FEEDS) {
+      expect(new URL(f.url).hostname.endsWith(".gov")).toBe(true);
+    }
+  });
 });
 
 // ---------- 中文文案 ----------
