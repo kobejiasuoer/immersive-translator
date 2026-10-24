@@ -41,6 +41,7 @@ import {
 } from "../core/bookImport";
 import { trackEvent } from "../lib/telemetry";
 import { DiscoverTab } from "./DiscoverTab";
+import { FeedTab } from "./FeedTab";
 import type { ArticleSourceType, ArticleSummary, VocabWord } from "../core/readerTypes";
 
 export interface ImportMeta {
@@ -62,7 +63,7 @@ interface Props {
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const GOAL_STORAGE_KEY = "intake-exam-goal";
 
-type TabId = "lib" | "epub" | "file" | "url" | "paste" | "discover";
+type TabId = "lib" | "epub" | "file" | "url" | "paste" | "discover" | "feed";
 
 interface UrlPreview {
   url: string;
@@ -173,6 +174,7 @@ export function ImportDialog({ vocabWords, articles, onImport, onImportBook, onC
               ["url", "网页链接"],
               ["paste", "粘贴文本"],
               ["discover", "发现书库"],
+              ["feed", "资讯订阅"],
             ] as [TabId, string][]
           ).map(([id, label]) => (
             <button
@@ -222,6 +224,7 @@ export function ImportDialog({ vocabWords, articles, onImport, onImportBook, onC
             }}
           />
         )}
+        {tab === "feed" && <FeedTab onImport={onImport} onSwitchToPaste={() => setTab("paste")} />}
       </div>
     </div>
   );
