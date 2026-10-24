@@ -10,6 +10,9 @@ use std::time::Duration;
 
 const MAX_HTML_BYTES: usize = 5_000_000;
 const MIN_ARTICLE_WORDS: usize = 150;
+/// 单篇正文长度上限（字符数，chars 口径，含段落间分隔符）：50_000 ≈ 1 万词/约 160 段；
+/// 配合 llm 桶 60/min 与客户端 429 自动退避，最坏耗时分钟级可控。
+const MAX_ARTICLE_CHARS: usize = 50_000;
 
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +21,26 @@ pub struct FetchedArticle {
     pub host: String,
     pub title: String,
     pub text: String,
+    /// 正文超过 MAX_ARTICLE_CHARS 被整段截断时为 true（预览卡提示用户）。
+    pub truncated: bool,
+}
+
+/// 整段保留截断：段落间 "\n\n" 分隔符计入预算（join 后总长严格 ≤ max_chars）；
+/// 超限时在段落边界截断并标记 truncated；首段恒保留（宁多勿空）。
+fn cap_text_chars(text: &str, max_chars: usize) -> (String, bool) {
+    let paras: Vec<&str> = text.split("\n\n").collect();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut total = 0usize;
+    for (i, p) in paras.iter().enumerate() {
+        let sep = if i > 0 { 2 } else { 0 };
+        let len = p.chars().count() + sep;
+        if i > 0 && total + len > max_chars {
+            return (kept.join("\n\n"), true);
+        }
+        total += len;
+        kept.push(p);
+    }
+    (kept.join("\n\n"), false)
 }
 
 /// 预览/导入共用的正文提取（纯函数，可测）。
@@ -40,11 +63,14 @@ pub fn extract_article_with_min(
             "只抓到 {words} 个词的正文——这个页面可能是付费墙、需要登录或反爬限制。可以在网页里全选复制正文，用「粘贴文本」导入，内容是一样的。"
         ));
     }
+    // 门槛检查按原文全量词数（截断不影响付费墙判定），之后再做长度截断。
+    let (text, truncated) = cap_text_chars(&text, MAX_ARTICLE_CHARS);
     Ok(FetchedArticle {
         url: final_url.to_string(),
         host,
         title,
         text,
+        truncated,
     })
 }
 
@@ -292,12 +318,14 @@ pub async fn reader_fetch_url(url: String) -> Result<FetchedArticle, String> {
         if words < MIN_ARTICLE_WORDS {
             return Err("这个地址没有可读的文章正文。".into());
         }
+        let (text, truncated) = cap_text_chars(&text, MAX_ARTICLE_CHARS);
         let host = host_of(&final_url);
         FetchedArticle {
             url: final_url,
             host,
             title: String::new(),
             text,
+            truncated,
         }
     };
     Ok(article)
@@ -361,5 +389,64 @@ mod tests {
             decode_entities("A &amp; B &quot;q&quot; &#8212; &#x27;"),
             "A & B \"q\" — '"
         );
+    }
+
+    // ---- cap_text_chars：整段保留截断（分隔符计入预算） ----
+
+    #[test]
+    fn cap_truncates_at_paragraph_boundary() {
+        // "12345" 之后：sep 2 + len 5 = 7，5+7=12 > 10 → 在段落边界截掉后两段。
+        let (out, truncated) = cap_text_chars("12345\n\n67890\n\nabc", 10);
+        assert_eq!(out, "12345");
+        assert!(truncated);
+        // 恰好放得下（含分隔符预算）→ 全保留且不标 truncated。
+        let (out, truncated) = cap_text_chars("12345\n\n6789", 12);
+        assert_eq!(out, "12345\n\n6789");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn cap_keeps_first_paragraph_even_if_over_limit() {
+        // 首段恒保留（宁多勿空）：即使单段超限也原样返回、不标 truncated。
+        let (out, truncated) = cap_text_chars("aaaaaaaaaaaa", 5);
+        assert_eq!(out, "aaaaaaaaaaaa");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn cap_keeps_short_text_unchanged() {
+        let (out, truncated) = cap_text_chars("aa\n\nbb\n\ncc", 100);
+        assert_eq!(out, "aa\n\nbb\n\ncc");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn extract_article_truncates_long_body() {
+        // 40 段 × 250 词（清洗后每段 1,499 字符）≈ 60,038 字符（含分隔符）> 50_000。
+        // 末段独有 TAILMARKER 词必须随截断消失；首段 HEADMARKER 必须保留。
+        let unit = "wordx ";
+        let mut paras: Vec<String> = Vec::new();
+        for i in 0..40 {
+            let mut p = unit.repeat(250);
+            if i == 0 {
+                p.push_str("headmarkerkept ");
+            } else if i == 39 {
+                p.push_str("tailmarkercut ");
+            }
+            paras.push(p);
+        }
+        let html = format!(
+            "<html><body>{}</body></html>",
+            paras
+                .iter()
+                .map(|p| format!("<p>{}</p>", p.trim_end()))
+                .collect::<Vec<_>>()
+                .join("")
+        );
+        let article = extract_article("https://example.gov/long", &html).unwrap();
+        assert!(article.truncated);
+        assert!(article.text.chars().count() <= MAX_ARTICLE_CHARS);
+        assert!(article.text.contains("headmarkerkept"));
+        assert!(!article.text.contains("tailmarkercut"));
     }
 }

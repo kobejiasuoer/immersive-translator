@@ -316,6 +316,34 @@ describe("ImportDialog 发现书库（B2 全链路）", () => {
     m.unmount();
   });
 
+  it("网页链接（UrlTab）：readerFetchUrl 返回 truncated → 预览卡显示「原文过长」提示", async () => {
+    feedMocks.readerFetchUrl.mockResolvedValueOnce({
+      url: "https://en.wikipedia.org/wiki/Reading",
+      host: "en.wikipedia.org",
+      title: "Reading",
+      text: "Reading is the process of taking in the sense or meaning of letters, symbols, or sentence structure.",
+      truncated: true,
+    });
+    const m = mountDialog({ onImportBook: importBookMock() });
+
+    // 切「网页链接」tab → 原生 setter 给受控输入赋值 → 抓取正文。
+    act(() => findButton(m.container, "网页链接").click());
+    await flush();
+    const input = m.container.querySelector<HTMLInputElement>('input[aria-label="文章链接"]');
+    expect(input).not.toBeNull();
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setter.call(input!, "https://en.wikipedia.org/wiki/Reading");
+      input!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      findButton(m.container, "抓取正文").click();
+    });
+    await until(() => (m.container.textContent ?? "").includes("原文过长，仅导入前 50,000 字符"));
+    expect(m.container.textContent).toContain("en.wikipedia.org");
+    m.unmount();
+  });
+
   it("资讯订阅（B3）：点开一篇文章走导入管线 → 「加入书架并开始阅读」onImport 带 url 链参数", async () => {
     const RSS_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>

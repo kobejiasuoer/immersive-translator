@@ -54,7 +54,12 @@ import { createVadDetector, type VadDetector } from "../core/vad";
 import { loadAsrCredentials, loadIseCredentials } from "../lib/iseCredentials";
 import { track } from "../lib/analytics";
 import { speakListSessions, speakSaveSession } from "../lib/speakStore";
-import { preloadScenarioCatalog, refreshOfficialScenarioCatalog } from "../lib/scenarioCatalog";
+import {
+  OFFICIAL_CATALOG_BADGE,
+  officialCatalogSource,
+  preloadScenarioCatalog,
+  refreshOfficialScenarioCatalog,
+} from "../lib/scenarioCatalog";
 import { cancelTranslation, openSettings } from "../lib/tauriBridge";
 import { phoneTip, wordScorePath } from "../core/shadowDiagnose";
 import type { VocabWord } from "../core/readerTypes";
@@ -1196,6 +1201,9 @@ export function SpeakView({
 
         <div className="scenario-group-label">
           <span>日常与职场模拟场景</span>
+          {officialCatalogSource() === "fallback" && (
+            <span>{OFFICIAL_CATALOG_BADGE.fallback}</span>
+          )}
           <span>点击即可开始</span>
         </div>
         <div className="scenario-daily-grid">
@@ -1222,7 +1230,7 @@ export function SpeakView({
           <>
             <div className="scenario-group-label">
               <span>官方场景库</span>
-              <span>云端目录</span>
+              <span>{OFFICIAL_CATALOG_BADGE[officialCatalogSource()]}</span>
             </div>
             <div className="scenario-daily-grid">
               {extraLists.official.map((sc) => (

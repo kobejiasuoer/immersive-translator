@@ -234,3 +234,93 @@ describe("refreshOfficialScenarioCatalog：后台拉取官方目录", () => {
     await expect(p2).resolves.toBeUndefined();
   });
 });
+
+describe("officialCatalogSource：官方目录来源三态（catalogBadge）", () => {
+  it("空缓存（缓存读失败/首启）→ fallback", async () => {
+    mocks.scenarioCacheRead.mockResolvedValue([]);
+    const { catalog } = await loadModules();
+
+    await catalog.preloadScenarioCatalog();
+
+    expect(catalog.officialCatalogSource()).toBe("fallback");
+  });
+
+  it("非空官方缓存装载 → cache", async () => {
+    mocks.scenarioCacheRead.mockResolvedValue([officialScenario("off_a"), officialScenario("off_b")]);
+    const { catalog } = await loadModules();
+
+    await catalog.preloadScenarioCatalog();
+
+    expect(catalog.officialCatalogSource()).toBe("cache");
+  });
+
+  it("cache 态 refresh 404（端点未上线）→ 仍 cache", async () => {
+    mocks.scenarioCacheRead.mockResolvedValue([officialScenario("off_a")]);
+    mocks.scenarioFetchOfficial.mockResolvedValue(http(404, "Not Found"));
+    const { catalog } = await loadModules();
+
+    await catalog.preloadScenarioCatalog();
+    await catalog.refreshOfficialScenarioCatalog();
+
+    expect(catalog.officialCatalogSource()).toBe("cache");
+  });
+
+  it("cache 态 refresh reject（断网/未登录）→ 仍 cache", async () => {
+    mocks.scenarioCacheRead.mockResolvedValue([officialScenario("off_a")]);
+    mocks.scenarioFetchOfficial.mockRejectedValue(new Error("network down"));
+    const { catalog } = await loadModules();
+
+    await catalog.preloadScenarioCatalog();
+    await catalog.refreshOfficialScenarioCatalog();
+
+    expect(catalog.officialCatalogSource()).toBe("cache");
+  });
+
+  it("fallback 态 refresh 200 有列表 → server", async () => {
+    mocks.scenarioCacheRead.mockResolvedValue([]); // 空缓存 → fallback
+    mocks.scenarioFetchOfficial.mockResolvedValue(
+      http(200, JSON.stringify({ scenarios: [officialScenario("off_a")] })),
+    );
+    const { catalog } = await loadModules();
+
+    await catalog.preloadScenarioCatalog();
+    expect(catalog.officialCatalogSource()).toBe("fallback");
+    await catalog.refreshOfficialScenarioCatalog();
+
+    expect(catalog.officialCatalogSource()).toBe("server");
+  });
+
+  it("refresh 200 但目录为空 → 桶空 → fallback（不变式：fallback ⟺ 官方桶空）", async () => {
+    mocks.scenarioCacheRead.mockResolvedValue([officialScenario("off_a")]); // 先 cache
+    mocks.scenarioFetchOfficial.mockResolvedValue(http(200, JSON.stringify({ scenarios: [] })));
+    const { catalog } = await loadModules();
+
+    await catalog.preloadScenarioCatalog();
+    expect(catalog.officialCatalogSource()).toBe("cache");
+    await catalog.refreshOfficialScenarioCatalog();
+
+    expect(catalog.officialCatalogSource()).toBe("fallback");
+  });
+
+  it("refresh 200 且内容与已装载缓存相同 → 零写盘仍算 server（已同步）", async () => {
+    const offA = officialScenario("off_a");
+    mocks.scenarioCacheRead.mockResolvedValue([offA]);
+    mocks.scenarioFetchOfficial.mockResolvedValue(http(200, JSON.stringify({ scenarios: [offA] })));
+    const { catalog } = await loadModules();
+
+    await catalog.preloadScenarioCatalog();
+    await catalog.refreshOfficialScenarioCatalog();
+
+    expect(catalog.officialCatalogSource()).toBe("server");
+    expect(mocks.scenarioCacheWrite).not.toHaveBeenCalled();
+  });
+
+  it("OFFICIAL_CATALOG_BADGE 三态文案", async () => {
+    const { catalog } = await loadModules();
+    expect(catalog.OFFICIAL_CATALOG_BADGE).toEqual({
+      server: "云端目录·已同步",
+      cache: "云端目录·本地缓存",
+      fallback: "内置场景",
+    });
+  });
+});

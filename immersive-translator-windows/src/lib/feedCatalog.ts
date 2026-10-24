@@ -72,8 +72,31 @@ export function feedInvokeErrorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** 推荐订阅（2026-10-24 WebFetch 逐一实测可达且为 RSS 2.0；NIH 备选源
- *  实测 403 已剔除）。 */
+/** 推荐订阅（均为实测可达的美国政府公有领域源，license 见各条注释；
+ *  实测口径与剔除记录如下，实测不通过的源绝不收录、宁缺勿滥）。
+ *
+ *  实测口径：应用真实请求 = feed.rs 只设 Chrome UA 与 20s 超时、不设 Accept 头、
+ *  reqwest 默认跟随重定向；故 curl 探测统一 -A "Chrome/126" 不加 Accept 头并带 -L，
+ *  WebFetch 交叉核对（WAF 挡 WebFetch 时以 curl 应用口径为准）。
+ *
+ *  两轮实测记录：
+ *  - 2026-10-24/25 设计阶段（curl + Chrome UA、WebFetch）：NASA/CDC/NIST/LoC/DOE
+ *    两环境两日 200+RSS 逐字节一致；NOAA 带浏览器 Accept 头 200+RSS（101,851B）、
+ *    裸 UA 得 202+text/html+0B——边缘按 Accept 头区别对待且跨环境不稳定。
+ *  - 2026-10-25 施工复测：DOE 301→/rss/energygov/2193718 后 200+application/rss+xml
+ *    8,223B（WebFetch 核对 RSS 2.0「Energy News」）→ 收编。LoC 403 Cloudflare
+ *    「Just a moment」（curl 三连 + 改 Accept 头 + HTTP/1.1 共 5 次 + WebFetch 均
+ *    403，与设计阶段两环境结论相反——WAF 按 egress IP 区别对待）→ 按实测剔除。
+ *    NOAA 307→/rss.xml→200+RSS 两次后第三次 202+text/html+0B（6 分钟内
+ *    200/200/202，现场复现跨请求不稳定）→ 按「裸 UA 连续 3 次全 200+RSS 才收、
+ *    任一 202/403/HTML 即弃」剔除。JPL curl SSL 自签证书链（error 60）→ 剔除。
+ *
+ *  剔除清单（实测不通过）：EPA newsreleases/search/rss 405 Human Verification（Akamai）；
+ *  USGS /rss 405 同款；FDA stay-informed/rss-feeds 302 bot 墙；CISA all.xml、
+ *  USDA /feed、congress.gov /rss、HHS /rss 403；blogs.nasa.gov/feed 与
+ *  new.nsf.gov/rss 200 但返回 HTML 非 feed；NPS /rss、DOI /rss、
+ *  federalregister.gov/documents/feed 404；justice.gov/news/rss 连接超时；
+ *  NIH 备选源 403（2026-10-24 既有记录）；LoC/NOAA/JPL 见 2026-10-25 施工复测。 */
 export const RECOMMENDED_FEEDS: RecommendedFeed[] = [
   {
     title: "NASA News Releases",
@@ -92,6 +115,12 @@ export const RECOMMENDED_FEEDS: RecommendedFeed[] = [
     url: "https://www.nist.gov/news-events/news/rss.xml",
     note: "美国国家标准与技术研究院，科技/计量新闻，周更 2-4 条，适合精读",
     // license：商务部下属机构，美国政府作品，公有领域。
+  },
+  {
+    title: "Energy Department News",
+    url: "https://www.energy.gov/rss",
+    note: "美国能源部新闻，能源科技与科研进展，周更数条",
+    // license：能源部作品为美国政府作品（17 U.S.C. §105）公有领域，第三方署名供稿除外。
   },
 ];
 

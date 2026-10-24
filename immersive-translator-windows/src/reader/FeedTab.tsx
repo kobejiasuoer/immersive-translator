@@ -390,6 +390,7 @@ export function FeedTab({ onImport, onSwitchToPaste }: FeedTabProps) {
                 {pvStats.words.toLocaleString()} 词 · {pvStats.paras} 段 · 约 {pvStats.minutes} 分钟
               </span>
             </div>
+            {pv.truncated && <div className="epub-pv-note">原文过长，仅导入前 50,000 字符</div>}
             <div className="intake-pv-cov">
               覆盖{EXAM_GOAL_LABELS[goal]}大纲词 <b>{pvCov.total}</b>
               {pvCov.unmastered > 0 && (
