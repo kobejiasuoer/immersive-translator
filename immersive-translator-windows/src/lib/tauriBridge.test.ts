@@ -33,8 +33,17 @@ import {
   syncStoreList,
   syncStorePut,
   ttsSpeakAdvanced,
+  booksDownload,
+  booksList,
+  onBooksDownloadProgress,
 } from "./tauriBridge";
-import type { AuthStatus, AuthUser, StoredSyncEntity, SyncHttpText } from "./tauriBridge";
+import type {
+  AuthStatus,
+  AuthUser,
+  BooksDownloadProgress,
+  StoredSyncEntity,
+  SyncHttpText,
+} from "./tauriBridge";
 
 const mockedInvoke = invoke as unknown as Mock;
 const mockedListen = listen as unknown as Mock;
@@ -274,5 +283,69 @@ describe("scenario IPC 命令封装（A1 场景目录：命令名/参数 camelCa
     mockedInvoke.mockResolvedValueOnce(undefined);
     await expect(scenarioCacheWrite("[]")).resolves.toBeUndefined();
     expect(mockedInvoke).toHaveBeenCalledWith("scenario_cache_write", { scenariosJson: "[]" });
+  });
+});
+
+describe("books IPC 命令封装（B2：命令名/参数与 generate_handler! 登记对齐）", () => {
+  it("books_list(query) → SyncHttpText（七键逐字透传，undefined 键由 invoke 序列化丢弃）", async () => {
+    const http: SyncHttpText = { status: 200, body: "{}", retryAfterSeconds: null };
+    mockedInvoke.mockResolvedValueOnce(http);
+    await expect(
+      booksList({ q: "poe", grade: "easy", page: 2, perPage: 40 }),
+    ).resolves.toEqual(http);
+    expect(mockedInvoke).toHaveBeenCalledWith("books_list", {
+      q: "poe",
+      language: undefined,
+      category: undefined,
+      source: undefined,
+      grade: "easy",
+      page: 2,
+      perPage: 40,
+    });
+  });
+
+  it("booksList({}) 缺省七键全 undefined（Rust Option=None 走服务端默认 page=1/perPage=20）", async () => {
+    mockedInvoke.mockResolvedValueOnce({ status: 200, body: "{}", retryAfterSeconds: null });
+    await booksList({});
+    expect(mockedInvoke).toHaveBeenCalledWith("books_list", {
+      q: undefined,
+      language: undefined,
+      category: undefined,
+      source: undefined,
+      grade: undefined,
+      page: undefined,
+      perPage: undefined,
+    });
+  });
+
+  it("booksDownload(bookId)：404 错误信封原样 resolves（404 是数据）+ 200 base64 一例", async () => {
+    // 404 是数据不是异常（口径同 scenario_fetch_official test:260-262），处置归 DiscoverTab。
+    const notFound = {
+      status: 404,
+      body: JSON.stringify({ error: { code: "not_found", message: "book missing" } }),
+      retryAfterSeconds: null,
+    };
+    mockedInvoke.mockResolvedValueOnce(notFound);
+    await expect(booksDownload("alice-in-wonderland")).resolves.toEqual(notFound);
+    expect(mockedInvoke).toHaveBeenCalledWith("books_download", {
+      bookId: "alice-in-wonderland",
+    });
+    const ok = { status: 200, body: "UEVQRg==", retryAfterSeconds: null };
+    mockedInvoke.mockResolvedValueOnce(ok);
+    await expect(booksDownload("the-call-of-the-wild")).resolves.toEqual(ok);
+  });
+
+  it("onBooksDownloadProgress：以 books:download:progress 注册、payload 转发、透传 unlisten", async () => {
+    const unlisten: UnlistenFn = () => undefined;
+    mockedListen.mockResolvedValueOnce(unlisten);
+    const handler = vi.fn();
+
+    const got = await onBooksDownloadProgress(handler);
+
+    expect(got).toBe(unlisten);
+    expect(mockedListen).toHaveBeenCalledWith("books:download:progress", expect.any(Function));
+    const registered = mockedListen.mock.calls[0][1] as EventCallback<BooksDownloadProgress>;
+    registered({ event: "books:download:progress", id: 3, payload: { bookId: "b", received: 1, total: 2 } });
+    expect(handler).toHaveBeenCalledWith({ bookId: "b", received: 1, total: 2 });
   });
 });

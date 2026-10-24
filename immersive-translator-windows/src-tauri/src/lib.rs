@@ -1,6 +1,7 @@
 mod auth;
 mod clipboard;
 mod crash;
+mod discover;
 mod file_export;
 mod history;
 mod ocr;
@@ -1460,6 +1461,8 @@ pub fn run() {
             scenario_catalog::scenario_fetch_official,
             scenario_catalog::scenario_cache_read,
             scenario_catalog::scenario_cache_write,
+            discover::books_list,
+            discover::books_download,
             open_login_window,
             settings_open_tab,
             settings_take_pending_tab,
