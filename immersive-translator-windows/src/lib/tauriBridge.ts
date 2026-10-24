@@ -662,6 +662,21 @@ export function onBooksDownloadProgress(
   );
 }
 
+// ---------------------------------------------------------------------------
+// B3 资讯订阅（feed）：匿名直连用户提供的源站抓 feed 原始 XML 文本。
+// 与 booksList/booksDownload（B2 经网关的挂法）刻意不同：不走网关、不带任何
+// 鉴权凭证——feed 源站匿名可读；解析在 lib/feedCatalog.ts，这里只做 IPC 封装。
+// ---------------------------------------------------------------------------
+
+/** GET 用户提供的 RSS/Atom 订阅地址（匿名直连源站，不走网关、不带凭证，
+ *  与 booksList/booksDownload 刻意不同）。resolve=原始 feed XML 文本（未解析，
+ *  解析在 lib/feedCatalog.ts）；reject=Error，message 为可直接展示的中文
+ *  （口径同 lib/webExtract.ts 的 readerFetchUrl）。参数名 url 为单词，
+ *  camelCase↔snake_case 无转换歧义。 */
+export function readerFetchFeed(url: string): Promise<string> {
+  return invoke<string>("reader_fetch_feed", { url });
+}
+
 /** 打开（或聚焦）登录窗口。 */
 export function openLoginWindow(): Promise<void> {
   return invoke("open_login_window");

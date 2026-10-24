@@ -3,6 +3,7 @@ mod clipboard;
 mod crash;
 mod discover;
 mod file_export;
+mod feed;
 mod history;
 mod ocr;
 mod reader_store;
@@ -1436,6 +1437,7 @@ pub fn run() {
             reader_store::note_write_replay,
             reader_store::note_delete,
             web_extract::reader_fetch_url,
+            feed::reader_fetch_feed,
             review_reminder::reminder_get_config,
             review_reminder::reminder_set_config,
             review_reminder::reminder_due_now,

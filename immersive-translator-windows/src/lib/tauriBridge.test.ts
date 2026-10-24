@@ -36,6 +36,7 @@ import {
   booksDownload,
   booksList,
   onBooksDownloadProgress,
+  readerFetchFeed,
 } from "./tauriBridge";
 import type {
   AuthStatus,
@@ -347,5 +348,30 @@ describe("books IPC 命令封装（B2：命令名/参数与 generate_handler! �
     const registered = mockedListen.mock.calls[0][1] as EventCallback<BooksDownloadProgress>;
     registered({ event: "books:download:progress", id: 3, payload: { bookId: "b", received: 1, total: 2 } });
     expect(handler).toHaveBeenCalledWith({ bookId: "b", received: 1, total: 2 });
+  });
+});
+
+describe("feed IPC 命令封装（B3 资讯订阅：匿名直连源站，无鉴权参数）", () => {
+  it("readerFetchFeed(url)：invoke 命令名 reader_fetch_feed、参数恰为 { url }、resolve 字符串原样透传", async () => {
+    const xml = '<?xml version="1.0"?><rss version="2.0"><channel><title>NASA</title></channel></rss>';
+    mockedInvoke.mockResolvedValueOnce(xml);
+    await expect(readerFetchFeed("https://www.nasa.gov/news-release/feed/")).resolves.toBe(xml);
+    expect(mockedInvoke).toHaveBeenCalledTimes(1);
+    expect(mockedInvoke).toHaveBeenCalledWith("reader_fetch_feed", {
+      url: "https://www.nasa.gov/news-release/feed/",
+    });
+    // 恰为 { url }：整个参数对象全等比对（多出任何鉴权类键都会失败）。
+    expect(mockedInvoke.mock.calls[0]).toEqual([
+      "reader_fetch_feed",
+      { url: "https://www.nasa.gov/news-release/feed/" },
+    ]);
+  });
+
+  it("readerFetchFeed(url)：reject 原样透传（Rust 中文 message，桥接层不做任何映射/catch）", async () => {
+    mockedInvoke.mockRejectedValueOnce(new Error("订阅源返回了 404"));
+    await expect(readerFetchFeed("https://example.gov/feed.xml")).rejects.toThrow("订阅源返回了 404");
+    expect(mockedInvoke).toHaveBeenCalledWith("reader_fetch_feed", {
+      url: "https://example.gov/feed.xml",
+    });
   });
 });
