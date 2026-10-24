@@ -68,6 +68,15 @@ export interface BookImportDraft {
   radar: { kaoyan: number; cet4: number; cet6: number };
   totalWords: number;
   minutes: number;
+  /** 来源书目 id（发现页下载导入时携带；本地导入缺省向后兼容）。
+   *  入库成功后据此上报 discover_import 埋点，见 discoverImportProps。 */
+  sourceBookId?: string;
+}
+
+/** 发现页导入的埋点属性：draft 带来源书目 id → { bookId }；本地导入 → null
+ *  （不埋 discover_import，绝不把「发起导入」当「下载入库成功」）。 */
+export function discoverImportProps(draft: BookImportDraft): { bookId: string } | null {
+  return draft.sourceBookId ? { bookId: draft.sourceBookId } : null;
 }
 
 /**

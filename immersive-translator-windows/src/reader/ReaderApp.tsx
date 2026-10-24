@@ -54,7 +54,7 @@ import {
 import { parseNoteMarkdown } from "../core/noteParser";
 import type { NoteMeta, NoteReplay } from "../core/readerTypes";
 import { bookChapterIndexOf } from "../core/readerTypes";
-import type { BookImportDraft } from "../core/bookImport";
+import { discoverImportProps, type BookImportDraft } from "../core/bookImport";
 import { loadGlobalReaderSettings, loadMicDeviceId, saveGlobalReaderSettings, saveMicDeviceId } from "./readerSettingsStore";
 import { trayRefreshBadge } from "../lib/reminder";
 import { buildArticleFromText, normalizeWordKey } from "../core/articleBuilder";
@@ -1322,6 +1322,9 @@ export function ReaderApp() {
           setBookList(books);
           booksRef.current = books;
           showToast(`已导入《${draft.title}》· ${metas.length} 章`);
+          // 发现页下载导入：入库成功才上报 discover_import（本地导入缺省不埋）。
+          const discoverEv = discoverImportProps(draft);
+          if (discoverEv) track("discover_import", discoverEv);
           await openArticle(metas[0].id);
         })
         .catch((error) => {
