@@ -40,6 +40,7 @@ import {
   type EpubBook,
 } from "../core/bookImport";
 import { trackEvent } from "../lib/telemetry";
+import { DiscoverTab } from "./DiscoverTab";
 import type { ArticleSourceType, ArticleSummary, VocabWord } from "../core/readerTypes";
 
 export interface ImportMeta {
@@ -61,7 +62,7 @@ interface Props {
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const GOAL_STORAGE_KEY = "intake-exam-goal";
 
-type TabId = "lib" | "epub" | "file" | "url" | "paste";
+type TabId = "lib" | "epub" | "file" | "url" | "paste" | "discover";
 
 interface UrlPreview {
   url: string;
@@ -104,6 +105,9 @@ function GoalCoverageRow({ goal, onGoalChange }: { goal: ExamGoal; onGoalChange:
 
 export function ImportDialog({ vocabWords, articles, onImport, onImportBook, onClose }: Props) {
   const [tab, setTab] = useState<TabId>("lib");
+  // 发现页下载完成的交接态：DiscoverTab onDeliver 写入 + 切到 epub tab，
+  // EpubTab 挂载时取走解析（onInjectedConsumed 清空，防重复解析）。
+  const [pendingEpub, setPendingEpub] = useState<EpubTabInjected | null>(null);
   const [goal, setGoal] = useState<ExamGoal>(() => {
     const saved = localStorage.getItem(GOAL_STORAGE_KEY);
     return saved && (EXAM_GOALS as string[]).includes(saved) ? (saved as ExamGoal) : "kaoyan";
@@ -168,6 +172,7 @@ export function ImportDialog({ vocabWords, articles, onImport, onImportBook, onC
               ["file", "本地文件"],
               ["url", "网页链接"],
               ["paste", "粘贴文本"],
+              ["discover", "发现书库"],
             ] as [TabId, string][]
           ).map(([id, label]) => (
             <button
@@ -195,13 +200,28 @@ export function ImportDialog({ vocabWords, articles, onImport, onImportBook, onC
           />
         )}
         {tab === "epub" && (
-          <EpubTab vocabWords={vocabWords} onImportBook={onImportBook} onSwitchToPaste={() => setTab("paste")} />
+          <EpubTab
+            vocabWords={vocabWords}
+            onImportBook={onImportBook}
+            onSwitchToPaste={() => setTab("paste")}
+            injected={pendingEpub}
+            onInjectedConsumed={() => setPendingEpub(null)}
+          />
         )}
         {tab === "file" && (
           <FileTab vocabWords={vocabWords} onImport={onImport} onSwitchToPaste={() => setTab("paste")} />
         )}
         {tab === "url" && <UrlTab onImport={onImport} onSwitchToPaste={() => setTab("paste")} />}
         {tab === "paste" && <PasteTab onImport={onImport} />}
+        {tab === "discover" && (
+          <DiscoverTab
+            onDeliver={(file, bookId) => {
+              // 同一事件两 setState 同帧生效：EpubTab 挂载时 injected 已就位。
+              setPendingEpub({ file, sourceBookId: bookId });
+              setTab("epub");
+            }}
+          />
+        )}
       </div>
     </div>
   );
@@ -797,6 +817,14 @@ interface EpubPreviewState {
   /** 勾选的章下标（默认全选；确认导入时只导所选）。 */
   selected: Set<number>;
   cover?: string;
+  /** 来源书目 id（发现页下载注入时携带；透传进 draft 供 discover_import 埋点）。 */
+  sourceBookId?: string;
+}
+
+/** 发现页交接的注入载荷（DiscoverTab onDeliver → pendingEpub → EpubTab 挂载取走）。 */
+interface EpubTabInjected {
+  file: File;
+  sourceBookId?: string;
 }
 
 /** 选书雷达的人话判定（口径：未掌握词占命中大纲词的比例）。 */
@@ -817,10 +845,16 @@ function EpubTab({
   vocabWords,
   onImportBook,
   onSwitchToPaste,
+  injected = null,
+  onInjectedConsumed,
 }: {
   vocabWords: VocabWord[];
   onImportBook: (draft: BookImportDraft) => void;
   onSwitchToPaste: () => void;
+  /** 外部注入的 File（发现页下载交接；既有本地导入调用不传，行为零变化）。 */
+  injected?: EpubTabInjected | null;
+  /** 注入被消费后的回调（ImportDialog 层清 pendingEpub，防重复解析）。 */
+  onInjectedConsumed?: () => void;
 }) {
   const [phase, setPhase] = useState<"idle" | "parsing" | "preview" | "error">("idle");
   const [preview, setPreview] = useState<EpubPreviewState | null>(null);
@@ -828,8 +862,10 @@ function EpubTab({
   const [dragOver, setDragOver] = useState(false);
   const [goal, setGoal] = useExamGoal();
   const fileRef = useRef<HTMLInputElement | null>(null);
+  // 防重入：注入只消费一次（effect 重跑 / StrictMode 双挂载都不重复解析）。
+  const injectedRef = useRef(false);
 
-  const parse = useCallback(async (file: File | undefined | null) => {
+  const parse = useCallback(async (file: File | undefined | null, sourceBookId?: string) => {
     if (!file) return;
     setPhase("parsing");
     setError("");
@@ -844,6 +880,7 @@ function EpubTab({
         fileName: file.name,
         selected: new Set(book.chapters.map((_, i) => i)),
         cover,
+        ...(sourceBookId ? { sourceBookId } : {}),
       });
       setPhase("preview");
     } catch (e) {
@@ -853,6 +890,15 @@ function EpubTab({
       setPhase("error");
     }
   }, []);
+
+  // 挂载消费注入（发现页路径：pendingEpub 在挂载前已就位）；
+  // 先回调清 pending 再解析，「返回重选文件」后重选路径不带 sourceBookId。
+  useEffect(() => {
+    if (!injected || injectedRef.current) return;
+    injectedRef.current = true;
+    onInjectedConsumed?.();
+    void parse(injected.file, injected.sourceBookId);
+  }, [injected, onInjectedConsumed, parse]);
 
   const fullText = useMemo(
     () => (preview ? preview.book.chapters.map((c) => c.text).join("\n\n") : ""),
@@ -885,6 +931,7 @@ function EpubTab({
       title: preview.book.title,
       ...(preview.book.author ? { author: preview.book.author } : {}),
       ...(preview.cover ? { cover: preview.cover } : {}),
+      ...(preview.sourceBookId ? { sourceBookId: preview.sourceBookId } : {}),
       chapters,
       radar: {
         kaoyan: coveredWords(text, "kaoyan").size,

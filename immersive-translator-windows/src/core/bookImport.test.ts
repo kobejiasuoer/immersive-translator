@@ -2,7 +2,7 @@
 // EPUB 解析在 webview 里跑（DOMParser），测试用 jsdom 提供同实现。
 import { describe, expect, it } from "vitest";
 import JSZip from "jszip";
-import { extractXhtmlText, parseEpub } from "./bookImport";
+import { discoverImportProps, extractXhtmlText, parseEpub, type BookImportDraft } from "./bookImport";
 
 /** 生成 .epub 的字节流（EPUB3 NAV 目录版）。 */
 async function buildEpub(files: Record<string, string>): Promise<Uint8Array> {
@@ -259,5 +259,29 @@ describe("parseEpub", () => {
     const bytes = await zip.generateAsync({ type: "uint8array" });
     const book = await parseEpub(epubFile(bytes));
     expect(book.coverDataUrl).toMatch(/^data:image\/jpeg;base64,/);
+  });
+});
+
+describe("discoverImportProps", () => {
+  /** 最小合法草稿（sourceBookId 由用例按需附加）。 */
+  function draft(extra: Partial<BookImportDraft> = {}): BookImportDraft {
+    return {
+      title: "The Call of the Wild",
+      chapters: [{ title: "Into the Primitive", text: "Old longings nomadic leap." }],
+      radar: { kaoyan: 1, cet4: 1, cet6: 0 },
+      totalWords: 4,
+      minutes: 1,
+      ...extra,
+    };
+  }
+
+  it("无 sourceBookId（本地导入）→ null，不埋 discover_import", () => {
+    expect(discoverImportProps(draft())).toBeNull();
+  });
+
+  it("sourceBookId 存在（发现页下载导入）→ { bookId } 透传", () => {
+    expect(discoverImportProps(draft({ sourceBookId: "alice-in-wonderland" }))).toEqual({
+      bookId: "alice-in-wonderland",
+    });
   });
 });

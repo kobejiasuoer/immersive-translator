@@ -8661,3 +8661,165 @@ button.notes-word:hover { color: var(--accent); }
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ---- 发现书库（B2）：目录筛选 + 单列书目卡 + 下载态（对齐 intake-*/epub-* 命名族） ---- */
+.discover-toolbar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.discover-search {
+  flex: 1;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.discover-search:focus {
+  border-color: var(--accent);
+}
+.discover-search::placeholder {
+  color: var(--text-4);
+}
+.discover-grade-select {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 12.5px;
+  outline: none;
+  cursor: pointer;
+}
+.discover-grade-select:focus {
+  border-color: var(--accent);
+}
+.discover-count {
+  margin: 2px 0 10px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.discover-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.discover-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.discover-cover {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 20px;
+  line-height: 1;
+}
+.discover-info {
+  flex: 1;
+  min-width: 0;
+}
+.discover-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.discover-author {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.discover-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.discover-grade-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.discover-grade-chip.g-easy {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+.discover-grade-chip.g-medium {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+.discover-grade-chip.g-hard {
+  color: var(--err);
+  background: var(--err-soft);
+}
+.discover-desc {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.discover-license {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-4);
+}
+.discover-action {
+  flex: none;
+  min-width: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 6px;
+}
+.discover-dl-progress {
+  font-size: 12px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.discover-dl-error {
+  font-size: 12px;
+  color: var(--err);
+  line-height: 1.5;
+  text-align: right;
+}
+.discover-more {
+  align-self: center;
+  min-width: 140px;
+}
+.discover-more-error {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--err);
+  text-align: center;
+  line-height: 1.6;
+}
