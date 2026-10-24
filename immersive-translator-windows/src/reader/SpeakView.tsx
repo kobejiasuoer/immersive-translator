@@ -40,6 +40,11 @@ import {
 } from "../core/speakLogic";
 import { transcribeSpeech } from "../core/xfyunAsr";
 import {
+  appendScenarioTargetsToPrompt,
+  hitKeyPhrases,
+  userScenarioTargets,
+} from "../core/scenarioForge";
+import {
   evaluateSentence,
   mapWordsToText,
   type PronunciationResult,
@@ -57,6 +62,7 @@ import type { NoteTranslateFn } from "./VocabNoteDialog";
 import { ShadowReport, MarkedWords, PhonemeRow, type DrillEntry } from "./ShadowReport";
 import { ShadowDrill } from "./ShadowDrill";
 import { SpeakReviewDialog } from "./SpeakReviewDialog";
+import { SpeakScenarioEditor } from "./SpeakScenarioEditor";
 import { IconBookOpen, IconList, IconLocate, IconMic, IconSparkles, IconStar, IconClock, IconVolume } from "../ui/icons";
 
 /** 一轮里的阶段（主对话环）。 */
@@ -227,6 +233,9 @@ export function SpeakView({
     official: [],
     user: [],
   });
+  /** 场景编辑器（A2）：null=关闭；initial=null 新建、非 null 编辑该用户场景。
+   *  全部入口（「＋ 新建场景」/卡片「编辑」）都在入口页，编辑器也只挂在入口页。 */
+  const [editorState, setEditorState] = useState<{ initial: SpeakScenario | null } | null>(null);
 
   const recorderRef = useRef<MicRecorderHandle | null>(null);
   const shadowRecorderRef = useRef<MicRecorderHandle | null>(null);
@@ -452,6 +461,24 @@ export function SpeakView({
     return hits;
   }, [session, contextTargets]);
 
+  // ---- 用户场景的 keyPhrases → 目标短语（A2 独立新通道，不碰语境 targets/SRS） ----
+  // 只对 source==="user" 的场景产出（内置/官方/语境会话恒 []，现状零变化）；
+  // 命中只打勾（chips done 态），不接 onGradeVocab、不进生词库。
+  const scenarioPhrases = useMemo(
+    () => (session ? userScenarioTargets(session.scenario).map((t) => t.word) : []),
+    [session],
+  );
+  const scenarioHits = useMemo(
+    () => hitKeyPhrases(session?.turns ?? [], scenarioPhrases),
+    [session, scenarioPhrases],
+  );
+
+  /** 编辑器保存成功（A2）：直接读内存注册表刷新「我的场景」分组——preload 是
+   *  once 单飞永久缓存，保存后重跑无效，必须 register（编辑器内）+ 显式 set。 */
+  const onScenarioSaved = useCallback(() => {
+    setExtraLists((prev) => ({ ...prev, user: listUserScenarios() }));
+  }, []);
+
   /** 结束录音并推进一轮：ASR →（并行）LLM 四行回复 + ISE 发音评测。 */
   const finishUtterance = useCallback(async () => {
     const rec = recorderRef.current;
@@ -560,9 +587,16 @@ export function SpeakView({
     const tag = `spk${++tagRef.current}`;
     activeTagRef.current = tag;
     const sysTargets: SpeakContextTarget[] = contextTargetsRef.current.map((w) => ({ word: w.word, zh: w.zh }));
+    // 用户场景的 keyPhrases 注入系统提示（A2）：调用侧拼接——空 targets 时
+    // appendScenarioTargetsToPrompt 原样返回，内置/语境会话的 prompt 逐字不变
+    // （语境 targets 与场景短语天然互斥：语境会话场景恒为 smalltalk）。
+    const sceneTargets = userScenarioTargets(withUser.scenario);
     const res = await requestTranslate(
       buildSpeakUserInput(withUser.turns.slice(0, -1), userText),
-      buildSpeakSystemPrompt(withUser.scenario, withUser.difficulty, withUser.context, sysTargets),
+      appendScenarioTargetsToPrompt(
+        buildSpeakSystemPrompt(withUser.scenario, withUser.difficulty, withUser.context, sysTargets),
+        sceneTargets,
+      ),
       tag,
       (t) => setLiveReply(t),
     );
@@ -1212,16 +1246,23 @@ export function SpeakView({
           </>
         )}
 
+        {/* 「我的场景」（A2 起标签行常显：空分组也提供「＋ 新建场景」入口） */}
+        <div className="scenario-group-label">
+          <span>我的场景</span>
+          <span className="scenario-group-tools">
+            {extraLists.user.length > 0 && <span>多端同步</span>}
+            <button className="sc-new-btn" onClick={() => setEditorState({ initial: null })}>
+              ＋ 新建场景
+            </button>
+          </span>
+        </div>
         {extraLists.user.length > 0 && (
-          <>
-            <div className="scenario-group-label">
-              <span>我的场景</span>
-              <span>多端同步</span>
-            </div>
-            <div className="scenario-daily-grid">
-              {extraLists.user.map((sc) => (
+          <div className="scenario-daily-grid">
+            {extraLists.user.map((sc) => (
+              // wrapper 承载「编辑」pill（HTML 不允许 button 嵌 button）；
+              // 卡片 button 与 start(sc.id,…) 行为与内置/官方卡完全一致
+              <div key={sc.id} className="sc-card-wrap">
                 <button
-                  key={sc.id}
                   className="scenario-card"
                   onClick={() => start(sc.id, sc.defaultDifficulty ?? difficulty)}
                 >
@@ -1235,9 +1276,12 @@ export function SpeakView({
                   </div>
                   <div className="sc-opener-preview">“{sc.opener}”</div>
                 </button>
-              ))}
-            </div>
-          </>
+                <button className="sc-edit-btn" onClick={() => setEditorState({ initial: sc })} title="编辑这个场景">
+                  编辑
+                </button>
+              </div>
+            ))}
+          </div>
         )}
 
         {recent.length > 0 && (
@@ -1262,6 +1306,18 @@ export function SpeakView({
               );
             })}
           </>
+        )}
+
+        {/* 场景编辑器（A2）：入口全在入口页，挂载钉死在入口页早退 return 内。
+            modal-overlay 是 fixed 定位，挂在滚动容器内视觉仍全屏覆盖。 */}
+        {editorState && (
+          <SpeakScenarioEditor
+            requestTranslate={requestTranslate}
+            onToast={onToast}
+            onSaved={onScenarioSaved}
+            onClose={() => setEditorState(null)}
+            initial={editorState.initial ?? undefined}
+          />
         )}
       </div>
     );
@@ -1329,6 +1385,23 @@ export function SpeakView({
                     </span>
                   );
                 })}
+              </div>
+            )}
+            {/* 用户场景的目标短语 chips（A2）：与语境目标词是两条独立通道——
+                无 SRS 过关、无 zh 释义，命中只打勾（hitKeyPhrases 按 user 轮扫描）。 */}
+            {scenarioPhrases.length > 0 && (
+              <div className="target-chip-row">
+                {scenarioPhrases.map((p) => (
+                  <span
+                    key={p}
+                    className={`lex-target-chip${scenarioHits.has(p) ? " done" : ""}`}
+                    title={`${p} — 在对话中自然说出即可`}
+                    onClick={() => onToast(`本场景目标短语：${p} — 在对话中自然说出即可`)}
+                  >
+                    <span>{scenarioHits.has(p) ? "✓ 已用上" : "○ 待练习"}</span>
+                    <strong>{p}</strong>
+                  </span>
+                ))}
               </div>
             )}
           </div>
