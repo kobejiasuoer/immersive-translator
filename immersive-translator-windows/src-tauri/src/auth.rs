@@ -129,15 +129,16 @@ pub trait AuthTransport: Send + Sync {
     }
 }
 
-/// 本地联调缺省：仅开发机经 `app_data_dir/server_endpoint.json` 指回本地时
-/// 生效（auth 联调测试也直接引用它），公众包不再回退到它。
+/// 调试构建（tauri dev / cargo run）的联调缺省；auth 联调测试也直接引用它。
 const DEV_BASE_URL: &str = "http://127.0.0.1:8090";
 
 /// 生产服务 base（登录/鉴权同源；gateway = base + /v1/chat/completions）。
 const PROD_BASE_URL: &str = "https://www.prismspace.online";
 
-/// 沉浸云对公众开放（服务端已公开部署，2026-10）。正式包缺省直连生产域名；
-/// 开发/内测机用 `app_data_dir/server_endpoint.json` 指回本地联调地址。
+/// 沉浸云对公众开放（服务端已公开部署，2026-10）。缺省地址按构建类型区分
+/// （见 `resolve_base_url`）：调试构建直连本地联调地址、正式构建直连生产
+/// 域名；任何机器都可用 `app_data_dir/server_endpoint.json` 覆盖（如内测机
+/// 的正式包指回本地）。
 const PLATFORM_PUBLIC: bool = true;
 
 struct ReqwestTransport {
@@ -195,11 +196,13 @@ impl ReqwestTransport {
     }
 
     /// §4.6 base_url 两层机制：`app_data_dir/server_endpoint.json`
-    /// （`{"baseUrl":"https://..."}`）优先；否则公众开放期走生产域名，
-    /// 未开放期回退本地联调地址。
+    /// （`{"baseUrl":"https://..."}`）优先；否则按构建类型取缺省——
+    /// 调试构建（tauri dev）走本地联调地址，正式构建（tauri build，
+    /// GitHub Releases 包）直连生产域名；沉浸云未开放期
+    /// （PLATFORM_PUBLIC=false）正式包仍回退本地联调地址。
     fn resolve_base_url(app: &AppHandle) -> String {
         endpoint_override(app).unwrap_or_else(|| {
-            if PLATFORM_PUBLIC {
+            if PLATFORM_PUBLIC && !cfg!(debug_assertions) {
                 PROD_BASE_URL.to_string()
             } else {
                 DEV_BASE_URL.to_string()
