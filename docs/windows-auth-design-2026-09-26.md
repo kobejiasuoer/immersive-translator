@@ -229,12 +229,12 @@ auth_bootstrap(app)（lib.rs setup 末尾 tokio::spawn，不阻塞任何窗口�
 
 `ReqwestTransport` 解析 `retry-after` 头（秒）进 `AuthHttpResponse.retry_after_seconds`，`AuthError.retry_after_seconds` 透传前端；前端按 §3 映射禁用按钮倒计时，**不做自动重试**（服务端文档 §5）。
 
-### 4.6 base_url 配置机制（P6 重写）
+### 4.6 base_url 配置机制（P6 重写；2026-10-23 修订缺省规则）
 
 分两层，不再依赖「发布前记得改」的口头约定：
 
 1. **运行时覆盖**：`ReqwestTransport` 构造时读 `app_data_dir/server_endpoint.json`（格式 `{"baseUrl":"https://auth.example.com"}`，明文非敏感，不存在则跳过）。生产部署方/发版流程写入该文件即可切换，无需重新编译。该文件同时是发布检查项（§10 清单第 1 条）。
-2. **编译期缺省**：`const DEV_BASE_URL: &str = "http://127.0.0.1:8090"`（仅作 dev/联调缺省）。若发布时既无 endpoint 文件又忘改缺省，§9.4 的验收演示在真实环境会在第一步 `network_error` 暴露——不静默。
+2. **编译期缺省（按构建类型，2026-10-23 起）**：`resolve_base_url` 用 `cfg!(debug_assertions)` 区分——调试构建（`tauri dev`）缺省 `DEV_BASE_URL = "http://127.0.0.1:8090"` 联调本地服务端；正式构建（`tauri build`，GitHub Releases 包）在 `PLATFORM_PUBLIC = true` 时直连 `PROD_BASE_URL = "https://www.prismspace.online"`（沉浸云未开放期仍回退 DEV 缺省）。同一份代码本地开发与正式发版各得其所，内测机可用 endpoint 文件把正式包指回本地。
 
 ---
 
