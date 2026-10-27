@@ -2,11 +2,12 @@
  * 屏 E · 口语陪练（v0.8 场景中心版）：选场景 → 免长按开麦对话 → 表达改进。
  *
  * 入口页 .scenario-hub-scroll：置顶「聊刚读的章节」「今日生词造句闯关」两张
- * 语境卡（真实数据：bookContext / dueVocabWords），下接四个日常场景卡与
- * 「官方场景库」「我的场景」分组（A1 场景目录，装载失败/为空时分组不渲染）。
- * 对话页 .sonic-studio-grid：#harmonicCanvas 60fps 声波（振幅吃真实麦克风
- * 电平与播报状态）+ 免长按点击开麦（core/vad.ts 静音自动收）→ 讯飞听写
- * → LLM 四行回复（EN/ZH/BETTER/TIP）→ 用户气泡下渲染词级增删对比
+ * 语境卡（真实数据：bookContext / dueVocabWords），下接四个日常场景大卡与
+ * 「官方场景库」（目录紧凑卡 + 分类筛选/展开）、「我的场景」分组（紧凑卡；
+ * A1 场景目录，装载失败/为空时分组不渲染）。
+ * 对话页 .sonic-studio-grid：场景条（目标词进度 + 听力模式）+ 目标词 chips
+ * + 对话流 + 底部输入区（点击/空格开麦、Esc 取消；core/vad.ts 静音自动收）
+ * → 讯飞听写 → LLM 四行回复（EN/ZH/BETTER/TIP）→ 用户气泡下渲染词级增删对比
  * （.editorial-diff-block）；同一录音异步送 ISE 发音评测写入 user 轮 pron，
  * 右侧「发音详情」透镜卡（词着色 / 音素药丸 / 逐词得分曲线 / 慢速示范）。
  * 命中语境目标词自动按 easy 档完成 SRS（onGradeVocab 记 spokenAt）。
@@ -15,7 +16,14 @@
  * 降级原则：断麦/断网/凭据缺失都给中文提示 + 逃生门，ISE 失败只降级不阻塞。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+} from "react";
 import {
   buildSpeakSystemPrompt,
   buildSpeakUserInput,
@@ -48,10 +56,12 @@ import {
   evaluateSentence,
   mapWordsToText,
   type PronunciationResult,
+  type WordMark,
 } from "../core/pronunciation";
 import { startMicRecorder, type MicRecorderHandle } from "../core/micRecorder";
 import { createVadDetector, type VadDetector } from "../core/vad";
 import { loadAsrCredentials, loadIseCredentials } from "../lib/iseCredentials";
+import { loadSpeakListenMode, saveSpeakListenMode } from "./readerSettingsStore";
 import { track } from "../lib/analytics";
 import { speakListSessions, speakSaveSession } from "../lib/speakStore";
 import {
@@ -61,14 +71,48 @@ import {
   refreshOfficialScenarioCatalog,
 } from "../lib/scenarioCatalog";
 import { cancelTranslation, openSettings } from "../lib/tauriBridge";
-import { phoneTip, wordScorePath } from "../core/shadowDiagnose";
+import {
+  filterScenarioPreview,
+  findTargetSpans,
+  friendlyNotice,
+  micTip,
+  nextTargetKey,
+  scenarioCategoryCounts,
+  scenarioSummary,
+  scoreTone,
+  targetProgress,
+  worstPhoneIdx,
+  type ScenarioFilter,
+  type Span,
+} from "../core/speakUi";
+import {
+  ListeningRow,
+  PronPanel,
+  SpeakMic,
+  SpeakNotice,
+  SpeakSceneBar,
+  TargetChips,
+  UserSentence,
+  type NoticeAction,
+  type TargetChipItem,
+} from "./SpeakParts";
 import type { VocabWord } from "../core/readerTypes";
 import type { NoteTranslateFn } from "./VocabNoteDialog";
-import { ShadowReport, MarkedWords, PhonemeRow, type DrillEntry } from "./ShadowReport";
+import { ShadowReport, type DrillEntry } from "./ShadowReport";
 import { ShadowDrill } from "./ShadowDrill";
 import { SpeakReviewDialog } from "./SpeakReviewDialog";
 import { SpeakScenarioEditor } from "./SpeakScenarioEditor";
-import { IconBookOpen, IconList, IconLocate, IconMic, IconSparkles, IconStar, IconClock, IconVolume } from "../ui/icons";
+import {
+  IconBookOpen,
+  IconCheck,
+  IconClock,
+  IconEye,
+  IconList,
+  IconLocate,
+  IconSparkles,
+  IconStar,
+  IconVolume,
+} from "../ui/icons";
 
 /** 一轮里的阶段（主对话环）。 */
 type RoundPhase =
@@ -149,6 +193,29 @@ const CATEGORY_TAG_ZH: Record<SpeakScenarioCategory, string> = {
   custom: "自定义",
 };
 
+/** 目录紧凑卡（「官方场景库」「我的场景」共用）：分类+emoji 标签、标题、2 行摘要
+ *  （goal 优先，CSS line-clamp 截断）、难度小标签；开场白预览挪到 title 提示，
+ *  信息不丢。点击行为与大卡一致（onPick = start(sc.id, …)）。 */
+function CompactScenarioCard({ sc, onPick }: { sc: SpeakScenario; onPick: () => void }) {
+  return (
+    <button className="scenario-card compact" title={`开场白：“${sc.opener}”`} onClick={onPick}>
+      <div>
+        <span className="sc-tag neutral">
+          {CATEGORY_TAG_ZH[sc.category]}
+          {sc.emoji ? ` ${sc.emoji}` : ""}
+        </span>
+        <div className="sc-title">{sc.title}</div>
+        <p className="sc-desc">{scenarioSummary(sc)}</p>
+      </div>
+      {sc.defaultDifficulty && (
+        <div className="sc-compact-meta">
+          <span className="sc-tag neutral">{difficultyOf(sc.defaultDifficulty).label}难度</span>
+        </div>
+      )}
+    </button>
+  );
+}
+
 /** 语境会话（book/vocab）的开场白：模板 + 真实数据插值（与 SPEAK_SCENARIOS
  * 内置场景及 A1 场景目录的 opener 同一性质，不引入演示内容）。 */
 function contextOpener(context: SpeakSessionContext): { text: string; hintZh: string } {
@@ -196,6 +263,8 @@ interface Props {
   pendingSpeak: PendingSpeakContext;
   /** 用户发言命中目标词：按 easy 档记 SRS（ReaderApp 侧附带 spokenAt）。 */
   onGradeVocab: (word: VocabWord, grade: "easy") => void;
+  /** 打开阅读室设置抽屉（麦克风选择在那里）；缺省则提示条不显示「检查麦克风」。 */
+  onOpenReaderSettings?: () => void;
 }
 
 export function SpeakView({
@@ -215,6 +284,7 @@ export function SpeakView({
   dueVocabWords,
   pendingSpeak,
   onGradeVocab,
+  onOpenReaderSettings,
 }: Props) {
   const [session, setSession] = useState<SpeakSession | null>(null);
   const [difficulty, setDifficulty] = useState<SpeakDifficulty>("medium");
@@ -241,6 +311,14 @@ export function SpeakView({
   /** 场景编辑器（A2）：null=关闭；initial=null 新建、非 null 编辑该用户场景。
    *  全部入口（「＋ 新建场景」/卡片「编辑」）都在入口页，编辑器也只挂在入口页。 */
   const [editorState, setEditorState] = useState<{ initial: SpeakScenario | null } | null>(null);
+  /** 官方场景库的分类筛选 + 展开态（纯本地 UI 状态，不持久化；切分类回到收起态）。 */
+  const [officialFilter, setOfficialFilter] = useState<ScenarioFilter>("all");
+  const [officialExpanded, setOfficialExpanded] = useState(false);
+  /** 听力模式（先听后看）：开 = 最新一句 AI 的英文/中文提示遮罩，答完或点
+   *  「看原文」才显示；偏好记 localStorage（readerSettingsStore），跨会话保留。 */
+  const [listenMode, setListenMode] = useState(() => loadSpeakListenMode());
+  /** 听力模式下已揭开的 assistant 轮下标（逐轮记忆；换会话/新开时重置）。 */
+  const [revealedTurns, setRevealedTurns] = useState<ReadonlySet<number>>(() => new Set());
 
   const recorderRef = useRef<MicRecorderHandle | null>(null);
   const shadowRecorderRef = useRef<MicRecorderHandle | null>(null);
@@ -269,11 +347,6 @@ export function SpeakView({
   const speakGenRef = useRef<number | null>(null);
   /** speak 已发出但代数还没拿回（云引擎要等合成完才 resolve）。 */
   const speakPendingRef = useRef(false);
-  /** 声波舞台：requestAnimationFrame 句柄 / 振幅 / 相位 / 最新真实麦克风电平。 */
-  const rafRef = useRef(0);
-  const waveAmpRef = useRef(0.16);
-  const wavePhaseRef = useRef(0);
-  const levelRef = useRef(0);
   /** pendingSpeak 已消费的引用（同一 intent 不重复开会）。 */
   const pendingConsumedRef = useRef<PendingSpeakContext>(null);
 
@@ -284,8 +357,8 @@ export function SpeakView({
       .catch(() => undefined);
   }, []);
 
-  // 挂载时装载场景目录（A1）：先 preload（官方缓存+同步的用户场景），后台再
-  // refresh 官方目录（15 分钟节流；404/断网全静默）。装载前后各 set 一次，
+  // 挂载时装载场景目录（A1）：先 preload（官方缓存+同步的用户场景），再拉取
+  // 官方目录（每次进 tab 都拉，无节流；404/断网全静默）。装载前后各 set 一次，
   // 保证目录到达后入口网格刷新出「官方场景库」「我的场景」分组。
   useEffect(() => {
     void (async () => {
@@ -383,6 +456,7 @@ export function SpeakView({
       setDrill(null);
       setMineReady(false);
       setPronSel(null);
+      setRevealedTurns(new Set()); // 听力模式：开场白先只听，遮罩从这一轮重新开始
       // 开场白直接播报
       speakRound(s.turns[0].text);
       persist(s);
@@ -407,6 +481,12 @@ export function SpeakView({
       setPronSel(null);
       // 重开的旧会话没有配对的 start 事件，不发 end（Phase 0 口径）
       trackedStartIdRef.current = null;
+      // 听力模式：整段都是历史，原文全部可见，不再遮
+      const allSeen = new Set<number>();
+      s.turns.forEach((t, i) => {
+        if (t.role === "assistant") allSeen.add(i);
+      });
+      setRevealedTurns(allSeen);
     },
     [stopSpeak],
   );
@@ -484,6 +564,26 @@ export function SpeakView({
     setExtraLists((prev) => ({ ...prev, user: listUserScenarios() }));
   }, []);
 
+  // ---- 听力模式（先听后看） ----
+
+  const toggleListenMode = useCallback(() => {
+    setListenMode((on) => {
+      const next = !on;
+      saveSpeakListenMode(next);
+      return next;
+    });
+  }, []);
+
+  /** 揭开某一轮的原文（看原文按钮 / 答完自动揭共用；已揭开的保持不动）。 */
+  const revealTurn = useCallback((idx: number) => {
+    setRevealedTurns((prev) => {
+      if (prev.has(idx)) return prev;
+      const next = new Set(prev);
+      next.add(idx);
+      return next;
+    });
+  }, []);
+
   /** 结束录音并推进一轮：ASR →（并行）LLM 四行回复 + ISE 发音评测。 */
   const finishUtterance = useCallback(async () => {
     const rec = recorderRef.current;
@@ -543,6 +643,13 @@ export function SpeakView({
     setSession(withUser);
     sessionRef.current = withUser;
     persist(withUser);
+    // 听力模式：你已答完这一问，最近一句 AI 原文自动揭开（先听→先说→再对照）
+    for (let i = withUser.turns.length - 2; i >= 0; i -= 1) {
+      if (withUser.turns[i].role === "assistant") {
+        revealTurn(i);
+        break;
+      }
+    }
 
     // 命中语境目标词 → 自动按 easy 档完成 SRS（spokenAt 在 ReaderApp 侧记录）
     const targets = contextTargetsRef.current;
@@ -645,7 +752,7 @@ export function SpeakView({
     setMineReady(false);
     shadowPcmRef.current = null;
     speakRound(reply.en);
-  }, [onToast, onGradeVocab, patchLastUserTurn, persist, requestTranslate, speakRound]);
+  }, [onToast, onGradeVocab, patchLastUserTurn, persist, requestTranslate, speakRound, revealTurn]);
 
   /** 免长按开麦：点击开始（播报中点击 = 打断插话），VAD 静音自动结束；录音中再点 = 说完。 */
   const toggleMic = useCallback(() => {
@@ -663,11 +770,10 @@ export function SpeakView({
     }
     if (phase !== "idle" && phase !== "error" && phase !== "speaking") return;
     if (shadow.phase === "recording" || shadow.phase === "evaluating") return; // 跟读占用麦克风
-    if (phase === "error") setRoundError("");
+    setRoundError(""); // 新一轮开始：上一轮的提示条（含「已跳过」这类 idle 态提示）一并收起
     stopSpeak();
     setPhase("recording");
     setLevel(0);
-    levelRef.current = 0;
     releasePendingRef.current = false;
     finishingRef.current = false;
     const epoch = epochRef.current;
@@ -682,7 +788,6 @@ export function SpeakView({
           deviceId: micDeviceId || undefined,
           onLevel: ({ level: lv, elapsedMs }) => {
             setLevel(lv);
-            levelRef.current = lv;
             vad.feed(lv, elapsedMs);
           },
         });
@@ -700,6 +805,20 @@ export function SpeakView({
       }
     })();
   }, [phase, shadow.phase, drill, micDeviceId, finishUtterance, stopSpeak]);
+
+  /** Esc 取消正在录的这一句（不识别、不进对话）。录音器还在等授权时打标记，由开麦续体丢弃。 */
+  const cancelRecording = useCallback(() => {
+    if (phase !== "recording" || finishingRef.current) return;
+    if (recorderRef.current) {
+      recorderRef.current.cancel();
+      recorderRef.current = null;
+    } else {
+      releasePendingRef.current = true;
+    }
+    vadRef.current = null;
+    setLevel(0);
+    setPhase("idle");
+  }, [phase]);
 
   /** 跳过等待中的 LLM 回复（长等待逃生门）。 */
   const skipReply = useCallback(() => {
@@ -780,7 +899,6 @@ export function SpeakView({
     stopSpeak();
     setShadow({ ...SHADOW_IDLE, phase: "recording" });
     setLevel(0);
-    levelRef.current = 0;
     shadowReleasePendingRef.current = false;
     void (async () => {
       try {
@@ -788,7 +906,6 @@ export function SpeakView({
           deviceId: micDeviceId || undefined,
           onLevel: ({ level: lv, elapsedMs }) => {
             setLevel(lv);
-            levelRef.current = lv;
             if (elapsedMs >= MAX_UTTERANCE_MS) void finishShadow();
           },
         });
@@ -963,53 +1080,6 @@ export function SpeakView({
     startShadow();
   }, [stopSpeak, startShadow]);
 
-  // ---- 声波舞台：60fps 三色正弦叠加，振幅吃真实状态（录音电平/播报/待机） ----
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const waveStateRef = useRef({ listening: false, playing: false });
-  waveStateRef.current = {
-    listening: phase === "recording" || shadow.phase === "recording",
-    playing: phase === "speaking",
-  };
-  useEffect(() => {
-    const waves = [
-      { color: "rgba(200, 75, 49, 0.45)", freq: 0.014, speed: 1.0, amp: 28 },
-      { color: "rgba(27, 107, 88, 0.38)", freq: 0.021, speed: -0.7, amp: 22 },
-      { color: "rgba(54, 73, 196, 0.25)", freq: 0.01, speed: 1.4, amp: 16 },
-    ];
-    const draw = () => {
-      rafRef.current = requestAnimationFrame(draw);
-      const canvas = canvasRef.current;
-      if (!canvas) return; // 场景中心页没有舞台，跳帧即可
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      const w = canvas.width;
-      const h = canvas.height;
-      ctx.clearRect(0, 0, w, h);
-      const { listening, playing } = waveStateRef.current;
-      // 录音中吃真实麦克风电平：静音时也留底摆，说话时顶到 0.78 量级
-      const micFactor = Math.min(1, 0.45 + levelRef.current * 2.2);
-      const targetAmp = listening ? 0.78 * micFactor : playing ? 0.52 : 0.16;
-      waveAmpRef.current += (targetAmp - waveAmpRef.current) * 0.08;
-      wavePhaseRef.current += listening ? 0.09 : 0.03;
-      for (const wv of waves) {
-        ctx.beginPath();
-        ctx.strokeStyle = wv.color;
-        ctx.lineWidth = 2;
-        for (let x = 0; x <= w; x += 6) {
-          const envelope = Math.sin((x / w) * Math.PI);
-          const y =
-            h / 2 +
-            Math.sin(x * wv.freq + wavePhaseRef.current * wv.speed) * wv.amp * waveAmpRef.current * envelope;
-          if (x === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-      }
-    };
-    rafRef.current = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, []);
-
   // 组件卸载/切视图时收麦停声。stopSpeak 走 ref、依赖恒为 []：
   // 若直接依赖 prop，ReaderApp 的任何重渲染（翻译流式 delta、自动保存等）
   // 都会执行 cleanup，掐断进行中的录音，松开时报「录音已结束」。
@@ -1039,7 +1109,7 @@ export function SpeakView({
   const lastPron = lastPronTurn?.pron ?? null;
   const lastPronText = lastPronTurn?.text ?? "";
 
-  // 新评测到达：默认选中得分最低的词（含漏读 0 分）
+  // 新评测到达：默认选中得分最低的词（含漏读 0 分），并展开它最差的那个音素
   useEffect(() => {
     const words = lastPron?.words ?? [];
     if (words.length === 0) {
@@ -1050,8 +1120,16 @@ export function SpeakView({
     words.forEach((w, i) => {
       if (w.totalScore < words[worst].totalScore) worst = i;
     });
-    setPronSel({ wordIdx: worst, phoneIdx: 0 });
+    setPronSel({ wordIdx: worst, phoneIdx: worstPhoneIdx(words[worst]) });
   }, [lastPron]);
+
+  /** 选中一个词：右栏默认展开它最差的音素（而不是永远第 0 个，否则红色音素和下面的建议对不上）。 */
+  const selectWord = useCallback(
+    (wordIdx: number) => {
+      setPronSel({ wordIdx, phoneIdx: worstPhoneIdx(lastPron?.words[wordIdx]) });
+    },
+    [lastPron],
+  );
 
   const pronWords = lastPron?.words ?? [];
   const pronMarks = useMemo(
@@ -1059,9 +1137,108 @@ export function SpeakView({
     [lastPron, lastPronText],
   );
   const selWord = pronSel ? pronWords[pronSel.wordIdx] : undefined;
-  const selPhones = selWord?.sylls.flatMap((s) => s.phones) ?? [];
-  const selPhone = pronSel ? selPhones[pronSel.phoneIdx] : undefined;
-  const scorePath = useMemo(() => wordScorePath(pronWords), [pronWords]);
+  const weakCount = pronMarks.filter((m) => m.quality !== "good").length;
+
+  // ---- 目标词 chips / 进度 / 句内高亮（语境目标词与用户场景短语两条通道合并展示，
+  // 命中判定各走各的：前者按 VocabWord.id 驱动 SRS，后者只打勾） ----
+  const targetItems = useMemo<TargetChipItem[]>(
+    () => [
+      ...contextTargets.slice(0, 6).map((w) => ({
+        key: w.id,
+        word: w.word,
+        zh: w.zh,
+        done: hitTargetIds.has(w.id),
+        toast: `今日练习词块：${w.word} — 在对话中自然说出即可完成`,
+      })),
+      ...scenarioPhrases.map((p) => ({
+        key: p,
+        word: p,
+        done: scenarioHits.has(p),
+        toast: `本场景目标短语：${p} — 在对话中自然说出即可`,
+      })),
+    ],
+    [contextTargets, hitTargetIds, scenarioPhrases, scenarioHits],
+  );
+  const progress = useMemo(
+    () => targetProgress(targetItems.filter((t) => t.done).length, targetItems.length),
+    [targetItems],
+  );
+  const nextKey = useMemo(
+    () =>
+      nextTargetKey(
+        targetItems.map((t) => t.key),
+        new Set(targetItems.filter((t) => t.done).map((t) => t.key)),
+      ),
+    [targetItems],
+  );
+  /** 一句话里的目标词命中：句内高亮区间 + 用上了几个不同的目标词
+   *  （判定复用 textHitsTarget，与 chips 打勾一致）。 */
+  const analyzeTargets = useCallback(
+    (text: string): { spans: Span[]; count: number } => {
+      const spans: Span[] = [];
+      let count = 0;
+      for (const t of targetItems) {
+        const found = findTargetSpans(text, t.word);
+        if (found.length > 0) count += 1;
+        spans.push(...found);
+      }
+      return { spans: spans.sort((a, b) => a.start - b.start), count };
+    },
+    [targetItems],
+  );
+
+  /** 点句子里标色的词：右栏跳到该词的音素细节（marks 与 pronWords 不一一对应，用词对象引用回找下标）。 */
+  const pickMark = useCallback(
+    (mark: WordMark) => {
+      if (!mark.word || !lastPron) return;
+      const idx = lastPron.words.indexOf(mark.word);
+      if (idx >= 0) selectWord(idx);
+    },
+    [lastPron, selectWord],
+  );
+
+  // ---- 本轮失败提示（主环错误优先，其次跟读的普通错误文本） ----
+  const notice = useMemo(() => {
+    if (roundError) return friendlyNotice(roundError);
+    if (shadow.phase === "error" && shadow.errorKind === "" && shadow.error) {
+      return friendlyNotice(shadow.error);
+    }
+    return null;
+  }, [roundError, shadow.phase, shadow.errorKind, shadow.error]);
+
+  // ---- 快捷键：空格 = 点麦克风（开始/发送），Esc = 取消正在录的这一句 ----
+  // ReaderApp 的全局键盘只在阅读视图生效，口语页这里自管。让位规则：正在输入、
+  // 焦点在按钮/链接上（空格本就会触发它）、带修饰键、长按重复、任何弹层/抽屉打开。
+  useEffect(() => {
+    if (!session) return;
+    const modalOpen = () => drill !== null || reviewOpen || document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || modalOpen()) return;
+      const el = e.target;
+      if (
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        el instanceof HTMLSelectElement ||
+        (el instanceof HTMLElement && el.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key === "Escape") {
+        if (phase === "recording") {
+          e.preventDefault();
+          cancelRecording();
+        }
+        return;
+      }
+      if (e.key === " " || e.code === "Space") {
+        if (el instanceof HTMLElement && el.closest("button, a, summary, [role='button']")) return;
+        e.preventDefault();
+        toggleMic();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [session, drill, reviewOpen, phase, toggleMic, cancelRecording]);
 
   // ---- 场景标题（舞台状态行 / 最近会话行共用） ----
   // 内置场景直取本地卡文案（输出与旧版逐字一致）；off_/usr_ 未知 id 走合并查找
@@ -1226,33 +1403,65 @@ export function SpeakView({
           })}
         </div>
 
-        {extraLists.official.length > 0 && (
-          <>
-            <div className="scenario-group-label">
-              <span>官方场景库</span>
-              <span>{OFFICIAL_CATALOG_BADGE[officialCatalogSource()]}</span>
-            </div>
-            <div className="scenario-daily-grid">
-              {extraLists.official.map((sc) => (
+        {extraLists.official.length > 0 && (() => {
+          // 目录层（B 精简）：分类 chips 只出实际有场景的分类；「全部」收起态只渲染
+          // 前 8 张，选了数量不多的分类（≤ 8）则直接全显示，超限才出展开按钮。
+          const counts = scenarioCategoryCounts(extraLists.official);
+          const { visible, total, hasMore } = filterScenarioPreview(
+            extraLists.official,
+            officialFilter,
+            officialExpanded,
+          );
+          const pickFilter = (f: ScenarioFilter) => {
+            setOfficialFilter(f);
+            setOfficialExpanded(false);
+          };
+          return (
+            <>
+              <div className="scenario-group-label">
+                <span>官方场景库</span>
+                <span>{OFFICIAL_CATALOG_BADGE[officialCatalogSource()]}</span>
+              </div>
+              <div className="lens-mode-switch scenario-filter-switch" role="group" aria-label="官方场景分类筛选">
                 <button
-                  key={sc.id}
-                  className="scenario-card"
-                  onClick={() => start(sc.id, sc.defaultDifficulty ?? difficulty)}
+                  className={`lens-mode-btn${officialFilter === "all" ? " active" : ""}`}
+                  aria-pressed={officialFilter === "all"}
+                  onClick={() => pickFilter("all")}
                 >
-                  <div>
-                    <span className="sc-tag neutral">
-                      {CATEGORY_TAG_ZH[sc.category] ?? "官方场景"}
-                      {sc.emoji ? ` ${sc.emoji}` : ""}
-                    </span>
-                    <div className="sc-title">{sc.title}</div>
-                    <p className="sc-desc">{sc.aiRole}</p>
-                  </div>
-                  <div className="sc-opener-preview">“{sc.opener}”</div>
+                  全部 {extraLists.official.length}
                 </button>
-              ))}
-            </div>
-          </>
-        )}
+                {counts.map(({ category, count }) => (
+                  <button
+                    key={category}
+                    className={`lens-mode-btn${officialFilter === category ? " active" : ""}`}
+                    aria-pressed={officialFilter === category}
+                    onClick={() => pickFilter(category)}
+                  >
+                    {CATEGORY_TAG_ZH[category]} {count}
+                  </button>
+                ))}
+              </div>
+              <div className="scenario-compact-grid">
+                {visible.map((sc) => (
+                  <CompactScenarioCard
+                    key={sc.id}
+                    sc={sc}
+                    onPick={() => start(sc.id, sc.defaultDifficulty ?? difficulty)}
+                  />
+                ))}
+              </div>
+              {(hasMore || officialExpanded) && (
+                <button
+                  className="sc-expand-btn"
+                  aria-expanded={officialExpanded}
+                  onClick={() => setOfficialExpanded((v) => !v)}
+                >
+                  {officialExpanded ? "收起" : `展开全部 ${total} 个`}
+                </button>
+              )}
+            </>
+          );
+        })()}
 
         {/* 「我的场景」（A2 起标签行常显：空分组也提供「＋ 新建场景」入口） */}
         <div className="scenario-group-label">
@@ -1265,25 +1474,15 @@ export function SpeakView({
           </span>
         </div>
         {extraLists.user.length > 0 && (
-          <div className="scenario-daily-grid">
+          <div className="scenario-compact-grid">
             {extraLists.user.map((sc) => (
               // wrapper 承载「编辑」pill（HTML 不允许 button 嵌 button）；
               // 卡片 button 与 start(sc.id,…) 行为与内置/官方卡完全一致
               <div key={sc.id} className="sc-card-wrap">
-                <button
-                  className="scenario-card"
-                  onClick={() => start(sc.id, sc.defaultDifficulty ?? difficulty)}
-                >
-                  <div>
-                    <span className="sc-tag neutral">
-                      {CATEGORY_TAG_ZH[sc.category] ?? "自定义场景"}
-                      {sc.emoji ? ` ${sc.emoji}` : ""}
-                    </span>
-                    <div className="sc-title">{sc.title}</div>
-                    <p className="sc-desc">{sc.aiRole}</p>
-                  </div>
-                  <div className="sc-opener-preview">“{sc.opener}”</div>
-                </button>
+                <CompactScenarioCard
+                  sc={sc}
+                  onPick={() => start(sc.id, sc.defaultDifficulty ?? difficulty)}
+                />
                 <button className="sc-edit-btn" onClick={() => setEditorState({ initial: sc })} title="编辑这个场景">
                   编辑
                 </button>
@@ -1348,6 +1547,40 @@ export function SpeakView({
       break;
     }
   }
+  const shadowBusy = shadow.phase === "recording" || shadow.phase === "evaluating";
+  const hasSpoken = session.turns.some((t) => t.role === "user");
+
+  // 提示条的动作：按失败原因给下一步。「再试一次」按来源走主环或跟读；
+  // 凭据缺失去主窗口设置；打不开/没声音的麦克风问题额外给「检查麦克风」。
+  const noticeFromRound = roundError !== "";
+  const dismissNotice = () => {
+    if (noticeFromRound) {
+      setRoundError("");
+      if (phase === "error") setPhase("idle");
+    } else {
+      setShadow(SHADOW_IDLE);
+    }
+  };
+  const retryFromNotice = () => {
+    dismissNotice();
+    if (noticeFromRound) toggleMic();
+    else startShadow();
+  };
+  const noticeActions: NoticeAction[] = [];
+  if (notice?.kind === "mic" || notice?.kind === "network") {
+    noticeActions.push({ label: "再试一次", onClick: retryFromNotice, primary: true });
+  }
+  if (notice?.kind === "mic" && onOpenReaderSettings) {
+    noticeActions.push({ label: "检查麦克风", onClick: onOpenReaderSettings });
+  }
+  if (notice?.kind === "credential") {
+    noticeActions.push({
+      label: "去设置",
+      onClick: () => void openSettings().catch(() => undefined),
+      primary: true,
+    });
+  }
+
   const lastTotal = lastReport ? lastReport.totals[lastReport.totals.length - 1] : null;
   // 有没有可复盘的跟读数据（一次都没跟读过时复盘入口禁用）
   const hasAssessments = session.turns.some(
@@ -1357,108 +1590,62 @@ export function SpeakView({
   return (
     <div className="sonic-studio-grid">
       <div className="sonic-dialogue-well">
-        <div className="harmonic-stage-card">
-          <canvas id="harmonicCanvas" ref={canvasRef} width={760} height={122} />
-          <div className="harmonic-overlay-left">
-            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <button
-                className="pill-Ghost-btn"
-                style={{ background: "var(--glass-elevated)", border: "1px solid var(--glass-border-strong)", fontWeight: 600, color: "var(--ink-1)" }}
-                onClick={backToHub}
-              >
-                ← 切换场景
-              </button>
-              <span className="cloud-pulse" aria-hidden />
-              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-1)" }}>
-                当前场景：{sceneTitleOf(session)}
-              </span>
-              <span className="tabular" style={{ fontSize: 11.5, color: "var(--ink-3)" }}>
-                （{difficultyOf(session.difficulty).label}难度）
-              </span>
-            </div>
-            {contextTargets.length > 0 && (
-              <div className="target-chip-row">
-                {contextTargets.slice(0, 6).map((w) => {
-                  const done = hitTargetIds.has(w.id);
-                  return (
-                    <span
-                      key={w.id}
-                      className={`lex-target-chip${done ? " done" : ""}`}
-                      title={`${w.word} — 在对话中自然说出即可完成`}
-                      onClick={() => onToast(`今日练习词块：${w.word} — 在对话中自然说出即可完成`)}
-                    >
-                      <span>{done ? "✓ 已用上" : "○ 待练习"}</span>
-                      <strong>{w.word}</strong>
-                      {w.zh && <span style={{ opacity: 0.75 }}>{w.zh}</span>}
-                    </span>
-                  );
-                })}
-              </div>
-            )}
-            {/* 用户场景的目标短语 chips（A2）：与语境目标词是两条独立通道——
-                无 SRS 过关、无 zh 释义，命中只打勾（hitKeyPhrases 按 user 轮扫描）。 */}
-            {scenarioPhrases.length > 0 && (
-              <div className="target-chip-row">
-                {scenarioPhrases.map((p) => (
-                  <span
-                    key={p}
-                    className={`lex-target-chip${scenarioHits.has(p) ? " done" : ""}`}
-                    title={`${p} — 在对话中自然说出即可`}
-                    onClick={() => onToast(`本场景目标短语：${p} — 在对话中自然说出即可`)}
-                  >
-                    <span>{scenarioHits.has(p) ? "✓ 已用上" : "○ 待练习"}</span>
-                    <strong>{p}</strong>
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="harmonic-overlay-right" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            {phase === "recording" && (
-              <button
-                className="pill-Ghost-btn"
-                style={{ background: "var(--glass-elevated)", border: "1px solid var(--glass-border-strong)" }}
-                onClick={() => void finishUtterance()}
-              >
-                说完了
-              </button>
-            )}
-            <button
-              className={`sonic-play-orb${phase === "recording" ? " rec" : ""}`}
-              style={
-                phase === "recording"
-                  ? { width: 44, height: 44, background: "var(--accent)", color: "#FFF" }
-                  : { width: 44, height: 44 }
-              }
-              onClick={toggleMic}
-              disabled={phase === "asr" || phase === "thinking" || drill !== null}
-              title={micTitle}
-              aria-label={phase === "recording" ? "说完（点击结束录音）" : "点击开始说话"}
-            >
-              <IconMic size={18} />
-            </button>
-          </div>
-        </div>
+        <div className="speak-stage">
+          <SpeakSceneBar
+            title={sceneTitleOf(session)}
+            difficultyLabel={difficultyOf(session.difficulty).label}
+            progress={progress}
+            listenMode={listenMode}
+            onBack={backToHub}
+            onToggleListen={toggleListenMode}
+          />
+          <TargetChips items={targetItems} nextKey={nextKey} onPick={(it) => onToast(it.toast)} />
 
         <div className="sonic-turns-scroll speak-log" ref={scrollRef}>
           {session.turns.map((t, i) => {
             const isLastAssistant = t.role === "assistant" && i === lastAssistantIdx;
             if (t.role === "assistant") {
+              // 听力模式：未揭开的 AI 轮遮原文（答完自动揭/点「看原文」手动揭；
+              // 重开的历史会话全部已揭）。遮罩保高度，不引起滚动跳动。
+              const veiled = listenMode && !revealedTurns.has(i);
               return (
                 <div key={i} className="dialogue-turn">
                   <div className="turn-speaker-line">
                     <span>AI 陪练 · {sc.title}</span>
-                    <button
-                      className="text-action-btn"
-                      disabled={busy}
-                      onClick={() => speakRound(t.text)}
-                      title="重听这句"
-                    >
-                      <IconVolume size={13} /> 重听
-                    </button>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 12 }}>
+                      <button
+                        className="text-action-btn"
+                        disabled={busy}
+                        onClick={() => speakRound(t.text)}
+                        title="重听这句"
+                      >
+                        <IconVolume size={13} /> 重听
+                      </button>
+                      {veiled && (
+                        <button
+                          className="text-action-btn"
+                          onClick={() => revealTurn(i)}
+                          title="显示这句原文"
+                        >
+                          <IconEye size={13} /> 看原文
+                        </button>
+                      )}
+                    </span>
                   </div>
-                  <div className="turn-prose-en">{t.text}</div>
-                  {t.hintZh && <div className="turn-prose-zh">{t.hintZh}</div>}
+                  <div
+                    className={`turn-prose-en${veiled ? " listen-veil" : ""}`}
+                    aria-hidden={veiled || undefined}
+                  >
+                    {t.text}
+                  </div>
+                  {t.hintZh && (
+                    <div
+                      className={`turn-prose-zh${veiled ? " listen-veil" : ""}`}
+                      aria-hidden={veiled || undefined}
+                    >
+                      {t.hintZh}
+                    </div>
+                  )}
                   {!isLastAssistant && (t.shadowAttempts?.length || typeof t.shadowScore === "number") && (
                     <div className="speak-shadow-score">
                       {t.shadowAttempts?.length
@@ -1469,17 +1656,34 @@ export function SpeakView({
                 </div>
               );
             }
+            const hits = analyzeTargets(t.text);
+            const isPronTurn = t === lastPronTurn;
             return (
               <div key={i} className="dialogue-turn mine">
-                <div className="turn-speaker-line tabular">
-                  <span>我的回答 · 点击右侧单词查看发音细节</span>
-                  {t.pron && (
-                    <span style={{ color: "var(--accent)", fontWeight: 600 }}>
-                      发音得分 {t.pron.total.toFixed(1)} / 5.0
-                    </span>
-                  )}
+                <div className="turn-prose-en speak-user-text">
+                  <UserSentence
+                    text={t.text}
+                    marks={isPronTurn ? pronMarks : []}
+                    targetSpans={hits.spans}
+                    selected={isPronTurn ? selWord : undefined}
+                    onPickMark={isPronTurn ? pickMark : undefined}
+                  />
                 </div>
-                <div className="turn-prose-en">{t.text}</div>
+                {(t.pron || hits.count > 0) && (
+                  <div className="speak-turn-meta">
+                    {hits.count > 0 && (
+                      <span className="speak-pill hit">
+                        <IconCheck size={12} />
+                        用上 {hits.count} 个目标词
+                      </span>
+                    )}
+                    {t.pron && (
+                      <span className={`speak-pill ${scoreTone(t.pron.total)} tabular`}>
+                        发音 {t.pron.total.toFixed(1)} / 5.0
+                      </span>
+                    )}
+                  </div>
+                )}
                 {t.coachDiff && t.coachDiff.segs.length > 0 && (
                   <div className="editorial-diff-block">
                     <div
@@ -1541,7 +1745,10 @@ export function SpeakView({
           )}
           {phase === "thinking" && (
             <div className="dialogue-turn">
-              <div className="turn-prose-en" style={{ opacity: 0.7 }}>{liveReply || "…在想你该怎么说…"}</div>
+              <div className="turn-prose-en" style={{ opacity: 0.7 }}>
+                {/* 听力模式下不流式上屏回复原文，避免抢在 TTS 前被看到 */}
+                {listenMode ? "…对方回复中…" : liveReply || "…在想你该怎么说…"}
+              </div>
             </div>
           )}
           {phase === "asr" && (
@@ -1549,46 +1756,22 @@ export function SpeakView({
               <div className="turn-speaker-line">…识别你刚才说的…</div>
             </div>
           )}
+          {phase === "recording" && <ListeningRow level={level} silenceSec={TALK_SILENCE_MS / 1000} />}
         </div>
 
-        {roundError && (
-          <div className="speak-error">
-            {roundError}
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => {
-                setRoundError("");
-                setPhase("idle");
-              }}
-            >
-              知道了
-            </button>
-          </div>
+        {notice && (
+          <SpeakNotice
+            message={notice.message}
+            detail={notice.detail}
+            actions={noticeActions}
+            onDismiss={dismissNotice}
+          />
         )}
 
-        <div className="speak-controls in-studio">
-          <div className="speak-level-bar" aria-hidden>
-            <i style={{ width: `${Math.round(Math.min(1, level) * 100)}%` }} />
-          </div>
-          <div className="speak-controls-row">
-            <span className="speak-phase-hint">
-              {phase === "recording"
-                ? "正在听你说…停顿约 1.5 秒自动发送"
-                : phase === "asr"
-                  ? "识别中…"
-                  : phase === "thinking"
-                    ? "对方回复中…"
-                    : phase === "speaking"
-                      ? "对方说话中 · 点击麦克风可插话"
-                      : "点击麦克风说话（英语）→ AI 回复带中文提示"}
-            </span>
-            {phase === "thinking" && (
-              <button className="btn btn-secondary" onClick={skipReply}>
-                跳过回复
-              </button>
-            )}
+        <div className="speak-composer">
+          <div className="speak-composer-side">
             <button
-              className="btn btn-secondary"
+              className="speak-btn"
               disabled={!shadowTarget || busy || drill !== null || shadow.phase === "evaluating"}
               onClick={shadow.phase === "recording" ? finishShadow : startShadow}
               onMouseUp={shadow.phase === "recording" ? finishShadow : undefined}
@@ -1601,26 +1784,44 @@ export function SpeakView({
                   : shadow.phase === "done" && lastTotal !== null
                     ? `跟读 ${lastTotal.toFixed(1)} 分 · 再跟读`
                     : shadow.phase === "error"
-                      ? shadow.errorKind !== ""
-                        ? "跟读失败 · 重试"
-                        : `跟读失败 · 重试（${shadow.error}）`
-                      : "跟读打分"}
+                      ? "再跟读一次"
+                      : "跟读这句"}
             </button>
             <button
-              className="speak-replay"
+              className="speak-btn"
               disabled={!shadowTarget || busy}
               onClick={() => shadowTarget && speakRound(shadowTarget)}
               title="重听 AI 这句"
             >
-              重听 AI 这句
+              <IconVolume size={14} /> 重听
             </button>
+          </div>
+
+          <div className="speak-mic-wrap">
+            <SpeakMic
+              recording={phase === "recording"}
+              level={level}
+              disabled={phase === "asr" || phase === "thinking" || drill !== null || shadowBusy}
+              title={micTitle}
+              ariaLabel={phase === "recording" ? "说完（点击发送）" : "点击开始说话"}
+              onClick={toggleMic}
+            />
+            <span className="speak-mic-tip">{micTip(phase, { shadowBusy, hasSpoken })}</span>
+          </div>
+
+          <div className="speak-composer-side end">
+            {phase === "thinking" && (
+              <button className="speak-btn" onClick={skipReply}>
+                跳过回复
+              </button>
+            )}
             <button
-              className="speak-review-entry"
+              className="speak-finish"
               disabled={!hasAssessments}
               title={
                 hasAssessments
                   ? "复盘本轮跟读中没掌握的词，确认后加入生词本"
-                  : "还没有跟读记录——先「跟读打分」一次再来复盘"
+                  : "还没有跟读记录——先「跟读这句」一次再来复盘"
               }
               onClick={() => {
                 stopSpeak();
@@ -1628,152 +1829,24 @@ export function SpeakView({
                 setReviewOpen(true);
               }}
             >
-              <span className="dot" aria-hidden />
-              ✦ 结束本轮并复盘
+              结束并复盘 →
             </button>
           </div>
-          {shadow.phase === "error" && shadow.errorKind === "" && (
-            <div className="speak-shadow-err">{shadow.error}</div>
-          )}
-          <div className="speak-hint">
-            「跟读打分」照 AI 最新一句读，报告卡会告诉你差在哪；右侧「发音详情」看你每轮发言的逐词得分
-          </div>
-          <button
-            className="speak-creds-toggle"
-            onClick={() => void openSettings().catch(() => undefined)}
-            title="讯飞评测/听写凭据在主窗口 设置 → 语音 里集中配置"
-          >
-            讯飞凭据设置
-          </button>
         </div>
       </div>
+      </div>
 
-      <aside className="spatial-lens-card" style={{ width: "100%", margin: 0 }}>
-        <div className="lens-header">
-          <span style={{ fontSize: 12.5, fontWeight: 600 }}>发音详情</span>
-          <span className="tabular" style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--accent)", fontWeight: 600 }}>
-            逐音标打分
-          </span>
-        </div>
-        <div className="lens-body">
-          {!lastPron ? (
-            <div className="lens-section">
-              <div className="lens-kicker">
-                <span>点选单词查看发音细节</span>
-              </div>
-              <div className="lens-empty">
-                还没有你的发音评分——说一句话（或配好讯飞评测凭据后再说一句），这里会给出逐词得分、
-                逐音标拆解和慢速示范。
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="lens-section">
-                <div className="lens-kicker">
-                  <span>点选单词查看发音细节</span>
-                  <span className="tabular" style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--accent)", fontWeight: 600 }}>
-                    {lastPron.total.toFixed(1)} / 5.0
-                  </span>
-                </div>
-                <div style={{ lineHeight: 2, fontFamily: "var(--font-serif)", fontSize: 17 }}>
-                  <MarkedWords
-                    target={lastPronText}
-                    marks={pronMarks}
-                    onClick={(mark) => {
-                      // marks 与 pronWords 不一定一一对应（增读词被过滤、对不上原文的词被丢弃），
-                      // 用词对象引用回找下标
-                      if (!mark.word) return;
-                      const idx = pronWords.indexOf(mark.word);
-                      if (idx >= 0) setPronSel({ wordIdx: idx, phoneIdx: 0 });
-                    }}
-                  />
-                </div>
-              </div>
-              {selWord && (
-                <div className="lens-section">
-                  <div className="lens-kicker tabular">
-                    <span>
-                      音标拆解 · {selWord.content}（{selWord.totalScore.toFixed(1)} 分）
-                    </span>
-                  </div>
-                  <PhonemeRow
-                    phones={selPhones}
-                    variant="pills"
-                    selectedIdx={pronSel?.phoneIdx ?? null}
-                    onSelect={(idx) => setPronSel((s) => (s ? { ...s, phoneIdx: idx } : s))}
-                  />
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink-1)", marginBottom: 4 }}>
-                    发音建议（/{selPhone?.content ?? ""}/）：
-                  </div>
-                  <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--ink-2)", margin: "0 0 12px" }}>
-                    {selPhone ? phoneTip(selPhone.content) : "点上面的音素看针对性建议"}
-                  </p>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      className="island-tab active"
-                      style={{ flex: 1, justifyContent: "center" }}
-                      onClick={() => speakWordSlowly(selWord.content)}
-                      title="云引擎按 0.75× 原生慢速合成示范；本地语音走普通朗读"
-                    >
-                      慢速示范 (0.75×)
-                    </button>
-                    <button
-                      className="pill-Ghost-btn"
-                      style={{ border: "1px solid var(--glass-border-strong)" }}
-                      onClick={() => speakWord(selWord.content)}
-                    >
-                      重读这个词
-                    </button>
-                  </div>
-                </div>
-              )}
-              <div className="lens-section">
-                <div className="lens-kicker">
-                  <span>逐词得分对比</span>
-                  <span style={{ fontSize: 11, color: "var(--ink-3)" }}>虚线：5 分基准</span>
-                </div>
-                <svg
-                  className="word-score-svg"
-                  viewBox={`0 0 ${scorePath.width} ${scorePath.height}`}
-                  role="img"
-                  aria-label="逐词得分曲线"
-                >
-                  <line
-                    x1={12}
-                    y1={scorePath.baselineY}
-                    x2={scorePath.width - 12}
-                    y2={scorePath.baselineY}
-                    stroke="var(--glass-border-strong)"
-                    strokeDasharray="3 3"
-                    strokeWidth={1}
-                  />
-                  <polyline
-                    points={scorePath.points.map((p) => `${p.x},${p.y}`).join(" ")}
-                    fill="none"
-                    stroke="var(--accent)"
-                    strokeWidth={2}
-                    strokeLinecap="round"
-                  />
-                  {scorePath.points.map((p, i) => (
-                    <circle
-                      key={i}
-                      cx={p.x}
-                      cy={p.y}
-                      r={pronSel?.wordIdx === i ? 3.2 : 2}
-                      fill={pronSel?.wordIdx === i ? "var(--accent)" : "var(--ink-2)"}
-                      onClick={() => setPronSel({ wordIdx: i, phoneIdx: 0 })}
-                      style={{ cursor: "pointer" }}
-                    />
-                  ))}
-                </svg>
-                <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 6 }}>
-                  连线是这一轮每个词的真实得分（点击圆点同步选中上方单词）
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      </aside>
+      <PronPanel
+        pron={lastPron}
+        weakCount={weakCount}
+        selWordIdx={pronSel?.wordIdx ?? null}
+        selPhoneIdx={pronSel?.phoneIdx ?? null}
+        onSelectWord={selectWord}
+        onSelectPhone={(idx) => setPronSel((s) => (s ? { ...s, phoneIdx: idx } : s))}
+        onSpeakSlow={speakWordSlowly}
+        onSpeak={speakWord}
+        onOpenSettings={() => void openSettings().catch(() => undefined)}
+      />
 
       {drill && (
         <ShadowDrill

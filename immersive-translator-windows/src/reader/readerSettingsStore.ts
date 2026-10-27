@@ -54,3 +54,23 @@ export function saveMicDeviceId(deviceId: string): void {
     /* ignore */
   }
 }
+
+// ---- 口语陪练：听力模式（先听后看；机器本地偏好，不进 schema） ----
+
+const SPEAK_LISTEN_MODE_KEY = "immersive-translator-speak-listen-mode";
+
+export function loadSpeakListenMode(): boolean {
+  try {
+    return localStorage.getItem(SPEAK_LISTEN_MODE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveSpeakListenMode(on: boolean): void {
+  try {
+    localStorage.setItem(SPEAK_LISTEN_MODE_KEY, on ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
