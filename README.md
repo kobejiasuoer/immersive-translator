@@ -11,6 +11,10 @@
 
 前往 [Releases](https://github.com/kobejiasuoer/immersive-translator/releases) 下载已经发布的平台安装包。不同 Release 的平台资产可能不同；Windows 版也可以按其 [`WINDOWS-SETUP.md`](./immersive-translator-windows/WINDOWS-SETUP.md) 在 Windows 环境构建。
 
+## 发版
+
+发布新版本（打安装包、推 Release、更新签名资产）的标准流程见根目录 **[`RELEASE-RUNBOOK.md`](./RELEASE-RUNBOOK.md)**——最近一次成功发版 v0.11.0（2026-10-27）实跑验证的一条龙步骤与踩坑速查，AI 助手发版时优先读它。
+
 ## 共享契约
 
 跨平台 Provider 与历史记录的契约收敛计划位于 [`contracts/`](./contracts/README.md)。当前两端的运行时数据格式仍独立，尚不能把内部历史文件直接互换；对外导入/导出格式稳定后再提升为共同的单一事实来源。
