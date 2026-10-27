@@ -315,6 +315,13 @@ jobs:
       # exe 名来自 cargo 产物（immersive-translator-windows.exe），不受此值影响。
       APP_NAME: 沉浸口语
       GH_TOKEN: ${{ github.token }}
+      # SignPath 云端签名（可选）：配置 secrets 后，tauri signCommand 钩子
+      # （scripts/sign.ps1）自动切换为 SignPath 提交签名；未配置时沿用
+      # 本地 pfx / 未签名回退，不影响现有发版。slugs 走 vars 便于改动。
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN || '' }}
+      SIGNPATH_ORGANIZATION_ID: ${{ secrets.SIGNPATH_ORGANIZATION_ID || '' }}
+      SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG || 'immersive-translator' }}
+      SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
 
     steps:
       - name: Check out repository
@@ -349,6 +356,16 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Ensure SignPath module (optional cloud signing)
+        if: env.SIGNPATH_API_TOKEN != ''
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable -Name SignPath)) {
+            Install-Module -Name SignPath -Force -Scope CurrentUser
+          }
+          Import-Module -Name SignPath
+          Write-Host "SignPath 模块就绪: org=$env:SIGNPATH_ORGANIZATION_ID project=$env:SIGNPATH_PROJECT_SLUG policy=$env:SIGNPATH_SIGNING_POLICY_SLUG"
+
       - name: Build Windows installer (NSIS)
         shell: bash
         env:
@@ -371,6 +388,20 @@ jobs:
           test -f "$exe"
           echo "EXE_PATH=$exe" >> "$GITHUB_ENV"
           ls -l src-tauri/target/release/bundle/nsis/
+
+      - name: Verify Authenticode signature (when SignPath enabled)
+        if: env.SIGNPATH_API_TOKEN != ''
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature -FilePath $env:EXE_PATH
+          Write-Host "安装包签名状态: $($sig.Status) - $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -eq 'NotSigned') {
+            Write-Host "::error::SignPath 已启用但安装包没有 Authenticode 签名，检查 scripts/sign.ps1 的 SignPath 分支。"
+            exit 1
+          }
+          if ($sig.Status -ne 'Valid') {
+            Write-Host "::warning::签名链在本机校验为 $($sig.Status)（CI 常见于中间证书/AIA 拉取超时），商店侧会做完整链校验。"
+          }
 
       - name: Wait for release (created by macOS job)
         shell: bash
