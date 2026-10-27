@@ -211,7 +211,10 @@ fn load_collection_from_path(path: &std::path::Path) -> Result<SyncCollectionFil
     Ok(file)
 }
 
-fn write_collection_to_path(path: &std::path::Path, file: &SyncCollectionFile) -> Result<(), String> {
+fn write_collection_to_path(
+    path: &std::path::Path,
+    file: &SyncCollectionFile,
+) -> Result<(), String> {
     let tmp = path.with_extension("json.tmp");
     let body = serde_json::to_string(file).map_err(|e| format!("序列化同步数据失败: {e}"))?;
     std::fs::write(&tmp, body).map_err(|e| format!("写入 {tmp:?} 失败: {e}"))?;
@@ -256,11 +259,15 @@ fn write_cursors_to_path(path: &std::path::Path, file: &SyncCursorsFile) -> Resu
 /// 列出集合的全部本地实体（含 tombstone 与 dirty；updatedAt 倒序）。
 /// 合并/过滤决策在前端 syncEngine.ts，这里只负责持久化。
 #[tauri::command]
-pub fn sync_store_list(app: AppHandle, collection: String) -> Result<Vec<StoredSyncEntity>, String> {
+pub fn sync_store_list(
+    app: AppHandle,
+    collection: String,
+) -> Result<Vec<StoredSyncEntity>, String> {
     let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
     let path = collection_path(&app, &collection)?;
     let mut file = load_collection_from_path(&path)?;
-    file.entities.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    file.entities
+        .sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     Ok(file.entities)
 }
 
@@ -300,7 +307,11 @@ pub fn sync_store_cursor_get(app: AppHandle, collection: String) -> Result<i64, 
 /// 写入集合游标。每个集合必须各存各的（版本号空间跨集合共享，
 /// 混用会漏拉低版本实体）。
 #[tauri::command]
-pub fn sync_store_cursor_set(app: AppHandle, collection: String, cursor: i64) -> Result<(), String> {
+pub fn sync_store_cursor_set(
+    app: AppHandle,
+    collection: String,
+    cursor: i64,
+) -> Result<(), String> {
     let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
     if !LOCAL_COLLECTIONS.contains(&collection.as_str()) {
         return Err(format!("未知同步集合 {collection}（本地白名单外）"));
@@ -425,11 +436,7 @@ mod tests {
     fn future_schema_version_is_rejected() {
         let path = temporary_path("future.json");
         let _ = std::fs::remove_file(&path);
-        std::fs::write(
-            &path,
-            format!(r#"{{"schemaVersion":99,"entities":[]}}"#),
-        )
-        .unwrap();
+        std::fs::write(&path, format!(r#"{{"schemaVersion":99,"entities":[]}}"#)).unwrap();
         assert!(load_collection_from_path(&path)
             .unwrap_err()
             .contains("版本不兼容"));

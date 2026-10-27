@@ -825,11 +825,7 @@ impl TokenManager {
             "ts": ts_ms,
         });
         let resp = self
-            .with_auth(
-                reqwest::Method::POST,
-                "/v1/events",
-                Some(body.to_string()),
-            )
+            .with_auth(reqwest::Method::POST, "/v1/events", Some(body.to_string()))
             .await?;
         if (200..300).contains(&resp.status) {
             Ok(())
@@ -1757,7 +1753,8 @@ mod tests {
         let reqs = transport.requests("/v1/events");
         assert_eq!(reqs.len(), 1, "恰好一次上报");
         assert_eq!(reqs[0].bearer.as_deref(), Some("old-access"));
-        let body: serde_json::Value = serde_json::from_str(reqs[0].body.as_deref().unwrap()).unwrap();
+        let body: serde_json::Value =
+            serde_json::from_str(reqs[0].body.as_deref().unwrap()).unwrap();
         assert_eq!(body["event"], "speak_session_start");
         assert_eq!(body["properties"]["scenarioId"], "interview");
         assert_eq!(body["properties"]["scenarioSource"], "builtin");
@@ -1778,7 +1775,10 @@ mod tests {
         let store = FakeTokenStore::new(Arc::new(AtomicU64::new(0)));
         let manager = make_manager(transport.clone(), store);
 
-        let err = manager.track_event("book_open", serde_json::json!({})).await.unwrap_err();
+        let err = manager
+            .track_event("book_open", serde_json::json!({}))
+            .await
+            .unwrap_err();
         assert_eq!(err.code, "unauthorized");
         assert_eq!(transport.count("/v1/events"), 0);
     }

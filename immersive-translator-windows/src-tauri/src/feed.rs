@@ -19,8 +19,7 @@ const FEED_TOO_LARGE_TEXT: &str = "订阅内容超过 2MB，已取消";
 /// 订阅地址校验（纯函数）：trim 首尾空白后解析，解析失败或 scheme 不是
 /// http/https（file/javascript/ftp…）以中文文案拒绝。
 fn feed_url_error(url: &str) -> Result<reqwest::Url, String> {
-    let parsed = reqwest::Url::parse(url.trim())
-        .map_err(|_| "这不是有效的订阅地址".to_string())?;
+    let parsed = reqwest::Url::parse(url.trim()).map_err(|_| "这不是有效的订阅地址".to_string())?;
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err("只支持 http/https 订阅源".to_string());
     }
@@ -103,7 +102,9 @@ mod tests {
         assert_eq!(url.scheme(), "https");
         assert_eq!(url.host_str(), Some("www.nasa.gov"));
         assert_eq!(
-            feed_url_error("http://example.com/feed.xml").unwrap().scheme(),
+            feed_url_error("http://example.com/feed.xml")
+                .unwrap()
+                .scheme(),
             "http"
         );
     }
@@ -116,7 +117,11 @@ mod tests {
 
     #[test]
     fn url_gate_rejects_non_http_schemes() {
-        for bad in ["file:///etc/passwd", "javascript://alert(1)", "ftp://example.com/feed"] {
+        for bad in [
+            "file:///etc/passwd",
+            "javascript://alert(1)",
+            "ftp://example.com/feed",
+        ] {
             let err = feed_url_error(bad).unwrap_err();
             assert_eq!(
                 err, "只支持 http/https 订阅源",
