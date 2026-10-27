@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
 import { ReviewView, GRADE_COPY, gradeAsk } from "./ReviewView";
-import { VocabListPanel } from "./VocabListPanel";
 import type { ReviewModeSetting } from "../core/readerTypes";
 import type { ReviewStats } from "../lib/readerStore";
 import type { VocabWord } from "../core/readerTypes";
@@ -152,45 +151,6 @@ describe("ReviewView render smoke", () => {
   });
 });
 
-describe("VocabListPanel render smoke", () => {
-  it("到期组带序号可跳卡，未到期组显示下次见面时间，页脚是回阅读室入口", () => {
-    const later = makeWord({
-      id: "novel",
-      word: "novel",
-      srs: { ease: 2.5, intervalDays: 3, reps: 1, dueAt: Date.now() + 3 * 86400000, lapses: 0 },
-    });
-    const words = [CHUNK, FRESH_WORD, later];
-    const html = renderToString(
-      <VocabListPanel
-        words={words}
-        due={dueVocab(words)}
-        pos={0}
-        reviewedToday={1}
-        streak={2}
-        onJumpToCard={() => undefined}
-        onOpenReader={() => undefined}
-      />,
-    );
-    expect(html).toContain("待复习");
-    expect(html).toContain("vlist-due");
-    expect(html).toContain("稍后再来");
-    expect(html).toContain("3天后");
-    expect(html).toContain("沉浸式阅读");
-  });
+// 左栏词表的渲染断言（计数/防泄答案/入口）自 2026-10-26 改版起等价迁入
+// VaultPage.test.tsx 的「左栏 rail」组（VocabListPanel.tsx 导出已改为 VaultRail）。
 
-  it("空词表：给出攒词指引", () => {
-    const html = renderToString(
-      <VocabListPanel
-        words={[]}
-        due={[]}
-        pos={0}
-        reviewedToday={0}
-        streak={0}
-        onJumpToCard={() => undefined}
-        onOpenReader={() => undefined}
-      />,
-    );
-    expect(html).toContain("还没有生词");
-    expect(html).toContain("沉浸式阅读");
-  });
-});

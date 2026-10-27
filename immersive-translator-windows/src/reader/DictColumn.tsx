@@ -1,18 +1,32 @@
 /**
- * 屏 C · 右侧透镜卡（v0.8）：圆角悬浮毛玻璃卡 + 「句子解析 / 查词」双 Tab。
+ * 右侧解析面板 .side（2026-10-26 阅读页重构，原型 prototypes/reader-room-
+ * redesign-2026-10-26.html .side 三态）：「句子解析 / 查词 / 本章生词」三 Tab
+ * + 当前句号。根类 .reader-dict / .spatial-lens-card 沿用（宽度与定位续命）。
  *
- * 「查词」Tab 完整保留原词典栏逻辑：词条 26px serif + 音标 + 发音 /
- * 词性+释义 / 原句卡（第 N 句定位）/ 常用搭配 / 词形变化 / 加入生词本 +
- * 复制；词块（正文点下划线短语）走即时卡：无 LLM 调用，数据来自标注结果。
+ * 「句子解析」Tab 三态（数据由 ReaderApp 驱动，本组件纯展示 + 速览现算）：
+ *   idle 速览——当前句词数/短语数由 activeSentence.en/chunks 现算，关键词
+ *   chips 用词块文本（点击走完整查词），品牌绿 CTA「AI 解析这一句 E」为
+ *   唯一解析入口（正文浮层不再重复）+ 自动解析开关（本地态，不落盘）；
+ *   loading 骨架屏；done 三区——句子主干（.lens-spine）/结构拆解 clauses
+ *   平铺伪树（缩进 + 左侧连线装饰，悬停回标正文）/常用句型（.lens-pattern）
+ *   + 重新解析。clauses 数据是平铺 {tag,snippet,desc} 无父子层级，从属关系
+ *   用缩进+连线示意（验收口径降级，见蓝图）。
  *
- * 「句子解析」Tab 展示 ReaderApp 层的 xray 数据（translateStream 请求，
- * tag 前缀 rx）：句子主干 / 结构拆解（悬停回标左侧原文片段）/ 常用句型。
- * 本组件纯展示，全部状态由 ReaderApp 驱动。
+ * 「查词」Tab 完整保留原词典栏逻辑：词条 serif + 音标 + 发音 / 词性+释义 /
+ * 原句卡 / 常用搭配 / 词形变化 / 加入生词本 + 复制；词块走即时卡（无 LLM）。
+ * 「本章生词」Tab：chapterVocab（ReaderApp 按当前文章 id 过滤的 VocabWord[]）。
  */
 
-import { IconClose, IconCopy, IconLocate, IconStar, IconVolume } from "../ui/icons";
+import { useEffect, useState, type CSSProperties } from "react";
+import { IconClose, IconCopy, IconLocate, IconSparkles, IconStar, IconVolume } from "../ui/icons";
 import type { ReaderDictEntry } from "../core/readerDict";
-import { CHUNK_TYPE_LABELS, type SentenceChunk, type VocabCollocation } from "../core/readerTypes";
+import {
+  CHUNK_TYPE_LABELS,
+  type SentenceChunk,
+  type SentencePair,
+  type VocabCollocation,
+  type VocabWord,
+} from "../core/readerTypes";
 import { normalizeWordKey } from "../core/articleBuilder";
 import type { SentenceXray } from "../core/sentenceXray";
 
@@ -32,8 +46,8 @@ export interface LensXrayState {
   data: SentenceXray | null;
 }
 
-/** 透镜卡模式：句子解析 / 查词。 */
-export type LensMode = "xray" | "lex";
+/** 解析面板模式：句子解析 / 查词 / 本章生词。 */
+export type LensMode = "xray" | "lex" | "vocab";
 
 interface Props {
   state: DictPanelState;
@@ -50,12 +64,16 @@ interface Props {
   /** 词块即时卡「详查词典」：走完整 LLM 词条查询。 */
   onLookup: (text: string, sentenceIdx: number) => void;
   onClose: () => void;
-  // ---- v0.8 双模透镜卡 ----
-  /** 当前 Tab（句子解析 / 查词）。 */
+  // ---- 三态解析面板 ----
+  /** 当前 Tab（句子解析 / 查词 / 本章生词）。 */
   lensMode: LensMode;
   onLensMode: (mode: LensMode) => void;
   /** 光标句序号（头部「第 N 句」与解析请求定位）。 */
   activeIdx: number;
+  /** 当前句（ReaderApp 契约：article.sentences[activeIdx]；速览词数/短语数/关键词的唯一数据通道）。 */
+  activeSentence?: SentencePair | null;
+  /** 本章生词（ReaderApp 按当前文章 id 过滤；「本章生词」Tab 数据源）。 */
+  chapterVocab?: readonly VocabWord[] | null;
   /** 句子解析数据（null = 本窗口还没请求过）。 */
   xray: LensXrayState | null;
   /** 句子解析请求进行中。 */
@@ -66,6 +84,12 @@ interface Props {
   onHoverClause: (snippet: string | null) => void;
   /** 「用这个句型练口语」：带入句切口语陪练。 */
   onPracticeSentence: (idx: number) => void;
+}
+
+/** 速览行：当前句词数（en 按空白切分）。 */
+function countWords(en: string): number {
+  const t = en.trim();
+  return t ? t.split(/\s+/).length : 0;
 }
 
 export function DictColumn({
@@ -82,22 +106,36 @@ export function DictColumn({
   lensMode,
   onLensMode,
   activeIdx,
+  activeSentence,
+  chapterVocab,
   xray,
   xrayBusy,
   onOpenXray,
   onHoverClause,
   onPracticeSentence,
 }: Props) {
+  /** 自动解析（本地态不落盘）：翻到新句且本句无解析记录时自动请求一次。 */
+  const [autoParse, setAutoParse] = useState(false);
+
   const headWord = state.status === "chunk" ? state.chunk.text : state.status === "closed" ? "" : state.query;
   /** 数据只对得上它所属的那一句；光标已移走就回到「解析当前句」入口。 */
   const xrayData =
     xray && xray.status === "ready" && xray.data && xray.sentenceIdx === activeIdx ? xray.data : null;
   const xrayFailed = xray != null && xray.sentenceIdx === activeIdx && xray.status === "error";
 
+  useEffect(() => {
+    if (!autoParse || lensMode !== "xray" || xrayBusy) return;
+    // 本句已有任何记录（loading/ready/error）都不重复请求——错误不自动重试。
+    if (xray && xray.sentenceIdx === activeIdx) return;
+    onOpenXray(activeIdx);
+  }, [autoParse, lensMode, xrayBusy, xray, activeIdx, onOpenXray]);
+
+  const chunkCount = activeSentence?.chunks?.length ?? 0;
+
   return (
     <aside className="reader-dict spatial-lens-card" aria-label="句子解析与查词">
       <div className="lens-header">
-        <div className="lens-mode-switch" role="tablist" aria-label="透镜卡模式">
+        <div className="lens-mode-switch" role="tablist" aria-label="解析面板模式">
           <button
             className={`lens-mode-btn${lensMode === "xray" ? " active" : ""}`}
             role="tab"
@@ -114,6 +152,15 @@ export function DictColumn({
           >
             查词
           </button>
+          <button
+            className={`lens-mode-btn${lensMode === "vocab" ? " active" : ""}`}
+            role="tab"
+            aria-selected={lensMode === "vocab"}
+            onClick={() => onLensMode("vocab")}
+            title="阅读本章时收藏的生词与词块"
+          >
+            本章生词
+          </button>
         </div>
         <span className="lens-ref-tag tabular">第 {activeIdx + 1} 句</span>
         {lensMode === "lex" && state.status !== "closed" && (
@@ -127,11 +174,15 @@ export function DictColumn({
         {lensMode === "xray" ? (
           <>
             {xrayBusy && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }} aria-live="polite">
-                <div className="skeleton-line" style={{ width: "40%" }} />
+              <div className="lens-loading" aria-live="polite">
+                <div className="lens-loading-title">正在解析…</div>
+                <div className="skeleton-line" style={{ width: "70%" }} />
                 <div className="skeleton-line" style={{ width: "92%" }} />
-                <div className="skeleton-line" style={{ width: "78%" }} />
-                <div className="lens-empty">正在解析第 {xray?.sentenceIdx != null ? xray.sentenceIdx + 1 : activeIdx + 1} 句…</div>
+                <div className="skeleton-line" style={{ width: "56%" }} />
+                <div className="skeleton-line" style={{ width: "80%" }} />
+                <div className="lens-empty">
+                  正在解析第 {xray?.sentenceIdx != null ? xray.sentenceIdx + 1 : activeIdx + 1} 句…
+                </div>
               </div>
             )}
 
@@ -148,10 +199,48 @@ export function DictColumn({
 
             {!xrayBusy && !xrayFailed && !xrayData && (
               <div className="lens-empty-stack">
-                <div className="lens-empty">第 {activeIdx + 1} 句还没解析。</div>
-                <button className="island-tab active" style={{ width: "100%", justifyContent: "center" }} onClick={() => onOpenXray(activeIdx)}>
-                  解析这一句 →
+                <div className="lens-kicker">
+                  <span>本句速览</span>
+                  <span>第 {activeIdx + 1} 句</span>
+                </div>
+                <div className="lens-glance serif">
+                  {activeSentence
+                    ? `第 ${activeIdx + 1} 句 · ${countWords(activeSentence.en)} 词`
+                    : `第 ${activeIdx + 1} 句`}
+                </div>
+                <div className="lens-glance-sub">
+                  {activeSentence ? `含 ${chunkCount} 个短语` : "还没解析，点下方按钮看主干与结构拆解"}
+                </div>
+                {activeSentence && chunkCount > 0 && (
+                  <div className="lens-keys">
+                    {activeSentence.chunks!.map((c, i) => (
+                      <button
+                        key={i}
+                        className="lens-key serif"
+                        onClick={() => onLookup(c.text, activeIdx)}
+                        title="点击查这个词块的完整词条"
+                      >
+                        {c.text}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <button className="lens-cta" onClick={() => onOpenXray(activeIdx)}>
+                  <IconSparkles size={14} />
+                  AI 解析这一句
+                  <kbd aria-hidden>E</kbd>
                 </button>
+                <div className="lens-auto">
+                  <button
+                    type="button"
+                    className="switch"
+                    role="switch"
+                    aria-checked={autoParse}
+                    aria-label="翻到新句子时自动解析"
+                    onClick={() => setAutoParse((v) => !v)}
+                  />
+                  <span>翻到新句子时自动解析</span>
+                </div>
                 <div className="lens-hint">解析这句的主干、结构拆解与常用句型，拆解悬停可高亮左侧原文。</div>
               </div>
             )}
@@ -173,19 +262,24 @@ export function DictColumn({
                   {xrayData.clauses.length === 0 ? (
                     <div className="lens-empty">这句没有拆出更多结构。</div>
                   ) : (
-                    xrayData.clauses.map((c, i) => (
-                      <div
-                        key={i}
-                        className="clause-step-item"
-                        style={{ marginLeft: i * 8 }}
-                        onMouseEnter={() => onHoverClause(c.snippet)}
-                        onMouseLeave={() => onHoverClause(null)}
-                      >
-                        <div className="clause-tag">{c.tag}</div>
-                        <div className="clause-snippet serif">{c.snippet}</div>
-                        <div className="clause-desc">{c.desc}</div>
-                      </div>
-                    ))
+                    <div className="clause-tree">
+                      {xrayData.clauses.map((c, i) => (
+                        <div
+                          key={i}
+                          className="clause-step-item"
+                          style={{ "--clause-depth": i } as CSSProperties}
+                          tabIndex={0}
+                          onMouseEnter={() => onHoverClause(c.snippet)}
+                          onMouseLeave={() => onHoverClause(null)}
+                          onFocus={() => onHoverClause(c.snippet)}
+                          onBlur={() => onHoverClause(null)}
+                        >
+                          <div className="clause-role">{c.tag}</div>
+                          <div className="clause-snippet serif">{c.snippet}</div>
+                          <div className="clause-desc">{c.desc}</div>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
 
@@ -198,17 +292,52 @@ export function DictColumn({
                   ) : (
                     <div className="lens-empty">这句没有值得单独提取的句型。</div>
                   )}
-                  <button
-                    className="island-tab active"
-                    style={{ width: "100%", justifyContent: "center", marginTop: 12 }}
-                    onClick={() => onPracticeSentence(activeIdx)}
-                  >
-                    用这个句型练口语 →
-                  </button>
+                  <div className="lens-done-actions">
+                    <button className="lens-practice-btn" onClick={() => onPracticeSentence(activeIdx)}>
+                      用这个句型练口语 →
+                    </button>
+                    <button className="lens-redo" onClick={() => onOpenXray(activeIdx)} title="重新请求这一句的解析">
+                      重新解析
+                    </button>
+                  </div>
                 </div>
               </>
             )}
           </>
+        ) : lensMode === "vocab" ? (
+          !chapterVocab || chapterVocab.length === 0 ? (
+            <div className="dict-empty">
+              本章还没有收藏的生词。正文里单击单词、划选短语或点词块虚线收藏后，会出现在这里。
+            </div>
+          ) : (
+            <div className="lens-vocab-list">
+              <div className="lens-kicker">
+                <span>本章生词</span>
+                <span>{chapterVocab.length} 个</span>
+              </div>
+              {chapterVocab.map((w) => (
+                <div key={w.id} className="lens-vocab-row">
+                  <button
+                    className="lens-vocab-word serif"
+                    onClick={() => onLookup(w.word, activeIdx)}
+                    title="查这个词的完整词条（音标、多义项、搭配）"
+                  >
+                    {w.word}
+                  </button>
+                  <span className="lens-vocab-cn">{w.senses.map((s) => s.cn).join("；")}</span>
+                  <button
+                    className="reader-tb-btn"
+                    style={{ width: 24, height: 24, flex: "none" }}
+                    onClick={() => onSpeak(w.word)}
+                    title={`朗读 ${w.word}`}
+                    aria-label={`朗读 ${w.word}`}
+                  >
+                    <IconVolume size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )
         ) : (
           <>
             {state.status === "closed" && (

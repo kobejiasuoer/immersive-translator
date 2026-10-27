@@ -189,11 +189,12 @@ describe("DictColumn（v0.8 透镜卡）", () => {
   });
 
   it("句子解析 Tab：未解析/解析中/失败/光标已移走四种状态", () => {
-    // 未请求过：给「解析这一句」入口
+    // 未请求过：idle 速览（2026-10-26 阅读页重构：词数/短语数由 activeSentence 现算，
+    // 测试未传该 prop → 速览回落「还没解析」文案）+ CTA 入口
     const onOpenXray = vi.fn();
     let mounted = mount({ xray: null, onOpenXray });
-    expect(mounted.container.textContent).toContain("第 3 句还没解析");
-    click(Array.from(mounted.container.querySelectorAll("button")).find((b) => b.textContent === "解析这一句 →")!);
+    expect(mounted.container.textContent).toContain("还没解析");
+    click(Array.from(mounted.container.querySelectorAll("button")).find((b) => b.textContent!.includes("AI 解析这一句"))!);
     expect(onOpenXray).toHaveBeenCalledExactlyOnceWith(2);
 
     // 解析中：骨架 + 文案
@@ -206,9 +207,10 @@ describe("DictColumn（v0.8 透镜卡）", () => {
     click(Array.from(mounted.container.querySelectorAll("button")).find((b) => b.textContent === "重试")!);
     expect(onOpenXray).toHaveBeenCalledTimes(2);
 
-    // 光标移走：旧句数据不冒充当前句，回到解析入口
+    // 光标移走：旧句数据不冒充当前句，回到速览入口
     mounted = mount({ activeIdx: 5 });
-    expect(mounted.container.textContent).toContain("第 6 句还没解析");
+    expect(mounted.container.textContent).toContain("第 6 句");
+    expect(mounted.container.textContent).toContain("还没解析");
     expect(mounted.container.querySelector(".lens-spine")).toBeNull();
   });
 

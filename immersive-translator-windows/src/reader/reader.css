@@ -22,6 +22,11 @@
 }
 
 /* ---------- 顶栏：安静的一行字，压在底色上 ---------- */
+/* 【deprecated 2026-10-26 外壳重构】.reader-topbar / .reader-appname /
+   .reader-article-name / .reader-theme-btn / .reader-topbar .spacer 已无组件
+   使用（顶栏现由 ReaderTopBar 的 .floating-top-stage 三段外壳承担，新样式见
+   文件末尾「外壳重构横幅（2026-10-26）」）。按死代码口径保留不删；
+   .reader-logo（ReadingView）与 .reader-tb-btn（8 处组件）仍在使用，勿动。 */
 .reader-topbar {
   height: 52px;
   flex: none;
@@ -163,6 +168,9 @@ button.reader-appname:hover {
 }
 
 /* ---------- 左栏 · 目录页书架 ---------- */
+/* 【2026-10-26 外壳重构踏勘备注】本段并非死代码：.reader-shelf 系列仍被 vault 的
+   VocabListPanel/NotesView 复用（≤1199 的收窄规则也依赖它），.reader-review-card
+   仍被 TodayCard 使用，均按原样保留；仅 .reader-import-row 已无组件使用（见下）。 */
 .reader-shelf {
   width: 232px;
   flex: none;
@@ -334,6 +342,8 @@ button.reader-appname:hover {
   color: var(--text-3);
   line-height: 1.7;
 }
+/* 【deprecated 2026-10-26 外壳重构】.reader-import-row 已无组件使用（导入入口
+   现走 ImportDialog 与书架浮层 folio-import-btn）。死代码保留不删。 */
 .reader-import-row {
   padding: 4px 8px 8px;
 }
@@ -352,7 +362,9 @@ button.reader-appname:hover {
   min-height: 0;
 }
 
-/* 遮罩模式状态条：轻量化，贴在正文列上方 */
+/* 【deprecated 2026-10-26 阅读页重构】.reader-maskbar 已无组件使用：遮罩开关、
+   「已揭开 N/M」计数与全部揭开/遮住按钮全部收进 .reading-toolbar（见文件末尾
+   「阅读页重构 2026-10-26」横幅）。死代码保留不删。 */
 .reader-maskbar {
   display: flex;
   align-items: center;
@@ -511,11 +523,12 @@ button.reader-appname:hover {
 .pair-cn:hover {
   color: var(--text-2);
 }
-/* 词块标注与生词再现：克制点线，不打断阅读 */
+/* 词块标注与生词再现：只用虚线（2026-10-26 阅读页重构，原型 .ph），悬停才给
+   底色反馈；当前句高亮只动 background，不与虚线叠加。 */
 .pair-en .chunk-hl {
   text-decoration-line: underline;
-  text-decoration-style: dotted;
-  text-decoration-color: var(--accent);
+  text-decoration-style: dashed;
+  text-decoration-color: var(--accent-line, var(--accent));
   text-decoration-thickness: 1.5px;
   text-underline-offset: 3px;
   cursor: pointer;
@@ -3646,41 +3659,12 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
   color:var(--ok);
 }
 
-.speak-error {
-  display:flex;
-  align-items:center;
-  gap:10px;
-  margin:0 18px 8px;
-  padding:9px 12px;
-  font-size:12.5px;
-  line-height:1.6;
-  color:var(--text-2);
-  border:1px solid var(--border);
-  border-left:3px solid var(--warn);
-  border-radius:10px;
-  background:var(--warn-soft);
-}
-
 .speak-controls {
   border-top:1px solid var(--border);
   padding:12px 18px 14px;
   display:flex;
   flex-direction:column;
   gap:9px;
-}
-
-.speak-level-bar {
-  height:4px;
-  border-radius:2px;
-  background:var(--bg);
-  overflow:hidden;
-}
-
-.speak-level-bar i {
-  display:block;
-  height:100%;
-  background:var(--accent);
-  transition:width .08s linear;
 }
 
 .speak-controls-row {
@@ -3746,26 +3730,6 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
   font-size:11.5px;
   color:var(--text-4);
   text-align:center;
-}
-
-.speak-shadow-err {
-  font-size:12px;
-  color:var(--warn);
-}
-
-.speak-creds-toggle {
-  align-self:flex-start;
-  border:none;
-  background:none;
-  padding:0;
-  font-family:inherit;
-  font-size:11.5px;
-  color:var(--text-4);
-  cursor:pointer;
-}
-
-.speak-creds-toggle:hover {
-  color:var(--text-2);
 }
 
 .speak-creds {
@@ -4792,39 +4756,6 @@ button.notes-word:hover { color: var(--accent); }
    标题栏入口 + 复盘弹层（勾选弱词 → 查词典 → 批量合并）。
    候选规则纯前端确定（speakVocab.ts），样式语言与跟读报告卡一致。
    ============================================================ */
-
-.speak-review-entry {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--accent-soft);
-  border-radius: 9px;
-  background: var(--accent-softer);
-  color: var(--accent);
-  font-family: inherit;
-  font-size: 12.5px;
-  font-weight: 600;
-  padding: 6px 12px;
-  cursor: pointer;
-  transition: background .15s;
-}
-
-.speak-review-entry .dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--err);
-  flex: none;
-}
-
-.speak-review-entry:hover:not(:disabled) {
-  background: var(--accent-soft);
-}
-
-.speak-review-entry:disabled {
-  opacity: .5;
-  cursor: default;
-}
 
 .sv-backdrop {
   position: absolute;
@@ -6322,6 +6253,12 @@ button.notes-word:hover { color: var(--accent); }
 }
 
 /* 左上：品牌书卷胶囊（书架抽屉触发器） */
+/* 【deprecated 2026-10-26 外壳重构】.brand-folio-pill / .center-nav-island /
+   .right-controls-island 三个容器胶囊由 .shell-brand / .shell-tabs / .shell-tools
+   三段取代（ReaderTopBar DOM 重排合入后即为死代码，此处保留兜底；新样式见文件
+   末尾「外壳重构横幅（2026-10-26）」）。段内 .monogram-seal / .folio-drawer-trigger /
+   .island-tab / .island-counter / .pill-Ghost-btn 仍被 DictColumn / PlayBar /
+   ReadingView / SpeakView 引用，原样保留勿删。 */
 .brand-folio-pill {
   display: inline-flex;
   align-items: center;
@@ -6513,15 +6450,6 @@ button.notes-word:hover { color: var(--accent); }
   height: 14px;
   flex: none;
 }
-.cloud-pulse {
-  width: 6.5px;
-  height: 6.5px;
-  border-radius: 50%;
-  background: var(--sonic-teal);
-  box-shadow: 0 0 0 3px var(--sonic-teal-soft);
-  flex: none;
-}
-
 /* ---------- 弹出式书架浮层 ---------- */
 .floating-folio-sheet {
   position: absolute;
@@ -6698,11 +6626,13 @@ button.notes-word:hover { color: var(--accent); }
 /* v0.8 工作台骨架段结束 */
 
 /* ============================================================
-   v0.8 阅读画报（Phase 2）——画报排版、专注模式、透镜卡与悬浮走带
-   结构 1:1 对齐 prototypes/windows-workbench-v08-2026-10-15.html
-   （.editorial-spine-col / .literary-sheet / .masthead / .prose-body /
-   .interlinear-fold / .parallel-spread-row / .spatial-lens-card /
-   .floating-sonic-dock）。【阶段协议】只追加，不回写上方任何段落。
+   v0.8 阅读画报（Phase 2）——2026-10-26 阅读页重构收编
+   原型：prototypes/reader-room-redesign-2026-10-26.html（白卡主栏 + 左侧
+   进度轨 + 640px 正文列 + 译文浮层 + 居中走带）。本段维护沿用的选择器
+   （.prose-body / .parallel-spread-* / .text-action-btn / .lens-* /
+   .floating-sonic-dock / cloze），新增 .reading-* 与 .translation-pop
+   系见文件末尾「阅读页重构 2026-10-26」横幅（folio 作用域）。
+   parallel 分支（renderZhSide）整套规则为红线，原样保留。
    ============================================================ */
 
 /* Phase 2 补充令牌：画报正文的衬线/无衬线字族（骨架段未定义，挂在
@@ -6715,10 +6645,33 @@ button.notes-word:hover { color: var(--accent); }
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- 左侧书脊列（超大句码 + 竖排书名 + 进度） ---------- */
+/* ---------- 主栏白卡与正文滚动区 ----------
+   几何契约（dock 居中）：白卡左右 margin 相等（12px），右栏 .spatial-lens-card
+   总占位 388px（14 边距 + 360 栏宽 + 14 边距）= 外壳令牌 --reading-side-w，
+   dock left:calc((100% − var(--reading-side-w))/2) 即精确居中于白卡中轴。 */
 .reader-root .reader-stage.reading-spread {
-  flex-direction: row;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg, 18px);
+  margin: 12px 12px 18px;
+  overflow: hidden;
 }
+.reader-root .reading-scrollpane {
+  flex: 1;
+  overflow-y: auto;
+  min-width: 0;
+  position: relative;
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+}
+/* 【deprecated 2026-10-26 阅读页重构】.editorial-spine-col / .oversized-folio-num /
+   .spine-col-cap / .spine-vertical-label / .spine-col-pct 已无组件使用（书脊列
+   被 .reading-rail 竖向进度轨取代，见 EOF 横幅）。死代码保留不删。 */
 .reader-root .editorial-spine-col {
   width: 56px;
   display: flex;
@@ -6762,7 +6715,9 @@ button.notes-word:hover { color: var(--accent); }
   font-weight: 600;
 }
 
-/* ---------- 正文画布与纸张 ---------- */
+/* 【deprecated 2026-10-26 阅读页重构】.literary-spread-scroll / .literary-sheet
+   已无组件使用（滚动区改 .reading-scrollpane，正文列改 .reading-col，对照模式
+   class 挂在滚动区上）。死代码保留不删。 */
 .reader-root .literary-spread-scroll {
   flex: 1;
   overflow-y: auto;
@@ -6775,7 +6730,10 @@ button.notes-word:hover { color: var(--accent); }
   margin: 0 auto;
 }
 
-/* ---------- 刊头：行内三开关 + display 标题 + 中文副题 ---------- */
+/* 【deprecated 2026-10-26 阅读页重构】.masthead-* 刊头系（top-meta / meta-line /
+   switches / display-title / cn-sub / cn-text）已无组件使用：控件收口进
+   .reading-toolbar，标题缩到 32px 改 .reading-head（.reading-eyebrow /
+   .reading-title / .reading-subtitle，见 EOF 横幅）。死代码保留不删。 */
 .reader-root .masthead-top-meta {
   display: flex;
   align-items: center;
@@ -6827,28 +6785,37 @@ button.notes-word:hover { color: var(--accent); }
   overflow-wrap: break-word;
 }
 
-/* ---------- 画报正文：行内英文流 + 专注模式聚光 ---------- */
+/* ---------- 画报正文：按段落分组的行内英文流 + 专注模式聚光 ---------- */
 .reader-root .prose-body {
   font-family: var(--font-serif);
   color: var(--ink-1);
   transition: opacity 250ms;
 }
+/* 段落分组（paragraphIdx）：句 span 间由 JSX 补空格节点，段间留 1.1em */
+.reader-root .prose-paragraph {
+  margin: 0 0 1.1em;
+}
+.reader-root .prose-paragraph:last-child {
+  margin-bottom: 0;
+}
 .reader-root .prose-sentence {
-  padding: 3px 5px;
-  margin: 0 -5px;
-  border-radius: 6px;
+  border-radius: 4px;
   cursor: pointer;
-  transition: all 220ms var(--ease-spring);
+  padding: 1px 0;
+  transition: background-color 0.12s ease;
   display: inline;
   font-family: var(--font-serif);
   font-size: var(--read-en-size-cur, var(--read-en-size, 20.5px));
-  /* 行距跟随设置（1.86 的画报行高 ≈ 默认行距 × 1.2，用户调整行距时同步缩放） */
+  /* 行距跟随设置（1.95 的画报行高 ≈ 默认行距 × 1.2，用户调整行距时同步缩放） */
   line-height: calc(var(--read-en-lh-cur, var(--read-en-lh, 34px)) * 1.2);
   overflow-wrap: break-word;
 }
+.reader-root .prose-sentence:hover {
+  background: var(--surface-2);
+}
+/* 当前句只用底色，不叠加下划线/描边（词块虚线不受影响） */
 .reader-root .prose-sentence.is-current {
   background: var(--accent-soft);
-  box-shadow: inset 0 -1.5px 0 var(--accent);
 }
 .reader-root .prose-sentence.failed {
   box-shadow: inset 0 -1.5px 0 var(--err);
@@ -6861,12 +6828,18 @@ button.notes-word:hover { color: var(--accent); }
   opacity: 0.78;
   filter: none;
 }
+/* 句卡（本地开关，仅段落态）：每句独立成块（原型 .win[data-layout=sent]） */
+.reader-root .prose-body.sent-cards .prose-sentence {
+  display: block;
+  padding: 6px 8px;
+  margin-left: -8px;
+}
 .reader-root .drop-cap {
   float: left;
   font-family: var(--font-display);
-  font-size: 64px;
-  line-height: 0.82;
-  padding: 4px 12px 0 0;
+  font-size: 3.1em;
+  line-height: 0.9;
+  padding: 4px 8px 0 0;
   color: var(--accent);
   font-style: italic;
 }
@@ -6882,7 +6855,10 @@ button.notes-word:hover { color: var(--accent); }
   padding: 0 2px;
 }
 
-/* ---------- 行间译文折叠卡（prose 模式当前句） ---------- */
+/* 【deprecated 2026-10-26 阅读页重构】.interlinear-fold / .fold-zh / .fold-actions
+   已无组件使用：行间折叠卡由 .translation-pop 译文浮层取代（脱离文档流、
+   贴当前句末行下方，见 EOF 横幅）。死代码保留不删；
+   .text-action-btn 仍被 SpeakView 使用，规则原样保留。 */
 .reader-root .interlinear-fold {
   display: block;
   margin: 12px 0 22px;
@@ -6983,28 +6959,27 @@ button.notes-word:hover { color: var(--accent); }
   opacity: 1;
 }
 
-/* ---------- 右侧透镜卡（句子解析 / 查词 双 Tab） ---------- */
+/* ---------- 右侧解析面板 .side（句子解析 / 查词 / 本章生词 三 Tab） ----------
+   总占位契约：margin 14 + width 360 + margin 14 = 388px（= --reading-side-w，
+   dock 居中的分母，窄窗同步见 EOF 横幅）；根类 .reader-dict / .spatial-lens-card
+   双沿用（≤1199 的 .reader-dict 收窄规则与本段协商，见 EOF 横幅 300px 覆盖）。 */
 .reader-root .spatial-lens-card {
-  width: 386px;
+  width: 360px;
   flex: none;
   align-self: stretch;
-  margin: 8px 0;
-  background: var(--glass-surface);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid var(--glass-border-strong);
-  border-radius: 22px;
-  box-shadow: var(--shadow-spatial), inset 0 1px 0 var(--glass-highlight);
+  margin: 12px 14px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg, 18px);
   display: flex;
   flex-direction: column;
   gap: 0;
   overflow: hidden;
   padding: 0;              /* 覆盖旧 .reader-dict 内衬：滚动移交给 .lens-body */
-  border-left: none;       /* 覆盖旧左栏通顶框线（画报取消硬切边） */
 }
 .reader-root .lens-header {
-  padding: 14px 18px 12px;
-  border-bottom: 1px solid var(--glass-border);
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -7013,46 +6988,50 @@ button.notes-word:hover { color: var(--accent); }
 }
 .reader-root .lens-mode-switch {
   display: inline-flex;
-  background: var(--canvas-bg);
+  gap: 2px;
   padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   border-radius: 99px;
-  border: 1px solid var(--glass-border);
+  min-width: 0;
 }
 .reader-root .lens-mode-btn {
   border: none;
   background: transparent;
   color: var(--ink-3);
-  padding: 4px 12px;
+  padding: 3px 10px;
   border-radius: 99px;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;
+  white-space: nowrap;
   transition: all 150ms;
 }
 .reader-root .lens-mode-btn.active {
-  background: var(--glass-elevated);
+  background: var(--surface);
   color: var(--ink-1);
   font-weight: 600;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 .reader-root .lens-ref-tag {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--ink-3);
+  flex: none;
 }
 .reader-root .lens-body {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  padding: 18px 20px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
 }
 .reader-root .lens-section {
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--glass-border);
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
 }
 .reader-root .lens-section:last-child {
   border-bottom: none;
@@ -7066,25 +7045,52 @@ button.notes-word:hover { color: var(--accent); }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+}
+/* 结构拆解 · 平铺伪树：clauses 数据无父子层级，从属关系用「缩进 + 左侧连线」
+   示意（--clause-depth 逐项 +1 级缩进）；悬停/聚焦回标左侧原文。 */
+.reader-root .clause-tree {
+  position: relative;
+  margin-left: 6px;
+  padding-left: 14px;
+  border-left: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 .reader-root .clause-step-item {
-  padding: 9px 12px;
-  border-radius: 10px;
-  margin-bottom: 6px;
+  position: relative;
+  padding: 6px 10px;
+  border-radius: var(--r-sm, 8px);
   border: 1px solid transparent;
+  margin-left: calc(var(--clause-depth, 0) * 8px);
   cursor: pointer;
-  transition: all 150ms var(--ease-spring);
+  outline: none;
+  transition: background-color 150ms ease, border-color 150ms ease;
 }
-.reader-root .clause-step-item:hover {
-  background: var(--glass-elevated);
-  border-color: var(--glass-border-strong);
-  transform: translateX(2px);
+.reader-root .clause-step-item::before {
+  content: "";
+  position: absolute;
+  top: 17px;
+  left: calc(-14px - var(--clause-depth, 0) * 8px);
+  width: calc(10px + var(--clause-depth, 0) * 8px);
+  border-top: 2px solid var(--border);
 }
-.reader-root .clause-step-item .clause-tag {
-  font-size: 11px;
-  color: var(--accent);
+.reader-root .clause-step-item:hover,
+.reader-root .clause-step-item:focus-visible {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+.reader-root .clause-step-item .clause-role {
+  display: inline-block;
+  font-size: 12px;
   font-weight: 600;
-  margin-bottom: 2px;
+  line-height: 1.7;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 5px;
+  padding: 0 7px;
+  margin-bottom: 3px;
 }
 .reader-root .clause-step-item .clause-snippet {
   font-family: var(--font-serif);
@@ -7102,8 +7108,12 @@ button.notes-word:hover { color: var(--accent); }
   font-family: var(--font-serif);
   font-size: 17px;
   font-weight: 600;
-  line-height: 1.45;
+  line-height: 1.55;
   color: var(--ink-1);
+  padding: 12px 14px;
+  border-radius: var(--r-md, 12px);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line, transparent);
 }
 .reader-root .lens-pattern {
   font-family: var(--font-mono);
@@ -7111,8 +7121,8 @@ button.notes-word:hover { color: var(--accent); }
   line-height: 1.55;
   padding: 10px 12px;
   border-radius: 10px;
-  background: var(--canvas-bg);
-  border: 1px solid var(--glass-border);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
 }
 .reader-root .lens-empty {
   font-size: 12.5px;
@@ -7130,28 +7140,54 @@ button.notes-word:hover { color: var(--accent); }
   line-height: 1.6;
 }
 
-/* ---------- 底部悬浮播放走带胶囊 ---------- */
+/* ---------- 悬浮播放走带 dock：居中于正文栏，宽 540 ----------
+   ReaderApp 将 dock 直挂 .reader-root（无正文栏定位祖先），定位用
+   left:calc((100% − var(--reading-side-w, 0px)) / 2) + translateX(-50%)：
+   --reading-side-w 为右栏实际占位（默认 388px，外壳令牌；≤1199 同步 328px、
+   ≤1019/专注 0px，见 EOF 横幅），保证 dock 始终居中于 640px 正文列。
+   拖拽语义在 PlayBar.tsx：拖动只移 dragIdx，松手才 jumpTo。 */
 .reader-root .floating-sonic-dock {
   position: absolute;
-  bottom: 18px;
-  left: 50%;
+  bottom: 16px;
+  left: calc((100% - var(--reading-side-w, 0px)) / 2);
   transform: translateX(-50%);
   z-index: 35;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 7px 14px 7px 10px;
+  gap: 8px;
+  padding: 6px 14px 6px 8px;
+  width: min(540px, calc(100vw - 32px));
   border-radius: 999px;
-  background: var(--glass-elevated);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid var(--glass-border-strong);
-  box-shadow: var(--shadow-spatial), inset 0 1px 0 var(--glass-highlight);
-  max-width: calc(100% - 48px);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop);
+  max-width: calc(100% - 32px);
+}
+.reader-root .dock-step-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--ink-2);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex: none;
+  padding: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.reader-root .dock-step-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--ink-1);
+}
+.reader-root .dock-step-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 .reader-root .sonic-play-orb {
-  width: 36px;
-  height: 36px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
   border: none;
   background: var(--ink-1);
@@ -7180,20 +7216,35 @@ button.notes-word:hover { color: var(--accent); }
 }
 .reader-root .dock-scrubber {
   position: relative;
-  width: 160px;
-  height: 4px;
-  background: var(--glass-border-strong);
-  border-radius: 99px;
+  flex: 1;
+  min-width: 60px;
+  height: 5px;
+  background: var(--border);
+  border-radius: 5px;
   cursor: pointer;
   overflow: visible;
-  flex: none;
   touch-action: none;
 }
 .reader-root .dock-scrubber-fill {
   height: 100%;
   background: var(--accent);
-  border-radius: 99px;
-  transition: width 200ms var(--ease-spring);
+  border-radius: 5px;
+  transition: width 200ms var(--ease-spring, ease);
+}
+/* 拖点：--p 由 PlayBar 以句百分比写入（拖拽时跟手指，不跟播放句） */
+.reader-root .dock-scrubber::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: var(--p, 0%);
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--accent);
+  box-shadow: 0 1px 4px rgba(16, 24, 40, 0.2);
+  pointer-events: none;
 }
 .reader-root .dock-preview {
   position: absolute;
@@ -7336,6 +7387,64 @@ button.notes-word:hover { color: var(--accent); }
   padding-top: 10px;
   border-top: 1px solid var(--glass-border);
 }
+
+/* ---------- 目录紧凑卡（官方场景库/我的场景；精选大卡之外的第二层） ----------
+   内容压缩为 分类+emoji 标签 / 标题 / 2 行摘要（goal 优先，line-clamp 截断）/
+   难度小标签；开场白预览挪到卡片 title 提示，不在卡面上占行。 */
+.reader-root .scenario-compact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.reader-root .scenario-card.compact {
+  padding: 14px 16px;
+  border-radius: 16px;
+  gap: 8px;
+}
+.reader-root .scenario-card.compact .sc-title {
+  font-size: 15.5px;
+  margin: 2px 0;
+}
+.reader-root .scenario-card.compact .sc-desc {
+  font-size: 12.5px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.reader-root .sc-compact-meta {
+  display: flex;
+  gap: 6px;
+}
+/* 官方库分类筛选 chips：复用 lens-mode-switch 视觉（与「对话难度」一致），
+   仅补与下方网格的间距 */
+.reader-root .scenario-filter-switch {
+  margin-bottom: 12px;
+}
+/* 「展开全部 N 个 / 收起」 */
+.reader-root .sc-expand-btn {
+  display: block;
+  margin: 14px auto 0;
+  border: 1px solid var(--glass-border-strong);
+  background: var(--glass-elevated);
+  color: var(--ink-2);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 18px;
+  border-radius: 99px;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+.reader-root .sc-expand-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* 场景中心可聚焦控件（筛选 chips / 展开按钮 / 场景卡本体）的键盘可见焦点 */
+.reader-root .lens-mode-btn:focus-visible,
+.reader-root .sc-expand-btn:focus-visible,
+.reader-root .scenario-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .reader-root .recent-session-row {
   display: flex;
   align-items: center;
@@ -7361,81 +7470,28 @@ button.notes-word:hover { color: var(--accent); }
 .reader-root .sonic-studio-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 410px;
+  /* 左列 minmax(0,1fr)：普通 1fr 的自动最小宽度 = 内容宽（nowrap 胶囊行的宽），
+     窗口逼近 960 下限时网格会横向撑破 .reader-root（overflow-x:auto → 出横滚动条
+     压住底栏）；minmax(0,1fr) 允许列收缩、由对话流自己滚动 */
+  grid-template-columns: minmax(0, 1fr) 410px;
   gap: 24px;
   min-height: 0;
   width: 100%;
+  /* 外边距对齐入口页（.scenario-hub-scroll 的 16px）：声波卡/对话流/控制条
+     原先全部顶着窗口边框，这是「对话贴左」的根源 */
+  padding: 0 16px 14px;
 }
 .reader-root .sonic-dialogue-well {
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
-.reader-root .harmonic-stage-card {
-  position: relative;
-  height: 122px;
-  border-radius: 20px;
-  background: var(--glass-surface);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--glass-border-strong);
-  box-shadow: var(--shadow-pill), inset 0 1px 0 var(--glass-highlight);
-  overflow: hidden;
-  margin-bottom: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 22px;
-  flex-shrink: 0;
-}
-.reader-root #harmonicCanvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  opacity: 0.72;
-}
-.reader-root .harmonic-overlay-left, .reader-root .harmonic-overlay-right {
-  position: relative;
-  z-index: 2;
-}
-.reader-root .target-chip-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 8px;
-}
-.reader-root .lex-target-chip {
-  padding: 4px 11px;
-  border-radius: 99px;
-  background: var(--glass-elevated);
-  border: 1px solid var(--glass-border-strong);
-  font-size: 12px;
-  color: var(--ink-2);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  transition: all 180ms;
-}
-.reader-root .lex-target-chip.done {
-  background: var(--sonic-teal-soft);
-  border-color: var(--sonic-teal);
-  color: var(--sonic-teal);
-  font-weight: 600;
-}
-.reader-root .sonic-play-orb.rec {
-  animation: speak-pulse 1.2s ease-in-out infinite;
-}
-
 /* ---------- 对话流（.sonic-turns-scroll 同时挂 .speak-log：弹层 portal
    锚点与滚动抑制沿用旧类，视觉以本段的 padding/gap 为准——本段在后覆盖） ---------- */
 .reader-root .sonic-turns-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 6px 8px 20px 2px;
+  padding: 6px 22px 20px 22px; /* 左右与 .speak-scene / .speak-targets 的内边距同一条竖线，AI 原文不再贴窗口边 */
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -7471,6 +7527,17 @@ button.notes-word:hover { color: var(--accent); }
   font-size: 13.5px;
   color: var(--ink-3);
   margin-top: 5px;
+}
+
+/* ---------- 听力模式（先听后看）：最新一句 AI 原文遮罩 ----------
+   只遮最新 assistant 轮（历史轮答完即揭、永远可回看）；blur 而非折叠，
+   保住占位高度不引起滚动跳动；点「看原文」或自己答完一句自动揭开。 */
+.reader-root .listen-veil {
+  filter: blur(9px);
+  opacity: 0.85;
+  user-select: none;
+  pointer-events: none;
+  transition: filter 240ms ease, opacity 240ms ease;
 }
 
 /* ---------- 表达改进 Diff ---------- */
@@ -7535,226 +7602,446 @@ button.notes-word:hover { color: var(--accent); }
 }
 
 /* ---------- 工作室内的控制条（沿用旧 .speak-controls 结构，收窄留白） ---------- */
-.reader-root .speak-controls.in-studio {
-  border-top: none;
-  border-radius: 16px;
-  background: var(--glass-surface);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  border: 1px solid var(--glass-border-strong);
-  padding: 10px 14px 12px;
-  margin-top: 12px;
-  flex: none;
-}
-.reader-root .speak-phase-hint {
+/* ---------- 口语陪练页重构（场景条 / 目标词 / 对话 / 输入区 / 发音面板） ----------
+   原型：prototypes/speaking-practice-redesign.html。只用阅读室令牌，四个主题自动适配。 */
+.reader-root .speak-stage {
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--glass-surface);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: 20px;
+  box-shadow: var(--shadow-pill), inset 0 1px 0 var(--glass-highlight);
+  overflow: hidden;
+}
+.reader-root .speak-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* 场景条：在练什么、进度如何，一行讲清 */
+.reader-root .speak-scene {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--glass-border);
+}
+.reader-root .speak-scene-back,
+.reader-root .speak-listen-toggle {
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: background 150ms, color 150ms;
+}
+.reader-root .speak-scene-back { margin-left: -8px; }
+.reader-root .speak-scene-back:hover,
+.reader-root .speak-listen-toggle:hover { background: var(--glass-border); color: var(--ink-1); }
+.reader-root .speak-scene-title { font-weight: 600; font-size: 15px; color: var(--ink-1); }
+.reader-root .speak-scene-level {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: 99px;
+  padding: 1px 9px;
+}
+.reader-root .speak-scene-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.reader-root .speak-bar {
+  display: inline-block;
+  width: 110px;
+  height: 6px;
+  border-radius: 99px;
+  background: var(--canvas-bg);
+  border: 1px solid var(--glass-border);
+  overflow: hidden;
+}
+.reader-root .speak-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--sonic-teal);
+  transition: width 400ms var(--ease-spring);
+}
+.reader-root .speak-bar > i.ok { background: var(--warn); }
+.reader-root .speak-bar > i.bad { background: var(--err); }
+.reader-root .speak-listen-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.reader-root .speak-switch {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  border-radius: 99px;
+  background: var(--ink-4);
+  transition: background 150ms;
+}
+.reader-root .speak-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 150ms var(--ease-spring);
+}
+.reader-root .speak-listen-toggle.on { color: var(--ink-1); font-weight: 600; }
+.reader-root .speak-listen-toggle.on .speak-switch { background: var(--sonic-teal); }
+.reader-root .speak-listen-toggle.on .speak-switch::after { transform: translateX(12px); }
+/* 目标词：状态用颜色 + 勾号双编码；「下一个该试的词」用描边提示 */
+.reader-root .speak-targets {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--canvas-bg);
+  border-bottom: 1px solid var(--glass-border);
+}
+.reader-root .speak-targets-label { font-size: 12px; color: var(--ink-3); margin-right: 2px; }
+.reader-root .speak-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px 3px 6px;
+  border-radius: 99px;
+  border: 1px solid var(--glass-border-strong);
+  background: var(--glass-elevated);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 150ms, border-color 150ms;
+}
+.reader-root .speak-chip strong { font-family: var(--font-serif); font-size: 14px; color: var(--ink-1); }
+.reader-root .speak-chip-zh { color: var(--ink-3); font-size: 12px; }
+.reader-root .speak-chip-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ink-4);
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  line-height: 1;
+}
+.reader-root .speak-chip.done { background: var(--sonic-teal-soft); border-color: transparent; }
+.reader-root .speak-chip.done strong { color: var(--sonic-teal); }
+.reader-root .speak-chip.done .speak-chip-dot { background: var(--sonic-teal); border-color: var(--sonic-teal); color: #fff; }
+.reader-root .speak-chip.next { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.reader-root .speak-chip:focus-visible,
+.reader-root .speak-btn:focus-visible,
+.reader-root .speak-mic:focus-visible,
+.reader-root .speak-finish:focus-visible,
+.reader-root .speak-scene-back:focus-visible,
+.reader-root .speak-listen-toggle:focus-visible,
+.reader-root .speak-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 对话流：AI 在左（无气泡），你在右（气泡）；句内标色见 .speak-seg */
+.reader-root .sonic-turns-scroll .dialogue-turn.mine {
+  align-self: flex-end;
+  width: auto;
+  max-width: min(58ch, 100%);
+  padding: 12px 18px;
+  border-radius: 18px 18px 4px 18px;
+  /* 中性卡片而非 accent-soft：accent 是朱红，铺成底色像告警，还会吃掉词下的橙色波浪线 */
+  background: var(--glass-elevated);
+  border: 1px solid var(--glass-border-strong);
+  box-shadow: var(--shadow-pill);
+}
+.reader-root .speak-user-text { font-size: 18px; }
+.reader-root .speak-turn-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.reader-root .speak-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 10px;
+  border-radius: 99px;
   font-size: 12px;
-  color: var(--ink-3);
-  text-align: left;
+  font-weight: 600;
 }
-.reader-root .speak-controls.in-studio .speak-hint {
+.reader-root .speak-pill.hit,
+.reader-root .speak-pill.good { background: var(--sonic-teal-soft); color: var(--sonic-teal); }
+.reader-root .speak-pill.ok { background: var(--warn-soft); color: var(--warn); }
+.reader-root .speak-pill.bad { background: var(--err-soft); color: var(--err); }
+
+.reader-root .speak-seg.hit { color: var(--sonic-teal); font-weight: 600; }
+.reader-root .speak-seg.wd-ok { text-decoration: underline wavy var(--warn) 1.5px; text-underline-offset: 4px; }
+.reader-root .speak-seg.wd-bad { text-decoration: underline wavy var(--err) 1.5px; text-underline-offset: 4px; }
+.reader-root .speak-seg.wd-missed { background: var(--err-soft); border-bottom: 2px solid var(--err); }
+.reader-root .speak-seg.sel { background: var(--warn-soft); border-radius: 3px; }
+.reader-root button.speak-seg.pickable {
+  border: none;
+  font: inherit;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+  background-color: transparent;
+}
+.reader-root button.speak-seg.pickable.hit { color: var(--sonic-teal); }
+.reader-root button.speak-seg.pickable:hover { background-color: var(--warn-soft); }
+.reader-root button.speak-seg.pickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+/* 录音中：对话流尾部的「正在听」行 */
+.reader-root .speak-live { align-self: flex-end; text-align: right; max-width: 58ch; }
+.reader-root .speak-live-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
   color: var(--ink-3);
 }
+.reader-root .speak-live-sub { margin-top: 4px; font-size: 12px; color: var(--ink-3); }
+.reader-root .speak-wave { display: inline-flex; align-items: center; gap: 3px; height: 18px; }
+.reader-root .speak-wave i {
+  width: 3px;
+  height: calc(4px + 14px * var(--lv, 0));
+  border-radius: 2px;
+  background: var(--accent);
+  transition: height 90ms linear;
+}
+.reader-root .speak-wave i:nth-child(2n) { height: calc(4px + 10px * var(--lv, 0)); }
+.reader-root .speak-wave i:nth-child(3) { height: calc(5px + 16px * var(--lv, 0)); }
+/* 失败提示：只在真的失败后出现，并给出下一步 */
+.reader-root .speak-notice {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 20px 8px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.reader-root .speak-notice > svg { flex: none; }
+.reader-root .speak-notice-msg { flex: 1; min-width: 0; }
+.reader-root .speak-notice-actions { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.reader-root .speak-notice-actions button {
+  border: 1px solid var(--glass-border-strong);
+  background: var(--glass-elevated);
+  color: var(--ink-1);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.reader-root .speak-notice-actions button.primary { background: var(--ink-1); color: var(--canvas-bg); border-color: transparent; }
+.reader-root .speak-notice-actions button.dismiss { border: none; background: none; color: inherit; padding: 3px; display: inline-flex; }
+
+/* 输入区：一个主按钮（麦克风）+ 两个次要动作 + 一个收尾动作 */
+.reader-root .speak-composer {
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px 16px;
+  border-top: 1px solid var(--glass-border);
+}
+.reader-root .speak-composer-side { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.reader-root .speak-composer-side.end { justify-content: flex-end; }
+.reader-root .speak-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border-strong);
+  background: var(--glass-elevated);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 150ms, color 150ms;
+}
+.reader-root .speak-btn:hover:not(:disabled) { border-color: var(--ink-3); color: var(--ink-1); }
+.reader-root .speak-btn:disabled { opacity: 0.5; cursor: default; }
+.reader-root .speak-finish {
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.reader-root .speak-finish:hover:not(:disabled) { background: var(--glass-border); color: var(--ink-1); }
+.reader-root .speak-finish:disabled { opacity: 0.5; cursor: default; }
+
+.reader-root .speak-mic-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.reader-root .speak-mic-tip { font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+.reader-root .speak-mic {
+  --lv: 0;
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border: none;
+  border-radius: 50%;
+  /* 待机用墨色（沿用原 .sonic-play-orb 的语言），录音才换 accent：阅读室 accent 本身是朱红，
+     待机也用红的话和「正在录音」只差一个图标，状态不够醒目 */
+  background: var(--ink-1);
+  color: var(--canvas-bg);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: var(--shadow-pill);
+  /* 只过渡缩放：录音态的底色要立刻切换，状态指示不该有 150ms 的滞后 */
+  transition: transform 150ms;
+}
+.reader-root .speak-mic:hover:not(:disabled) { background: var(--ink-2); transform: scale(1.04); }
+.reader-root .speak-mic:disabled { opacity: 0.55; cursor: default; transform: none; }
+/* 录音中：换成 accent，光圈随真实电平扩张，说话越响圈越大 */
+.reader-root .speak-mic.rec {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 0 calc(4px + 14px * var(--lv)) var(--accent-soft), 0 6px 18px var(--accent-glow);
+  transition: box-shadow 90ms linear;
+}
+.reader-root .speak-mic.rec:hover:not(:disabled) { background: var(--accent-hover); }
+@media (prefers-reduced-motion: reduce) {
+  .reader-root .speak-mic,
+  .reader-root .speak-wave i,
+  .reader-root .speak-bar > i { transition: none; }
+}
+/* 右栏：发音面板 */
+.reader-root .speak-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--glass-surface);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: 22px;
+  box-shadow: var(--shadow-spatial), inset 0 1px 0 var(--glass-highlight);
+  overflow: hidden;
+}
+.reader-root .speak-panel-head {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--glass-border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-1);
+}
+.reader-root .speak-panel-head small { font-weight: 400; font-size: 11.5px; color: var(--ink-3); }
+.reader-root .speak-panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 18px; }
+.reader-root .speak-panel-foot {
+  flex: none;
+  padding: 10px 18px;
+  border-top: 1px solid var(--glass-border);
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+.reader-root .speak-link { border: none; background: none; padding: 0; font: inherit; color: inherit; text-decoration: underline; cursor: pointer; }
+.reader-root .speak-link:hover { color: var(--ink-1); }
+.reader-root .speak-panel-note { margin: 10px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--ink-3); }
+
+.reader-root .speak-panel-preview { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.reader-root .speak-panel-preview li { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink-2); }
+.reader-root .speak-panel-preview .ico {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--canvas-bg);
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+}
+
+.reader-root .speak-total { display: flex; align-items: center; gap: 16px; }
+.reader-root .speak-ring {
+  --p: 0;
+  flex: none;
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: conic-gradient(var(--sonic-teal) calc(var(--p) * 1%), var(--canvas-bg) 0);
+}
+.reader-root .speak-ring.ok { background: conic-gradient(var(--warn) calc(var(--p) * 1%), var(--canvas-bg) 0); }
+.reader-root .speak-ring.bad { background: conic-gradient(var(--err) calc(var(--p) * 1%), var(--canvas-bg) 0); }
+.reader-root .speak-ring > span {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: var(--glass-elevated);
+  display: grid;
+  place-content: center;
+  text-align: center;
+  line-height: 1.1;
+}
+.reader-root .speak-ring b { font-size: 18px; color: var(--ink-1); }
+.reader-root .speak-ring small { font-size: 10px; color: var(--ink-3); }
+.reader-root .speak-subs { flex: 1; display: grid; gap: 7px; }
+.reader-root .speak-sub { display: grid; grid-template-columns: 30px 1fr 26px; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); }
+.reader-root .speak-sub .speak-bar { width: auto; height: 5px; }
+
+.reader-root .speak-word { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--glass-border); }
+.reader-root .speak-word-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.reader-root .speak-word-head b { font-family: var(--font-serif); font-size: 20px; color: var(--ink-1); }
+.reader-root .speak-word-score { margin-left: auto; font-weight: 600; font-size: 13px; }
+.reader-root .speak-word-score.good { color: var(--sonic-teal); }
+.reader-root .speak-word-score.ok { color: var(--warn); }
+.reader-root .speak-word-score.bad { color: var(--err); }
+.reader-root .speak-word-tip { margin: 0 0 12px; font-size: 13px; line-height: 1.6; color: var(--ink-2); }
+.reader-root .speak-word-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.reader-root .speak-curve { margin-top: 16px; border-top: 1px solid var(--glass-border); padding-top: 12px; }
+.reader-root .speak-curve > summary { cursor: pointer; font-size: 12.5px; color: var(--ink-3); margin-bottom: 8px; }
+.reader-root .speak-curve > summary:hover { color: var(--ink-1); }
 
 /* 窄窗回落：已并入文件末尾的「响应式体系」1199px 档，此处删除避免两套断点并存。 */
 /* v0.8 口语场景中心段结束 */
 
 /* ==========================================================================
-   v0.8 笔记与复习段（Phase 4）—— 令牌与结构逐条对照原型
-   prototypes/windows-workbench-v08-2026-10-15.html:973-1120。
+   v0.8 笔记与复习段（Phase 4）
+   2026-10-26 改版：旧两栏工作台（vault-top-bar / vault-studio-grid 两列 /
+   tape 手账版式 / archive select / tape-pass-btn / challenge 旧皮肤 /
+   笔记回看弹层）已由文件末尾「笔记与复习改版段（2026-10-26）」整段替换。
+   本段仅保留仍被复用的骨架：.memory-tape 胶带、.stage-pill、
+   .vault-outcome-strip、.vault-done-panel、.vault-markdown-pre、
+   speak-challenge-*（开口卡）、.vault-notes-grid（NotesView 内嵌网格）、
+   .heatmap-grid / .heat-cell（看板热力）与 vault-weak-* 列表。
    旧 .review-layout/.review-card 系列保留（闯关卡复用）。
    ========================================================================== */
-
-/* ---------- 三合一页容器（左栏 VocabListPanel 由 ReaderApp 挂载，本页占余宽） ---------- */
-.reader-root .vault-page {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-}
-.reader-root .vault-top-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--glass-border-strong);
-}
-.reader-root .vault-top-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.reader-root .vault-filter-label {
-  font-size: 12px;
-  color: var(--ink-3);
-}
-.reader-root .vault-studio-grid {
-  flex: 1;
-  display: grid;
-  grid-template-columns: 1fr 370px;
-  gap: 24px;
-  min-height: 0;
-  width: 100%;
-}
-.reader-root .vault-main-scroll {
-  overflow-y: auto;
-  padding: 4px 10px 40px 2px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-/* ---------- 记忆胶带手账 ---------- */
-.reader-root .notebook-sheet-card {
-  padding: 24px 28px;
-  border-radius: 22px;
-  background: var(--glass-surface);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--glass-border-strong);
-  box-shadow: var(--shadow-spatial), inset 0 1px 0 var(--glass-highlight);
-}
-.reader-root .tape-sheet-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 14px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--glass-border-strong);
-}
-.reader-root .tape-sheet-kicker {
-  font-size: 12px;
-  color: var(--accent);
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-.reader-root .tape-sheet-title {
-  font-family: var(--font-serif);
-  font-size: 24px;
-  margin: 0;
-  color: var(--ink-1);
-}
-.reader-root .tape-sheet-sub {
-  font-size: 12.5px;
-  color: var(--ink-3);
-  margin: 4px 0 0;
-}
-.reader-root .tape-sheet-hint {
-  font-size: 12px;
-  color: var(--ink-3);
-}
-.reader-root .tape-entry-row {
-  padding: 16px 0;
-  border-bottom: 1px solid var(--glass-border);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.reader-root .tape-entry-row:last-child {
-  border-bottom: none;
-  padding-bottom: 0;
-}
-.reader-root .tape-filter-row {
-  flex-direction: row;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-.reader-root .vault-archive-label {
-  font-size: 12px;
-  color: var(--ink-3);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.reader-root .vault-archive-select {
-  font-family: inherit;
-  font-size: 12px;
-  color: var(--ink-2);
-  background: var(--canvas-bg);
-  border: 1px solid var(--glass-border);
-  border-radius: 8px;
-  padding: 3px 8px;
-  outline: none;
-}
-.reader-root .tape-global-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.reader-root .tape-row-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.reader-root .tape-category {
-  font-size: 11.5px;
-  color: var(--ink-3);
-  font-weight: 600;
-}
-.reader-root .tape-sentence {
-  font-family: var(--font-serif);
-  font-size: 19.5px;
-  line-height: 1.7;
-  color: var(--ink-1);
-  overflow-wrap: break-word;
-}
-.reader-root .tape-speak-original {
-  color: var(--ink-3);
-  font-size: 15px;
-}
-.reader-root .tape-speak-arrow {
-  color: var(--ink-3);
-  font-size: 15px;
-  margin-right: 2px;
-}
-.reader-root .tape-zh {
-  font-size: 13.5px;
-  color: var(--ink-2);
-}
-.reader-root .tape-row-actions {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 4px;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.reader-root .tape-tip-row {
-  font-size: 12px;
-  color: var(--ink-3);
-}
-.reader-root .tape-action-btns {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-.reader-root .tape-pass-btn {
-  border: 1px solid var(--glass-border-strong);
-  gap: 5px;
-  display: inline-flex;
-  align-items: center;
-}
-.reader-root .tape-pass-btn svg {
-  color: var(--sonic-teal);
-}
-.reader-root .tape-empty {
-  padding: 26px 8px;
-  font-size: 13px;
-  color: var(--ink-3);
-  line-height: 1.7;
-  text-align: center;
-}
 
 /* 核心微交互：琥珀色记忆胶带（点击前遮盖英文，点击后丝滑掀开显影）（原型:1024-1063） */
 .reader-root .memory-tape {
@@ -7818,29 +8105,7 @@ button.notes-word:hover { color: var(--accent); }
 }
 .reader-root .stage-pill.s3 { background: var(--sonic-teal-soft); color: var(--sonic-teal); }
 
-/* ---------- 3 分钟快刷闯关 ---------- */
-.reader-root .challenge-stage-box {
-  padding: 28px 30px;
-  border-radius: 22px;
-  background: var(--glass-elevated);
-  border: 1px solid var(--glass-border-strong);
-  box-shadow: var(--shadow-spatial);
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-.reader-root .challenge-stage-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.reader-root .challenge-stage-head .tabular {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--ink-3);
-}
+/* ---------- 专注复习复用块（战报条 / 完成面板 / 开口卡皮肤） ---------- */
 .reader-root .vault-outcome-strip {
   padding: 10px 14px;
   border-radius: 12px;
@@ -7848,21 +8113,6 @@ button.notes-word:hover { color: var(--accent); }
   color: var(--sonic-teal);
   font-size: 12.5px;
   font-weight: 500;
-}
-/* 原型 1090-1103 的闯关大输入框（词面 token 对齐保留；完形卡沿用 .cloze-blank-input） */
-.reader-root .cloze-input-field {
-  font-family: var(--font-serif);
-  font-size: 21px;
-  font-weight: 600;
-  color: var(--accent);
-  background: var(--canvas-bg);
-  border: none;
-  border-bottom: 2px solid var(--accent);
-  border-radius: 6px 6px 0 0;
-  padding: 2px 10px;
-  width: 190px;
-  text-align: center;
-  outline: none;
 }
 .reader-root .vault-done-panel {
   padding: 10px 4px 4px;
@@ -7954,46 +8204,10 @@ button.notes-word:hover { color: var(--accent); }
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
-.reader-root .tape-copy-btn {
-  gap: 5px;
-  display: inline-flex;
-  align-items: center;
-}
-
-/* 笔记库回看弹层（NotesView 渲染内核不动，容器收进 vault 网格） */
-.reader-root .vault-notes-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 60;
-  background: rgba(12, 14, 13, 0.32);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
-  padding: 18px;
-}
-.reader-root .vault-notes-embed {
-  position: relative;
-  width: 100%;
-  max-width: 1180px;
-  background: var(--canvas-bg);
-  border: 1px solid var(--glass-border-strong);
-  border-radius: 22px;
-  box-shadow: var(--shadow-spatial);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-.reader-root .vault-notes-close {
-  position: absolute;
-  top: 12px;
-  right: 14px;
-  z-index: 5;
-  border: 1px solid var(--glass-border-strong);
-}
+/* 笔记库内嵌网格（2026-10-26 起为「全部笔记」档的 stage 内嵌容器；渲染内核不动） */
 .reader-root .vault-notes-grid {
-  flex: 1;
+  display: grid;
+  width: 100%;
   min-height: 0;
   grid-template-columns: 232px 1fr;
   gap: 0;
@@ -8002,58 +8216,7 @@ button.notes-word:hover { color: var(--accent); }
   min-width: 0;
 }
 
-/* ---------- 右侧「我的内化看板」 ---------- */
-.reader-root .spatial-lens-card.vault-lens-card {
-  width: 100%;
-  margin: 0;
-  flex: none;
-}
-.reader-root .vault-lens-title {
-  font-size: 12.5px;
-  font-weight: 600;
-}
-.reader-root .vault-streak {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--sonic-teal);
-  font-weight: 600;
-}
-.reader-root .vault-progress-num {
-  color: var(--accent);
-  font-weight: 700;
-}
-.reader-root .vault-progress-track {
-  height: 6px;
-  background: var(--glass-border-strong);
-  border-radius: 99px;
-  overflow: hidden;
-  margin: 8px 0;
-}
-.reader-root .vault-progress-track i {
-  display: block;
-  height: 100%;
-  background: var(--sonic-teal);
-  transition: width 250ms;
-}
-.reader-root .vault-progress-note {
-  font-size: 12px;
-  color: var(--ink-2);
-}
-.reader-root .vault-stage-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-size: 12.5px;
-}
-.reader-root .vault-stage-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  color: var(--ink-2);
-}
-
-/* 28 天热力图矩阵（原型:1105-1120） */
+/* 28 天热力图矩阵（原型:1105-1120；2026-10-26 看板改版沿用） *//* 28 天热力图矩阵（原型:1105-1120） */
 .reader-root .heatmap-grid {
   display: grid;
   grid-template-columns: repeat(14, 1fr);
@@ -8085,15 +8248,6 @@ button.notes-word:hover { color: var(--accent); }
   color: var(--ink-3);
   line-height: 1.6;
 }
-.reader-root .vault-weak-btn {
-  width: 100%;
-  justify-content: center;
-}
-.reader-root .vault-weak-speak {
-  width: 100%;
-  justify-content: center;
-  margin-top: 6px;
-}
 
 /* 窄窗回落：已并入文件末尾的「响应式体系」1199/1019 两档，此处删除避免两套断点并存。 */
 /* v0.8 笔记与复习段结束 */
@@ -8119,36 +8273,48 @@ button.notes-word:hover { color: var(--accent); }
 
 /* ---------- ≥1440：宽窗增益 ---------- */
 @media (min-width: 1440px) {
-  .reader-root .bookgrid { grid-template-columns: repeat(3, 1fr); }
-  .reader-root .scenario-daily-grid { grid-template-columns: repeat(5, 1fr); }
-  .reader-root .sonic-studio-grid { grid-template-columns: 1fr 460px; }
-  .reader-root .vault-studio-grid { grid-template-columns: 1fr 420px; }
+  /* 【2026-10-26 外壳重构】.reader-root .bookgrid 三列规则已删：书架页新 DOM
+     （最近阅读主卡 + 紧凑列表）不再使用书卡网格，基表见 5725 段由书架页改写。 */
+  /* 【2026-10-27 场景中心精简】.scenario-daily-grid 的 5 列规则已删：容器
+     max-width 980px 下 5 列每卡仅 ~134px；且该网格现只剩第一组 4 张精选大卡
+     （官方库/我的场景改用 .scenario-compact-grid 自适应列），统一回到基表 4 列。 */
+  .reader-root .sonic-studio-grid { grid-template-columns: minmax(0, 1fr) 460px; }
+  .reader-root .vault-page { grid-template-columns: 210px minmax(0, 1fr) 320px; }
   .reader-root .reader-dict { width: 420px; }
 }
 
 /* ---------- ≤1199：窄窗降级 ---------- */
 @media (max-width: 1199px) {
-  /* 左栏 232 → 200。注意 .reader-shelf 同时服务书架页与 vault 的
-     VocabListPanel（VocabListPanel.tsx:81 复用同一 class），必须一起收。 */
+  /* 左栏 232 → 200。注意 .reader-shelf 同时服务书架页与笔记库目录（NotesView
+     的 noteslist aside 复用同一 class），必须一起收。 */
   .reader-root .reader-shelf { width: 200px; padding-left: 16px; }
 
   /* 词典/透镜卡 380/386 → 330。两个来源都会作用到 DictColumn：
      .reader-dict（裸类）与 .spatial-lens-card（.reader-root 前缀），
      只改一个会漏。 */
   .reader-root .reader-dict { width: 330px; }
-  .reader-root .spatial-lens-card.vault-lens-card { width: 330px; }
 
-  /* vault 工作台右栏 370 → 320，省下的 50px 回给主列 */
-  .reader-root .vault-studio-grid { grid-template-columns: 1fr 320px; gap: 16px; }
+  /* vault 三栏两端收窄（210/280 → 190/260），省下的宽度回给主列 */
+  .reader-root .vault-page { grid-template-columns: 190px minmax(0, 1fr) 260px; gap: 12px; }
 
   /* vault 笔记库左栏跟随 .reader-shelf 的 200（原写死 232） */
   .reader-root .vault-notes-grid { grid-template-columns: 200px 1fr; }
 
   /* 口语工作室右栏 410 → 340 */
-  .reader-root .sonic-studio-grid { grid-template-columns: 1fr 340px; gap: 16px; }
+  .reader-root .sonic-studio-grid { grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; }
 
-  /* 场景中心：每日四卡 4→2 列，主打卡双栏→ 单栏 */
+  /* 口语页场景条/目标词收紧：最小窗口 960×620 下，不收紧的话它们占掉近一半高度，对话只剩几行。
+     难度标签藏起（场景名已够用）、进度条缩短让听力开关留在同一行；目标词只给「下一个该试的」留中文义。 */
+  .reader-root .speak-scene { padding: 10px 16px; }
+  .reader-root .speak-scene-level { display: none; }
+  .reader-root .speak-bar { width: 72px; }
+  .reader-root .speak-targets { padding: 8px 16px; gap: 6px; }
+  .reader-root .speak-chip:not(.next) .speak-chip-zh { display: none; }
+
+  /* 场景中心：每日四卡/目录紧凑卡 4→2 列（紧凑网格基表是 auto-fill 自适应，
+     窄窗必须显式压到 2 列，否则仍按 220px 最小宽排出 4 列），主打卡双栏→ 单栏 */
   .reader-root .scenario-daily-grid { grid-template-columns: repeat(2, 1fr); }
+  .reader-root .scenario-compact-grid { grid-template-columns: repeat(2, 1fr); }
   .reader-root .scenario-featured-grid { grid-template-columns: 1fr; }
 
   /* 双语对照双栏 → 单栏（否则每栏仅 ~240px，中英对照失去意义） */
@@ -8167,15 +8333,13 @@ button.notes-word:hover { color: var(--accent); }
 /* ---------- ≤1019：极窄兜底（防左栏挤掉主列） ---------- */
 @media (max-width: 1019px) {
   .reader-root .reader-shelf { width: 176px; }
-  .reader-root .vault-studio-grid,
-  .reader-root .sonic-studio-grid { grid-template-columns: 1fr; }
+  /* 口语工作室不在此列：它没有左栏要保护，且阅读室窗口最小 960×620。上下堆叠会让
+     场景条 + 输入区吃掉大半高度，对话流只剩一行；保持双栏（右栏沿用 ≤1199 的 340px）。 */
+  .reader-root .vault-page { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* ---------- 书卡网格：改自适应，无需断点 ---------- */
-/* 任意宽度都成立，且省掉一个断点分支。 */
-@media (min-width: 1020px) {
-  .reader-root .bookgrid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
-}
+/* 【2026-10-26 外壳重构】原「书卡网格自适应」@media(min-width:1020) 整段已删：
+   书架页新 DOM 不再使用 .bookgrid 书卡网格（减法仅此两条，其余响应式规则全部保留）。 */
 
 /* ---------- 竖向：矮窗（minHeight 620）时压缩 chrome ---------- */
 @media (max-height: 700px) {
@@ -9034,3 +9198,2430 @@ button.notes-word:hover { color: var(--accent); }
   font-size: 11.5px;
   color: var(--text-4);
 }
+
+/* ==========================================================================
+   ===== 外壳重构 2026-10-26 =====
+   原型：prototypes/reader-room-redesign-2026-10-26.html（灰绿护眼 · 三段胶囊顶栏）。
+   作用域铁律（blueprint tokenPlan / shellScoping）：
+   1) .reader-root 不新增任何令牌定义（styles.css:2823-2834 红线，styles.css 零改动）。
+   2) 非颜色令牌挂 .reader-root[data-skin='folio']——ReaderApp 根 div 仅在
+      shelf/reading 视图挂 data-skin='folio'；speak/vault 不挂，零影响。
+   3) 颜色令牌只挂 .reader-root[data-skin='folio'][data-theme='light']（0-3-0）：
+      品牌绿仅 folio+light 生效；sepia/dark/oled 不命中本块，
+      .reader-root[data-theme=dark/oled] 的 --accent:#E26D52 等主题原值不被覆盖。
+   4) .shell-* 布局规则全局生效（.reader-root .shell-*，无 [data-skin] 前缀）：
+      四视图四主题均得新骨架；颜色只引用主题令牌，folio 专属视觉才进 [data-skin]。
+   5) 共享基元新版（.btn/.pill/.seg/.chip/.tag/.switch）只在
+      .reader-root[data-skin='folio'] 作用域；speak/vault 及其内 SettingsDrawer
+      维持 styles.css 全局基元（175-236 / 594-624）。EOF 禁裸类名覆盖。
+   6) 原型 demoOnly 一律不落地：.demo 条 / .pin 标注 / .legend / fit() 整体缩放 /
+      深链 hash / .titlebar / 硬编码演示数据；--bad/--bad-soft 不落地（失败态沿用
+      --warn 系）。本段所有取色只引用令牌名，不写死主题色值。
+   ========================================================================== */
+
+/* ---------- 令牌矩阵 · 非颜色系（folio 皮肤，四主题共用） ---------- */
+.reader-root[data-skin='folio'] {
+  /* 圆角四级（原型 L16） */
+  --r-sm: 8px;     /* veil / 行内按钮 */
+  --r-md: 12px;    /* 译文浮层 / 设置浮层 / 主干框 */
+  --r-lg: 18px;    /* 主栏 / 右栏 / 卡片 / 列表 */
+  --r-pill: 999px; /* 按钮 / 开关 / 标签 / 分段 */
+  /* 英文衬线（标题 / 正文 / 关键词 / 树节点英文）；回落系统衬线即可 */
+  --font-en: "Source Serif 4", Georgia, "Times New Roman", serif;
+  /* 右栏实际占位契约（360px 右栏 + 28px 边距）：播放条 dock 居中
+     left:calc((100% - var(--reading-side-w, 0px)) / 2) 与专注 / 窄窗藏右栏
+     共用该值，必须与右栏实际占位一致，否则 dock 左偏、居中验收不成立。
+     阅读页规则负责同步：≤1199 置 328px（300px 栏 + 28px 边距）；
+     ≤1019 与专注模式经 .reader-root[data-side-hidden] 置 0px（默认 388px）。 */
+  --reading-side-w: 388px;
+  /* 新增颜色令牌的非 light 回落（var() 引主题令牌派生，不写死色值；真值在下方
+     light 块）。--accent-line=绿描边（胶囊边 / 短语虚线默认色）；
+     --mod=修饰语角色标签（状语 / 方式状语 / 后置定语，四主题均有 --clause-indigo）。 */
+  --accent-line: var(--border-strong);
+  --mod: var(--clause-indigo);
+}
+
+/* ---------- 令牌矩阵 · 颜色系（仅 folio + light，0-3-0） ---------- */
+/* 品牌绿（原型 L9/L13）：主按钮 / CTA / 开关开态 / 进度条 / 当前句底 / 角色标签 /
+   进度百分比。只覆盖本作用域；sepia(#1B6B58)/dark/oled(#E26D52) 各主题原值生效。 */
+.reader-root[data-skin='folio'][data-theme='light'] {
+  --accent: #1f6b57;
+  --accent-hover: #185646;
+  /* 按压态回落悬停绿（不新增色值；否则全局靛蓝 --accent-active 会在
+     .btn-primary:active 时闪一拍旧品牌色） */
+  --accent-active: var(--accent-hover);
+  --accent-soft: #e3f0ea;
+  --accent-line: #b9d8cc;
+  --mod: #4b5a9a;
+  --warn: #a1620f;
+  --warn-soft: #fbf1e1;
+}
+
+/* ---------- 外壳 · 顶栏三段布局（全局：四视图四主题同得骨架） ---------- */
+/* ReaderTopBar 重排为 .shell-brand / .shell-tabs / .shell-tools 三段；根类
+   .floating-top-stage 保留（≤700px 矮窗规则 8461 段续命，故本规则不动 padding）。
+   布局改 grid 1fr auto 1fr（原型 .topbar L44）。内件沿用既有类名即得样式：
+   .monogram-seal / .folio-drawer-trigger / .island-tab / .island-counter /
+   .pill-Ghost-btn（6210 段全局规则仍生效）；检索输入框随容器迁到 .shell-tools
+   作用域（见下）。旧容器三胶囊（.brand-folio-pill 等）由本段取代，6210 段保留兜底。 */
+.reader-root .floating-top-stage {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+.reader-root .shell-brand,
+.reader-root .shell-tabs,
+.reader-root .shell-tools {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: 999px;
+  background: var(--glass-pill);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-pill), inset 0 1px 0 var(--glass-highlight);
+}
+.reader-root .shell-brand {
+  justify-self: start;
+  gap: 10px;
+  padding: 5px 14px 5px 5px;
+  max-width: 380px;
+  font-weight: 600;
+}
+.reader-root .shell-tabs {
+  justify-self: center;
+  gap: 2px;
+  padding: 4px;
+}
+.reader-root .shell-tools {
+  justify-self: end;
+  gap: 6px;
+  padding: 4px 6px;
+}
+/* 检索输入框：原作用域 .right-controls-island 已废弃，随三段外壳迁到 .shell-tools
+   （取值 1:1 沿用 6383-6402 原规则）。 */
+.reader-root .shell-tools .island-search-input {
+  width: 150px;
+  height: 26px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-1);
+  font-size: 11.5px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 150ms, background 150ms;
+}
+.reader-root .shell-tools .island-search-input::placeholder {
+  color: var(--ink-4);
+}
+.reader-root .shell-tools .island-search-input:focus {
+  border-color: var(--glass-border-strong);
+  background: var(--glass-elevated);
+}
+
+/* ---------- 外壳 · folio 顶栏皮肤（shelf/reading；原型 L44-54 平面白胶囊） ---------- */
+.reader-root[data-skin='folio'] .shell-brand,
+.reader-root[data-skin='folio'] .shell-tabs,
+.reader-root[data-skin='folio'] .shell-tools {
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.reader-root[data-skin='folio'] .shell-brand .monogram-seal {
+  background: var(--text-1);
+  color: var(--surface);
+}
+/* 激活 tab：--text-1 深底（原型 .tab.on L52）。badge（.island-counter）本就
+   --accent-soft/--accent 随主题，folio light 下经令牌块自然转绿，无需重写。 */
+.reader-root[data-skin='folio'] .shell-tabs .island-tab.active {
+  background: var(--text-1);
+  color: var(--surface);
+  box-shadow: none;
+}
+
+/* ---------- folio 共享基元（原型 L22-33/66-72/117-119；仅 shelf/reading 视图） ----------
+   与 styles.css 全局基元同名不同值：本作用域（0-3-0+）在 folio 两视图内覆盖全局；
+   既有 kebab 变体（.btn-primary/.btn-ghost/.btn-danger/.btn-sm）与原型 dotted 写法
+   （.btn.primary/.btn.sm 等）在此等价，过渡期混用不破相。次级按钮 = 基元默认面
+   （surface + 强描边，即原型 .btn；对应全局 .btn-secondary 无需单独写）。 */
+.reader-root[data-skin='folio'] .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 600;
+  padding: 8px 18px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-1);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease,
+    box-shadow 0.15s ease, transform 0.05s ease;
+}
+.reader-root[data-skin='folio'] .btn:active {
+  transform: translateY(0.5px);
+}
+.reader-root[data-skin='folio'] .btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+.reader-root[data-skin='folio'] .btn svg {
+  flex-shrink: 0;
+}
+.reader-root[data-skin='folio'] .btn:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+/* 主按钮：品牌绿实底（原型 .btn.primary L29-30） */
+.reader-root[data-skin='folio'] .btn.primary,
+.reader-root[data-skin='folio'] .btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: none;
+}
+.reader-root[data-skin='folio'] .btn.primary:hover:not(:disabled),
+.reader-root[data-skin='folio'] .btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #fff;
+}
+/* 幽灵按钮：收平无描边（对应全局 .btn-ghost） */
+.reader-root[data-skin='folio'] .btn.ghost,
+.reader-root[data-skin='folio'] .btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-2);
+}
+.reader-root[data-skin='folio'] .btn.ghost:hover:not(:disabled),
+.reader-root[data-skin='folio'] .btn-ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+/* 危险按钮（对应全局 .btn-danger） */
+.reader-root[data-skin='folio'] .btn.danger,
+.reader-root[data-skin='folio'] .btn-danger {
+  background: transparent;
+  border-color: transparent;
+  color: var(--err);
+}
+.reader-root[data-skin='folio'] .btn.danger:hover:not(:disabled),
+.reader-root[data-skin='folio'] .btn-danger:hover:not(:disabled) {
+  background: var(--err-soft);
+  color: var(--err);
+}
+/* 小号（原型 .btn.sm L31） */
+.reader-root[data-skin='folio'] .btn.sm,
+.reader-root[data-skin='folio'] .btn-sm {
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: 500;
+}
+/* 标签（原型 .tag L32）：非交互，绿底小标签 */
+.reader-root[data-skin='folio'] .tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 0 8px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  white-space: nowrap;
+}
+/* 容器胶囊基元（原型 .pill L45）：白底细边圆胶囊，给各分区壳用 */
+.reader-root[data-skin='folio'] .pill {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+}
+/* 分段控件（原型 .seg L117-119；.on=原型口径 / .active=既有代码口径，双支持） */
+.reader-root[data-skin='folio'] .seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+}
+.reader-root[data-skin='folio'] .seg button {
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-2);
+  padding: 3px 14px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.reader-root[data-skin='folio'] .seg button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.reader-root[data-skin='folio'] .seg button.active,
+.reader-root[data-skin='folio'] .seg button.on {
+  background: var(--surface);
+  color: var(--text-1);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.1);
+}
+/* 交互 chip（原型 .chip L70-72）：工具条 chip / 筛选项；
+   基面不带底色以兼容既有 .chip-blue 等色点标签的过渡期共存 */
+.reader-root[data-skin='folio'] .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.reader-root[data-skin='folio'] .chip:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.reader-root[data-skin='folio'] .chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.reader-root[data-skin='folio'] .chip.on,
+.reader-root[data-skin='folio'] .chip.active {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+  font-weight: 600;
+}
+/* 开关（原型 .sw L66-69；role=switch + aria-checked 与 .on 类双支持） */
+.reader-root[data-skin='folio'] .switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border: none;
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+  cursor: pointer;
+  padding: 0;
+  flex: none;
+  transition: background 0.15s ease;
+}
+.reader-root[data-skin='folio'] .switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.25);
+  transition: transform 0.15s ease;
+}
+.reader-root[data-skin='folio'] .switch.on,
+.reader-root[data-skin='folio'] .switch[aria-checked='true'] {
+  background: var(--accent);
+}
+.reader-root[data-skin='folio'] .switch.on::after,
+.reader-root[data-skin='folio'] .switch[aria-checked='true']::after {
+  transform: translateX(14px);
+}
+/* 键盘焦点环（原型 L23）：folio 视图内统一品牌色焦点 */
+.reader-root[data-skin='folio'] button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- 外壳 · FolioSheet / Toast 视觉增量（仅 folio） ----------
+   结构 / 定位规则在 6434-6607 段原样保留（speak/vault 下两组件维持原样）；
+   folio 视图只做换肤增量：实面卡 + 大圆角。 */
+.reader-root[data-skin='folio'] .floating-folio-sheet {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  border-radius: var(--r-lg);
+}
+.reader-root[data-skin='folio'] .toast {
+  border-radius: var(--r-md);
+}
+/* 外壳重构段结束 */
+/* ============================================================
+   笔记与复习改版段（2026-10-26）
+   逐区对照原型 prototypes/notes-review-redesign-2026-10-26.html:43-152。
+   三栏 rail(210) | stage | board(280)；focus 态单列、两侧栏与顶栏中岛隐藏
+   （原型 body[data-view="focus"]）。英文句条衬线（--font-serif，19/26px），
+   UI 用 --font-sans。段内私有令牌 --vault-stage-1/2（三阶分段条前两档，
+   第三档用 var(--accent)）与 --vault-chunk-tag-bg/fg（词块标签），四主题各配一份；
+   sepia = nordic-mist 即原型灰绿板（styles.css:2951 起的主题映射）。
+   ============================================================ */
+
+/* ---------- 段内私有令牌（默认=light/warm-archival；sepia=原型灰绿板） ---------- */
+.reader-root {
+  --vault-stage-1: #c9a74a;
+  --vault-stage-2: #6aa690;
+  --vault-chunk-tag-bg: #eceff8;
+  --vault-chunk-tag-fg: #4b5a9a;
+}
+.reader-root[data-theme="dark"],
+.reader-root[data-theme="oled"] {
+  --vault-stage-1: #c9973f;
+  --vault-stage-2: #3f9a83;
+  --vault-chunk-tag-bg: rgba(128, 147, 255, 0.14);
+  --vault-chunk-tag-fg: #a5b0ff;
+}
+.reader-root[data-theme="sepia"] {
+  --vault-stage-1: #c9a74a;
+  --vault-stage-2: #6aa690;
+  --vault-chunk-tag-bg: #eceff8;
+  --vault-chunk-tag-fg: #4b5a9a;
+}
+
+/* ---------- 顶栏：focus 态隐藏中心导航岛（原型:46） ---------- */
+.reader-root .floating-top-stage.vault-focus-top .shell-tabs { display: none; }
+
+/* ---------- 三栏骨架（原型:44-46） ---------- */
+.reader-root .vault-page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr) 280px;
+  gap: 16px;
+  padding: 2px 24px 20px;
+}
+.reader-root .vault-page[data-vault-view="focus"] { grid-template-columns: minmax(0, 1fr); }
+.reader-root .vault-page[data-vault-view="focus"] .vault-rail,
+.reader-root .vault-page[data-vault-view="focus"] .board { display: none; }
+
+/* ---------- 左栏 rail：只做筛选，不摆词表（原型:47-54,183-193） ---------- */
+.reader-root .vault-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 2px 12px;
+  min-height: 0;
+  overflow-y: auto;
+}
+.reader-root .vault-rail h4 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+  padding: 10px 12px 4px;
+  margin: 0;
+}
+.reader-root .vault-rail .rail-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  font-size: 13.5px;
+  overflow: hidden;
+}
+.reader-root .vault-rail .rail-item:hover { background: var(--surface-2); }
+.reader-root .vault-rail .rail-item.on {
+  background: var(--surface);
+  color: var(--ink-1);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--glass-border);
+}
+.reader-root .vault-rail .rail-item .n {
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.reader-root .vault-rail .rail-note {
+  margin: 12px 8px 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.reader-root .vault-rail .rail-note button {
+  color: var(--warn);
+  text-decoration: underline;
+  font-size: 12.5px;
+  padding: 2px 0 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.reader-root .vault-rail .rail-empty {
+  margin: 10px 12px;
+  font-size: 12px;
+  color: var(--ink-3);
+  line-height: 1.6;
+}
+.reader-root .vault-rail .focus-banner { margin: 4px 8px 6px; flex: none; }
+
+/* ---------- 主区 stage 外壳 + stage-head + seg（原型:55-62） ---------- */
+.reader-root .vault-page .stage {
+  background: var(--surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.reader-root .vault-page .stage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--glass-border);
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 2;
+}
+.reader-root .vault-page .seg {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--glass-border);
+  border-radius: 99px;
+}
+.reader-root .vault-page .seg button {
+  padding: 5px 16px;
+  border: 0;
+  border-radius: 99px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  font-size: 13px;
+}
+.reader-root .vault-page .seg button.on {
+  background: var(--surface);
+  color: var(--ink-1);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* ---------- 胶囊按钮（原型 .btn 体系，段内专用） ---------- */
+.reader-root .vault-page .vault-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border-radius: 99px;
+  font-weight: 600;
+  font-size: 13.5px;
+  border: 1px solid var(--glass-border-strong);
+  background: var(--surface);
+  color: var(--ink-1);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.reader-root .vault-page .vault-btn:hover:not(:disabled) { background: var(--surface-2); }
+.reader-root .vault-page .vault-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.reader-root .vault-page .vault-btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
+.reader-root .vault-page .vault-btn.lg { padding: 12px 30px; font-size: 15.5px; }
+.reader-root .vault-page .vault-btn.sm { padding: 5px 12px; font-size: 12.5px; font-weight: 500; }
+.reader-root .vault-page .vault-btn.ghost { background: transparent; border-color: transparent; color: var(--ink-2); }
+.reader-root .vault-page .vault-btn:disabled { opacity: 0.45; cursor: default; }
+.reader-root .vault-page kbd {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  border: 1px solid var(--glass-border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 0 5px;
+  background: var(--surface);
+  color: var(--ink-2);
+}
+
+/* ---------- Hero：首屏唯一主操作（原型:63-71,202-214） ---------- */
+.reader-root .vault-hero {
+  margin: 22px 24px 8px;
+  padding: 26px 28px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, var(--accent-soft), transparent);
+  border: 1px solid var(--accent-glow);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.reader-root .vault-hero h2 {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  font-size: 23px;
+  line-height: 1.3;
+  margin: 0 0 4px;
+  color: var(--ink-1);
+}
+.reader-root .vault-hero p { color: var(--ink-2); margin: 0; font-size: 13.5px; }
+.reader-root .vault-hero .modes { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.reader-root .vault-hero .mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  border-radius: 99px;
+  border: 1px solid var(--glass-border-strong);
+  background: var(--surface);
+  font-size: 12.5px;
+  color: var(--ink-4);
+}
+.reader-root .vault-hero .mode.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.reader-root .vault-hero .hero-cta { text-align: center; flex: none; }
+.reader-root .vault-hero .hero-cta .muted { font-size: 12px; margin-top: 6px; color: var(--ink-3); }
+
+/* ---------- 待复习列表（原型:73-95,215-239） ---------- */
+.reader-root .vault-page .list-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 18px 28px 6px;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+.reader-root .vault-page .list-title button {
+  color: var(--accent);
+  font-size: 13px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.reader-root .vault-item {
+  margin: 0 24px;
+  padding: 18px 4px 14px;
+  border-bottom: 1px solid var(--glass-border);
+}
+.reader-root .vault-item:last-child { border-bottom: 0; }
+.reader-root .vault-item .src {
+  font-size: 12px;
+  color: var(--ink-3);
+  margin-bottom: 6px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.reader-root .vault-item .tag {
+  font-size: 12px;
+  padding: 0 8px;
+  border-radius: 99px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  line-height: 1.7;
+}
+.reader-root .vault-item .tag.chunk { background: var(--vault-chunk-tag-bg); color: var(--vault-chunk-tag-fg); }
+.reader-root .vault-item .tag.speak { background: var(--warn-soft); color: var(--warn); }
+.reader-root .vault-item .sent {
+  font-family: var(--font-serif);
+  font-size: 19px;
+  line-height: 1.8;
+  color: var(--ink-1);
+  overflow-wrap: break-word;
+}
+.reader-root .vault-item .speak-original,
+.reader-root .vault-item .speak-arrow { color: var(--ink-3); font-size: 15px; }
+.reader-root .vault-item .reveal {
+  margin-top: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--glass-border);
+}
+.reader-root .vault-item .reveal .zh { color: var(--ink-1); font-size: 13.5px; }
+.reader-root .vault-item .reveal .def { color: var(--ink-3); font-size: 13px; margin-top: 2px; }
+.reader-root .vault-item .item-actions {
+  display: flex;
+  gap: 14px;
+  margin-top: 8px;
+  color: var(--ink-3);
+  font-size: 13px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.reader-root .vault-item .item-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-3);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 0;
+}
+.reader-root .vault-item .item-actions button:hover { color: var(--accent); }
+.reader-root .vault-item .hint-text { color: var(--ink-3); font-size: 12.5px; }
+.reader-root .vault-list-empty {
+  margin: 8px 24px 24px;
+  padding: 26px 8px;
+  font-size: 13px;
+  color: var(--ink-3);
+  line-height: 1.7;
+  text-align: center;
+}
+
+/* 三档评分带（reveal 内与专注完形共用；f/m/g 三色 hover，原型:87-92,222-226） */
+.reader-root .vault-page .grades { display: flex; gap: 8px; margin-top: 12px; }
+.reader-root .vault-page .grade-chip {
+  flex: 1;
+  min-width: 96px;
+  padding: 9px 0;
+  border-radius: 12px;
+  border: 1px solid var(--glass-border-strong);
+  background: var(--surface);
+  color: var(--ink-1);
+  text-align: center;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+}
+.reader-root .vault-page .grade-chip small {
+  display: block;
+  font-weight: 400;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  margin-top: 1px;
+}
+.reader-root .vault-page .grade-chip.f:hover { background: var(--err-soft); border-color: var(--err); }
+.reader-root .vault-page .grade-chip.m:hover { background: var(--warn-soft); border-color: var(--warn); }
+.reader-root .vault-page .grade-chip.g:hover { background: var(--accent-soft); border-color: var(--accent); }
+.reader-root .vault-page .grade-chip.suggest { box-shadow: 0 0 0 2px var(--accent); }
+
+/* ---------- 右侧看板（原型:96-112,290-307） ---------- */
+.reader-root .vault-page .board {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 2px 0 12px;
+}
+.reader-root .vault-page .board .card {
+  background: var(--surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  padding: 16px 18px;
+  flex: none;
+}
+.reader-root .vault-page .board .card h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-3);
+  margin: 0 0 12px;
+}
+.reader-root .vault-page .prog { display: flex; align-items: center; gap: 14px; }
+.reader-root .vault-page .ring {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: conic-gradient(var(--accent) calc(var(--p) * 1%), var(--glass-border-strong) 0);
+  display: grid;
+  place-items: center;
+  flex: none;
+  --p: 0;
+}
+.reader-root .vault-page .ring span {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: var(--surface);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--ink-1);
+  font-variant-numeric: tabular-nums;
+}
+.reader-root .vault-page .prog b { font-size: 16px; display: block; color: var(--ink-1); }
+.reader-root .vault-page .prog .muted { font-size: 12.5px; color: var(--ink-3); }
+.reader-root .vault-page .stages {
+  display: flex;
+  height: 10px;
+  border-radius: 99px;
+  overflow: hidden;
+  background: var(--glass-border-strong);
+  margin-bottom: 12px;
+}
+.reader-root .vault-page .stages i { display: block; height: 100%; }
+.reader-root .vault-page .stages i.v-s1 { background: var(--vault-stage-1); }
+.reader-root .vault-page .stages i.v-s2 { background: var(--vault-stage-2); }
+.reader-root .vault-page .stages i.v-s3 { background: var(--accent); }
+.reader-root .vault-page .stage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.reader-root .vault-page .stage-row .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.reader-root .vault-page .stage-row .dot.s1 { background: var(--vault-stage-1); }
+.reader-root .vault-page .stage-row .dot.s2 { background: var(--vault-stage-2); }
+.reader-root .vault-page .stage-row .dot.s3 { background: var(--accent); }
+.reader-root .vault-page .stage-row .n {
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--ink-1);
+  font-variant-numeric: tabular-nums;
+}
+.reader-root .vault-page .empty-hint { margin-top: 10px; font-size: 12.5px; color: var(--ink-3); }
+.reader-root .vault-page .weak-btn { width: 100%; justify-content: center; margin-top: 2px; }
+.reader-root .vault-page .weak-speak-btn { width: 100%; justify-content: center; margin-top: 6px; }
+
+/* ---------- 专注态（原型:113-130,241-262） ---------- */
+.reader-root .vault-page .focus-wrap {
+  max-width: 680px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 28px 24px 40px;
+}
+.reader-root .vault-page .focus-top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 32px;
+}
+.reader-root .vault-page .bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 99px;
+  background: var(--glass-border-strong);
+  overflow: hidden;
+}
+.reader-root .vault-page .bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 250ms;
+}
+.reader-root .vault-page .exit {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-3);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-size: 13.5px;
+  padding: 4px 0;
+}
+.reader-root .vault-page .exit:hover { color: var(--ink-1); }
+.reader-root .vault-page .focus-top .muted {
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.reader-root .vault-page .focus-card { display: flex; flex-direction: column; gap: 14px; }
+.reader-root .vault-page .vault-focus { display: flex; flex-direction: column; gap: 12px; }
+.reader-root .vault-page .q-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+.reader-root .vault-page .q-sent {
+  font-family: var(--font-serif);
+  font-size: 26px;
+  line-height: 2;
+  color: var(--ink-1);
+  overflow-wrap: break-word;
+}
+.reader-root .vault-page .q-sent .cloze-blank-input {
+  color: var(--ink-1);
+  background: var(--accent-softer);
+  min-width: 150px;
+}
+.reader-root .vault-page .hint-ladder { margin-top: 6px; display: flex; flex-direction: column; gap: 8px; }
+.reader-root .vault-page .hint-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px dashed var(--glass-border-strong);
+  color: var(--ink-3);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.reader-root .vault-page .hint-step.shown {
+  border-style: solid;
+  border-color: var(--accent-glow);
+  background: var(--accent-soft);
+  color: var(--ink-1);
+}
+.reader-root .vault-page .hint-step .lv { font-size: 12px; color: var(--ink-3); flex: none; }
+.reader-root .vault-page .hint-step button {
+  margin-left: auto;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  flex: none;
+}
+.reader-root .vault-page .answer-row {
+  margin-top: 22px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.reader-root .vault-page .answer-row .grades { margin-top: 0; flex: 1; min-width: 280px; }
+.reader-root .vault-page .answer-row .keys {
+  margin-left: auto;
+  color: var(--ink-3);
+  font-size: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.reader-root .vault-page .focus-foot {
+  margin-top: 36px;
+  padding-top: 14px;
+  border-top: 1px solid var(--glass-border);
+  color: var(--ink-3);
+  font-size: 12.5px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* ---------- 导出（原型:131-147,263-287） ---------- */
+.reader-root .vault-page .exp { padding: 22px 28px 32px; }
+.reader-root .vault-page .exp h2 {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  font-size: 22px;
+  line-height: 1.3;
+  margin: 0;
+  color: var(--ink-1);
+}
+.reader-root .vault-page .exp-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 28px;
+  margin: 18px 0;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+}
+.reader-root .vault-page .opt-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.reader-root .vault-page .opt-group label { color: var(--ink-3); font-size: 13px; }
+.reader-root .vault-page .chk {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 11px;
+  border-radius: 99px;
+  border: 1px solid var(--glass-border-strong);
+  background: var(--surface);
+  font-size: 12.5px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.reader-root .vault-page .chk.on {
+  background: var(--accent-soft);
+  border-color: var(--accent-glow);
+  color: var(--accent);
+  font-weight: 600;
+}
+.reader-root .vault-page .exp-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.reader-root .vault-page .exp-bar .muted { color: var(--ink-3); font-size: 12.5px; }
+.reader-root .vault-page .exp-error { font-size: 12.5px; color: var(--err); margin: -8px 0 10px; }
+.reader-root .vault-page .md {
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  padding: 6px 22px 18px;
+  background: var(--surface);
+}
+.reader-root .vault-page .md h3 {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  font-size: 18px;
+  margin: 16px 0 8px;
+  color: var(--ink-1);
+}
+.reader-root .vault-page .md .w { padding: 10px 0; border-bottom: 1px solid var(--glass-border); }
+.reader-root .vault-page .md .w:last-child { border-bottom: 0; }
+.reader-root .vault-page .md .w b { font-family: var(--font-serif); font-weight: 600; font-size: 17px; color: var(--ink-1); }
+.reader-root .vault-page .md .ipa { color: var(--ink-3); margin-left: 8px; font-size: 13px; }
+.reader-root .vault-page .md .ex {
+  font-family: var(--font-serif);
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--ink-2);
+  margin-top: 3px;
+  padding-left: 12px;
+  border-left: 3px solid var(--accent-glow);
+}
+.reader-root .vault-page .md .note { font-size: 12.5px; color: var(--ink-3); margin-top: 2px; padding-left: 12px; }
+
+/* ---------- 「全部笔记」档：NotesView 内嵌容器（渲染内核与数据链不动） ---------- */
+.reader-root .vault-page .vault-notes-embed {
+  padding: 0;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+}
+
+/* ---------- 全部笔记档：内嵌纸张窄宽适配 ----------
+   .notes-sheet 的 720 纸宽 + 52/60 页边、.notes-replay-ft 的单行脚注，按旧
+   全宽弹层设计；内嵌列宽只有 ~400-620px，照搬会把正文与提示挤成竖排。
+   作用域限定本网格——Markdown 导出回看弹层等其它挂载点维持原版式。 */
+.reader-root .vault-notes-grid { height: 100%; } /* 行高随面板定死，notes-page 的内部滚动才生效 */
+.reader-root .vault-notes-grid .notes-sheet {
+  max-width: none;
+  margin: 14px 0 24px;
+  padding: 26px 30px 32px 34px;
+}
+.reader-root .vault-notes-grid .notes-replay-ft { flex-wrap: wrap; }
+.reader-root .vault-notes-grid .notes-replay-ft .hint { flex: 1 1 200px; }
+
+/* ---------- 底部快捷切换器（原型底部深色胶囊收编为产品浮层） ----------
+   四档浮层常驻（focus 态也不隐藏，等效 Esc 出口）；深色胶囊不随主题走，
+   与原型一致保持高对比。vault 不挂 folio 皮肤，--r-pill 等皮肤令牌在此
+   不存在（外壳重构作用域铁律），圆角一律写字面量 999px。 */
+.reader-root .vault-switch {
+  position: fixed;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(31, 35, 41, 0.92);
+  border-radius: 999px;
+  z-index: 9;
+}
+.reader-root .vault-switch button {
+  border: 0; /* 本应用无全局 button 重置，默认 outset 描边需显式清除 */
+  cursor: pointer;
+  background: transparent; /* styles.css 全局 button 基元自带浅灰底，盖掉露出深色胶囊 */
+  padding: 5px 14px;
+  border-radius: 999px;
+  color: #cfd5d2;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.reader-root .vault-switch button.on {
+  background: #fff;
+  color: var(--ink-1);
+  font-weight: 600;
+}
+
+/* 笔记与复习改版段结束 */
+
+/* ============================================================
+   ===== 书架页重构 2026-10-26 =====
+   原型：prototypes/reader-room-redesign-2026-10-26.html 的
+   「书架 · 书」（#v-shelf）与「书架 · 短文」（#v-shorts）两视图。
+   作用域：ShelfPage 仅在 shelf 视图渲染（.reader-root[data-skin='folio']），
+   全部选择器带 folio 前缀；颜色一律引用主题令牌（品牌绿经外壳
+   [data-skin='folio'][data-theme='light'] 令牌块自然渗入，sepia/dark/oled
+   回落各主题令牌）；禁裸 .btn/.seg 覆盖（外壳 EOF 已有 folio 基元）。
+   旧书架段（5725-6209 附近）保留为死代码不删：其中 .today-ring 等
+   .today-* 规则仍被 vault 视图的 TodayCard 组件消费。
+   类名语义化对照原型：.segw→.shelf-segment / .book→.shelf-bookcard /
+   .stat→.shelf-statcard / .disc→.shelf-disc / .it→.shelf-item /
+   .pr→.shelf-probring / .merged→.shelf-merged / .page-head→.shelf-pagehead。
+   ============================================================ */
+
+/* ---------- 页头：标题 + 带数量分段 + 导入主按钮 ---------- */
+.reader-root[data-skin='folio'] .shelf-wrap {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 8px 24px 24px;
+}
+.reader-root[data-skin='folio'] .shelf-pagehead {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 0 18px;
+}
+.reader-root[data-skin='folio'] .shelf-pagehead h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+.reader-root[data-skin='folio'] .shelf-import-btn {
+  margin-left: auto;
+}
+/* 分段（原型 .segw）：容器胶囊 + 选中段 text-1 深底反白 */
+.reader-root[data-skin='folio'] .shelf-segment {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+}
+.reader-root[data-skin='folio'] .shelf-segment button {
+  padding: 3px 18px;
+  border: none;
+  border-radius: var(--r-pill);
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.reader-root[data-skin='folio'] .shelf-segment button:hover {
+  color: var(--text-1);
+}
+.reader-root[data-skin='folio'] .shelf-segment button.on {
+  background: var(--text-1);
+  color: var(--surface);
+  font-weight: 600;
+}
+
+/* ---------- 书 tab：主卡 + 紧凑列表（左） · 统计卡（右） ---------- */
+.reader-root[data-skin='folio'] .shelf-topgrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+}
+.reader-root[data-skin='folio'] .shelf-bookcol {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* 书主卡（原型 .card.book）：封面 + 元信息一行化 + 进度 + 操作行 */
+.reader-root[data-skin='folio'] .shelf-bookcard {
+  display: flex;
+  gap: 22px;
+  padding: 20px 22px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  min-width: 0;
+}
+.reader-root[data-skin='folio'] .shelf-cover {
+  position: relative;
+  width: 124px;
+  height: 176px;
+  flex: none;
+  border-radius: 6px 10px 10px 6px;
+  /* 品牌绿渐变仅 folio+light（经 --accent 令牌）；余主题用各主题令牌渐变 */
+  background: linear-gradient(150deg, var(--accent), var(--accent-hover));
+  color: #fff;
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+  box-shadow: 4px 6px 14px rgba(16, 24, 40, 0.22), inset 4px 0 0 rgba(0, 0, 0, 0.14);
+}
+.reader-root[data-skin='folio'] .shelf-cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.reader-root[data-skin='folio'] .shelf-cover small {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  opacity: 0.8;
+  text-transform: uppercase;
+}
+.reader-root[data-skin='folio'] .shelf-cover b {
+  font: 600 16px/1.25 var(--font-en);
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.reader-root[data-skin='folio'] .shelf-cover-done {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text-1);
+  border-radius: var(--r-pill);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+}
+.reader-root[data-skin='folio'] .shelf-bookmain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* 书名完整显示（原型 .book h3 不设截断）：超长书名自然换行，主卡随内容增高 */
+.reader-root[data-skin='folio'] .shelf-bookmain h3 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.3;
+  font-weight: 600;
+  color: var(--text-1);
+  overflow-wrap: break-word;
+}
+.reader-root[data-skin='folio'] .shelf-bookby {
+  color: var(--text-2);
+  font-size: 13.5px;
+  margin: 2px 0 6px;
+}
+.reader-root[data-skin='folio'] .shelf-facts {
+  color: var(--text-3);
+  font-size: 13px;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.reader-root[data-skin='folio'] .shelf-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.reader-root[data-skin='folio'] .shelf-progress b {
+  font-size: 15px;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+.reader-root[data-skin='folio'] .shelf-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--border);
+  overflow: hidden;
+  min-width: 60px;
+}
+.reader-root[data-skin='folio'] .shelf-bar i {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+.reader-root[data-skin='folio'] .shelf-muted {
+  color: var(--text-3);
+  font-size: 13px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.reader-root[data-skin='folio'] .shelf-bookacts {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: auto;
+}
+/* 安静图标钮（紧凑列表/主卡删除共用） */
+.reader-root[data-skin='folio'] .shelf-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  flex: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.reader-root[data-skin='folio'] .shelf-iconbtn:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+.reader-root[data-skin='folio'] .shelf-iconbtn.del:hover {
+  background: var(--err-soft);
+  color: var(--err);
+}
+.reader-root[data-skin='folio'] .shelf-book-del {
+  margin-left: auto;
+}
+
+/* 其余书紧凑列表（全量渲染跟随主卡） */
+.reader-root[data-skin='folio'] .shelf-booksmini {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+.reader-root[data-skin='folio'] .shelf-minirow {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.reader-root[data-skin='folio'] .shelf-minirow:last-child {
+  border-bottom: 0;
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+.reader-root[data-skin='folio'] .shelf-minirow:first-child {
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+}
+.reader-root[data-skin='folio'] .shelf-minirow:hover {
+  background: var(--surface-2);
+}
+.reader-root[data-skin='folio'] .shelf-minirow:focus-visible,
+.reader-root[data-skin='folio'] .shelf-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.reader-root[data-skin='folio'] .shelf-minicover {
+  position: relative;
+  width: 26px;
+  height: 36px;
+  border-radius: 3px 5px 5px 3px;
+  background: linear-gradient(150deg, var(--accent), var(--accent-hover));
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+.reader-root[data-skin='folio'] .shelf-minicover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.reader-root[data-skin='folio'] .shelf-minititle {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.reader-root[data-skin='folio'] .shelf-minimeta {
+  color: var(--text-3);
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.reader-root[data-skin='folio'] .shelf-miniacts {
+  display: inline-flex;
+  gap: 2px;
+}
+.reader-root[data-skin='folio'] .shelf-miniacts .shelf-iconbtn {
+  width: 26px;
+  height: 26px;
+}
+
+/* 空态卡（无书 / 无短文） */
+.reader-root[data-skin='folio'] .shelf-emptycard {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 22px 24px;
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-lg);
+  color: var(--text-3);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.reader-root[data-skin='folio'] .shelf-emptycard:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.reader-root[data-skin='folio'] .shelf-emptycard .t {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.reader-root[data-skin='folio'] .shelf-emptycard .sub {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* ---------- 统计卡：今日阅读 / 今日复习 / 连续天数 ---------- */
+.reader-root[data-skin='folio'] .shelf-statcard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 20px 22px;
+  min-width: 0;
+}
+.reader-root[data-skin='folio'] .shelf-statblk h4 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.reader-root[data-skin='folio'] .shelf-statblk + .shelf-statblk {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.reader-root[data-skin='folio'] .shelf-statrow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+/* 今日阅读 conic 进度环（--v = 0–100，行内 style 写入） */
+.reader-root[data-skin='folio'] .shelf-ring {
+  width: 58px;
+  height: 58px;
+  flex: none;
+  border-radius: 50%;
+  background: conic-gradient(var(--accent) 0 calc(var(--v, 0) * 1%), var(--border) 0);
+  display: grid;
+  place-items: center;
+}
+.reader-root[data-skin='folio'] .shelf-ring span {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--surface);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 12.5px;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+.reader-root[data-skin='folio'] .shelf-stattext {
+  min-width: 0;
+}
+.reader-root[data-skin='folio'] .shelf-stattext b,
+.reader-root[data-skin='folio'] .shelf-statblk > b {
+  display: block;
+  font-size: 15px;
+  color: var(--text-1);
+  font-weight: 600;
+}
+.reader-root[data-skin='folio'] .shelf-statbar {
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--border);
+  margin: 8px 0 0;
+  overflow: hidden;
+}
+.reader-root[data-skin='folio'] .shelf-statbar i {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+.reader-root[data-skin='folio'] .shelf-statfoot {
+  margin-top: 14px;
+}
+.reader-root[data-skin='folio'] .shelf-streak {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warn);
+}
+.reader-root[data-skin='folio'] .shelf-streak b {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 发现入口三列 ---------- */
+.reader-root[data-skin='folio'] .shelf-sectitle {
+  font-size: 14px;
+  color: var(--text-3);
+  font-weight: 600;
+  margin: 24px 0 10px;
+}
+.reader-root[data-skin='folio'] .shelf-disc {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+.reader-root[data-skin='folio'] .shelf-disc-card {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+.reader-root[data-skin='folio'] .shelf-disc-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.reader-root[data-skin='folio'] .shelf-disc-ic {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+  margin-bottom: 4px;
+}
+.reader-root[data-skin='folio'] .shelf-disc-card b {
+  font-size: 15px;
+  color: var(--text-1);
+}
+.reader-root[data-skin='folio'] .shelf-disc-card span {
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ---------- 短文 tab：工具行 + 分组 + 统一行结构 ---------- */
+.reader-root[data-skin='folio'] .shelf-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.reader-root[data-skin='folio'] .shelf-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  max-width: 320px;
+  min-width: 0;
+  padding: 6px 14px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+}
+.reader-root[data-skin='folio'] .shelf-search:focus-within {
+  border-color: var(--accent-line);
+}
+.reader-root[data-skin='folio'] .shelf-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-1);
+}
+.reader-root[data-skin='folio'] .shelf-search input::placeholder {
+  color: var(--text-3);
+}
+.reader-root[data-skin='folio'] .shelf-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  flex: none;
+}
+.reader-root[data-skin='folio'] .shelf-search-clear:hover {
+  color: var(--text-1);
+  background: var(--surface-2);
+}
+.reader-root[data-skin='folio'] .shelf-filters {
+  display: inline-flex;
+  gap: 6px;
+}
+.reader-root[data-skin='folio'] .shelf-sort {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+/* 分组标题：紧贴工具行的第一组不吃顶部间距 */
+.reader-root[data-skin='folio'] .shelf-grouptitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-3);
+  margin: 18px 4px 8px;
+  font-variant-numeric: tabular-nums;
+}
+.reader-root[data-skin='folio'] .shelf-tools + .shelf-grouptitle {
+  margin-top: 4px;
+}
+/* 白卡列表：不裁剪（more 菜单要溢出），圆角由首尾行承接 */
+.reader-root[data-skin='folio'] .shelf-list {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+/* 统一行（原型 .it）：进度环 | 标题+中文行 | 元信息 | more */
+.reader-root[data-skin='folio'] .shelf-item {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto 28px;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  position: relative;
+  transition: background 0.15s ease;
+}
+.reader-root[data-skin='folio'] .shelf-item:first-child {
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+}
+.reader-root[data-skin='folio'] .shelf-item:last-child {
+  border-bottom: 0;
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+.reader-root[data-skin='folio'] .shelf-item:first-child:last-child {
+  border-radius: var(--r-lg);
+}
+.reader-root[data-skin='folio'] .shelf-item:hover {
+  background: var(--surface-2);
+}
+/* 进度环（原型 .pr）：conic --v 百分比；done 态实心对勾 */
+.reader-root[data-skin='folio'] .shelf-probring {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: conic-gradient(var(--accent) 0 calc(var(--v, 0) * 1%), var(--border) 0);
+  display: grid;
+  place-items: center;
+}
+.reader-root[data-skin='folio'] .shelf-probring::after {
+  content: "";
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface);
+  grid-area: 1 / 1;
+}
+.reader-root[data-skin='folio'] .shelf-item:hover .shelf-probring::after {
+  background: var(--surface-2);
+}
+.reader-root[data-skin='folio'] .shelf-probring svg {
+  grid-area: 1 / 1;
+  position: relative;
+  z-index: 1;
+}
+.reader-root[data-skin='folio'] .shelf-probring.done {
+  background: var(--accent);
+  color: #fff;
+}
+.reader-root[data-skin='folio'] .shelf-probring.done::after {
+  display: none;
+}
+.reader-root[data-skin='folio'] .shelf-item-titles {
+  min-width: 0;
+}
+.reader-root[data-skin='folio'] .shelf-item .t {
+  font: 600 16px/1.35 var(--font-en);
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.reader-root[data-skin='folio'] .shelf-item .z {
+  color: var(--text-3);
+  font-size: 13px;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.reader-root[data-skin='folio'] .shelf-item-info {
+  color: var(--text-3);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.reader-root[data-skin='folio'] .shelf-lv {
+  font-weight: 600;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 0 8px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text-2);
+}
+/* more 钮与菜单：悬停/键盘聚焦才显；菜单溢出行不被列表裁剪 */
+.reader-root[data-skin='folio'] .shelf-item-more-wrap {
+  position: relative;
+  justify-self: end;
+}
+.reader-root[data-skin='folio'] .shelf-item-more {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.reader-root[data-skin='folio'] .shelf-item:hover .shelf-item-more,
+.reader-root[data-skin='folio'] .shelf-item .shelf-item-more:focus-visible {
+  opacity: 1;
+}
+.reader-root[data-skin='folio'] .shelf-item-more:hover {
+  background: var(--border);
+  color: var(--text-1);
+}
+.reader-root[data-skin='folio'] .shelf-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  min-width: 160px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: 0 12px 34px rgba(16, 24, 40, 0.18);
+}
+.reader-root[data-skin='folio'] .shelf-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--err);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+.reader-root[data-skin='folio'] .shelf-menu button:hover {
+  background: var(--err-soft);
+}
+/* 合并提示 + 撤销 */
+.reader-root[data-skin='folio'] .shelf-merged {
+  margin: 10px 4px 0;
+  color: var(--text-3);
+  font-size: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.reader-root[data-skin='folio'] .shelf-merged button {
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+/* 搜索/筛选空结果 */
+.reader-root[data-skin='folio'] .shelf-nores {
+  padding: 28px 18px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-lg);
+}
+
+/* ---------- 书架页窄窗（minWidth 960） ----------
+   ≤1199：wrap 收窄、发现三列→两列；≤1019：wrap 100%、发现单列、
+   主卡纵排（封面上置）、统计卡下移、工具行允许换行。 */
+@media (max-width: 1199px) {
+  .reader-root[data-skin='folio'] .shelf-wrap {
+    padding: 8px 20px 24px;
+  }
+  .reader-root[data-skin='folio'] .shelf-disc {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 1019px) {
+  .reader-root[data-skin='folio'] .shelf-wrap {
+    max-width: 100%;
+    padding: 8px 16px 24px;
+  }
+  .reader-root[data-skin='folio'] .shelf-disc {
+    grid-template-columns: 1fr;
+  }
+  .reader-root[data-skin='folio'] .shelf-topgrid {
+    grid-template-columns: 1fr;
+  }
+  .reader-root[data-skin='folio'] .shelf-bookcard {
+    flex-direction: column;
+    gap: 16px;
+  }
+  .reader-root[data-skin='folio'] .shelf-tools {
+    flex-wrap: wrap;
+  }
+  .reader-root[data-skin='folio'] .shelf-search {
+    max-width: 100%;
+  }
+  .reader-root[data-skin='folio'] .shelf-sort {
+    margin-left: 0;
+  }
+}
+/* 书架页重构段结束 */
+
+/* ==========================================================================
+   ===== 阅读页重构 2026-10-26 =====
+   原型：prototypes/reader-room-redesign-2026-10-26.html（阅读页）。
+   纪律：全部新选择器带 .reader-root[data-skin='folio'] 前缀（仅 shelf/reading
+   两视图命中；speak/vault 不挂 data-skin 零影响）；不覆盖 .btn/.seg/.chip/
+   .switch 基元（由「外壳重构 2026-10-26」横幅定义）；颜色一律引用令牌名——
+   light 主题下 --accent 系经外壳令牌块转品牌绿，sepia/dark/oled 自动回落
+   各主题原值；--reading-side-w 与右栏实际占位必须同步（dock 居中的分母）：
+   默认 388 / ≤1199 328 / ≤1019 与专注（data-side-hidden）0。
+   ========================================================================== */
+
+/* 根定位锚：dock（.floating-sonic-dock）与 ≤1019 的右栏覆盖层都以
+   .reader-root 为定位祖先（根在 0,0 占满窗口，加 relative 不改变任何
+   既有 fixed/absolute 后代的几何）。 */
+.reader-root[data-skin='folio'] {
+  position: relative;
+}
+
+/* 【跨段补偿】ReaderTopBar 三段重排（.center-nav-island → .shell-tabs）后，
+   「笔记与复习」横幅的 vault 专注态隐藏规则（.vault-focus-top
+   .center-nav-island）不再命中新 DOM。本规则为改名后的等价镜像（全局，
+   不带 [data-skin]——vault 视图不挂 folio），行为不变；原规则属笔记与
+   复习段（9533 行附近），由本段补位以免断链。 */
+.reader-root .floating-top-stage.vault-focus-top .shell-tabs {
+  display: none;
+}
+
+/* ---------- 右栏几何契约（覆盖响应式段的 .reader-dict 宽度规则） ----------
+   响应式段（≥1440 420px / ≤1199 330px）与 Phase2 段同为 0-2-0，且位于本横幅
+   之前/之后互相打架；本规则 0-3-0 一锤定音：宽度只在这里与下方两档媒体查询
+   变化。总占位 = 14 边距 + 栏宽 + 14 边距 = --reading-side-w。 */
+.reader-root[data-skin='folio'] .spatial-lens-card {
+  width: 360px;
+  margin: 12px 14px 18px;
+}
+/* 专注模式：ReadingView 经 ref 在根上声明 data-side-hidden（同时内联
+   --reading-side-w:0px，优先级高于本横幅的媒体查询），右栏整体收起。 */
+.reader-root[data-side-hidden] .reader-dict {
+  display: none;
+}
+
+/* ---------- 工具栏：控件收口（遮罩开关 + 计数/全部揭开遮住 + 目录/设置 chip） ---------- */
+.reader-root[data-skin='folio'] .reading-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  row-gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px 14px 10px 20px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+  position: relative;
+  z-index: 3;
+  background: var(--surface);
+}
+.reader-root[data-skin='folio'] .reading-toolbar-meta {
+  margin-right: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--ink-3);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.reader-root[data-skin='folio'] .reading-toolbar-meta .tag {
+  flex: none;
+}
+.reader-root[data-skin='folio'] .reading-status-chip {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-radius: var(--r-pill, 999px);
+  padding: 1px 9px;
+  white-space: nowrap;
+}
+.reader-root[data-skin='folio'] .reading-mask-ctl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink-1);
+}
+.reader-root[data-skin='folio'] .reading-mask-count {
+  font-weight: 400;
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 阅读设置浮层（排版/句卡/字号/短语虚线/专注/随读抽查/主题只读） ---------- */
+.reader-root[data-skin='folio'] .reading-settings-pop {
+  position: absolute;
+  top: 48px;
+  right: 14px;
+  width: 264px;
+  z-index: 8;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md, 12px);
+  box-shadow: var(--shadow-pop);
+  padding: 6px 14px 10px;
+}
+.reader-root[data-skin='folio'] .reading-settings-opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  font-size: 13px;
+  color: var(--ink-1);
+}
+.reader-root[data-skin='folio'] .reading-settings-opt + .reading-settings-opt {
+  border-top: 1px solid var(--border);
+}
+.reader-root[data-skin='folio'] .reading-settings-opt .opt-label {
+  color: var(--ink-2);
+}
+.reader-root[data-skin='folio'] .reading-settings-theme {
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+/* 句卡开关在「对照」排版下不可用（本地态仅段落有意义） */
+.reader-root[data-skin='folio'] .switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ---------- 左侧进度轨（44px 竖向：百分比 + 3px track + 竖排章节名） ---------- */
+.reader-root[data-skin='folio'] .reading-rail {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 22px 0 110px;
+  pointer-events: none;
+  z-index: 2;
+}
+.reader-root[data-skin='folio'] .reading-rail .rail-pct {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.reader-root[data-skin='folio'] .reading-rail .rail-track {
+  flex: 1;
+  width: 3px;
+  margin: 8px 0;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.reader-root[data-skin='folio'] .reading-rail .rail-track i {
+  display: block;
+  width: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+}
+.reader-root[data-skin='folio'] .reading-rail .rail-label {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-4);
+  writing-mode: vertical-rl;
+  letter-spacing: 0.12em;
+  max-height: 40vh;
+  overflow: hidden;
+  text-transform: uppercase;
+}
+
+/* ---------- 正文列 640px 与底部渐隐（让位居中 dock） ---------- */
+.reader-root[data-skin='folio'] .reading-col {
+  position: relative;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 22px 24px 150px;
+}
+.reader-root[data-skin='folio'] .reading-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 96px;
+  background: linear-gradient(transparent, var(--surface) 70%);
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* ---------- 正文头部：eyebrow + 32px 标题 + 中文副题行 ---------- */
+.reader-root[data-skin='folio'] .reading-head {
+  margin-bottom: 22px;
+}
+.reader-root[data-skin='folio'] .reading-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+}
+.reader-root[data-skin='folio'] .reading-title {
+  font-family: var(--font-en, var(--font-serif));
+  font-size: 32px;
+  line-height: 1.2;
+  font-weight: 600;
+  color: var(--ink-1);
+  margin: 6px 0 2px;
+  overflow-wrap: break-word;
+}
+.reader-root[data-skin='folio'] .reading-subtitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ink-3);
+  font-size: 15px;
+}
+.reader-root[data-skin='folio'] .reading-subtitle-cn {
+  min-width: 0;
+  overflow-wrap: break-word;
+  font-family: var(--font-serif);
+}
+.reader-root[data-skin='folio'] .reading-practice-btn {
+  color: var(--accent);
+  border-color: var(--accent-line, var(--border-strong));
+  background: var(--accent-soft);
+  flex: none;
+}
+
+/* ---------- 续读胶囊：一键回到上次位置，可关闭 ---------- */
+.reader-root[data-skin='folio'] .resume-capsule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 14px;
+  border-radius: var(--r-pill, 999px);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line, var(--border-strong));
+  color: var(--accent);
+  font-size: 13px;
+  margin-bottom: 22px;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.reader-root[data-skin='folio'] .resume-capsule .go {
+  margin-left: auto;
+  background: var(--accent);
+  color: #fff;
+  padding: 3px 14px;
+  border-radius: var(--r-pill, 999px);
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+}
+.reader-root[data-skin='folio'] .resume-capsule .go:hover {
+  background: var(--accent-hover);
+}
+.reader-root[data-skin='folio'] .resume-capsule .x {
+  color: var(--ink-3);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  display: inline-flex;
+  align-items: center;
+}
+.reader-root[data-skin='folio'] .resume-capsule .x:hover {
+  color: var(--ink-1);
+}
+
+/* ---------- 译文浮层：脱离文档流，贴当前句末行下方 ----------
+   top 与箭头 --ax 由 ReadingView.placePop() 以 getClientRects 末行直测写入；
+   失败行/编辑输入复用既有 .pair-failed-row / .pair-cn-editor 结构。 */
+.reader-root[data-skin='folio'] .translation-pop {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  z-index: 6;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md, 12px);
+  box-shadow: var(--shadow-pop);
+  padding: 6px 10px;
+}
+.reader-root[data-skin='folio'] .translation-pop::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: var(--ax, 60px);
+  width: 10px;
+  height: 10px;
+  background: var(--surface);
+  border-left: 1px solid var(--border-strong);
+  border-top: 1px solid var(--border-strong);
+  transform: rotate(45deg);
+}
+.reader-root[data-skin='folio'] .pop-veil {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--r-sm, 8px);
+  background: repeating-linear-gradient(135deg, var(--bg) 0 8px, var(--surface-2) 8px 16px);
+  border: 1px dashed var(--border-strong);
+  color: var(--ink-2);
+  font-size: 14px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.reader-root[data-skin='folio'] .pop-veil:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.reader-root[data-skin='folio'] .pop-zh {
+  padding: 9px 4px 7px;
+  font-size: 15px;
+  line-height: 1.7;
+  font-family: var(--font-serif);
+  color: var(--ink-1);
+  overflow-wrap: break-word;
+}
+.reader-root[data-skin='folio'] .pop-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.reader-root[data-skin='folio'] .pop-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: var(--r-sm, 8px);
+  border: none;
+  background: none;
+  color: var(--ink-2);
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.reader-root[data-skin='folio'] .pop-actions button:hover {
+  background: var(--surface-2);
+  color: var(--accent);
+}
+.reader-root[data-skin='folio'] .pop-actions .sp {
+  margin-left: auto;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+/* 对照模式（视图菜单）与浮层的语义：仅英文时藏中文行（veil 也不出现）；
+   仅中文时英文句已 display:none（getClientRects 为空，placePop 直测跳过），
+   整个浮层一并收起，避免悬空卡片。 */
+.reader-root[data-skin='folio'] .reader-contrast-en .translation-pop .pop-zh,
+.reader-root[data-skin='folio'] .reader-contrast-en .translation-pop .pop-veil {
+  display: none;
+}
+.reader-root[data-skin='folio'] .reader-contrast-zh .translation-pop {
+  display: none;
+}
+
+/* ---------- 解析面板 · 速览/CTA/自动解析/重新解析/本章生词 ---------- */
+.reader-root[data-skin='folio'] .lens-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.reader-root[data-skin='folio'] .lens-loading-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.reader-root[data-skin='folio'] .lens-glance {
+  font-family: var(--font-en, var(--font-serif));
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--ink-1);
+}
+.reader-root[data-skin='folio'] .lens-glance-sub {
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+.reader-root[data-skin='folio'] .lens-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.reader-root[data-skin='folio'] .lens-key {
+  padding: 2px 10px;
+  border-radius: var(--r-pill, 999px);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-family: var(--font-en, var(--font-serif));
+  font-size: 13.5px;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.reader-root[data-skin='folio'] .lens-key:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* CTA：品牌绿（light 主题经令牌块；其余主题自动回落各自 accent） */
+.reader-root[data-skin='folio'] .lens-cta {
+  width: 100%;
+  padding: 11px 16px;
+  border-radius: var(--r-md, 12px);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: 13.5px;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: inherit;
+}
+.reader-root[data-skin='folio'] .lens-cta:hover {
+  background: var(--accent-hover);
+}
+.reader-root[data-skin='folio'] .lens-cta kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 5px;
+  padding: 0 5px;
+  opacity: 0.85;
+}
+.reader-root[data-skin='folio'] .lens-auto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.reader-root[data-skin='folio'] .lens-done-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.reader-root[data-skin='folio'] .lens-practice-btn {
+  width: 100%;
+  justify-content: center;
+  padding: 9px 16px;
+  border-radius: var(--r-md, 12px);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line, transparent);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.reader-root[data-skin='folio'] .lens-practice-btn:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.reader-root[data-skin='folio'] .lens-redo {
+  align-self: center;
+  color: var(--ink-3);
+  font-size: 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+  font-family: inherit;
+  padding: 2px 6px;
+}
+.reader-root[data-skin='folio'] .lens-redo:hover {
+  color: var(--accent);
+}
+.reader-root[data-skin='folio'] .lens-vocab-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.reader-root[data-skin='folio'] .lens-vocab-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.reader-root[data-skin='folio'] .lens-vocab-row:last-child {
+  border-bottom: none;
+}
+.reader-root[data-skin='folio'] .lens-vocab-word {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-en, var(--font-serif));
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink-1);
+  padding: 0;
+  min-width: 0;
+  text-align: left;
+}
+.reader-root[data-skin='folio'] .lens-vocab-word:hover {
+  color: var(--accent);
+}
+.reader-root[data-skin='folio'] .lens-vocab-cn {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- SettingsDrawer · folio 换肤（仅 shelf/reading；speak/vault 原样） ----------
+   结构/分组/开关与「选遮罩样式顺带开遮罩」联动全在 1006-1227 段原样不动；
+   颜色已随外壳令牌矩阵换肤（light 下开关/滑杆/主按钮转品牌绿），
+   这里只补 folio 视觉增量：左缘描边 + 投影。 */
+.reader-root[data-skin='folio'] .reader-drawer {
+  border-left: 1px solid var(--border-strong);
+  box-shadow: -12px 0 34px rgba(16, 24, 40, 0.12);
+}
+
+/* ---------- 窄窗同步（--reading-side-w 必须与右栏实际占位一致，dock 才居中） ----------
+   ≤1199：右栏 360→300（总占位 14+300+14=328，同步 --reading-side-w:328px）。
+   ≤1019：右栏改绝对定位覆盖层（复用专注态 data-side-hidden 的语义；不隐藏时
+   浮在右侧），总占位 0 → --reading-side-w:0px；主卡边距清零后主栏即整窗宽，
+   dock left:50% 与主栏中轴重合；正文 640→100%，进度轨让位隐藏。 */
+@media (max-width: 1199px) {
+  .reader-root[data-skin='folio'] {
+    --reading-side-w: 328px;
+  }
+  .reader-root[data-skin='folio'] .spatial-lens-card {
+    width: 300px;
+  }
+}
+@media (max-width: 1019px) {
+  .reader-root[data-skin='folio'] {
+    --reading-side-w: 0px;
+  }
+  .reader-root[data-skin='folio'] .spatial-lens-card {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    bottom: 18px;
+    width: min(320px, calc(100vw - 48px));
+    margin: 0;
+    z-index: 30;
+    box-shadow: var(--shadow-pop);
+  }
+  .reader-root[data-skin='folio'] .reader-stage.reading-spread {
+    margin-left: 0;
+    margin-right: 0;
+    border-left: none;
+    border-right: none;
+    border-radius: 0;
+  }
+  .reader-root[data-skin='folio'] .reading-col {
+    max-width: 100%;
+  }
+  .reader-root[data-skin='folio'] .reading-rail {
+    display: none;
+  }
+}
+
+/* 阅读页重构段结束 */
