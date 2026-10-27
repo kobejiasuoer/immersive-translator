@@ -1,10 +1,10 @@
 /**
  * scenarioCatalog 装载器单测：mock ./tauriBridge（先例 syncEngine.test.ts），
- * 每例 vi.resetModules + 动态 import 重置模块级单飞/节流状态。覆盖：
+ * 每例 vi.resetModules + 动态 import 重置模块级单飞状态。覆盖：
  * preload 装载/降级（缓存+同步用户场景）、refresh 200 写缓存/404 静默/断网
- * 静默/垃圾 body 不写盘、节流与 in-flight 并发、「有更新才替换」。
+ * 静默/垃圾 body 不写盘、每次调用都发请求与 in-flight 并发、「有更新才替换」。
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoredSyncEntity, SyncHttpText } from "./tauriBridge";
 
 // vi.hoisted：resetModules 后 mock 工厂即使重跑，也返回同一组 vi.fn 实例
@@ -62,7 +62,7 @@ function storedEntity(payload: Record<string, unknown> | undefined, deleted = fa
 
 const http = (status: number, body: string): SyncHttpText => ({ status, body, retryAfterSeconds: null });
 
-/** 每例取一套新模块图（catalog 的单飞/节流 + speakLogic 注册表同图重置）。 */
+/** 每例取一套新模块图（catalog 的单飞 + speakLogic 注册表同图重置）。 */
 async function loadModules() {
   const catalog = await import("./scenarioCatalog");
   const logic = await import("../core/speakLogic");
@@ -75,10 +75,6 @@ beforeEach(() => {
   mocks.scenarioFetchOfficial.mockReset();
   mocks.syncStoreList.mockReset().mockResolvedValue([]);
   vi.resetModules();
-});
-
-afterEach(() => {
-  vi.useRealTimers();
 });
 
 describe("preloadScenarioCatalog：启动装载", () => {
@@ -195,23 +191,13 @@ describe("refreshOfficialScenarioCatalog：后台拉取官方目录", () => {
     expect(mocks.scenarioCacheWrite).not.toHaveBeenCalled();
   });
 
-  it("节流：间隔内第二次调用不重复拉取；窗口过后可重新拉取", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-10-23T10:00:00Z"));
+  it("无节流：每次调用都发起新拉取（进 tab 即可见云端上下架）", async () => {
     mocks.scenarioFetchOfficial.mockResolvedValue(http(200, JSON.stringify([])));
     const { catalog } = await loadModules();
 
     await catalog.refreshOfficialScenarioCatalog();
-    expect(mocks.scenarioFetchOfficial).toHaveBeenCalledTimes(1);
-
-    // 15 分钟窗口内：直接跳过，不发第二次请求
-    vi.setSystemTime(new Date("2026-10-23T10:05:00Z"));
     await catalog.refreshOfficialScenarioCatalog();
-    expect(mocks.scenarioFetchOfficial).toHaveBeenCalledTimes(1);
 
-    // 窗口过后：重新拉取
-    vi.setSystemTime(new Date("2026-10-23T10:16:00Z"));
-    await catalog.refreshOfficialScenarioCatalog();
     expect(mocks.scenarioFetchOfficial).toHaveBeenCalledTimes(2);
   });
 
