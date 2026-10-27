@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>笔记与复习 · 优化稿 2026-10-26</title>
+<style>
+/* 令牌沿用现有「护眼」主题的灰绿板；英文正文用衬线 */
+:root {
+  --accent: #1f6b57; --accent-hover: #185646; --accent-soft: #e3f0ea; --accent-line: #b9d8cc;
+  --bg: #eef1ee; --surface: #fff; --surface-2: #f6f8f6;
+  --border: #e1e6e2; --border-strong: #c9d1cc;
+  --text-1: #1f2329; --text-2: #48505a; --text-3: #69727d; --text-4: #8f98a3;
+  --ok: #2f8f5b; --warn: #a1620f; --warn-soft: #fbf1e1; --bad: #b4423a; --bad-soft: #fbeae8;
+  --tape: #e9dfc2; --tape-line: #cdbf93;
+  --font-ui: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --font-en: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --r-sm: 8px; --r-md: 12px; --r-lg: 18px; --r-pill: 999px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font: 14px/1.6 var(--font-ui); color: var(--text-1); background: var(--bg); height: 100vh; overflow: hidden; }
+button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ico { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.row { display: flex; align-items: center; gap: 8px; }
+.muted { color: var(--text-3); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 18px; border-radius: var(--r-pill); font-weight: 600; border: 1px solid var(--border-strong); background: var(--surface); }
+.btn:hover { background: var(--surface-2); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { background: var(--accent-hover); }
+.btn.lg { padding: 12px 30px; font-size: 16px; }
+.btn.sm { padding: 5px 12px; font-size: 13px; font-weight: 500; }
+kbd { font: 12px var(--font-ui); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 0 6px; background: var(--surface); color: var(--text-2); }
+/* 顶栏 */
+.topbar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 14px 24px 10px; }
+.pill { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-pill); }
+.brand { justify-self: start; display: flex; align-items: center; gap: 10px; padding: 5px 14px 5px 5px; font-weight: 600; }
+.logo { width: 28px; height: 28px; border-radius: 50%; background: var(--text-1); color: #fff; display: grid; place-items: center; font: italic 700 15px var(--font-en); }
+.tabs { display: flex; gap: 2px; padding: 4px; }
+.tab { display: inline-flex; align-items: center; gap: 5px; padding: 6px 16px; border-radius: var(--r-pill); color: var(--text-2); }
+.tab.on { background: var(--text-1); color: #fff; font-weight: 600; }
+.tab .badge { font-size: 12px; background: var(--accent-soft); color: var(--accent); border-radius: var(--r-pill); padding: 0 7px; }
+.tools { justify-self: end; display: flex; gap: 14px; align-items: center; padding: 6px 16px; color: var(--text-2); }
+/* 主体：左筛选栏 | 主区 | 右看板；专注模式下两侧栏隐藏 */
+.page { display: grid; grid-template-columns: 210px minmax(0, 1fr) 280px; gap: 16px; padding: 0 24px 20px; height: calc(100vh - 62px); }
+body[data-view="focus"] .page { grid-template-columns: minmax(0, 1fr); }
+body[data-view="focus"] .rail, body[data-view="focus"] .board, body[data-view="focus"] .tabs-nav { display: none; }
+.rail { display: flex; flex-direction: column; gap: 4px; padding: 6px 2px; overflow: auto; }
+.rail h4 { font-size: 12px; font-weight: 600; color: var(--text-3); letter-spacing: .04em; padding: 8px 12px 4px; }
+.rail-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-radius: var(--r-sm); color: var(--text-2); text-align: left; width: 100%; }
+.rail-item:hover { background: rgba(255,255,255,.6); }
+.rail-item.on { background: var(--surface); color: var(--text-1); font-weight: 600; box-shadow: 0 0 0 1px var(--border); }
+.rail-item .n { color: var(--text-3); font-size: 13px; font-weight: 400; }
+.rail-note { margin: 10px 12px; padding: 10px 12px; border-radius: var(--r-md); background: var(--warn-soft); color: var(--warn); font-size: 13px; line-height: 1.5; }
+.rail-note button { color: var(--warn); text-decoration: underline; font-size: 13px; }
+.stage { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); min-height: 0; overflow: auto; }
+.view { display: none; }
+body[data-view="home"] #v-home, body[data-view="focus"] #v-focus, body[data-view="export"] #v-export { display: block; }
+/* 主区头：模式切换 + 导出按钮（导出是动作，不再占 Tab） */
+.stage-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); z-index: 2; }
+.seg { display: flex; gap: 2px; padding: 3px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-pill); }
+.seg button { padding: 5px 16px; border-radius: var(--r-pill); color: var(--text-2); }
+.seg button.on { background: var(--surface); color: var(--text-1); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+/* 开始复习 Hero：首屏唯一主操作 */
+.hero { margin: 22px 24px 8px; padding: 26px 28px; border-radius: var(--r-lg); background: linear-gradient(135deg, var(--accent-soft), #f1f6f3); border: 1px solid var(--accent-line); display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.hero h2 { font: 600 24px/1.3 var(--font-en); margin-bottom: 4px; }
+.hero p { color: var(--text-2); }
+.modes { display: flex; gap: 8px; margin-top: 14px; }
+.mode { display: inline-flex; align-items: center; gap: 5px; padding: 4px 12px; border-radius: var(--r-pill); border: 1px solid var(--accent-line); background: rgba(255,255,255,.7); font-size: 13px; color: var(--text-2); }
+.mode.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.hero-cta { text-align: center; flex: none; }
+.hero-cta .muted { font-size: 12px; margin-top: 6px; }
+/* 待复习列表：默认只露出遮住的句子，答案与译文点开后才出现 */
+.list-title { display: flex; justify-content: space-between; align-items: center; padding: 18px 28px 6px; color: var(--text-3); font-size: 13px; }
+.list-title button { color: var(--accent); font-size: 13px; }
+.item { margin: 0 24px; padding: 18px 4px; border-bottom: 1px solid var(--border); }
+.item:last-child { border-bottom: 0; }
+.item .src { font-size: 12px; color: var(--text-3); margin-bottom: 6px; display: flex; gap: 8px; align-items: center; }
+.tag { font-size: 12px; padding: 0 8px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent); }
+.tag.chunk { background: #eceff8; color: #4b5a9a; }
+.sent { font: 19px/1.8 var(--font-en); }
+.tape { display: inline-block; vertical-align: baseline; min-width: 84px; height: 1.15em; margin: 0 2px; border-radius: 4px; background: repeating-linear-gradient(135deg, var(--tape) 0 6px, #efe7cf 6px 12px); border: 1px solid var(--tape-line); transform: translateY(3px); cursor: pointer; }
+.tape:hover { filter: brightness(.96); }
+.tape.open { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); font-weight: 600; padding: 0 8px; min-width: 0; height: auto; transform: none; }
+.reveal { margin-top: 8px; padding: 12px 14px; border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--border); }
+.reveal .zh { color: var(--text-1); }
+.reveal .def { color: var(--text-3); font-size: 13px; margin-top: 2px; }
+.grades { display: flex; gap: 8px; margin-top: 12px; }
+.grade { flex: 1; padding: 9px 0; border-radius: var(--r-md); border: 1px solid var(--border-strong); background: var(--surface); text-align: center; font-weight: 600; }
+.grade small { display: block; font-weight: 400; color: var(--text-3); font-size: 12px; }
+.grade.f:hover { background: var(--bad-soft); border-color: #e4b3ae; }
+.grade.m:hover { background: var(--warn-soft); border-color: #e6c88f; }
+.grade.g:hover { background: var(--accent-soft); border-color: var(--accent-line); }
+.item-actions { display: flex; gap: 14px; margin-top: 8px; color: var(--text-3); font-size: 13px; }
+.item-actions button { display: inline-flex; align-items: center; gap: 4px; color: var(--text-3); }
+.item-actions button:hover { color: var(--accent); }
+/* 右侧看板：数据为零时安静，不用红色惩罚 */
+.board { display: flex; flex-direction: column; gap: 12px; overflow: auto; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 16px 18px; }
+.card h3 { font-size: 13px; font-weight: 600; color: var(--text-3); margin-bottom: 12px; }
+.prog { display: flex; align-items: center; gap: 14px; }
+.ring { width: 64px; height: 64px; border-radius: 50%; background: conic-gradient(var(--accent) 0 0%, var(--border) 0); display: grid; place-items: center; }
+.ring span { width: 50px; height: 50px; border-radius: 50%; background: var(--surface); display: grid; place-items: center; font-weight: 700; }
+.prog b { font-size: 16px; display: block; }
+.stages { display: flex; height: 10px; border-radius: var(--r-pill); overflow: hidden; background: var(--border); margin-bottom: 12px; }
+.stages i { display: block; height: 100%; }
+.stage-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; color: var(--text-2); }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.stage-row .n { margin-left: auto; font-weight: 600; color: var(--text-1); }
+.heat { display: grid; grid-template-columns: repeat(14, 1fr); gap: 4px; }
+.heat i { aspect-ratio: 1; border-radius: 4px; background: var(--border); }
+.heat i.today { outline: 2px solid var(--accent); outline-offset: 1px; background: var(--surface); }
+.empty-hint { margin-top: 10px; font-size: 13px; color: var(--text-3); }
+/* 专注模式：只剩一道题，进度只出现一次 */
+.focus-wrap { max-width: 680px; margin: 0 auto; padding: 28px 24px 40px; }
+.focus-top { display: flex; align-items: center; gap: 14px; margin-bottom: 36px; }
+.bar { flex: 1; height: 6px; border-radius: var(--r-pill); background: var(--border); overflow: hidden; }
+.bar i { display: block; height: 100%; width: 20%; background: var(--accent); border-radius: inherit; }
+.exit { display: inline-flex; align-items: center; gap: 4px; color: var(--text-3); }
+.exit:hover { color: var(--text-1); }
+.q-meta { display: flex; gap: 8px; align-items: center; color: var(--text-3); font-size: 13px; margin-bottom: 14px; }
+.q-sent { font: 26px/2 var(--font-en); }
+.blank { display: inline-block; min-width: 150px; border-bottom: 2px solid var(--accent); margin: 0 4px; padding: 0 6px; font: 26px var(--font-en); color: var(--text-4); text-align: center; background: var(--accent-soft); border-radius: 6px 6px 0 0; }
+.hint-ladder { margin-top: 18px; display: flex; flex-direction: column; gap: 8px; }
+.hint-step { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--r-md); border: 1px dashed var(--border-strong); color: var(--text-3); }
+.hint-step.shown { border-style: solid; border-color: var(--accent-line); background: var(--accent-soft); color: var(--text-1); }
+.hint-step .lv { font-size: 12px; color: var(--text-3); flex: none; }
+.hint-step button { margin-left: auto; color: var(--accent); font-weight: 600; font-size: 13px; }
+.answer-row { margin-top: 26px; display: flex; gap: 10px; align-items: center; }
+.answer-row .keys { margin-left: auto; color: var(--text-3); font-size: 12px; display: flex; gap: 10px; }
+.focus-foot { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--border); color: var(--text-3); font-size: 13px; display: flex; justify-content: space-between; }
+/* 导出：范围/内容可选，复制与保存并列，原文/预览可切换 */
+.exp { padding: 22px 28px 32px; }
+.exp h2 { font: 600 22px/1.3 var(--font-en); }
+.exp-opts { display: flex; flex-wrap: wrap; gap: 18px 28px; margin: 18px 0; padding: 14px 16px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); }
+.opt-group { display: flex; align-items: center; gap: 8px; }
+.opt-group label { color: var(--text-3); font-size: 13px; }
+.chk { display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px; border-radius: var(--r-pill); border: 1px solid var(--border-strong); background: var(--surface); font-size: 13px; color: var(--text-2); }
+.chk.on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); font-weight: 600; }
+.exp-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.md { border: 1px solid var(--border); border-radius: var(--r-md); padding: 6px 22px 18px; background: #fff; }
+.md h3 { font: 600 18px var(--font-en); margin: 16px 0 8px; }
+.md .w { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.md .w:last-child { border-bottom: 0; }
+.md .w b { font: 600 17px var(--font-en); }
+.md .ipa { color: var(--text-3); margin-left: 8px; font-size: 13px; }
+.md .ex { font: 15px/1.7 var(--font-en); color: var(--text-2); margin-top: 3px; padding-left: 12px; border-left: 3px solid var(--accent-line); }
+.md .note { font-size: 13px; color: var(--text-3); margin-top: 2px; padding-left: 12px; }
+/* 原型状态切换器（不属于产品界面） */
+.proto-switch { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; gap: 4px; padding: 4px; background: rgba(31,35,41,.92); border-radius: var(--r-pill); z-index: 9; }
+.proto-switch button { padding: 5px 14px; border-radius: var(--r-pill); color: #cfd5d2; font-size: 13px; }
+.proto-switch button.on { background: #fff; color: var(--text-1); font-weight: 600; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute"><defs>
+<symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5"/></symbol>
+<symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+<symbol id="i-note" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+<symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></symbol>
+<symbol id="i-sound" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6"/></symbol>
+<symbol id="i-mic2" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+<symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></symbol>
+<symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></symbol>
+<symbol id="i-out" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+</defs></svg>
+
+<header class="topbar">
+  <div class="pill brand"><span class="logo">I</span><svg class="ico"><use href="#i-book"/></svg>书架 · 笔记与复习</div>
+  <nav class="pill tabs">
+    <span class="tab"><svg class="ico"><use href="#i-book"/></svg>阅读</span>
+    <span class="tab"><svg class="ico"><use href="#i-mic"/></svg>口语</span>
+    <span class="tab on"><svg class="ico"><use href="#i-note"/></svg>笔记与复习<span class="badge">5</span></span>
+  </nav>
+  <div class="pill tools"><svg class="ico"><use href="#i-search"/></svg><span>主题: 护眼</span><svg class="ico"><use href="#i-gear"/></svg></div>
+</header>
+
+<main class="page">
+  <!-- 左：只做筛选，不再摆出待复习词表，避免泄露答案 -->
+  <aside class="rail">
+    <h4>内容来源</h4>
+    <button class="rail-item on">全部<span class="n">5</span></button>
+    <button class="rail-item">The Speed of Reading<span class="n">1</span></button>
+    <button class="rail-item">划词收藏<span class="n">3</span></button>
+    <button class="rail-item">口语纠偏<span class="n">0</span></button>
+    <h4>类型</h4>
+    <button class="rail-item">单词<span class="n">3</span></button>
+    <button class="rail-item">词块 / 短语<span class="n">2</span></button>
+    <div class="rail-note">有 1 条内容未整理，可能不是词汇（如命令行）。<br><button>去处理</button></div>
+  </aside>
+
+  <section class="stage">
+    <!-- ===== 状态 1：复习首页 ===== -->
+    <div class="view" id="v-home">
+      <div class="stage-head">
+        <div class="seg"><button class="on">今日复习</button><button>全部笔记</button></div>
+        <button class="btn sm" onclick="go('export')"><svg class="ico"><use href="#i-down"/></svg>导出笔记</button>
+      </div>
+      <div class="hero">
+        <div>
+          <h2>今天有 5 条要复习</h2>
+          <p>预计 3 分钟 · 都是你最近读到、收藏过的表达</p>
+          <div class="modes">
+            <span class="mode on">填空</span><span class="mode">听音</span><span class="mode">开口</span>
+          </div>
+        </div>
+        <div class="hero-cta">
+          <button class="btn primary lg" onclick="go('focus')"><svg class="ico"><use href="#i-play"/></svg>开始复习</button>
+          <div class="muted">按 Enter 也可以开始</div>
+        </div>
+      </div>
+      <div class="list-title"><span>先自己想一想，点胶带看答案</span><button onclick="tapeAll()">全部盖住</button></div>
+      <div class="item" id="it1">
+        <div class="src"><span class="tag">单词</span>《The Speed of Reading》</div>
+        <div class="sent">Researchers measured how fast <span class="tape open" data-w="volunteers">volunteers</span> could move through a text.</div>
+        <div class="reveal">
+          <div class="zh">研究人员测量了志愿者阅读一段文本的速度。</div>
+          <div class="def">volunteers · n. 志愿者（volunteer 的复数）</div>
+          <div class="grades">
+            <button class="grade f">没记住<small>10 分钟后再来</small></button>
+            <button class="grade m">有点模糊<small>明天再看</small></button>
+            <button class="grade g">记住了<small>4 天后再看</small></button>
+          </div>
+        </div>
+        <div class="item-actions"><button><svg class="ico"><use href="#i-sound"/></svg>听原句</button><button><svg class="ico"><use href="#i-mic2"/></svg>去口语里用一次</button></div>
+      </div>
+      <div class="item">
+        <div class="src"><span class="tag chunk">词块</span>《I am wondering if others have experienced what I am seeing》</div>
+        <div class="sent">Locations on Booking.com and Ctrip are also similarly <span class="tape" data-w="inconsistent with" style="min-width:150px"></span> street address.</div>
+        <div class="item-actions"><button><svg class="ico"><use href="#i-bulb"/></svg>给点提示</button><button><svg class="ico"><use href="#i-sound"/></svg>听原句</button></div>
+      </div>
+      <div class="item">
+        <div class="src"><span class="tag">单词</span>划词收藏</div>
+        <div class="sent">Our company <span class="tape" data-w="standardizes" style="min-width:110px"></span> all reports so every department uses the same simple format.</div>
+        <div class="item-actions"><button><svg class="ico"><use href="#i-bulb"/></svg>给点提示</button><button><svg class="ico"><use href="#i-sound"/></svg>听原句</button></div>
+      </div>
+    </div>
+    <!-- ===== 状态 2：专注填空（隐藏两侧栏） ===== -->
+    <div class="view" id="v-focus">
+      <div class="focus-wrap">
+        <div class="focus-top">
+          <button class="exit" onclick="go('home')"><svg class="ico"><use href="#i-x"/></svg>退出 <kbd>Esc</kbd></button>
+          <div class="bar"><i></i></div>
+          <span class="muted">1 / 5</span>
+        </div>
+        <div class="q-meta"><span class="tag">填空</span>来自《The Speed of Reading》</div>
+        <div class="q-sent">Researchers measured how fast <span class="blank">写出被遮住的词</span> could move through a text.</div>
+        <div class="hint-ladder">
+          <div class="hint-step shown"><span class="lv">提示 1</span>译文：研究人员测量了＿＿＿阅读一段文本的速度。</div>
+          <div class="hint-step"><span class="lv">提示 2</span>首字母与长度<button>展开</button></div>
+        </div>
+        <div class="answer-row">
+          <button class="btn primary lg">提交</button>
+          <button class="btn lg">我不会</button>
+          <div class="keys"><span><kbd>Enter</kbd> 提交</span><span><kbd>Tab</kbd> 下一级提示</span></div>
+        </div>
+        <div class="focus-foot"><span>提示不会显示答案本身</span><span>提交后选择「记住了 / 模糊 / 没记住」</span></div>
+      </div>
+    </div>
+    <!-- ===== 状态 3：导出 ===== -->
+    <div class="view" id="v-export">
+      <div class="stage-head">
+        <button class="exit" onclick="go('home')">← 返回复习</button>
+        <div class="row"><button class="btn sm"><svg class="ico"><use href="#i-copy"/></svg>复制 Markdown</button><button class="btn primary sm"><svg class="ico"><use href="#i-down"/></svg>保存为 .md</button></div>
+      </div>
+      <div class="exp">
+        <h2>导出学习笔记</h2>
+        <div class="exp-opts">
+          <div class="opt-group"><label>范围</label><span class="chk on">本周</span><span class="chk">今天</span><span class="chk">全部</span></div>
+          <div class="opt-group"><label>包含</label><span class="chk on">原句</span><span class="chk on">释义</span><span class="chk">音标</span><span class="chk on">用法提示</span></div>
+        </div>
+        <div class="exp-bar"><div class="seg"><button class="on">预览</button><button>Markdown 源码</button></div><span class="muted">共 3 条</span></div>
+        <div class="md">
+          <h3>2026-10-26 英语精读笔记</h3>
+          <div class="w"><b>volunteers</b><span class="ipa">/ˌvɒlənˈtɪəz/</span> n. 志愿者
+            <div class="ex">Researchers measured how fast volunteers could move through a text.</div></div>
+          <div class="w"><b>inconsistent with</b> 与……不一致
+            <div class="ex">Locations on Booking.com and Ctrip are also similarly inconsistent with street address.</div>
+            <div class="note">用法：be inconsistent with sth。</div></div>
+          <div class="w"><b>standardizes</b><span class="ipa">/ˈstændədaɪzɪz/</span> v. 使标准化
+            <div class="ex">Our company standardizes all reports so every department uses the same simple format.</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <aside class="board">
+    <div class="card">
+      <h3>今日进度</h3>
+      <div class="prog"><div class="ring"><span>0/5</span></div><div><b>还差 5 条</b><span class="muted">约 3 分钟</span></div></div>
+    </div>
+    <div class="card">
+      <h3>掌握阶段</h3>
+      <div class="stages"><i style="width:0;background:#c9a74a"></i><i style="width:100%;background:#6aa690"></i><i style="width:0;background:var(--accent)"></i></div>
+      <div class="stage-row"><span class="dot" style="background:#c9a74a"></span>刚收集<span class="n">0</span></div>
+      <div class="stage-row"><span class="dot" style="background:#6aa690"></span>眼熟（读到能懂）<span class="n">5</span></div>
+      <div class="stage-row"><span class="dot" style="background:var(--accent)"></span>能说出口<span class="n">0</span></div>
+    </div>
+    <div class="card">
+      <h3>近 28 天</h3>
+      <div class="heat" id="heat"></div>
+      <div class="empty-hint">完成第一轮复习，就会点亮今天。</div>
+    </div>
+  </aside>
+</main>
+<div class="proto-switch"><button data-v="home" class="on">复习首页</button><button data-v="focus">专注填空</button><button data-v="export">导出</button></div>
+<script>
+function go(v) {
+  document.body.dataset.view = v;
+  document.querySelectorAll('.proto-switch button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+}
+function tapeAll() {
+  document.querySelectorAll('.tape').forEach(t => { t.classList.remove('open'); t.textContent = ''; });
+}
+document.querySelectorAll('.proto-switch button').forEach(b => b.onclick = () => go(b.dataset.v));
+document.querySelectorAll('.tape').forEach(t => t.onclick = () => {
+  const open = t.classList.toggle('open');
+  t.textContent = open ? t.dataset.w : '';
+});
+const heat = document.getElementById('heat');
+for (let i = 0; i < 28; i++) heat.insertAdjacentHTML('beforeend', '<i' + (i === 27 ? ' class="today"' : '') + '></i>');
+go(new URLSearchParams(location.search).get('v') || 'home');
+</script>
+</body>
+</html>

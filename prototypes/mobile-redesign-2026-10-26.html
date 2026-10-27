@@ -1,0 +1,816 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>沉浸口语 · 移动端改版半保真原型 2026-10-26</title>
+<style>
+/* 令牌沿用 mobile-v3 定稿（暖纸浅色板）；本稿只动信息架构、文案与页面结构，不换视觉语言 */
+:root{
+  --bg:#FAF8F3; --surface:#FFFFFF; --surface-2:#F3F0E9;
+  --ink:#201D18; --ink-2:#565147; --ink-3:#736C5F; --ink-4:#B4AC9E;
+  --hairline:#E7E2D6; --hairline-strong:#D8D2C2;
+  --accent:#2B567F; --accent-soft:rgba(43,86,127,.10); --on-ink:#FAF8F3;
+  --ok:#3F7050; --ok-soft:rgba(63,112,80,.10);
+  --warn:#96631C; --warn-soft:rgba(150,99,28,.10);
+  --err:#AE4A3C; --err-soft:rgba(174,74,60,.10);
+  --font-serif:ui-serif,"New York",Georgia,"Source Serif 4",serif;
+  --font-sans:-apple-system,"SF Pro Text","PingFang SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.5 var(--font-sans);color:var(--ink);background:#E8E3D6;padding:48px 32px 96px}
+button{font:inherit;color:inherit;border:0;background:none}
+.ico{width:22px;height:22px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.ico.sm{width:18px;height:18px}.ico.xs{width:14px;height:14px}
+.fill{fill:currentColor;stroke:none}
+.en{font-family:var(--font-serif)}
+
+/* ---------- 看板外壳 ---------- */
+.head{max-width:1760px;margin:0 auto 44px}
+.head h1{font-size:30px;letter-spacing:.5px}
+.head p{margin-top:8px;color:var(--ink-2);max-width:780px;font-size:15px}
+.sec{max-width:1760px;margin:0 auto 72px}
+.sec>h2{font-size:20px;margin-bottom:6px;display:flex;align-items:center;gap:10px}
+.sec>h2 em{font-style:normal;font-size:12px;font-weight:600;color:var(--on-ink);background:var(--ink);border-radius:10px;padding:1px 9px}
+.sec>.sub{color:var(--ink-3);margin-bottom:28px}
+.row{display:flex;flex-wrap:wrap;gap:52px 36px;align-items:flex-start}
+
+/* ---------- 手机壳与通用组件 ---------- */
+.dev{width:393px}
+.phone{width:393px;height:778px;border:9px solid #1F1C17;border-radius:50px;background:var(--bg);position:relative;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 50px rgba(32,29,24,.22),0 2px 6px rgba(32,29,24,.25)}
+.sb{height:46px;flex:none;display:flex;justify-content:space-between;align-items:flex-end;padding:0 28px 6px 32px;font-weight:600;font-size:15px}
+.sb .r{display:flex;gap:6px;align-items:center;font-size:12px}
+.sb svg{fill:currentColor}
+.body{flex:1;min-height:0;overflow:hidden;position:relative;display:flex;flex-direction:column}
+.tabbar{flex:none;height:84px;border-top:1px solid var(--hairline);background:var(--bg);display:flex;padding:9px 6px 0}
+.tabbar a{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:11px;color:var(--ink-3);position:relative}
+.tabbar a.on{color:var(--ink);font-weight:700}
+.tabbar a.on .ico{stroke-width:2.1}
+.tabbar .dot{position:absolute;top:0;left:calc(50% + 9px);width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.hi{position:absolute;bottom:7px;left:50%;transform:translateX(-50%);width:128px;height:5px;border-radius:3px;background:var(--ink);z-index:8}
+/* 组件 */
+.ttl{font-size:30px;font-weight:700;letter-spacing:.5px;line-height:1.2}
+.lbl{font-size:12px;color:var(--ink-3);letter-spacing:.4px}
+.card{background:var(--surface);border:1px solid var(--hairline);border-radius:18px}
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;line-height:1.5;padding:1px 9px;border-radius:99px;background:var(--surface-2);color:var(--ink-2);white-space:nowrap}
+.chip.acc{background:var(--accent-soft);color:var(--accent)}.chip.ok{background:var(--ok-soft);color:var(--ok)}.chip.warn{background:var(--warn-soft);color:var(--warn)}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;height:52px;border-radius:16px;background:var(--ink);color:var(--on-ink);font-size:17px;font-weight:600}
+.btn.ghost{background:transparent;border:1.5px solid var(--hairline-strong);color:var(--ink)}
+.btn.soft{background:var(--accent-soft);color:var(--accent)}
+.btn.sm{height:36px;font-size:14px;border-radius:12px;padding:0 14px;display:inline-flex}
+.cir{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;flex:none}
+.cir.line{border:1px solid var(--hairline-strong)}.cir.soft{background:var(--surface-2)}
+.seg{display:flex;background:var(--surface-2);border-radius:12px;padding:3px}
+.seg b{flex:1;text-align:center;font-weight:500;font-size:14px;padding:6px 0;border-radius:10px;color:var(--ink-3)}
+.seg b.on{background:var(--surface);color:var(--ink);font-weight:700;box-shadow:0 1px 3px rgba(32,29,24,.12)}
+.prog{height:3px;border-radius:2px;background:var(--hairline);overflow:hidden}
+.prog i{display:block;height:100%;background:var(--accent)}
+.x{border-bottom:1.5px dashed var(--accent)}
+.w{background:rgba(32,29,24,.07);border-radius:4px;padding:0 3px}
+.tgl{width:44px;height:26px;border-radius:13px;background:var(--ok);position:relative;flex:none}
+.tgl::after{content:"";position:absolute;top:3px;right:3px;width:20px;height:20px;border-radius:50%;background:#fff}
+.topbar{display:grid;grid-template-columns:48px 1fr 48px;align-items:center;height:48px;padding:0 12px;flex:none}
+.topbar .t{text-align:center;font-weight:700;font-size:17px}
+/* 批注 */
+.pin{position:absolute;z-index:9;width:20px;height:20px;border-radius:50%;background:var(--err);color:#fff;font:700 11px/20px var(--font-sans);text-align:center;box-shadow:0 0 0 3px rgba(174,74,60,.2)}
+.cap{margin-top:20px}
+.cap h3{font-size:17px}
+.cap .was{font-size:12.5px;color:var(--ink-3);margin:1px 0 10px}
+.cap ol{list-style:none;display:grid;gap:8px}
+.cap li{display:flex;gap:9px;font-size:13px;color:var(--ink-2);line-height:1.55}
+.cap li i{flex:none;width:18px;height:18px;border-radius:50%;background:var(--err);color:#fff;font:700 10.5px/18px var(--font-sans);text-align:center;font-style:normal;margin-top:2px}
+.cap li b{color:var(--ink)}
+
+
+.flow{display:flex;gap:10px;align-items:stretch;margin-top:26px;max-width:1180px}
+.flow .s{flex:1;background:#fff;border:1px solid var(--hairline);border-radius:16px;padding:14px 16px}
+.flow .s b{display:block;font-size:15px;margin-bottom:2px}
+.flow .s span{font-size:12.5px;color:var(--ink-3);line-height:1.5;display:block}
+.flow .ar{align-self:center;color:var(--ink-3);font-size:22px}
+.pr{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:18px;max-width:1180px}
+.pr div{border-left:3px solid var(--ink);padding:2px 0 2px 14px;font-size:13.5px;color:var(--ink-2)}
+.pr b{display:block;color:var(--ink);font-size:15px;margin-bottom:2px}
+.note{margin-top:18px;max-width:1180px;font-size:12.5px;color:var(--ink-3)}
+
+
+.st{margin-top:6px;position:relative}
+.st-row{display:flex;gap:12px;align-items:center;padding:0 14px;height:54px;border-top:1px solid var(--hairline)}
+.st-row:first-child{border-top:0}
+.st-row>div{flex:1;min-width:0}
+.st-row b{display:block;font-weight:600;line-height:1.3}
+.st-row small{display:block;font-size:12px;color:var(--ink-3);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st-row .ico:first-child{color:var(--ink-2)}
+.st-h{font-size:12px;color:var(--ink-3);letter-spacing:.4px;margin:14px 4px 0}
+
+
+.nm{width:560px}
+.nm table{width:100%;border-collapse:collapse;font-size:13.5px}
+.nm th{text-align:left;font-size:12px;font-weight:600;color:var(--ink-3);padding:0 12px 8px}
+.nm td{padding:9px 12px;border-top:1px solid var(--hairline);vertical-align:top;line-height:1.5}
+.nm td:first-child{color:var(--ink-3);text-decoration:line-through;text-decoration-color:rgba(115,108,95,.45);white-space:nowrap}
+.nm td:nth-child(2){font-weight:700;white-space:nowrap}
+.nm td:last-child{color:var(--ink-2);font-size:12.5px}
+
+</style>
+</head>
+<body>
+
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-sig" viewBox="0 0 18 11"><rect x="0" y="7" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="6" rx=".8"/><rect x="10" y="2.5" width="3" height="8.5" rx=".8"/><rect x="15" y="0" width="3" height="11" rx=".8"/></symbol>
+<symbol id="i-bat" viewBox="0 0 27 12"><rect x=".5" y=".5" width="22" height="11" rx="3.2" fill="none" stroke="currentColor" opacity=".45"/><rect x="2" y="2" width="19" height="8" rx="2"/><path d="M24.5 4v4c.9-.3 1.5-1.1 1.5-2s-.6-1.7-1.5-2z" opacity=".5"/></symbol>
+<symbol id="i-today" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M8 3v4M16 3v4M4 10h16"/><circle cx="12" cy="15" r="1.3" fill="currentColor" stroke="none"/></symbol>
+<symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></symbol>
+<symbol id="i-book" viewBox="0 0 24 24"><path d="M5 4v16M10 4v16M15 5l4 15M3 20h18"/></symbol>
+<symbol id="i-mark" viewBox="0 0 24 24"><path d="M7 4h10v16l-5-4-5 4z"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+<symbol id="i-fwd" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+<symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.3"/><circle cx="8" cy="17" r="2.3"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></symbol>
+<symbol id="i-prev" viewBox="0 0 24 24"><path d="M6.5 5v14M18 5.5v13L9 12z"/></symbol>
+<symbol id="i-next" viewBox="0 0 24 24"><path d="M17.5 5v14M6 5.5v13L15 12z"/></symbol>
+<symbol id="i-spk" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></symbol>
+<symbol id="i-kbd" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2.5"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+<symbol id="i-trans" viewBox="0 0 24 24"><path d="M4 6h9M8.5 4v2M6 6c.5 3 2.5 5.5 5.5 7M12 6c-.5 3-3 5.8-7 7.5M13 20l4-9 4 9M14.5 17h5"/></symbol>
+<symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.5"/><path d="M6 6l3.5 3.5M18 6l-3.5 3.5M6 18l3.5-3.5M18 18l-3.5-3.5"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+<symbol id="i-dots" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
+<symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></symbol>
+<symbol id="i-coffee" viewBox="0 0 24 24"><path d="M5 9h11v5a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5zM16 10h2a2.5 2.5 0 0 1 0 5h-2M8 3v3M12 3v3"/></symbol>
+<symbol id="i-plane" viewBox="0 0 24 24"><path d="M21 4L3 11l7 3 3 7zM10 14l11-10"/></symbol>
+<symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s6-5.5 6-11a6 6 0 0 0-12 0c0 5.5 6 11 6 11z"/><circle cx="12" cy="10" r="2.2"/></symbol>
+<symbol id="i-brief" viewBox="0 0 24 24"><rect x="3.5" y="7.5" width="17" height="12" rx="2.5"/><path d="M9 7.5V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5M3.5 13h17"/></symbol>
+<symbol id="i-wave" viewBox="0 0 24 24"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></symbol>
+<symbol id="i-repeat" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3M18 3v4h-4M6 21v-4h4"/></symbol>
+<symbol id="i-clip" viewBox="0 0 24 24"><rect x="6" y="4" width="12" height="17" rx="2.5"/><path d="M9.5 4V3h5v1M9 10h6M9 14h6"/></symbol>
+<symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 0 1-.5-9A6 6 0 0 1 18 10a4 4 0 0 1-.5 8z"/></symbol>
+<symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13h6l-1 8 8-10h-6z"/></symbol>
+<symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/></symbol>
+<symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 17v-6a6 6 0 0 1 12 0v6l1.5 2h-15zM10 21h4"/></symbol>
+<symbol id="i-flask" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></symbol>
+</defs></svg>
+
+
+<header class="head">
+  <h1>沉浸口语 · 移动端改版半保真原型</h1>
+  <p>依据 7 张现状截图的体验评审做的改版稿。视觉语言沿用 mobile-v3（暖纸底、衬线英文、墨色主按钮），只动信息架构、文案和页面结构。屏内数据均为示例，红点编号对应每屏下方的「改了什么」。</p>
+  <div class="flow">
+    <div class="s"><b>1 阅读</b><span>读文章时点词，收进「表达」</span></div><div class="ar">›</div>
+    <div class="s"><b>2 表达</b><span>到期的表达自动排进今日口语任务</span></div><div class="ar">›</div>
+    <div class="s"><b>3 开口</b><span>在场景对话里把它们用出来</span></div><div class="ar">›</div>
+    <div class="s"><b>4 总结</b><span>用上了几个、哪里可改，一键存回「表达」</span></div>
+  </div>
+  <div class="pr">
+    <div><b>口语居中</b>首页第一屏就是今日口语任务，「开口」升到第 2 个 Tab。</div>
+    <div><b>术语说人话</b>清卡、词块、收词三路、ASR/ISE 不再出现在主界面。</div>
+    <div><b>先给进度，再给欠账</b>「0/11 · 连续 0 天」换成本周开口进度和已完成目标。</div>
+  </div>
+  <p class="note">这版没覆盖：深色模式、首日空状态、转场动效，以及真实语音识别与 AI 反馈的表现，这些需要上手实测才能判断。</p>
+</header>
+
+<section class="sec">
+<h2>A · 四个主 Tab <em>每日入口</em></h2>
+<p class="sub">Tab 顺序改为 今天 / 开口 / 阅读 / 表达，口语从最后一位提到第二位。</p>
+<div class="row">
+
+<!-- ========== 今天 ========== -->
+<div class="dev">
+<div class="phone">
+<div class="sb"><span>18:40</span><span class="r"><svg width="18" height="11"><use href="#i-sig"/></svg><span>4G</span><svg width="27" height="12"><use href="#i-bat"/></svg></span></div>
+<div class="body" style="padding:0 20px">
+  <div style="display:flex;justify-content:space-between;align-items:center;height:34px">
+    <span class="lbl">10月26日 星期一</span>
+    <svg class="ico" style="color:var(--ink-2)"><use href="#i-sliders"/></svg>
+  </div>
+  <div class="ttl" style="margin-top:6px">晚上好</div>
+  <div style="color:var(--ink-2);margin-top:2px">今天只做一件事：开口说 3 分钟。</div>
+
+  <div style="margin-top:16px;background:var(--ink);color:var(--on-ink);border-radius:22px;padding:18px 18px 16px;position:relative">
+    <div style="font-size:12px;opacity:.7;letter-spacing:.5px">今日口语任务 · 约 3 分钟</div>
+    <div class="en" style="font-size:22px;font-weight:700;margin-top:6px;line-height:1.25">Chat with a new neighbor</div>
+    <div style="opacity:.8;margin-top:2px;font-size:14px">和新邻居聊聊搬家后的生活</div>
+    <div style="margin-top:12px;font-size:12px;opacity:.7">今天要用上</div>
+    <div class="en" style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;font-size:15px">
+      <span style="border:1px dashed rgba(250,248,243,.55);border-radius:99px;padding:1px 11px">settle in</span>
+      <span style="border:1px dashed rgba(250,248,243,.55);border-radius:99px;padding:1px 11px">canopy</span>
+      <span style="border:1px dashed rgba(250,248,243,.55);border-radius:99px;padding:1px 11px">buffer against</span>
+    </div>
+    <div class="btn" style="background:var(--on-ink);color:var(--ink);margin-top:16px"><svg class="ico sm"><use href="#i-mic"/></svg>开始对话</div>
+    <span class="pin" style="top:-8px;right:-6px">1</span>
+  </div>
+
+  <div style="display:flex;gap:10px;margin-top:12px;position:relative">
+    <div class="card" style="flex:1.1;padding:12px 14px;display:flex;align-items:center;gap:12px">
+      <svg width="46" height="46" viewBox="0 0 46 46"><circle cx="23" cy="23" r="18" fill="none" stroke="var(--hairline)" stroke-width="5"/><circle cx="23" cy="23" r="18" fill="none" stroke="var(--accent)" stroke-width="5" stroke-linecap="round" stroke-dasharray="75.4 113.1" transform="rotate(-90 23 23)"/><text x="23" y="27.5" text-anchor="middle" font-size="12" font-weight="700" fill="var(--ink)">2/3</text></svg>
+      <div><div style="font-weight:700;font-size:14px">本周开口</div><div class="lbl">再 1 次达标</div></div>
+    </div>
+    <div class="card" style="flex:1;padding:12px 14px">
+      <div style="font-weight:700;font-size:14px">连续 3 天</div>
+      <div style="display:flex;gap:5px;margin-top:8px"><i style="width:14px;height:14px;border-radius:50%;background:var(--ok)"></i><i style="width:14px;height:14px;border-radius:50%;background:var(--ok)"></i><i style="width:14px;height:14px;border-radius:50%;background:var(--ok)"></i><i style="width:14px;height:14px;border-radius:50%;border:1.5px dashed var(--ink-4)"></i></div>
+    </div>
+    <span class="pin" style="top:-8px;left:-6px">2</span>
+  </div>
+
+  <div class="card" style="margin-top:12px;padding:12px 14px;display:flex;align-items:center;gap:12px;position:relative">
+    <div class="cir soft"><svg class="ico sm"><use href="#i-mark"/></svg></div>
+    <div style="flex:1"><div style="font-weight:700">复习 11 个表达</div><div class="lbl">约 6 分钟 · 只复习 3 个 · 1 分钟</div></div>
+    <svg class="ico sm" style="color:var(--ink-3)"><use href="#i-fwd"/></svg>
+    <span class="pin" style="top:-8px;right:-6px">3</span>
+  </div>
+
+  <div style="margin-top:14px;padding:0 2px">
+    <div style="display:flex;justify-content:space-between"><span class="lbl">继续阅读</span><span class="lbl" style="color:var(--accent)">50%</span></div>
+    <div class="en" style="font-size:19px;font-weight:700;margin-top:3px">Why Cities Need Trees</div>
+    <div class="lbl" style="margin:1px 0 7px">读到第 6 句 · 共 12 句 · 还剩约 6 分钟</div>
+    <div class="prog"><i style="width:50%"></i></div>
+  </div>
+</div>
+<div class="tabbar">
+  <a class="on"><svg class="ico"><use href="#i-today"/></svg>今天</a>
+  <a><svg class="ico"><use href="#i-mic"/></svg>开口</a>
+  <a><svg class="ico"><use href="#i-book"/></svg>阅读</a>
+  <a><svg class="ico"><use href="#i-mark"/></svg>表达<i class="dot"></i></a>
+</div>
+<div class="hi"></div>
+</div>
+<div class="cap">
+  <h3>今天</h3>
+  <div class="was">原：大号待还数字「11」、0/11、连续 0 天、收词三路</div>
+  <ol>
+    <li><i>1</i><span><b>口语任务做首屏主角。</b>任务由「今天要复习的表达」生成，阅读、表达、口语第一次接上。</span></li>
+    <li><i>2</i><span><b>用进度替代欠账。</b>「本周开口 2/3」和连续天数放同一行，先给正反馈。</span></li>
+    <li><i>3</i><span><b>术语换成人话。</b>「清卡」改「复习」，8 分钟和 2 分钟两个时长合成一行；收词入口挪进「表达」页的 +。</span></li>
+    <li><i>·</i><span>右上角的太阳图标换成滑块，不再像深色模式开关；Tab 角标改成小圆点。</span></li>
+  </ol>
+</div>
+</div>
+
+
+<!-- ========== 开口 ========== -->
+<div class="dev">
+<div class="phone">
+<div class="sb"><span>18:40</span><span class="r"><svg width="18" height="11"><use href="#i-sig"/></svg><span>4G</span><svg width="27" height="12"><use href="#i-bat"/></svg></span></div>
+<div class="body" style="padding:0 20px">
+  <div style="margin-top:8px"><span class="ttl">开口</span></div>
+  
+
+  <div class="card" style="margin-top:14px;padding:12px 14px;background:var(--accent-soft);border-color:transparent;display:flex;gap:12px;align-items:center;position:relative">
+    <div style="flex:1;min-width:0">
+      <div class="lbl" style="color:var(--accent)">今日任务 · 3 分钟</div>
+      <div class="en" style="font-size:18px;font-weight:700;margin-top:2px">Chat with a new neighbor</div>
+      <div class="lbl" style="margin-top:2px">用上 settle in / canopy / buffer against</div>
+    </div>
+    <div class="cir" style="width:48px;height:48px;background:var(--ink);color:var(--on-ink)"><svg class="ico"><use href="#i-mic"/></svg></div>
+    <span class="pin" style="top:-8px;right:-6px">1</span>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:14px"><b style="font-size:16px">选个场景</b><span class="lbl">4 个</span></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;position:relative">
+    <div class="card" style="padding:9px 12px;display:flex;gap:10px;align-items:center"><div class="cir soft" style="width:38px;height:38px"><svg class="ico sm"><use href="#i-coffee"/></svg></div><div><b>点餐</b><div class="lbl">入门 · 3 分钟</div></div></div>
+    <div class="card" style="padding:9px 12px;display:flex;gap:10px;align-items:center"><div class="cir soft" style="width:38px;height:38px"><svg class="ico sm"><use href="#i-plane"/></svg></div><div><b>旅行</b><div class="lbl">入门 · 4 分钟</div></div></div>
+    <div class="card" style="padding:9px 12px;display:flex;gap:10px;align-items:center"><div class="cir soft" style="width:38px;height:38px"><svg class="ico sm"><use href="#i-pin"/></svg></div><div><b>问路</b><div class="lbl">入门 · 2 分钟</div></div></div>
+    <div class="card" style="padding:9px 12px;display:flex;gap:10px;align-items:center"><div class="cir soft" style="width:38px;height:38px"><svg class="ico sm"><use href="#i-brief"/></svg></div><div><b>面试</b><div class="lbl">进阶 · 5 分钟</div></div></div>
+    <span class="pin" style="top:-8px;left:-6px">2</span>
+  </div>
+
+  <b style="font-size:16px;display:block;margin-top:14px">跟读与听写</b>
+  <div class="card" style="margin-top:10px;position:relative">
+    <div style="display:flex;gap:12px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--hairline)">
+      <svg class="ico" style="color:var(--ink-2)"><use href="#i-wave"/></svg>
+      <div style="flex:1"><b>影子跟读</b><div class="lbl">每次 3 句，没读准的词会标红</div></div>
+      <svg class="ico sm" style="color:var(--ink-3)"><use href="#i-fwd"/></svg>
+    </div>
+    <div style="display:flex;gap:12px;align-items:center;padding:9px 14px">
+      <svg class="ico" style="color:var(--ink-2)"><use href="#i-clip"/></svg>
+      <div style="flex:1"><b>边说边译</b><div class="lbl">开口说英文，中英字幕同步出现</div></div>
+      <svg class="ico sm" style="color:var(--ink-3)"><use href="#i-fwd"/></svg>
+    </div>
+    <span class="pin" style="top:-8px;right:-6px">3</span>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:14px"><b style="font-size:16px">最近练习</b><span class="lbl">全部</span></div>
+  <div style="display:flex;gap:10px;margin-top:10px;position:relative">
+    <div class="card" style="flex:1;padding:9px 12px"><b>旅行</b><div class="lbl">10月10日 · 5 轮</div><div style="margin-top:6px;font-size:13px;color:var(--accent);font-weight:600;display:flex;align-items:center;gap:4px"><svg class="ico xs"><use href="#i-repeat"/></svg>再练一次</div></div>
+    <div class="card" style="flex:1;padding:9px 12px"><b>点餐</b><div class="lbl">10月2日 · 3 轮</div><div style="margin-top:6px;font-size:13px;color:var(--accent);font-weight:600;display:flex;align-items:center;gap:4px"><svg class="ico xs"><use href="#i-repeat"/></svg>再练一次</div></div>
+    <span class="pin" style="top:-8px;right:-6px">4</span>
+  </div>
+</div>
+<div class="tabbar">
+  <a><svg class="ico"><use href="#i-today"/></svg>今天</a>
+  <a class="on"><svg class="ico"><use href="#i-mic"/></svg>开口</a>
+  <a><svg class="ico"><use href="#i-book"/></svg>阅读</a>
+  <a><svg class="ico"><use href="#i-mark"/></svg>表达<i class="dot"></i></a>
+</div>
+<div class="hi"></div>
+</div>
+<div class="cap">
+  <h3>开口（原「练」）</h3>
+  <div class="was">原：一个「练」字，三个入口层级不一，场景数量要点进去才知道</div>
+  <ol>
+    <li><i>1</i><span><b>首位放今日任务。</b>打开就能开口，不用先挑场景；任务和「今天」页是同一个。</span></li>
+    <li><i>2</i><span><b>场景平铺。</b>名称、难度、时长一眼可见，不再藏在「4 个场景」后面。</span></li>
+    <li><i>3</i><span><b>工具降级。</b>影子跟读、录音直译归到「跟读与听写」，文案改成能看懂的话（原：词级标红、字幕实时落）。</span></li>
+    <li><i>4</i><span><b>最近练习可一键重练。</b>原来只有场景名和轮数，点进去是回看还是继续并不明确。</span></li>
+  </ol>
+</div>
+</div>
+
+
+<!-- ========== 阅读（书架） ========== -->
+<div class="dev">
+<div class="phone">
+<div class="sb"><span>18:40</span><span class="r"><svg width="18" height="11"><use href="#i-sig"/></svg><span>4G</span><svg width="27" height="12"><use href="#i-bat"/></svg></span></div>
+<div class="body" style="padding:0 20px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;position:relative">
+    <span class="ttl">阅读</span>
+    <div class="cir line" style="width:38px;height:38px"><svg class="ico sm"><use href="#i-plus"/></svg></div>
+    <span class="pin" style="top:-4px;right:-6px">1</span>
+  </div>
+  <div class="seg" style="margin-top:12px"><b class="on">我的书架</b><b>发现</b></div>
+
+  <div class="card" style="margin-top:14px;padding:14px;position:relative">
+    <div style="display:flex;justify-content:space-between"><span class="lbl" style="color:var(--accent);font-weight:600">继续读</span><span class="lbl">还剩约 6 分钟</span></div>
+    <div class="en" style="font-size:19px;font-weight:700;margin-top:3px">Why Cities Need Trees</div>
+    <div class="lbl" style="margin:1px 0 9px">为什么城市需要树 · 读到第 6/12 句</div>
+    <div class="prog"><i style="width:50%"></i></div>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:16px"><b style="font-size:15px">全部文章</b><span class="lbl">3 篇</span></div>
+  <div style="margin-top:4px;position:relative">
+    <div style="padding:11px 0;border-bottom:1px solid var(--hairline);display:flex;align-items:center;gap:10px">
+      <div style="flex:1;min-width:0"><div class="en" style="font-size:16.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">I noticed the rhythm of my own foots</div><div class="lbl">粘贴导入 · 3 句 · 约 2 分钟 · 未开始</div></div>
+      <span class="chip acc">命名</span>
+    </div>
+    <div style="padding:11px 0;border-bottom:1px solid var(--hairline)">
+      <div class="en" style="font-size:16.5px;font-weight:700">The Quiet Power of Reading Slowly</div>
+      <div class="lbl" style="margin-bottom:6px">慢读的力量 · 3 句 · 读到第 1 句</div>
+      <div class="prog"><i style="width:33%"></i></div>
+    </div>
+    <span class="pin" style="top:6px;right:-6px">2</span>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:16px"><b style="font-size:15px">为你推荐</b><span class="lbl" style="color:var(--accent)">去发现 ›</span></div>
+  <div style="display:flex;gap:10px;margin-top:10px;position:relative">
+    <div class="card" style="flex:1;padding:12px"><span class="chip ok">入门</span><div class="en" style="font-weight:700;margin-top:6px;line-height:1.3">How to Order Coffee Abroad</div><div class="lbl" style="margin-top:3px">5 句 · 3 分钟</div></div>
+    <div class="card" style="flex:1;padding:12px"><span class="chip ok">入门</span><div class="en" style="font-weight:700;margin-top:6px;line-height:1.3">A Walk Through the Old Town</div><div class="lbl" style="margin-top:3px">8 句 · 4 分钟</div></div>
+    <span class="pin" style="top:-8px;left:-6px">3</span>
+  </div>
+</div>
+<div class="tabbar">
+  <a><svg class="ico"><use href="#i-today"/></svg>今天</a>
+  <a><svg class="ico"><use href="#i-mic"/></svg>开口</a>
+  <a class="on"><svg class="ico"><use href="#i-book"/></svg>阅读</a>
+  <a><svg class="ico"><use href="#i-mark"/></svg>表达<i class="dot"></i></a>
+</div>
+<div class="hi"></div>
+</div>
+<div class="cap">
+  <h3>阅读（原「书架」）</h3>
+  <div class="was">原：书架只有 3 篇、没有发现入口，底部常驻删除手势提示</div>
+  <ol>
+    <li><i>1</i><span><b>改名「阅读」，加「我的书架 / 发现」。</b>新用户书架是空的时候也有东西可读；+ 保留为导入入口。</span></li>
+    <li><i>2</i><span><b>标题一行截断。</b>粘贴导入的文章用首句当标题，容易出现语病和折行，旁边给「命名」入口；元信息统一成「句数 + 分钟」。</span></li>
+    <li><i>3</i><span><b>推荐卡片带难度标签。</b>入门级文章直接放在书架下方，一点即可加入。</span></li>
+    <li><i>·</i><span>「左滑删除」不再常驻：首次左滑时给一次提示，之后靠撤销条兜底。</span></li>
+  </ol>
+</div>
+</div>
+
+
+<!-- ========== 表达（原生词） ========== -->
+<div class="dev">
+<div class="phone">
+<div class="sb"><span>18:40</span><span class="r"><svg width="18" height="11"><use href="#i-sig"/></svg><span>4G</span><svg width="27" height="12"><use href="#i-bat"/></svg></span></div>
+<div class="body" style="padding:0 20px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;position:relative">
+    <span class="ttl">表达</span>
+    <div style="display:flex;gap:8px">
+      <div class="cir line" style="width:38px;height:38px"><svg class="ico sm"><use href="#i-search"/></svg></div>
+      <div class="cir line" style="width:38px;height:38px"><svg class="ico sm"><use href="#i-plus"/></svg></div>
+    </div>
+    <span class="pin" style="top:-4px;right:-6px">1</span>
+  </div>
+  <div class="seg" style="margin-top:12px"><b class="on">待复习 11</b><b>全部 12</b></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
+    <span class="lbl">约 6 分钟</span>
+    <span class="btn sm" style="height:32px">开始复习</span>
+  </div>
+
+  <div style="margin-top:6px;position:relative">
+    <div style="padding:12px 0 13px;border-bottom:1px solid var(--hairline)">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="en" style="font-size:20px;font-weight:700">in the wake of</span><span class="chip">习语</span>
+        <span style="flex:1"></span><svg class="ico sm" style="color:var(--accent)"><use href="#i-spk"/></svg>
+      </div>
+      <div style="color:var(--ink-2);margin-top:1px">紧随……之后（常指随坏事而来）</div>
+      <div class="en" style="margin-top:8px;padding:9px 11px;background:var(--surface-2);border-radius:12px;font-size:15px;line-height:1.5"><span class="x">In the wake of</span> the storm, the council planted twelve thousand trees.</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+        <span class="lbl">来自 · Why Cities Need Trees</span>
+        <span class="chip acc" style="padding:3px 11px;font-size:13px"><svg class="ico xs"><use href="#i-mic"/></svg>用它说一句</span>
+      </div>
+      <span class="pin" style="top:54px;right:-6px">2</span>
+    </div>
+    <div style="padding:12px 0;border-bottom:1px solid var(--hairline)">
+      <div style="display:flex;align-items:center;gap:8px"><span class="en" style="font-size:20px;font-weight:700">buffer against</span><span class="chip">搭配</span><span style="flex:1"></span><svg class="ico sm" style="color:var(--ink-3)"><use href="#i-spk"/></svg></div>
+      <div style="color:var(--ink-2)">缓冲，抵御（噪音、冲击、炎热）</div>
+      <div class="lbl" style="margin-top:2px">来自 · Why Cities Need Trees</div>
+    </div>
+    <div style="padding:12px 0;border-bottom:1px solid var(--hairline)">
+      <div style="display:flex;align-items:center;gap:8px"><span class="en" style="font-size:20px;font-weight:700">attribute X to Y</span><span class="chip">句式</span><span style="flex:1"></span><svg class="ico sm" style="color:var(--ink-3)"><use href="#i-spk"/></svg></div>
+      <div style="color:var(--ink-2)">把 X 归因于 Y</div>
+      <div class="lbl" style="margin-top:2px">来自 · Why Cities Need Trees</div>
+    </div>
+    <div style="padding:12px 0;border-bottom:1px solid var(--hairline)">
+      <div style="display:flex;align-items:center;gap:8px"><span class="en" style="font-size:20px;font-weight:700">settle in</span><span class="chip">短语动词</span><span style="flex:1"></span><svg class="ico sm" style="color:var(--ink-3)"><use href="#i-spk"/></svg></div>
+      <div style="color:var(--ink-2)">安顿下来，适应新环境</div>
+      <div class="lbl" style="margin-top:2px">来自 · 口语陪练</div>
+    </div>
+    <span class="pin" style="top:204px;right:-6px">3</span>
+  </div>
+</div>
+<div class="tabbar">
+  <a><svg class="ico"><use href="#i-today"/></svg>今天</a>
+  <a><svg class="ico"><use href="#i-mic"/></svg>开口</a>
+  <a><svg class="ico"><use href="#i-book"/></svg>阅读</a>
+  <a class="on"><svg class="ico"><use href="#i-mark"/></svg>表达<i class="dot"></i></a>
+</div>
+<div class="hi"></div>
+</div>
+<div class="cap">
+  <h3>表达（原「生词」）</h3>
+  <div class="was">原：每行都有「演示」和「现在」标签，没有发音和语境，术语表混在里面</div>
+  <ol>
+    <li><i>1</i><span><b>改名「表达」。</b>这里存的是习语、搭配、句式，不只是单词；搜索和「+」放在右上角，收词的三种方式（阅读点词 / 分享 / 粘贴）收进「+」菜单。</span></li>
+    <li><i>2</i><span><b>展开即语境。</b>点开一条显示原句、出处和发音；「用它说一句」把阅读里收的词接到口语练习。</span></li>
+    <li><i>3</i><span><b>去噪。</b>删掉「演示」「现在」这类重复标签，每行只留类型一个标签；「术语表」移到设置里；Tab 数字角标改成小圆点。</span></li>
+  </ol>
+</div>
+</div>
+
+</div>
+</section>
+
+<section class="sec">
+<h2>B · 从阅读到开口 <em>口语闭环</em></h2>
+<p class="sub">读一段、收几个表达、开口用出来。下面四屏是这条链路的核心页面。</p>
+<div class="row">
+
+<!-- ========== 阅读器 ========== -->
+<div class="dev">
+<div class="phone">
+<div class="sb"><span>18:40</span><span class="r"><svg width="18" height="11"><use href="#i-sig"/></svg><span>4G</span><svg width="27" height="12"><use href="#i-bat"/></svg></span></div>
+<div class="body" style="padding:0">
+  <div class="topbar" style="height:58px;align-items:flex-start;padding-top:4px">
+    <svg class="ico" style="margin-top:6px"><use href="#i-back"/></svg>
+    <div style="text-align:center"><div class="en" style="font-weight:700;font-size:17px">Why Cities Need Trees</div><div class="lbl">第 6/12 句 · 还剩约 6 分钟</div></div>
+    <svg class="ico" style="margin:6px 0 0 auto"><use href="#i-dots"/></svg>
+  </div>
+  <div class="prog" style="margin:0 20px"><i style="width:50%"></i></div>
+  <div style="display:flex;gap:14px;padding:9px 22px 0;font-size:11.5px;color:var(--ink-3);position:relative">
+    <span><span class="x">虚线</span> 可收的表达</span><span><span class="w">灰底</span> 生词</span><span>点句子看译文</span>
+    <span class="pin" style="top:6px;right:8px">1</span>
+  </div>
+
+  <div class="en" style="padding:12px 22px 0;font-size:18.5px;line-height:1.72;position:relative">
+    <p>The idea of car-free streets <span class="x">took root</span> after the summer of <span class="w">heatwaves</span>. <span class="x">In the wake of</span> the storm, the council planted twelve thousand trees. Planners borrowed the Dutch woonerven, where pedestrians come first.</p>
+
+    <div style="margin:16px 0 2px -10px;padding:6px 10px 8px;background:var(--accent-soft);border-left:3px solid var(--accent);border-radius:0 12px 12px 0;position:relative">
+      The city's tree <span class="w">canopy</span> now covers forty percent of the streets.
+      <div style="font-family:var(--font-sans);font-size:14px;line-height:1.55;color:var(--ink-2);margin-top:4px;border-top:1px dashed var(--hairline-strong);padding-top:5px">这座城市的树冠层，如今覆盖了四成街道。<span style="color:var(--accent);margin-left:6px;font-size:12px">收起</span></div>
+      <span class="pin" style="top:-6px;right:-14px">2</span>
+    </div>
+
+    <p style="margin-top:12px">Rows of <span class="w">lindens</span> <span class="x">buffer against</span> the traffic noise all summer. Residents say the air feels lighter near the boulevard.</p>
+  </div>
+
+  <div style="position:absolute;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--hairline);padding:8px 8px 22px">
+    <div style="display:flex;align-items:center;position:relative">
+      <a style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:var(--ink-2)"><svg class="ico sm"><use href="#i-prev"/></svg>上一句</a>
+      <a style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px"><span class="cir" style="width:46px;height:46px;background:var(--ink);color:var(--on-ink)"><svg class="ico"><use href="#i-play"/></svg></span></a>
+      <a style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:var(--ink-2)"><svg class="ico sm"><use href="#i-next"/></svg>下一句</a>
+      <a style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:var(--accent);font-weight:600"><svg class="ico sm"><use href="#i-trans"/></svg>译文</a>
+      <a style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:var(--ink-2)"><svg class="ico sm"><use href="#i-mic"/></svg>跟读</a>
+      <a style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:var(--ink-2)"><span style="font:700 15px/18px var(--font-serif)">Aa</span>字号</a>
+      <span class="pin" style="top:-20px;right:8px">3</span>
+    </div>
+  </div>
+  <div class="hi"></div>
+</div>
+</div>
+<div class="cap">
+  <h3>阅读器</h3>
+  <div class="was">原：英文句后紧跟灰色中文，全部常显；标注无图例；看不出当前读到哪一句</div>
+  <ol>
+    <li><i>1</i><span><b>加一行图例。</b>虚线下划线是可收的表达，灰底是生词；虚线连成整段，不再按词断开。</span></li>
+    <li><i>2</i><span><b>译文默认收起，点句子再展开。</b>英文连续读，不用在两种语言间来回跳；当前句用淡蓝底和左侧竖线标出。</span></li>
+    <li><i>3</i><span><b>底栏图标全加文字。</b>麦克风明确叫「跟读」，新增「译文」总开关，进度挪到标题下方。</span></li>
+  </ol>
+</div>
+</div>
+
+
+<!-- ========== 场景准备 ========== -->
+<div class="dev">
+<div class="phone">
+<div class="sb"><span>18:40</span><span class="r"><svg width="18" height="11"><use href="#i-sig"/></svg><span>4G</span><svg width="27" height="12"><use href="#i-bat"/></svg></span></div>
+<div class="body" style="padding:0 20px">
+  <div class="topbar" style="padding:0;grid-template-columns:36px 1fr 36px"><svg class="ico"><use href="#i-back"/></svg><span></span><span></span></div>
+  <div style="display:flex;gap:12px;align-items:center;margin-top:2px">
+    <div class="cir" style="width:52px;height:52px;background:var(--accent-soft);color:var(--accent)"><svg class="ico"><use href="#i-spk"/></svg></div>
+    <div><div class="en" style="font-size:23px;font-weight:700;line-height:1.2">Chat with a new neighbor</div><div style="color:var(--ink-2)">和新邻居聊聊搬家后的生活</div></div>
+  </div>
+  <div style="display:flex;gap:6px;margin-top:10px"><span class="chip ok">入门</span><span class="chip">约 3 分钟</span><span class="chip">你是：新搬来的住户</span></div>
+
+  <div class="card" style="margin-top:14px;padding:12px 14px;color:var(--ink-2);line-height:1.6;position:relative">
+    周末下午，你在小区花园里遇到邻居 <b style="color:var(--ink)">Sam</b>。你刚搬来两周，想聊聊新家和周围的环境。
+    <span class="pin" style="top:-8px;right:-6px">1</span>
+  </div>
+
+  <b style="display:block;margin-top:16px;font-size:15px">本次目标</b>
+  <div style="margin-top:8px;position:relative">
+    <div style="display:flex;gap:10px;align-items:center;padding:8px 0"><i style="width:20px;height:20px;border-radius:50%;border:1.5px solid var(--hairline-strong)"></i>简单介绍自己</div>
+    <div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--hairline)"><i style="width:20px;height:20px;border-radius:50%;border:1.5px solid var(--hairline-strong)"></i><span>用上 <span class="en x" style="font-size:16px">settle in</span> 说说适应得怎么样</span></div>
+    <div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--hairline)"><i style="width:20px;height:20px;border-radius:50%;border:1.5px solid var(--hairline-strong)"></i><span>夸夸街上的树，试试 <span class="en x" style="font-size:16px">canopy</span></span></div>
+    <span class="pin" style="top:2px;right:-6px">2</span>
+  </div>
+
+  <b style="display:block;margin-top:16px;font-size:15px">可能用到</b>
+  <div style="margin-top:6px">
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--hairline)"><span class="en" style="flex:1;font-size:15.5px">I'm still trying to <span class="x">settle in</span>.</span><svg class="ico sm" style="color:var(--accent)"><use href="#i-spk"/></svg></div>
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 0"><span class="en" style="flex:1;font-size:15.5px">The <span class="x">canopy</span> keeps the street cool.</span><svg class="ico sm" style="color:var(--accent)"><use href="#i-spk"/></svg></div>
+  </div>
+
+  <div style="position:absolute;left:0;right:0;bottom:0;padding:10px 20px 26px;background:var(--bg);border-top:1px solid var(--hairline)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;position:relative">
+      <span style="font-size:14px;color:var(--ink-2)">对话中显示提示句</span><span class="tgl"></span>
+      <span class="pin" style="top:-4px;left:160px">3</span>
+    </div>
+    <div class="btn"><svg class="ico sm"><use href="#i-mic"/></svg>开始对话</div>
+  </div>
+  <div class="hi"></div>
+</div>
+</div>
+<div class="cap">
+  <h3>场景准备（新增）</h3>
+  <div class="was">原：点进场景直接进空白对话页，不知道自己是谁、该说什么</div>
+  <ol>
+    <li><i>1</i><span><b>先交代情境。</b>你是谁、在哪儿、和谁说话，两行讲完。</span></li>
+    <li><i>2</i><span><b>目标拆成 3 个可勾选的小任务。</b>其中两条正好是今天要复习的表达，对话结束后能直接看到完成情况。</span></li>
+    <li><i>3</i><span><b>提示句可开关。</b>想挑战自己的人关掉提示，新手保持开启；示例句可点击试听。</span></li>
+  </ol>
+</div>
+</div>
+
+
+<!-- ========== 对话（待说） ========== -->
+<div class="dev">
+<div class="phone">
+<div class="sb"><span>18:40</span><span class="r"><svg width="18" height="11"><use href="#i-sig"/></svg><span>4G</span><svg width="27" height="12"><use href="#i-bat"/></svg></span></div>
+<div class="body" style="padding:0">
+  <div class="topbar" style="grid-template-columns:44px 1fr 56px;height:50px">
+    <svg class="ico"><use href="#i-back"/></svg>
+    <div style="text-align:center"><div style="font-weight:700;font-size:16px">新邻居闲聊</div><div class="lbl">花园 · 周末下午</div></div>
+    <span style="font-size:14px;color:var(--ink-2);text-align:right">结束</span>
+  </div>
+  <div style="display:flex;gap:8px;padding:6px 20px 10px;border-bottom:1px solid var(--hairline);position:relative">
+    <span class="chip ok"><svg class="ico xs"><use href="#i-check"/></svg>自我介绍</span>
+    <span class="chip acc" style="border:1px dashed var(--accent)">settle in</span>
+    <span class="chip">canopy</span>
+    <span style="flex:1"></span><span class="lbl" style="align-self:center">1/3</span>
+    <span class="pin" style="top:4px;right:-2px">1</span>
+  </div>
+
+  <div style="flex:1;padding:14px 20px 0;display:flex;flex-direction:column;gap:12px;min-height:0;overflow:hidden">
+    <div class="card en" style="align-self:flex-start;max-width:84%;padding:11px 14px;font-size:17px;line-height:1.5">Hi! I'm Sam. Are you the new neighbor?
+      <div style="font-family:var(--font-sans);display:flex;gap:14px;margin-top:6px;color:var(--ink-3);font-size:12.5px"><span style="display:flex;gap:4px;align-items:center"><svg class="ico xs"><use href="#i-spk"/></svg>听</span><span style="display:flex;gap:4px;align-items:center"><svg class="ico xs"><use href="#i-trans"/></svg>译文</span></div>
+    </div>
+    <div class="en" style="align-self:flex-end;max-width:82%;padding:11px 14px;font-size:17px;line-height:1.5;background:var(--ink);color:var(--on-ink);border-radius:18px 18px 4px 18px">Yes, I'm Lin. I moved here two weeks ago.</div>
+    <div style="align-self:flex-end;margin-top:-6px;font-size:12px;color:var(--ok);display:flex;gap:4px;align-items:center"><svg class="ico xs"><use href="#i-check"/></svg>自我介绍 已完成</div>
+    <div class="card en" style="align-self:flex-start;max-width:84%;padding:11px 14px;font-size:17px;line-height:1.5">Welcome! How are you settling in so far?
+      <div style="font-family:var(--font-sans);display:flex;gap:14px;margin-top:6px;color:var(--ink-3);font-size:12.5px"><span style="display:flex;gap:4px;align-items:center"><svg class="ico xs"><use href="#i-spk"/></svg>听</span><span style="display:flex;gap:4px;align-items:center"><svg class="ico xs"><use href="#i-trans"/></svg>译文</span></div>
+    </div>
+  </div>
+
+  <div style="flex:none;padding:0 16px 24px;position:relative">
+    <div class="card" style="padding:10px 12px;background:var(--accent-soft);border-color:transparent">
+      <div class="lbl" style="color:var(--accent)">试着说</div>
+      <div class="en" style="font-size:16.5px;margin-top:2px">I'm still trying to <span class="x">settle in</span>, but I like it here.</div>
+      <div style="display:flex;gap:16px;margin-top:6px;font-size:13px;color:var(--accent);font-weight:600"><span style="display:flex;gap:4px;align-items:center"><svg class="ico xs"><use href="#i-spk"/></svg>听</span><span style="display:flex;gap:4px;align-items:center"><svg class="ico xs"><use href="#i-mic"/></svg>跟读</span><span style="display:flex;gap:4px;align-items:center;color:var(--ink-3);font-weight:400"><svg class="ico xs"><use href="#i-repeat"/></svg>换一句</span></div>
+      <span class="pin" style="top:-8px;right:-4px">2</span>
+    </div>
+    <div style="display:flex;gap:8px;margin:10px 0;position:relative">
+      <span class="chip" style="padding:3px 12px;font-size:13px">看中文提示</span><span class="chip" style="padding:3px 12px;font-size:13px">说简单点</span><span class="chip" style="padding:3px 12px;font-size:13px">放慢重播</span>
+      <span class="pin" style="top:-8px;right:-4px">3</span>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;position:relative">
+      <div class="cir line" style="width:52px;height:52px;border-radius:16px"><svg class="ico"><use href="#i-kbd"/></svg></div>
+      <div class="btn" style="flex:1;height:52px;flex-direction:column;gap:0;font-size:16px;line-height:1.2"><span style="display:flex;gap:8px;align-items:center"><svg class="ico sm"><use href="#i-mic"/></svg>按住说话</span><span style="font-size:11px;font-weight:400;opacity:.65">上滑取消</span></div>
+      <span class="pin" style="top:-8px;right:-4px">4</span>
+    </div>
+  </div>
+  <div class="hi"></div>
+</div>
+</div>
+<div class="cap">
+  <h3>对话（待说）</h3>
+  <div class="was">原：空白页 + 一个「按住说话」，提示句藏在中文括号里的灰字</div>
+  <ol>
+    <li><i>1</i><span><b>顶部固定目标进度。</b>用到目标表达会即时打勾，不用等到结束。</span></li>
+    <li><i>2</i><span><b>提示句做成卡片。</b>目标表达带虚线，可听、可跟读、可换一句。</span></li>
+    <li><i>3</i><span><b>卡住时有三个出口。</b>看中文提示、让对方说简单点、放慢重播，不会只剩沉默。</span></li>
+    <li><i>4</i><span><b>说明手势。</b>「上滑取消」直接写在按钮上；设置里可切换成点按开始 / 结束，适合说长句。</span></li>
+  </ol>
+</div>
+</div>
+
+
+<!-- ========== 对话（录音中） ========== -->
+<div class="dev">
+<div class="phone">
+<div class="sb"><span>18:40</span><span class="r"><svg width="18" height="11"><use href="#i-sig"/></svg><span>4G</span><svg width="27" height="12"><use href="#i-bat"/></svg></span></div>
+<div class="body" style="padding:0">
+  <div class="topbar" style="grid-template-columns:44px 1fr 56px;height:50px;opacity:.45">
+    <svg class="ico"><use href="#i-back"/></svg>
+    <div style="text-align:center"><div style="font-weight:700;font-size:16px">新邻居闲聊</div><div class="lbl">花园 · 周末下午</div></div>
+    <span style="font-size:14px;color:var(--ink-2);text-align:right">结束</span>
+  </div>
+
+  <div style="flex:1;padding:14px 20px 0;display:flex;flex-direction:column;gap:12px;min-height:0;overflow:hidden">
+    <div class="card en" style="align-self:flex-start;max-width:84%;padding:11px 14px;font-size:17px;line-height:1.5;opacity:.4">Welcome! How are you settling in so far?</div>
+    <div class="en" style="align-self:flex-end;max-width:86%;padding:11px 14px;font-size:17px;line-height:1.5;background:var(--surface);border:1.5px solid var(--accent);border-radius:18px 18px 4px 18px;position:relative">
+      Everything is new, but I'm slowly <span class="x">settling in</span><span style="display:inline-block;width:2px;height:18px;background:var(--accent);vertical-align:-3px;margin-left:2px"></span>
+      <span class="pin" style="top:-10px;left:-10px">1</span>
+    </div>
+    <div style="align-self:flex-end;font-size:12px;color:var(--ink-3)">实时转写中</div>
+  </div>
+
+  <div style="flex:none;padding:0 16px 26px;position:relative">
+    <div style="border:1.5px dashed var(--hairline-strong);border-radius:16px;padding:9px 0;text-align:center;font-size:13px;color:var(--ink-3);position:relative">
+      <span style="display:inline-flex;gap:6px;align-items:center"><svg class="ico xs"><use href="#i-x"/></svg>上滑到这里取消</span>
+      <span class="pin" style="top:-10px;right:-4px">2</span>
+    </div>
+    <div style="margin-top:10px;background:var(--ink);color:var(--on-ink);border-radius:20px;padding:14px 16px 12px;position:relative">
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">
+        <span style="display:flex;gap:6px;align-items:center"><i style="width:8px;height:8px;border-radius:50%;background:#E5705F"></i>录音中</span><span style="font-variant-numeric:tabular-nums">0:07</span>
+      </div>
+      <div style="display:flex;gap:3px;align-items:center;justify-content:center;height:40px;margin:8px 0 6px">
+        <i style="width:3px;height:8px;border-radius:2px;background:rgba(250,248,243,.5)"></i><i style="width:3px;height:14px;border-radius:2px;background:rgba(250,248,243,.5)"></i><i style="width:3px;height:22px;border-radius:2px;background:rgba(250,248,243,.7)"></i><i style="width:3px;height:30px;border-radius:2px;background:rgba(250,248,243,.8)"></i><i style="width:3px;height:18px;border-radius:2px;background:rgba(250,248,243,.7)"></i><i style="width:3px;height:36px;border-radius:2px;background:#fff"></i><i style="width:3px;height:26px;border-radius:2px;background:#fff"></i><i style="width:3px;height:12px;border-radius:2px;background:rgba(250,248,243,.7)"></i><i style="width:3px;height:32px;border-radius:2px;background:#fff"></i><i style="width:3px;height:20px;border-radius:2px;background:rgba(250,248,243,.8)"></i><i style="width:3px;height:34px;border-radius:2px;background:#fff"></i><i style="width:3px;height:16px;border-radius:2px;background:rgba(250,248,243,.7)"></i><i style="width:3px;height:28px;border-radius:2px;background:#fff"></i><i style="width:3px;height:10px;border-radius:2px;background:rgba(250,248,243,.5)"></i><i style="width:3px;height:24px;border-radius:2px;background:rgba(250,248,243,.8)"></i><i style="width:3px;height:14px;border-radius:2px;background:rgba(250,248,243,.5)"></i><i style="width:3px;height:8px;border-radius:2px;background:rgba(250,248,243,.5)"></i>
+      </div>
+      <div style="text-align:center;font-size:15px;font-weight:600">松开发送</div>
+      <span class="pin" style="top:-10px;left:-10px">3</span>
+    </div>
+  </div>
+  <div class="hi"></div>
+</div>
+</div>
+<div class="cap">
+  <h3>对话（录音中）</h3>
+  <div class="was">原：截图里没有这个状态，属于补全</div>
+  <ol>
+    <li><i>1</i><span><b>实时转写。</b>边说边出字，用户能确认自己被听见了；目标表达识别到会加虚线。</span></li>
+    <li><i>2</i><span><b>取消区常驻可见。</b>长句说到一半发现不对，上滑就能放弃，不会被迫发送。</span></li>
+    <li><i>3</i><span><b>状态只留三件事：</b>计时、波形、「松开发送」。提示卡和求助按钮在录音时收起，减少干扰。</span></li>
+  </ol>
+</div>
+</div>
+
+</div>
+</section>
+
+<section class="sec">
+<h2>C · 对话总结、设置与命名 <em>收尾</em></h2>
+<p class="sub">对话结束后的反馈页、重排后的设置页，以及这次改版涉及的名词替换。</p>
+<div class="row">
+
+<!-- ========== 对话总结 ========== -->
+<div class="dev">
+<div class="phone">
+<div class="sb"><span>18:40</span><span class="r"><svg width="18" height="11"><use href="#i-sig"/></svg><span>4G</span><svg width="27" height="12"><use href="#i-bat"/></svg></span></div>
+<div class="body" style="padding:0 20px">
+  <div class="topbar" style="padding:0;grid-template-columns:36px 1fr 36px"><svg class="ico"><use href="#i-x"/></svg><div class="t">本次对话</div><span></span></div>
+
+  <div style="text-align:center;margin-top:4px;position:relative">
+    <div class="ttl" style="font-size:44px">2<span style="font-size:26px;color:var(--ink-3)"> / 3</span></div>
+    <div style="color:var(--ink-2)">个目标完成 · 6 轮 · 3 分 12 秒</div>
+    <div style="margin-top:6px;color:var(--ok);font-weight:600">今天新用上了 2 个表达</div>
+    <span class="pin" style="top:0;right:10px">1</span>
+  </div>
+
+  <div class="card" style="margin-top:14px;padding:4px 14px;position:relative">
+    <div style="display:flex;gap:10px;align-items:center;padding:9px 0"><span class="cir" style="width:22px;height:22px;background:var(--ok);color:#fff"><svg class="ico xs"><use href="#i-check"/></svg></span>简单介绍自己</div>
+    <div style="display:flex;gap:10px;align-items:center;padding:9px 0;border-top:1px solid var(--hairline)"><span class="cir" style="width:22px;height:22px;background:var(--ok);color:#fff"><svg class="ico xs"><use href="#i-check"/></svg></span><span>用上 <span class="en">settle in</span></span></div>
+    <div style="display:flex;gap:10px;align-items:center;padding:9px 0;border-top:1px solid var(--hairline)"><i style="width:22px;height:22px;border-radius:50%;border:1.5px dashed var(--ink-4)"></i><span style="flex:1">用上 <span class="en">canopy</span></span><span class="chip acc">留到明天</span></div>
+    <span class="pin" style="top:-8px;right:-6px">2</span>
+  </div>
+
+  <b style="display:block;margin-top:16px;font-size:15px">值得改一改 · 2 处</b>
+  <div class="card" style="margin-top:8px;padding:11px 14px;position:relative">
+    <div class="en" style="color:var(--err);text-decoration:line-through;text-decoration-color:rgba(174,74,60,.5);font-size:15px">I am here two weeks.</div>
+    <div class="en" style="font-size:16px;margin-top:3px;font-weight:600">I've been here for two weeks.</div>
+    <div style="display:flex;gap:16px;margin-top:7px;font-size:13px;color:var(--accent);font-weight:600"><span style="display:flex;gap:4px;align-items:center"><svg class="ico xs"><use href="#i-spk"/></svg>听</span><span style="display:flex;gap:4px;align-items:center"><svg class="ico xs"><use href="#i-mark"/></svg>存入表达</span></div>
+    <span class="pin" style="top:-8px;right:-6px">3</span>
+  </div>
+  <div class="card" style="margin-top:8px;padding:11px 14px">
+    <div class="en" style="color:var(--err);text-decoration:line-through;text-decoration-color:rgba(174,74,60,.5);font-size:15px">It is very quiet and comfortable.</div>
+    <div class="en" style="font-size:16px;margin-top:3px;font-weight:600">It's really quiet and peaceful.</div>
+    <div style="display:flex;gap:16px;margin-top:7px;font-size:13px;color:var(--accent);font-weight:600"><span style="display:flex;gap:4px;align-items:center"><svg class="ico xs"><use href="#i-spk"/></svg>听</span><span style="display:flex;gap:4px;align-items:center"><svg class="ico xs"><use href="#i-mark"/></svg>存入表达</span></div>
+  </div>
+
+  <div style="position:absolute;left:0;right:0;bottom:0;padding:10px 20px 26px;background:var(--bg);border-top:1px solid var(--hairline);display:flex;gap:10px">
+    <div class="btn ghost" style="flex:1">再聊一次</div><div class="btn" style="flex:1">回到今天</div>
+  </div>
+  <div class="hi"></div>
+</div>
+</div>
+<div class="cap">
+  <h3>对话总结（新增）</h3>
+  <div class="was">原：没有结束页，练完没有反馈</div>
+  <ol>
+    <li><i>1</i><span><b>先说完成了什么，再谈分数。</b>大数字是目标完成数，一句话点出「今天新用上了 2 个表达」。</span></li>
+    <li><i>2</i><span><b>没用上的表达不算失败。</b>标成「留到明天」，会进入明天的任务。</span></li>
+    <li><i>3</i><span><b>纠错最多给 2 条。</b>错句和更自然的说法并排，一键存回「表达」，回到阅读-表达-口语的闭环。</span></li>
+  </ol>
+</div>
+</div>
+
+
+
+<!-- ========== 设置 ========== -->
+<div class="dev">
+<div class="phone">
+<div class="sb"><span>18:40</span><span class="r"><svg width="18" height="11"><use href="#i-sig"/></svg><span>4G</span><svg width="27" height="12"><use href="#i-bat"/></svg></span></div>
+<div class="body" style="padding:0 20px">
+  <div class="topbar" style="padding:0;grid-template-columns:36px 1fr 36px"><svg class="ico"><use href="#i-back"/></svg><div class="t">设置</div><span></span></div>
+
+  <div class="st-h" style="margin-top:6px">学习</div>
+  <div class="card st">
+    <div class="st-row"><svg class="ico sm"><use href="#i-bell"/></svg><div><b>提醒与目标</b><small>每天 21:30 · 每周开口 3 次</small></div><svg class="ico xs" style="color:var(--ink-3)"><use href="#i-fwd"/></svg></div>
+    <div class="st-row"><svg class="ico sm"><use href="#i-mic"/></svg><div><b>口语偏好</b><small>美式口音 · 正常语速 · 按住说话</small></div><svg class="ico xs" style="color:var(--ink-3)"><use href="#i-fwd"/></svg></div>
+    <div class="st-row"><svg class="ico sm"><use href="#i-trans"/></svg><div><b>阅读与翻译</b><small>译文点击展开 · 自动检测语言</small></div><svg class="ico xs" style="color:var(--ink-3)"><use href="#i-fwd"/></svg></div>
+    <div class="st-row"><svg class="ico sm"><use href="#i-sun"/></svg><div><b>外观</b><small>浅色</small></div><svg class="ico xs" style="color:var(--ink-3)"><use href="#i-fwd"/></svg></div>
+    <span class="pin" style="top:-8px;right:-6px">1</span>
+  </div>
+
+  <div class="st-h">账号与数据</div>
+  <div class="card st">
+    <div class="st-row"><svg class="ico sm"><use href="#i-cloud"/></svg><div><b>同步与备份</b><small>未登录 · 数据仅保存在本机</small></div><svg class="ico xs" style="color:var(--ink-3)"><use href="#i-fwd"/></svg></div>
+    <span class="pin" style="top:-8px;right:-6px">2</span>
+  </div>
+
+  <div class="st-h">高级</div>
+  <div class="card st">
+    <div class="st-row"><svg class="ico sm"><use href="#i-bolt"/></svg><div><b>对话与语音服务</b><small>已连接 · 点开查看模型与密钥</small></div><svg class="ico xs" style="color:var(--ink-3)"><use href="#i-fwd"/></svg></div>
+    <div class="st-row"><svg class="ico sm"><use href="#i-list"/></svg><div><b>术语表</b><small>让翻译保持用词一致</small></div><svg class="ico xs" style="color:var(--ink-3)"><use href="#i-fwd"/></svg></div>
+    <div class="st-row"><svg class="ico sm"><use href="#i-flask"/></svg><div><b>诊断与反馈</b></div><svg class="ico xs" style="color:var(--ink-3)"><use href="#i-fwd"/></svg></div>
+    <div class="st-row"><svg class="ico sm"><use href="#i-info"/></svg><div><b>关于与新手引导</b><small>0.1.0 · 内测</small></div><svg class="ico xs" style="color:var(--ink-3)"><use href="#i-fwd"/></svg></div>
+    <span class="pin" style="top:-8px;right:-6px">3</span>
+  </div>
+</div>
+<div class="hi"></div>
+</div>
+<div class="cap">
+  <h3>设置</h3>
+  <div class="was">原：模型、翻译、语音三项技术配置排在最前，没有账号和口语相关设置</div>
+  <ol>
+    <li><i>1</i><span><b>按用户关心程度重排。</b>提醒目标、口语偏好、阅读翻译、外观放最前；副标题直接显示当前取值（目标是每周 3 次）。</span></li>
+    <li><i>2</i><span><b>补上账号与数据入口。</b>原来没有同步和备份，用户换手机会丢数据。</span></li>
+    <li><i>3</i><span><b>技术项收进「高级」。</b>主界面只说「已连接」，模型名和密钥点进去才看到；ASR / ISE 这类缩写不再出现。</span></li>
+  </ol>
+</div>
+</div>
+
+
+
+<!-- ========== 命名对照 ========== -->
+<div class="nm">
+  <div class="card" style="padding:18px 8px 10px">
+    <h3 style="font-size:17px;padding:0 12px 12px">名词对照</h3>
+    <table>
+      <tr><th>原</th><th>改为</th><th>理由</th></tr>
+      <tr><td>练</td><td>开口</td><td>一个字看不出是口语；同时从最后一个 Tab 提到第二个</td></tr>
+      <tr><td>书架</td><td>阅读</td><td>容纳「我的书架 / 发现」，新用户不用先自己找素材</td></tr>
+      <tr><td>生词</td><td>表达</td><td>里面是习语、搭配、句式，不只是单词</td></tr>
+      <tr><td>清卡</td><td>复习</td><td>不用解释的词</td></tr>
+      <tr><td>词块</td><td>表达 / 短语</td><td>词块是教学术语，用户说的是「短语」</td></tr>
+      <tr><td>收词三路</td><td>「+」菜单</td><td>阅读点词 / 分享进来 / 粘贴，用时再看，不常驻首页</td></tr>
+      <tr><td>演示卡组</td><td>示例</td><td>只在首次引导期间出现，不挂在每一行上</td></tr>
+      <tr><td>术语表</td><td>设置 · 高级</td><td>翻译工具的概念，放进学习者的表达列表很突兀</td></tr>
+      <tr><td>ASR / ISE / 模型名</td><td>对话与语音服务</td><td>主界面只说「已连接」，细节放诊断页</td></tr>
+    </table>
+  </div>
+  <div class="card" style="margin-top:16px;padding:16px 20px;background:var(--warn-soft);border-color:transparent">
+    <b style="color:var(--warn)">落地前要确认的两件事</b>
+    <p style="margin-top:6px;font-size:13px;color:var(--ink-2);line-height:1.6">1. 「今日口语任务」由到期表达自动生成，这依赖对话场景能按表达动态出题，当前 4 个固定场景做不到，需要先确认生成方案。<br>2. 对话里的实时转写、目标表达识别、纠错只给 2 条，这三项都取决于语音与 AI 服务的实际表现，需要真机跑通再定交互细节。</p>
+  </div>
+</div>
+
+</div>
+</section>
+
+</body>
+</html>
