@@ -11,6 +11,20 @@
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
+
+/**
+ * 商店版（MSIX，带包身份）检测。商店版的更新由 Microsoft Store 接管：
+ * MSIX 容器只读，内置自更新（下载 NSIS 覆盖安装）必然失败，
+ * 所以带包身份时所有更新检查直接短路为"无更新"。
+ */
+async function isStorePackaged(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("is_store_packaged");
+  } catch {
+    return false;
+  }
+}
 
 export interface UpdateInfo {
   hasUpdate: boolean;
@@ -31,6 +45,9 @@ export interface UpdateProgress {
 /** 检查是否有新版本（不下载）。 */
 export async function checkForUpdate(): Promise<UpdateInfo> {
   const currentVersion = await getVersion();
+  if (await isStorePackaged()) {
+    return { hasUpdate: false, currentVersion };
+  }
   try {
     const update = await check();
     if (update) {
@@ -55,6 +72,10 @@ export async function checkForUpdate(): Promise<UpdateInfo> {
 export async function downloadAndInstall(
   onProgress: (p: UpdateProgress) => void,
 ): Promise<void> {
+  if (await isStorePackaged()) {
+    onProgress({ stage: "done", message: "商店版更新由 Microsoft Store 接管" });
+    return;
+  }
   onProgress({ stage: "checking", message: "正在检查更新…" });
 
   const update = await check();

@@ -2,8 +2,8 @@ mod auth;
 mod clipboard;
 mod crash;
 mod discover;
-mod file_export;
 mod feed;
+mod file_export;
 mod history;
 mod ocr;
 mod reader_store;
@@ -1338,6 +1338,14 @@ mod hotkey_switch_tests {
     }
 }
 
+/// 当前进程是否带包身份（以 MSIX/商店版运行，如从微软商店或 Add-AppxPackage 安装）。
+/// 商店版的更新由 Microsoft Store 接管（MSIX 容器只读，自更新必然失败），
+/// 前端 updater 在检查更新前先查这里，带身份即跳过内置自更新。
+#[tauri::command]
+fn is_store_packaged() -> bool {
+    windows::ApplicationModel::Package::Current().is_ok()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1372,6 +1380,7 @@ pub fn run() {
         .manage(ActiveHotkeys::default())
         .manage(PendingSettingsTab::default())
         .invoke_handler(tauri::generate_handler![
+            is_store_packaged,
             take_pending_panel_payload,
             clear_pending_panel_payload,
             clipboard::read_selection,

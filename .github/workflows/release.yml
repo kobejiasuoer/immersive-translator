@@ -403,6 +403,19 @@ jobs:
             Write-Host "::warning::签名链在本机校验为 $($sig.Status)（CI 常见于中间证书/AIA 拉取超时），商店侧会做完整链校验。"
           }
 
+      # 微软商店（MSIX 或 PWA 应用通道）：商店对审核通过的包自动重签名，
+      # 打包无需代码签名证书；失败不阻塞 NSIS 发版主流程。
+      - name: Install winapp CLI
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          winget install --id microsoft.winappcli --exact --source winget --accept-source-agreements --accept-package-agreements
+
+      - name: Package MSIX (Microsoft Store submission)
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/pack-msix.ps1
+
       - name: Wait for release (created by macOS job)
         shell: bash
         run: |
@@ -453,6 +466,15 @@ jobs:
           else
             gh release create "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" "$RUNNER_TEMP/$asset" \
               --title "$APP_NAME $RELEASE_VERSION" --target "$GITHUB_SHA"
+          fi
+
+          # MSIX（微软商店提交用）：随 Release 附带，便于 Partner Center 上传
+          msix="build/msix/ImmersiveTranslator_${RELEASE_VERSION}_x64.msix"
+          if [[ -f "$msix" ]]; then
+            gh release upload "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" "$msix" --clobber
+            echo "已上传 MSIX: $msix"
+          else
+            echo "::warning::未找到 MSIX 产物（$msix），商店提交包需本地补打。"
           fi
 
           notes="$GITHUB_WORKSPACE/release-notes/v${RELEASE_VERSION}.md"

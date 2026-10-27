@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  微软商店（MSIX 或 PWA 应用通道）提交用的包清单。
+  Identity Name/Publisher 必须与 Partner Center「产品标识」页完全一致：
+    Package/Identity/Name      6CB76113.301226195DDAA
+    Package/Identity/Publisher CN=6C32A8A6-A9B5-4B39-9FC3-E1AC3A8949DD
+  Version 由 scripts/pack-msix.ps1 打包时从 tauri.conf.json 读取并替换 @VERSION@。
+  商店会对通过审核的 MSIX 自动重签名，本地打包无需代码签名证书；
+  本地安装调试用 `winapp cert generate` + `winapp pack --cert`。
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <Identity
+    Name="6CB76113.301226195DDAA"
+    Publisher="CN=6C32A8A6-A9B5-4B39-9FC3-E1AC3A8949DD"
+    Version="@VERSION@" />
+
+  <Properties>
+    <DisplayName>沉浸口语</DisplayName>
+    <PublisherDisplayName>棱镜空间</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="zh-cn" />
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application
+      Id="App"
+      Executable="immersive-translator-windows.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="沉浸口语"
+        Description="语言学习桌面应用：沉浸翻译、口语练习与沉浸阅读。"
+        BackgroundColor="#1B1B1B"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile
+          Square71x71Logo="Assets\Square71x71Logo.png"
+          Square310x310Logo="Assets\Square310x310Logo.png" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- Tauri Win32 应用必需：完整信任运行 -->
+    <rescap:Capability Name="runFullTrust" />
+    <Capability Name="internetClient" />
+    <!-- 口语跟读/发音评测（麦克风仅音频；相机未使用） -->
+    <DeviceCapability Name="microphone" />
+  </Capabilities>
+</Package>
