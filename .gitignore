@@ -40,6 +40,18 @@ release-v*/
 # ZCode 本地会话状态
 .zcode/
 
+# AI 工具本地状态（会话/技能/浏览器抓取残留，纯本机，不入公开仓库）
+.agents/
+.claude/
+.taste-skill/
+.playwright-cli/
+skills-lock.json
+prototypes/.taste-skill/
+prototypes/.shots*.png
+
+# 官网整包导出（website/ 源码入库，zip 留档不入）
+website.zip
+
 # 私有商业文档（服务端设计/定价/商标备案等，只留本机、永不入库）
 # 公开仓库是客户端开源的一部分；这里的东西不随仓库走，注意自行备份
 docs/private/
