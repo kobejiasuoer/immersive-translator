@@ -93,7 +93,10 @@ fn validate_book_id(id: &str) -> Result<(), String> {
     let shape_ok = !id.is_empty()
         && id.len() <= BOOK_ID_MAX_LENGTH
         && id.split('-').all(|seg| {
-            !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            !seg.is_empty()
+                && seg
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
         });
     if shape_ok {
         Ok(())
@@ -126,11 +129,7 @@ fn build_query_pairs(
         ("source", source),
         ("grade", grade),
     ] {
-        if let Some(v) = value
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-        {
+        if let Some(v) = value.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
             pairs.push((key.to_string(), v.to_string()));
         }
     }
@@ -199,8 +198,17 @@ pub async fn books_list(
     page: Option<i64>,
     per_page: Option<i64>,
 ) -> Result<SyncHttpText, AuthError> {
-    match fetch_books_page(manager.inner(), &q, &language, &category, &source, &grade, page, per_page)
-        .await
+    match fetch_books_page(
+        manager.inner(),
+        &q,
+        &language,
+        &category,
+        &source,
+        &grade,
+        page,
+        per_page,
+    )
+    .await
     {
         Ok(v) => Ok(v),
         // reject 前照 sync.rs 形态广播：本命令 reject 仅 network_error /
@@ -229,7 +237,11 @@ async fn fetch_books_page(
     };
     let client = build_http_client(LIST_TIMEOUT_SECS)?;
     let pairs = build_query_pairs(q, language, category, source, grade, page, per_page);
-    let req = with_optional_bearer(client.get(format!("{base}/v1/books")).query(&pairs), manager).await;
+    let req = with_optional_bearer(
+        client.get(format!("{base}/v1/books")).query(&pairs),
+        manager,
+    )
+    .await;
     let resp = req
         .send()
         .await
