@@ -738,7 +738,8 @@ export function GradeFooter({
   );
 }
 
-function VerdictPanel({
+/** 判分结果条（vault 专注完形卡等复用，v0.8 起具名导出）。 */
+export function VerdictPanel({
   verdict,
   onJump,
   children,

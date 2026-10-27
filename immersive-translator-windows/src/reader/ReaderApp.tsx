@@ -106,7 +106,6 @@ import {
 import "./reader.css";
 import { ReaderTopBar, ViewMenu, type IslandSurface } from "./ReaderTopBar";
 import { FolioSheet } from "./ReaderShelf";
-import { VocabListPanel } from "./VocabListPanel";
 import { ReadingView } from "./ReadingView";
 import { SettingsDrawer } from "./SettingsDrawer";
 import { DictColumn, type DictPanelState, type LensMode, type LensXrayState } from "./DictColumn";
@@ -199,6 +198,21 @@ type PendingSpeak =
   | { kind: "vocab" }
   | null;
 
+/** 导入弹窗初始 tab（与 ImportDialog 的 TabId 同集合；propContracts 外壳契约：
+ *  onOpenImport 升级为 (tab?) => void，三挂点共用）。 */
+type ImportOpenTab = "lib" | "epub" | "file" | "url" | "paste" | "discover" | "feed";
+
+/** openImport 的运行时白名单：拦下 onClick 直传泄漏进来的事件对象等非 tab 值。 */
+const IMPORT_OPEN_TABS: readonly ImportOpenTab[] = [
+  "lib",
+  "epub",
+  "file",
+  "url",
+  "paste",
+  "discover",
+  "feed",
+];
+
 export function ReaderApp() {
   // ---- 数据 ----
   const [globalSettings, setGlobalSettings] = useState<ReaderSettings>(DEFAULT_READER_SETTINGS);
@@ -225,6 +239,9 @@ export function ReaderApp() {
   const [chunking, setChunking] = useState<{ done: number; total: number } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  /** 导入弹窗初始 tab（书架「发现/订阅/文库」入口直达；缺省文库）。ImportDialog
+      条件挂载，每次重开都以该值作 useState 初值生效（外壳 2026-10-26 契约）。 */
+  const [importInitialTab, setImportInitialTab] = useState<ImportOpenTab>("lib");
   const [viewMenuAnchor, setViewMenuAnchor] = useState<{ top: number; right: number } | null>(null);
   const [dict, setDict] = useState<DictPanelState>({ status: "closed" });
   // ---- v0.8 阅读画报：透镜卡双模 + 句子解析 + 口语带入 ----
@@ -242,9 +259,9 @@ export function ReaderApp() {
   // ---- 整本书阅读室（书级载体） ----
   const [bookList, setBookList] = useState<BookMeta[]>([]);
   const [tocBookId, setTocBookId] = useState<string | null>(null);
-  // ---- v0.8「笔记与复习」三合一（Phase 4） ----
-  /** 当前玩法档（tape/challenge/md）：goReview/托盘入口带 challenge，导览默认 tape。 */
-  const [vaultMode, setVaultMode] = useState<VaultPlayMode>("tape");
+  // ---- v0.8「笔记与复习」三合一（2026-10-26 改版为 home/notes/focus/export 四态） ----
+  /** 当前档：goReview→home、goNotes→notes、startFocusReview→focus、导出按钮→export。 */
+  const [vaultMode, setVaultMode] = useState<VaultPlayMode>("home");
   /** 口语会话缓存（speak_list_sessions；进 vault 视图时拉取，手账/导出的数据源）。 */
   const [speakSessions, setSpeakSessions] = useState<SpeakSession[]>([]);
   /** 今日已读秒数 / 每日阅读目标分钟（辅助增强二）。 */
@@ -289,12 +306,22 @@ export function ReaderApp() {
     setView("shelf");
   }, []);
 
-  /** 书架浮层外点关闭（左上触发胶囊不算「外」——它自己走 onToggleFolio）。 */
+  /** 打开导入弹窗，可指定直达 tab（书架发现三列 discover/feed/lib、书架浮层与
+      阅读页空态不带 tab 落缺省文库）。挂点：FolioSheet/ShelfPage/ReadingView。
+      白名单防御：onClick 直传本函数时第一个参数是事件对象，不能进 tab 状态，
+      否则 ImportDialog 里所有 tab === "…" 都不命中，弹窗只剩头和 tab 条。 */
+  const openImport = useCallback((tab?: ImportOpenTab) => {
+    setImportInitialTab(tab !== undefined && IMPORT_OPEN_TABS.includes(tab) ? tab : "lib");
+    setImportOpen(true);
+  }, []);
+
+  /** 书架浮层外点关闭（左上触发胶囊不算「外」——它自己走 onToggleFolio；
+      .shell-brand 是外壳重构后的新容器类，与旧 .brand-folio-pill 并列兜底）。 */
   useEffect(() => {
     if (!folioOpen) return;
     function onDown(e: MouseEvent) {
       const el = e.target as Element | null;
-      if (el && el.closest(".floating-folio-sheet, .brand-folio-pill")) return;
+      if (el && el.closest(".floating-folio-sheet, .brand-folio-pill, .shell-brand")) return;
       setFolioOpen(false);
     }
     window.addEventListener("mousedown", onDown);
@@ -1550,6 +1577,12 @@ export function ReaderApp() {
 
   /** 生词再现标记：生词本归一化 id 集。 */
   const knownIds = useMemo(() => new Set(vocabWords.map((w) => w.id)), [vocabWords]);
+  /** 本章生词（按当前文章 id 过滤；DictColumn「本章生词」第三 tab 数据源，
+      外壳 2026-10-26 契约 chapterVocab）。 */
+  const chapterVocab = useMemo(
+    () => (article ? vocabWords.filter((w) => w.source.articleId === article.id) : []),
+    [vocabWords, article?.id],
+  );
 
   /** 常用搭配行一键收藏为词块。 */
   const addCollVocab = useCallback(
@@ -1629,7 +1662,7 @@ export function ReaderApp() {
     [gradeVocab],
   );
 
-  /** 笔记复盘区「开始复习 / 只测仍错的词」：只排这批词，不等到期（v0.8 落地 vault 闯关）。 */
+  /** 笔记复盘区「开始复习 / 只测仍错的词」：只排这批词，不等到期（v0.8 落地 vault 专注态）。 */
   const startFocusReview = useCallback(
     (ids: string[]) => {
       if (ids.length === 0) {
@@ -1638,7 +1671,7 @@ export function ReaderApp() {
       }
       setFocusIds(ids);
       setReviewPos(0);
-      setVaultMode("challenge");
+      setVaultMode("focus");
       setView("vault");
     },
     [showToast],
@@ -1650,16 +1683,16 @@ export function ReaderApp() {
     setFocusIds(null);
     setView("reading");
   }, []);
-  /** 生词复习（v0.8：vault 三合一的闯关模式）。 */
+  /** 生词复习（v0.8 改版：vault 复习首页，Hero 开始复习再进专注态）。 */
   const goReview = useCallback(() => {
     setFocusIds(null);
-    setVaultMode("challenge");
+    setVaultMode("home");
     setView("vault");
   }, []);
-  /** 笔记库（v0.8：vault 的 Markdown 导出档，内嵌笔记库回看弹层）。 */
+  /** 笔记库（v0.8 改版：vault 的「全部笔记」档，stage 内嵌 NotesView）。 */
   const goNotes = useCallback(() => {
     setFocusIds(null);
-    setVaultMode("md");
+    setVaultMode("notes");
     setView("vault");
   }, []);
   const goSpeak = useCallback(() => {
@@ -2139,11 +2172,20 @@ export function ReaderApp() {
   );
 
   return (
-    <div className="reader-root" data-theme={effectiveSettings.theme} data-font={effectiveSettings.fontPair} style={rootStyle}>
+    /* data-skin='folio'：书架/阅读两视图挂 folio 外壳皮肤（令牌矩阵与共享基元见
+       reader.css 末尾「外壳重构 2026-10-26」横幅）；口语/笔记视图不挂，v0.8
+       主题层原样。data-theme 四主题循环与 data-font 均不受影响。 */
+    <div
+      className="reader-root"
+      data-theme={effectiveSettings.theme}
+      data-font={effectiveSettings.fontPair}
+      data-skin={view === "shelf" || view === "reading" ? "folio" : undefined}
+      style={rootStyle}
+    >
       <ReaderTopBar
         articleName={
           view === "shelf"
-            ? "书架"
+            ? null
             : view === "vault"
               ? "笔记与复习"
               : view === "speak"
@@ -2171,6 +2213,7 @@ export function ReaderApp() {
         unnotedCount={unnotedCount}
         onNavigate={navigateSurface}
         onToggleFolio={() => setFolioOpen((v) => !v)}
+        focusMode={view === "vault" && vaultMode === "focus"}
       />
 
       {folioOpen && (
@@ -2182,7 +2225,7 @@ export function ReaderApp() {
           onContinueBook={(b) => void openBookAtBreakpoint(b.id)}
           onDelete={deleteArticle}
           onDeleteBook={deleteBook}
-          onOpenImport={() => setImportOpen(true)}
+          onOpenImport={() => openImport()}
           onClose={() => setFolioOpen(false)}
         />
       )}
@@ -2194,26 +2237,6 @@ export function ReaderApp() {
       )}
 
       <div className="reader-body">
-        {view === "vault" && (
-          <VocabListPanel
-            words={vocabWords}
-            due={activeDue}
-            pos={reviewPos}
-            reviewedToday={stats.reviewedToday}
-            streak={stats.streak}
-            focusCount={focusIds?.length ?? 0}
-            onExitFocus={exitFocus}
-            newWords={unnotedCount}
-            onJumpToCard={setReviewPos}
-            onOpenReader={goReading}
-            onOpenSpeak={goSpeak}
-            onOpenNotes={goNotes}
-            requestTranslate={requestTranslate}
-            onNoteSaved={(meta) => void openSavedNote(meta)}
-            readMinutesToday={Math.round(readSecondsToday / 60)}
-            readGoalMin={readGoalMin}
-          />
-        )}
         {view === "shelf" && (
           <ShelfPage
             books={bookList}
@@ -2230,7 +2253,7 @@ export function ReaderApp() {
             onSelectArticle={(id) => void openArticle(id)}
             onDeleteArticle={deleteArticle}
             onDeleteBook={deleteBook}
-            onOpenImport={() => setImportOpen(true)}
+            onOpenImport={openImport}
             onGoReview={goReview}
           />
         )}
@@ -2285,7 +2308,7 @@ export function ReaderApp() {
                 // 顶部墨线、走带进度、当前句高亮与断点记忆随之更新。
                 if (!playback.playing && !playback.shadowingWait) playback.setActiveIdx(idx);
               }}
-              onOpenImport={() => setImportOpen(true)}
+              onOpenImport={openImport}
               onRetryTitle={retryTitle}
               titleCnError={titleCnError ?? undefined}
               showFinishAction={showFinishAction}
@@ -2303,6 +2326,12 @@ export function ReaderApp() {
               onOpenToc={currentBook ? () => setTocBookId(currentBook.id) : undefined}
               onPatchSettings={patchSettings}
               onOpenXray={(idx) => void lookupXray(idx)}
+              xrayIdle={
+                // 解析面板对当前句的速览 idle 态（与右栏三态渲染同口径：本句无
+                // loading/ready/error 记录且无请求在途）——E 键仅此时触发解析。
+                xray?.status !== "loading" &&
+                !(xray != null && xray.sentenceIdx === playback.activeIdx)
+              }
               onPracticeSentence={practiceSentence}
               onPracticeChapter={article ? () => practiceChapter(playback.activeIdx) : undefined}
               hoveredClause={hoveredClause}
@@ -2326,6 +2355,8 @@ export function ReaderApp() {
               lensMode={lensMode}
               onLensMode={setLensMode}
               activeIdx={playback.activeIdx}
+              activeSentence={article?.sentences[playback.activeIdx] ?? null}
+              chapterVocab={chapterVocab}
               xray={xray}
               xrayBusy={xray?.status === "loading"}
               onOpenXray={(idx) => void lookupXray(idx)}
@@ -2351,6 +2382,7 @@ export function ReaderApp() {
             dueVocabWords={speakDueWords}
             pendingSpeak={pendingSpeak}
             onGradeVocab={gradeSpokenVocab}
+            onOpenReaderSettings={() => setDrawerOpen(true)}
           />
         ) : view === "vault" ? (
           <VaultPage
@@ -2376,6 +2408,12 @@ export function ReaderApp() {
             onStartFocusReview={startFocusReview}
             onGenerateNote={openNoteGenerator}
             notesPanel={notesPanel}
+            focusCount={focusIds?.length ?? 0}
+            onExitFocus={exitFocus}
+            requestTranslate={requestTranslate}
+            onNoteSaved={(meta) => void openSavedNote(meta)}
+            unnotedCount={unnotedCount}
+            onOpenReader={goReading}
           />
         ) : null}
       </div>
@@ -2489,6 +2527,7 @@ export function ReaderApp() {
             importPaste(text, title, meta);
           }}
           onImportBook={importBook}
+          initialTab={importInitialTab}
         />
       )}
 

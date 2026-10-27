@@ -1,9 +1,12 @@
 /**
- * 播放条 72px（屏 A）：上一句 · 播放 · 下一句 | 进度条 + 第 N/M 句 | 1.0× · 视图 · 设置。
- * 进度条支持拖拽与 hover 预览（§9-10）。
+ * 播放走带 dock（2026-10-26 阅读页重构）：居中于正文栏下方（ReaderApp 直挂
+ * .reader-root，定位 left:calc((100% − var(--reading-side-w,0px))/2)，CSS 见
+ * reader.css Phase2 段）——上一句 · 播放 · 下一句 | 进度条（含拖点）+ 第 N/M 句 |
+ * 语速 · 视图 · 设置。进度条支持拖拽与 hover 预览（§9-10）：拖动只移光标
+ * （dragIdx 不打断朗读），松手才 jumpTo（讯飞额度保护），role=slider 键盘操作。
  */
 
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import {
   IconNext,
   IconPause,
@@ -181,12 +184,12 @@ export function PlayBar({ article, playback, settings, onPatchSettings, onOpenVi
   const playing = playback.playing;
   const previewText = hover && article?.sentences[hover.idx]?.en;
 
-  // v0.8 悬浮播放走带胶囊（原型 .floating-sonic-dock）：容器/按钮换壳，
+  // v0.8 悬浮播放走带胶囊（原型 .dock）：容器/按钮换壳居中正文栏，
   // 拖拽语义不变——拖动只移光标（dragIdx），松手才 jumpTo（讯飞额度保护）。
   return (
     <footer className="floating-sonic-dock">
       <button
-        className="pill-Ghost-btn"
+        className="dock-step-btn"
         onClick={() => playback.step(-1)}
         disabled={total === 0 || idx <= 0}
         title="上一句 (L)"
@@ -204,7 +207,7 @@ export function PlayBar({ article, playback, settings, onPatchSettings, onOpenVi
         {playing ? <IconPause size={15} /> : <IconPlay size={15} style={{ marginLeft: 1 }} />}
       </button>
       <button
-        className="pill-Ghost-btn"
+        className="dock-step-btn"
         onClick={() => playback.step(1)}
         disabled={total === 0 || idx >= total - 1}
         title="下一句 (J)"
@@ -262,6 +265,7 @@ export function PlayBar({ article, playback, settings, onPatchSettings, onOpenVi
         aria-valuenow={idx + 1}
         aria-valuetext={`第 ${idx + 1} 句，共 ${total} 句`}
         aria-label="朗读进度（左右方向键逐句切换）"
+        style={{ "--p": `${percent}%` } as CSSProperties}
       >
         <div className="dock-scrubber-fill" style={{ width: `${percent}%` }} />
         {hover && previewText && (

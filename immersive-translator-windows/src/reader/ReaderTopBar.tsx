@@ -1,9 +1,11 @@
 /**
- * v0.8 顶部悬浮导航岛（Phase 1，对齐原型 .floating-top-stage）：
- * 左 .brand-folio-pill（monogram「I」+ 书架抽屉触发器：书架 · 当前书名）
- * 中 .center-nav-island（阅读 / 口语 / 笔记与复习 三档，vault 档角标 =
+ * 顶部外壳三段（2026-10-26 阅读页重构，原型 .topbar grid 1fr auto 1fr）：
+ * 左 .shell-brand（monogram「I」→ onHome + 书架抽屉触发器：书架 · 当前书名）
+ * 中 .shell-tabs（阅读 / 口语 / 笔记与复习 三档，vault 档角标 =
  *   待复习词 + 未整理进笔记的生词）
- * 右 .right-controls-island（主题循环 · 全文检索 · 阅读设置抽屉）
+ * 右 .shell-tools（全文检索 · 主题循环 · 阅读设置抽屉）
+ * 布局与皮肤规则见 reader.css「外壳重构 2026-10-26」横幅（.shell-* 全局骨架，
+ * folio 视图平面白胶囊）；根类 .floating-top-stage 保留（矮窗规则续命）。
  * 视图菜单（§7）仍由本文件导出——ReaderApp 在 viewMenuAnchor 处挂载，
  * PlayBar 只通过 onOpenViewMenu 回调触发。
  */
@@ -40,6 +42,8 @@ interface Props {
   onNavigate: (surface: IslandSurface) => void;
   /** 左上书卷胶囊：弹出 / 收起书架浮层。 */
   onToggleFolio: () => void;
+  /** 专注复习态（仅 vault+focus）：隐藏中心导航岛，对齐原型 focus 态。 */
+  focusMode?: boolean;
 }
 
 const THEME_CYCLE: ReaderTheme[] = ["light", "dark", "sepia", "oled"];
@@ -56,6 +60,7 @@ export function ReaderTopBar({
   onHome,
   onNavigate,
   onToggleFolio,
+  focusMode = false,
 }: Props) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -85,8 +90,8 @@ export function ReaderTopBar({
   const vaultCount = dueNow + unnotedCount;
 
   return (
-    <header className="floating-top-stage">
-      <div className="brand-folio-pill">
+    <header className={`floating-top-stage${focusMode ? " vault-focus-top" : ""}`}>
+      <div className="shell-brand">
         <button
           type="button"
           className="monogram-seal"
@@ -113,7 +118,7 @@ export function ReaderTopBar({
         </button>
       </div>
 
-      <nav className="center-nav-island" aria-label="主导航">
+      <nav className="shell-tabs" aria-label="主导航">
         <button
           type="button"
           className={`island-tab${view === "reading" ? " active" : ""}`}
@@ -145,7 +150,7 @@ export function ReaderTopBar({
         </button>
       </nav>
 
-      <div className="right-controls-island">
+      <div className="shell-tools">
         {searchOpen && (
           <input
             ref={searchInputRef}

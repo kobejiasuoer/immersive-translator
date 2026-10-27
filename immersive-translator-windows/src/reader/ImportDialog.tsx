@@ -58,6 +58,10 @@ interface Props {
   /** 整本入库（EPUB/长书 tab 确认导入时）。 */
   onImportBook: (draft: BookImportDraft) => void;
   onClose: () => void;
+  /** 初始 tab（书架发现三列 discover/feed/lib 等直达入口用；缺省文库）。
+      ReaderApp 条件挂载 + 每次重开前重置该值，useState 初值即每次生效——
+      propContracts 外壳契约 2026-10-26：tab 视觉与逻辑零改动。 */
+  initialTab?: TabId;
 }
 
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
@@ -105,8 +109,8 @@ function GoalCoverageRow({ goal, onGoalChange }: { goal: ExamGoal; onGoalChange:
   );
 }
 
-export function ImportDialog({ vocabWords, articles, onImport, onImportBook, onClose }: Props) {
-  const [tab, setTab] = useState<TabId>("lib");
+export function ImportDialog({ vocabWords, articles, onImport, onImportBook, onClose, initialTab }: Props) {
+  const [tab, setTab] = useState<TabId>(initialTab ?? "lib");
   // 发现页下载完成的交接态：DiscoverTab onDeliver 写入 + 切到 epub tab，
   // EpubTab 挂载时取走解析（onInjectedConsumed 清空，防重复解析）。
   const [pendingEpub, setPendingEpub] = useState<EpubTabInjected | null>(null);

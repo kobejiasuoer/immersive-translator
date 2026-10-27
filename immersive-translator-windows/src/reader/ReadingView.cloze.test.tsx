@@ -79,6 +79,7 @@ function baseProps(overrides: Record<string, unknown> = {}) {
     onFinishRead: vi.fn(),
     onPatchSettings: vi.fn(),
     onOpenXray: vi.fn(),
+    xrayIdle: true,
     onPracticeSentence: vi.fn(),
     hoveredClause: null,
     readWatermark: 1,
