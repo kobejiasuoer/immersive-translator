@@ -8,8 +8,11 @@
 import {
   DEFAULT_READER_SETTINGS,
   mergeReaderSettings,
+  shouldMigrateLegacyTtsProvider,
   type ReaderSettings,
 } from "../core/readerTypes";
+import { hasAnyXfyunCredential } from "../lib/iseCredentials";
+import { authGetStatus } from "../lib/tauriBridge";
 
 const STORAGE_KEY = "immersive-translator-reader-settings";
 
@@ -33,6 +36,28 @@ export function saveGlobalReaderSettings(settings: ReaderSettings): void {
   } catch {
     /* ignore */
   }
+}
+
+export interface ReaderTtsMigrationDeps {
+  hasAnyXfyunCredential: () => Promise<boolean>;
+  isLoggedIn: () => Promise<boolean>;
+}
+
+/** 启动时判定一次，同时供全局设置与文章级旧覆盖迁移；探测失败按无该项处理。 */
+export async function resolveLegacyTtsMigrationAllowed(
+  deps: ReaderTtsMigrationDeps = {
+    hasAnyXfyunCredential,
+    isLoggedIn: () => authGetStatus().then((s) => s.loggedIn),
+  },
+): Promise<boolean> {
+  const [credential, loggedIn] = await Promise.all([
+    deps.hasAnyXfyunCredential().catch(() => false),
+    deps.isLoggedIn().catch(() => false),
+  ]);
+  return shouldMigrateLegacyTtsProvider("xfyun", {
+    hasAnyXfyunCredential: credential,
+    loggedIn,
+  });
 }
 
 // ---- 跟读评测：麦克风设备偏好（机器本地，不随文章、不进 schema） ----

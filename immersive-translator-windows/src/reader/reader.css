@@ -6623,6 +6623,24 @@ button.notes-word:hover { color: var(--accent); }
   color: var(--canvas-bg);
   box-shadow: var(--shadow-spatial);
 }
+.reader-root .toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.reader-root .toast .toast-action {
+  flex: none;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: transparent;
+  color: inherit;
+  border-radius: var(--r-sm, 6px);
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.reader-root .toast .toast-action:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
 /* v0.8 工作台骨架段结束 */
 
 /* ============================================================

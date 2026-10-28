@@ -34,6 +34,7 @@ import {
   DEFAULT_EDGE_VOICE_EN,
   synthesizeEdgeTts,
 } from "../core/edgeTts";
+import { synthesize as synthesizeGatewayTts } from "../lib/voice";
 
 export type EndedEvent = { gen: number; track: string };
 
@@ -245,14 +246,270 @@ export function createEdgeEngine(getCfg: () => EdgeEngineConfig): SpeechEngine {
   });
 }
 
+/** 沉浸云朗读配置：音色取语音页即时保存的 voiceGatewayVoice，空值由服务端用默认音色。 */
+export interface GatewayEngineConfig {
+  voice?: string;
+  rate: number;
+}
+
+export interface GatewayEngineDeps {
+  synthesize?: typeof synthesizeGatewayTts;
+  /** 首片已开始播放后的异步失败（启动失败仍走 speak reject）。 */
+  onAsyncError?: (error: unknown) => void;
+  /** 测试/特殊运行时覆盖；缺省探测 MediaSource 的 mp3 流式能力。 */
+  mediaSourceSupported?: () => boolean;
+}
+
+function defaultGatewayStreamingSupported(): boolean {
+  return (
+    typeof MediaSource !== "undefined" &&
+    typeof MediaSource.isTypeSupported === "function" &&
+    MediaSource.isTypeSupported("audio/mpeg")
+  );
+}
+
+/** 网关 mp3 分片 → Blob，仅供不支持 MSE 的运行时兜底；Windows WebView2 走下方流式路径。 */
+function synthesizeGatewayBlob(
+  synth: typeof synthesizeGatewayTts,
+  text: string,
+  voice: string | undefined,
+): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const chunks: ArrayBuffer[] = [];
+    synth(
+      text,
+      voice,
+      undefined,
+      (chunk) => chunks.push(chunk),
+      () => resolve(new Blob(chunks, { type: "audio/mpeg" })),
+      reject,
+    );
+  });
+}
+
+/** MSE 流式播放器：首个分片 append 完成立即 play，后续分片按序追加，onEnd 才 endOfStream。 */
+function createGatewayStreamingEngine(
+  getCfg: () => GatewayEngineConfig,
+  synth: typeof synthesizeGatewayTts,
+  onAsyncError?: (error: unknown) => void,
+): SpeechEngine {
+  let genCounter = 3_000_000;
+  const handlers: Array<(e: EndedEvent) => void> = [];
+  const players: Record<string, { el: HTMLAudioElement; gen: number; url: string } | null> = {
+    sentence: null,
+    word: null,
+  };
+  const trackGen: Record<string, number | null> = { sentence: null, word: null };
+  const pendingStarts: Record<string, (() => void) | null> = { sentence: null, word: null };
+
+  function fireEnded(e: EndedEvent) {
+    handlers.forEach((fn) => fn(e));
+  }
+
+  function teardownTrack(track: string): number | null {
+    trackGen[track] = null;
+    const cancel = pendingStarts[track];
+    pendingStarts[track] = null;
+    cancel?.();
+    const cur = players[track];
+    if (!cur) return null;
+    cur.el.onended = null;
+    cur.el.pause();
+    cur.el.removeAttribute("src");
+    URL.revokeObjectURL(cur.url);
+    players[track] = null;
+    return cur.gen;
+  }
+
+  function speak(text: string, _chinese: boolean, opts: ReaderSpeakOptions): Promise<number> {
+    const track = opts.track ?? "sentence";
+    const gen = ++genCounter;
+    const cfg = getCfg();
+    const rate = Math.min(4, Math.max(0.25, opts.rate ?? cfg.rate ?? 1));
+    teardownTrack(track);
+    trackGen[track] = gen;
+
+    return new Promise<number>((resolve, reject) => {
+      const el = new Audio();
+      const mediaSource = new MediaSource();
+      const url = URL.createObjectURL(mediaSource);
+      const queue: ArrayBuffer[] = [];
+      let sourceBuffer: SourceBuffer | null = null;
+      let synthesisEnded = false;
+      let hasAppended = false;
+      let started = false;
+      let startupSettled = false;
+      let failed = false;
+      players[track] = { el, gen, url };
+      pendingStarts[track] = () => {
+        if (startupSettled) return;
+        startupSettled = true;
+        resolve(gen);
+      };
+
+      const isCurrent = () => trackGen[track] === gen;
+      const fail = (error: unknown) => {
+        if (failed || !isCurrent()) return;
+        failed = true;
+        const notifyAsync = startupSettled;
+        startupSettled = true;
+        teardownTrack(track);
+        if (notifyAsync) onAsyncError?.(error);
+        else reject(error);
+      };
+      const pump = () => {
+        if (failed || !isCurrent() || sourceBuffer === null || sourceBuffer.updating) return;
+        const chunk = queue.shift();
+        if (chunk !== undefined) {
+          try {
+            sourceBuffer.appendBuffer(chunk);
+            hasAppended = true;
+          } catch (error) {
+            fail(error);
+          }
+          return;
+        }
+        if (!synthesisEnded) return;
+        if (!hasAppended) {
+          fail(new Error("云端合成返回空音频"));
+          return;
+        }
+        if (mediaSource.readyState === "open") {
+          try {
+            mediaSource.endOfStream();
+          } catch (error) {
+            fail(error);
+          }
+        }
+      };
+      const start = () => {
+        if (started || failed || !isCurrent()) return;
+        started = true;
+        void el.play().then(
+          () => {
+            if (startupSettled) return;
+            startupSettled = true;
+            pendingStarts[track] = null;
+            resolve(gen);
+          },
+          (error: unknown) => fail(error),
+        );
+      };
+
+      el.onended = () => {
+        if (started && players[track]?.gen === gen) fireEnded({ gen, track });
+      };
+      el.preservesPitch = true;
+      el.playbackRate = rate;
+      mediaSource.addEventListener(
+        "sourceopen",
+        () => {
+          if (failed || !isCurrent()) return;
+          try {
+            sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
+            sourceBuffer.onupdateend = () => {
+              pump();
+              if (hasAppended) start();
+            };
+            pump();
+          } catch (error) {
+            fail(error);
+          }
+        },
+        { once: true },
+      );
+      el.src = url;
+
+      try {
+        synth(
+          text,
+          cfg.voice,
+          undefined,
+          (chunk) => {
+            if (failed || !isCurrent()) return;
+            queue.push(chunk);
+            pump();
+          },
+          () => {
+            if (failed || !isCurrent()) return;
+            synthesisEnded = true;
+            if (!hasAppended && queue.length === 0) {
+              fail(new Error("云端合成返回空音频"));
+              return;
+            }
+            pump();
+          },
+          fail,
+        );
+      } catch (error) {
+        fail(error);
+      }
+    });
+  }
+
+  return {
+    speak,
+    stopTrack: async (track) => {
+      const gen = teardownTrack(track);
+      if (gen !== null) fireEnded({ gen, track });
+    },
+    onEnded(handler) {
+      handlers.push(handler);
+      return () => {
+        const i = handlers.indexOf(handler);
+        if (i >= 0) handlers.splice(i, 1);
+      };
+    },
+  };
+}
+
+/** 沉浸云网关朗读：支持 MSE 时首片即播；否则仅用同协议收齐后播放，不直连任何上游。 */
+export function createGatewayEngine(
+  getCfg: () => GatewayEngineConfig,
+  deps: GatewayEngineDeps = {},
+): SpeechEngine {
+  const synth = deps.synthesize ?? synthesizeGatewayTts;
+  const supported = deps.mediaSourceSupported ?? defaultGatewayStreamingSupported;
+  const streaming = createGatewayStreamingEngine(getCfg, synth, deps.onAsyncError);
+  const buffered = createCloudEngine({
+    synthesize: (text) => synthesizeGatewayBlob(synth, text, getCfg().voice),
+    fallbackRate: () => getCfg().rate,
+  });
+  return {
+    speak: (text, chinese, opts) =>
+      (supported() ? streaming : buffered).speak(text, chinese, opts),
+    stopTrack: async (track) => {
+      await Promise.all([streaming.stopTrack(track), buffered.stopTrack(track)]);
+    },
+    onEnded(handler) {
+      const offStreaming = streaming.onEnded(handler);
+      const offBuffered = buffered.onEnded(handler);
+      return () => {
+        offStreaming();
+        offBuffered();
+      };
+    },
+  };
+}
+
 /**
  * 引擎调度器：speak 路由到当前生效引擎（凭据缺失回落本地）；
  * stopTrack 停所有引擎的该音轨（切换引擎时旧音频不残留）；
- * ended 事件聚合转发。
+ * ended 事件聚合转发。getActive 可为异步守卫；停止/切句后迟到结果不再启动播放。
  */
-export function createSpeechDispatcher(getActive: () => SpeechEngine): SpeechEngine {
+export function createSpeechDispatcher(
+  getActive: () => SpeechEngine | Promise<SpeechEngine>,
+  options: {
+    /** 启动失败时的同句恢复引擎（当前用于网关配额耗尽 → Edge）。 */
+    onSpeakError?: (
+      error: unknown,
+      engine: SpeechEngine,
+    ) => SpeechEngine | null | Promise<SpeechEngine | null>;
+  } = {},
+): SpeechEngine {
   const handlers: Array<(e: EndedEvent) => void> = [];
   const attached = new Set<SpeechEngine>();
+  const routeVersions: Record<string, number> = { sentence: 0, word: 0 };
   function attach(engine: SpeechEngine) {
     if (attached.has(engine)) return;
     attached.add(engine);
@@ -261,16 +518,35 @@ export function createSpeechDispatcher(getActive: () => SpeechEngine): SpeechEng
     });
   }
   return {
-    speak: (text, chinese, opts) => {
-      const engine = getActive();
+    speak: async (text, chinese, opts) => {
+      const track = opts.track ?? "sentence";
+      const version = ++routeVersions[track];
+      const engine = await getActive();
+      if (routeVersions[track] !== version) return -1;
       attach(engine);
-      return engine.speak(text, chinese, opts);
+      try {
+        return await engine.speak(text, chinese, opts);
+      } catch (error) {
+        if (routeVersions[track] !== version) return -1;
+        const fallback = await options.onSpeakError?.(error, engine);
+        if (fallback === null || fallback === undefined || fallback === engine) throw error;
+        if (routeVersions[track] !== version) return -1;
+        attach(fallback);
+        return fallback.speak(text, chinese, opts);
+      }
     },
     stopTrack: async (track) => {
+      routeVersions[track] += 1;
       attached.forEach((engine) => void engine.stopTrack(track));
     },
     prefetch: (text, chinese, opts) => {
-      getActive().prefetch?.(text, chinese, opts);
+      const track = opts.track ?? "sentence";
+      const version = routeVersions[track];
+      void Promise.resolve(getActive())
+        .then((engine) => {
+          if (routeVersions[track] === version) engine.prefetch?.(text, chinese, opts);
+        })
+        .catch(() => undefined);
     },
     onEnded(handler) {
       handlers.push(handler);

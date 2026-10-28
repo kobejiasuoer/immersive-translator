@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_READER_SETTINGS,
   mergeReaderSettings,
+  migrateLegacyTtsProviderValue,
+  shouldMigrateLegacyTtsProvider,
 } from "./readerTypes";
 
 describe("mergeReaderSettings", () => {
@@ -103,5 +105,22 @@ describe("mergeReaderSettings", () => {
     });
     expect(bad.spotlightMode).toBe(true);
     expect(bad.spreadLayout).toBe("prose");
+  });
+});
+
+describe("旧 xfyun → cloud 迁移谓词（零回归）", () => {
+  it("仅旧值参与迁移；edge/local/cloud 永不被凭据或登录态改写", () => {
+    expect(shouldMigrateLegacyTtsProvider("xfyun", { hasAnyXfyunCredential: true, loggedIn: false })).toBe(true);
+    expect(shouldMigrateLegacyTtsProvider("xfyun", { hasAnyXfyunCredential: false, loggedIn: true })).toBe(true);
+    expect(shouldMigrateLegacyTtsProvider("xfyun", { hasAnyXfyunCredential: false, loggedIn: false })).toBe(false);
+    expect(shouldMigrateLegacyTtsProvider("edge", { hasAnyXfyunCredential: true, loggedIn: true })).toBe(false);
+    expect(shouldMigrateLegacyTtsProvider("cloud", { hasAnyXfyunCredential: true, loggedIn: true })).toBe(false);
+  });
+
+  it("迁移允许时旧值升格 cloud；不允许时保留 xfyun（继续本地回落，不串 Edge）", () => {
+    expect(migrateLegacyTtsProviderValue("xfyun", true)).toBe("cloud");
+    expect(migrateLegacyTtsProviderValue("xfyun", false)).toBe("xfyun");
+    expect(migrateLegacyTtsProviderValue("edge", true)).toBe("edge");
+    expect(migrateLegacyTtsProviderValue("cloud", true)).toBe("cloud");
   });
 });

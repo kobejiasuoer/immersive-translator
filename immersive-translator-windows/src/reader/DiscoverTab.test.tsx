@@ -95,6 +95,20 @@ async function flush(rounds = 4): Promise<void> {
   for (let i = 0; i < rounds; i += 1) await act(async () => {});
 }
 
+/**
+ * 轮询到断言成立为止（verifyEpubSha256 走 crypto.subtle.digest：真异步宏任务，
+ * 不在微任务队列里——套件满载并发时单靠 flush 可能还没落地，全量门禁曾现偶发）。
+ * 每轮先冲微任务（React 状态落地进 DOM）再让出一个宏任务轮，超时抛错给出可读原因。
+ */
+async function flushUntil(cond: () => boolean, rounds = 60): Promise<void> {
+  for (let i = 0; i < rounds; i += 1) {
+    if (cond()) return;
+    await act(async () => {});
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("flushUntil: 断言条件未在时限内成立");
+}
+
 function textOf(el: Element | null): string {
   return (el?.textContent ?? "").trim();
 }
@@ -249,7 +263,8 @@ describe("DiscoverTab（发现书库）", () => {
     await act(async () => {
       findButton(m.container, "下载").click();
     });
-    await flush();
+    // 校验走 crypto.subtle（宏任务）：轮询到交付回调触发，不等固定轮数。
+    await flushUntil(() => onDeliver.mock.calls.length >= 1);
     expect(mocks.booksDownload).toHaveBeenCalledWith("alice-in-wonderland");
     expect(onDeliver).toHaveBeenCalledTimes(1);
     const [file, sourceBookId] = onDeliver.mock.calls[0] as [File, string];
@@ -325,7 +340,8 @@ describe("DiscoverTab（发现书库）", () => {
     await act(async () => {
       findButton(m.container, "下载").click();
     });
-    await flush();
+    // 同上：sha256 校验是宏任务，轮询到校验失败文案出现。
+    await flushUntil(() => m.container.textContent.includes("下载的文件校验失败，请重新下载"));
     expect(m.container.textContent).toContain("下载的文件校验失败，请重新下载");
     expect(onDeliver).not.toHaveBeenCalled();
     m.unmount();
