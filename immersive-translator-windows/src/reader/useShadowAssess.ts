@@ -13,12 +13,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { onTtsEnded } from "../lib/tauriBridge";
 import { loadIseCredentials } from "../lib/iseCredentials";
 import {
+  evaluatePronunciation,
+  pcm16kToBase64,
+  resolveVoiceRoute,
+  voiceErrorDisplayText,
+} from "../lib/voice";
+import {
   evaluateSentence,
   isPass,
+  type IseCredentials,
   type PronunciationResult,
 } from "../core/pronunciation";
 import { startMicRecorder, type MicRecorderHandle } from "../core/micRecorder";
 import { createVadDetector, type VadDetector } from "../core/vad";
+import { recordAssessmentSilently } from "../lib/speakRecords";
 
 export type AssessPhase =
   | "idle" // 非跟读等待（或尚未开始）
@@ -115,37 +123,68 @@ export function useShadowAssess(deps: UseShadowAssessDeps) {
         patch({ phase: "error", error: "句子不存在" });
         return;
       }
-      let creds;
-      try {
-        creds = await loadIseCredentials();
-      } catch {
-        creds = null;
-      }
-      if (!creds) {
-        patch({ phase: "error", error: "未配置讯飞评测凭据：设置 → 语音" });
+      // 评测引擎走路由守卫（voiceRoute §三.5）：gateway=VoiceClient，xfyun=既有直连，
+      // off=入口按态禁用（未登录/未开通/额度尽/本地开关关），给引导、不烧额度。
+      const route = await resolveVoiceRoute("ise");
+      if (route.engine === "off") {
+        patch({ phase: "error", error: route.hint ?? "跟读打分暂不可用" });
         return;
       }
-      try {
-        const result = await evaluateSentence(pcm, text, creds);
-        if (epoch !== epochRef.current) return; // 已被取消/重试
-        const { passScore } = depsRef.current.getConfig();
-        if (isPass(result, passScore)) {
-          patch({ phase: "passed", result, error: null });
-          clearPassTimer();
-          passTimerRef.current = window.setTimeout(() => {
-            passTimerRef.current = null;
-            depsRef.current.onAdvance();
-          }, PASS_LINGER_MS);
-        } else {
-          const hint =
-            result.isRejected || result.exceptInfo === "28673"
-              ? "没听到足够的声音——离麦克风近一点，或在设置里换个麦克风"
-              : `${result.total.toFixed(1)} / ${passScore.toFixed(1)} 分，差一点`;
-          patch({ phase: "failed", result, error: hint });
+      let result: PronunciationResult;
+      if (route.engine === "gateway") {
+        try {
+          result = await evaluatePronunciation(text, "en", pcm16kToBase64(pcm, 16000).base64);
+        } catch (err) {
+          if (epoch !== epochRef.current) return;
+          patch({
+            phase: "error",
+            result: null,
+            // 云端错误按 §二映射（额度类拼重置时间）；非信封错误（网络/未接线）落通用兜底
+            error:
+              voiceErrorDisplayText(err as { code?: unknown; details?: unknown }) ||
+              "服务暂时不可用，请稍后再试",
+          });
+          return;
         }
-      } catch (err) {
-        if (epoch !== epochRef.current) return;
-        patch({ phase: "error", result: null, error: err instanceof Error ? err.message : String(err) });
+      } else {
+        let creds: IseCredentials | null;
+        try {
+          creds = await loadIseCredentials();
+        } catch {
+          creds = null;
+        }
+        if (!creds) {
+          patch({ phase: "error", error: "未配置讯飞评测凭据：设置 → 语音" });
+          return;
+        }
+        try {
+          result = await evaluateSentence(pcm, text, creds);
+        } catch (err) {
+          if (epoch !== epochRef.current) return;
+          patch({ phase: "error", result: null, error: err instanceof Error ? err.message : String(err) });
+          return;
+        }
+      }
+      if (epoch !== epochRef.current) return; // 已被取消/重试
+      // 评测记录入云（speak-assessments，source=reader；异常结果不计——同 SpeakView
+      // 侧 attempts 语义；仅分数与逐词精简结果，音频不上云、不落盘）
+      if (!result.isRejected && result.exceptInfo === null) {
+        recordAssessmentSilently({ result, source: "reader", refText: text });
+      }
+      const { passScore } = depsRef.current.getConfig();
+      if (isPass(result, passScore)) {
+        patch({ phase: "passed", result, error: null });
+        clearPassTimer();
+        passTimerRef.current = window.setTimeout(() => {
+          passTimerRef.current = null;
+          depsRef.current.onAdvance();
+        }, PASS_LINGER_MS);
+      } else {
+        const hint =
+          result.isRejected || result.exceptInfo === "28673"
+            ? "没听到足够的声音——离麦克风近一点，或在设置里换个麦克风"
+            : `${result.total.toFixed(1)} / ${passScore.toFixed(1)} 分，差一点`;
+        patch({ phase: "failed", result, error: hint });
       }
     },
     [patch, clearPassTimer],

@@ -31,6 +31,13 @@ import { startMicRecorder, type MicRecorderHandle } from "../core/micRecorder";
 import { createVadDetector, type VadDetector } from "../core/vad";
 import { transcribeSpeech } from "../core/xfyunAsr";
 import { loadAsrCredentials } from "../lib/iseCredentials";
+import type { IseCredentials } from "../core/pronunciation";
+import {
+  pcm16kToBase64,
+  resolveVoiceRoute,
+  transcribeBatch,
+  voiceErrorDisplayText,
+} from "../lib/voice";
 import { textHitsTarget } from "../core/speakLogic";
 import {
   firstLetters,
@@ -1320,19 +1327,41 @@ export function SpeakChallengeCard({
       setError("没听到声音——离麦克风近一点再说一次");
       return;
     }
-    const creds = await loadAsrCredentials().catch(() => null);
-    if (!creds) {
+    // 语音服务商路由（voiceRoute §三.5）：gateway=VoiceClient 批量转写，xfyun=既有
+    // 直连；off=语音入口按态禁用——这里已有打字兜底，切打字模式并给「登录沉浸云即用」引导。
+    const route = await resolveVoiceRoute("asr", { asrLang: "en_us" });
+    if (route.engine === "off") {
       setTypedMode(true);
       setPhase("idle");
-      setError("未配置讯飞听写凭据，改用打字造句（到 设置 → 语音 可补配）");
+      setError(`${route.hint ?? "语音造句暂不可用"}；可改用打字造句`);
       return;
+    }
+    let creds: IseCredentials | null = null;
+    if (route.engine === "xfyun") {
+      creds = await loadAsrCredentials().catch(() => null);
+      if (!creds) {
+        setTypedMode(true);
+        setPhase("idle");
+        setError("未配置讯飞听写凭据，改用打字造句（到 设置 → 语音 可补配）");
+        return;
+      }
     }
     let text: string;
     try {
-      text = await transcribeSpeech(pcm, "en_us", creds);
+      // gateway：REST 批量转写（pcm 已是 micRecorder 出来的 16k）；xfyun：既有流式听写。
+      text =
+        route.engine === "gateway"
+          ? (await transcribeBatch("en_us", pcm16kToBase64(pcm, 16000).base64)).text
+          : await transcribeSpeech(pcm, "en_us", creds!);
     } catch (e) {
       setPhase("error");
-      setError(`语音识别失败：${e instanceof Error ? e.message : String(e)}`);
+      setError(
+        route.engine === "gateway"
+          ? // 云端错误按 §二映射（额度类拼重置时间）；非信封错误（网络/未接线）落通用兜底
+            voiceErrorDisplayText(e as { code?: unknown; details?: unknown }) ||
+              "服务暂时不可用，请稍后再试"
+          : `语音识别失败：${e instanceof Error ? e.message : String(e)}`,
+      );
       return;
     }
     if (!text) {

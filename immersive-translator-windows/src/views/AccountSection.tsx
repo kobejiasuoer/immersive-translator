@@ -19,6 +19,11 @@ import {
   type AuthStatus,
 } from "../lib/tauriBridge";
 import { syncNow, type SyncSummary } from "../lib/syncEngine";
+import {
+  SPEAK_ASSESSMENTS_COLLECTION,
+  SPEAK_SESSIONS_COLLECTION,
+} from "../lib/speakRecords";
+import { RedeemCard } from "./RedeemCard";
 import { IconAlert, IconCheck } from "../ui/icons";
 
 export interface AccountStatusState {
@@ -90,6 +95,32 @@ function syncSummaryText(s: SyncSummary): string {
   return `同步完成（${parts.join("，")}）`;
 }
 
+/** 多集合同步汇总合并（各集合 syncNow 结果并成一句话的口径）。 */
+function mergeSummaries(list: SyncSummary[]): SyncSummary {
+  return list.reduce<SyncSummary>(
+    (acc, s) => ({
+      ok: acc.ok && s.ok,
+      pulled: acc.pulled + s.pulled,
+      appliedRemote: acc.appliedRemote + s.appliedRemote,
+      keptLocal: acc.keptLocal + s.keptLocal,
+      pushed: acc.pushed + s.pushed,
+      conflicts: acc.conflicts + s.conflicts,
+      skipped: [...acc.skipped, ...s.skipped],
+      error: acc.error ?? s.error,
+    }),
+    {
+      ok: true,
+      pulled: 0,
+      appliedRemote: 0,
+      keptLocal: 0,
+      pushed: 0,
+      conflicts: 0,
+      skipped: [],
+      error: null,
+    },
+  );
+}
+
 export function AccountSection() {
   const { status, refresh } = useAccountStatus();
   const [loggingOut, setLoggingOut] = useState(false);
@@ -137,8 +168,17 @@ export function AccountSection() {
     if (scenarioSyncing) return;
     setScenarioSyncing(true);
     setScenarioSyncMsg(null);
-    // syncNow 不抛错（失败汇总带回）；未登录/网络失败在 summary.error 里。
-    const summary = await syncNow("speak-scenarios");
+    // 三个口语集合一起同步（场景库 + 对话记录 + 评测记录；syncNow 不抛错，
+    // 未登录/网络失败在 summary.error 里），汇总成一句话展示。
+    const summaries: SyncSummary[] = [];
+    for (const collection of [
+      "speak-scenarios",
+      SPEAK_SESSIONS_COLLECTION,
+      SPEAK_ASSESSMENTS_COLLECTION,
+    ]) {
+      summaries.push(await syncNow(collection));
+    }
+    const summary = mergeSummaries(summaries);
     setScenarioSyncMsg({ text: syncSummaryText(summary), ok: summary.ok });
     setScenarioSyncing(false);
   }
@@ -274,6 +314,9 @@ export function AccountSection() {
               </div>
             )}
           </section>
+
+          {/* 兑换码卡（语音云契约 §三.10）：锚点 id="account-redeem"，语音页「兑换更多额度」跳转目标 */}
+          <RedeemCard />
 
           <section className="group-card acct-security-panel">
             <div className="field-row">
