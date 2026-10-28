@@ -109,11 +109,28 @@ pub struct AuthHttpRequest {
     pub bearer: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct AuthHttpResponse {
     pub status: u16,
     pub retry_after_seconds: Option<u64>,
     pub body: String,
+    /// 白名单响应头（键已小写）：仅 402 配额余量所需的 `x-quota-*`（语音契约 §一：
+    /// details 之外唯一可得字段）。其余响应头一律不透传，内部头不出传输层。
+    pub headers: Vec<(String, String)>,
+}
+
+/// 响应头白名单：只放行 `x-quota-*`（reqwest 的 HeaderName 恒小写）。非 UTF-8 值跳过。
+fn whitelist_quota_headers(headers: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| name.as_str().starts_with("x-quota-"))
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|v| (name.as_str().to_string(), v.to_string()))
+        })
+        .collect()
 }
 
 /// 返回 `BoxFuture<'static>`（而非 trait 内 `async fn`）：单飞刷新要求 future
@@ -242,6 +259,8 @@ impl AuthTransport for ReqwestTransport {
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.trim().parse::<u64>().ok());
+            // 白名单头要在 text() 消费 response 前取出。
+            let headers = whitelist_quota_headers(response.headers());
             let body = response
                 .text()
                 .await
@@ -250,6 +269,7 @@ impl AuthTransport for ReqwestTransport {
                 status,
                 retry_after_seconds,
                 body,
+                headers,
             })
         }
         .boxed()
@@ -1341,11 +1361,37 @@ mod tests {
             status,
             retry_after_seconds: None,
             body: body.to_string(),
+            ..Default::default()
         }
     }
 
     fn make_manager(transport: FakeTransport, store: FakeTokenStore) -> Arc<TokenManager> {
         Arc::new(TokenManager::new(Arc::new(transport), Arc::new(store)))
+    }
+
+    /// 响应头白名单：只透传 x-quota-*（语音 402 配额余量），其余头（含内部头）不外漏。
+    #[test]
+    fn quota_header_whitelist_only_passes_x_quota() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-quota-tts_chars-remaining", "0".parse().unwrap());
+        headers.insert("x-quota-asr_seconds-remaining", "12".parse().unwrap());
+        headers.insert("retry-after", "7".parse().unwrap());
+        headers.insert("x-internal-flag", "secret".parse().unwrap());
+        let picked: std::collections::BTreeMap<String, String> =
+            whitelist_quota_headers(&headers).into_iter().collect();
+        assert_eq!(picked.len(), 2, "白名单外头必须全部滤除: {picked:?}");
+        assert_eq!(
+            picked
+                .get("x-quota-tts_chars-remaining")
+                .map(String::as_str),
+            Some("0")
+        );
+        assert_eq!(
+            picked
+                .get("x-quota-asr_seconds-remaining")
+                .map(String::as_str),
+            Some("12")
+        );
     }
 
     /// 3 个并发 with_auth 同收 401 token_expired：refresh 端点恰被调 1 次，
@@ -1590,6 +1636,7 @@ mod tests {
                 status: 429,
                 retry_after_seconds: Some(37),
                 body: err_body("rate_limited"),
+                headers: Vec::new(),
             })
         });
         let store = FakeTokenStore::new(seq);

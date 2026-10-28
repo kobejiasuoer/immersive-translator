@@ -103,6 +103,36 @@ export async function iseCredsConfigured(): Promise<boolean> {
   return creds !== null;
 }
 
+/**
+ * 三个讯飞凭据槽位的「已保存」状态（只读判定，语音页 voiceProvider 迁移推断用，
+ * §三.3）：iseMain = 主凭据三元组齐全；ttsOwn / asrOwn = 对应服务的「单独凭据」齐全——
+ * 高级覆盖用户可以不配主凭据，所以三个槽位分开看。不写任何键，失败按未配置处理。
+ */
+export interface XfyunCredentialPresence {
+  iseMain: boolean;
+  ttsOwn: boolean;
+  asrOwn: boolean;
+}
+
+export async function xfyunCredentialPresence(): Promise<XfyunCredentialPresence> {
+  const [main, ttsOwn, asrOwn] = await Promise.all([
+    loadCredTriple(XFYUN_ISE_SECRET_KEYS).catch(() => null),
+    loadCredTriple(XFYUN_TTS_SECRET_KEYS).catch(() => null),
+    loadCredTriple(XFYUN_ASR_SECRET_KEYS).catch(() => null),
+  ]);
+  return {
+    iseMain: main !== null,
+    ttsOwn: ttsOwn !== null,
+    asrOwn: asrOwn !== null,
+  };
+}
+
+/** 任一槽位已保存（讯飞行 keydot 等布尔场景用）。 */
+export async function hasAnyXfyunCredential(): Promise<boolean> {
+  const p = await xfyunCredentialPresence();
+  return p.iseMain || p.ttsOwn || p.asrOwn;
+}
+
 // ---- 在线合成（TTS）：优先专用覆盖，缺省回落主凭据 ----
 
 export async function loadXfyunTtsCredentials(): Promise<XfyunTtsCredentials | null> {

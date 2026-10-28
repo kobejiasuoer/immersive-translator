@@ -2814,6 +2814,11 @@ input[type="radio"] {
   font-weight: 500;
 }
 
+/* 兑换码卡（语音云契约 §三.10）：输入框定宽，窄屏随 field-row 折行 */
+.acct-redeem-panel .redeem-input {
+  width: 220px;
+}
+
 /* ============================================================
    v0.8 工作台主题层（Phase 1）——三套氛围主题
    令牌 1:1 对齐 prototypes/windows-workbench-v08-2026-10-15.html
@@ -4610,6 +4615,15 @@ input[type="radio"] {
 
 .platform-card-status.off i {
   background: var(--warn);
+}
+
+/* 失败/封禁态红点（语音页沉浸云卡；原型 voice-settings-cloud-2026-10-27 状态 9 回补） */
+.platform-card-status.err {
+  color: var(--err);
+}
+
+.platform-card-status.err i {
+  background: var(--err);
 }
 
 .platform-card .provider-check {
