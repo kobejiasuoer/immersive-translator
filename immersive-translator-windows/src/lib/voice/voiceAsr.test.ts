@@ -271,12 +271,15 @@ describe("断线重连(§二:指数退避,重换票→新连接,ASR 重连后重
     const h = harness();
     await settle();
     FakeWs.instances[0]!.open();
+    // 本用例退避拉长到 200ms:断言窗口 40ms 内数学上不可能耗尽 6 次重试
+    // (全局 5ms 快退避下 6×5ms≈30ms<40ms,套件满载时会偶发跑完而终局)。
+    setAsrBackoffForTests(() => 200);
     // 换票通道断掉:下一次重连取票失败
     setVoiceRuntime({ http: async () => { throw new Error("offline"); } });
     FakeWs.instances[0]!.drop(1006);
     await new Promise((r) => setTimeout(r, 40));
     expect(h.errors).toHaveLength(0); // 未终局
-    // 通道恢复后,下一次退避重连成功
+    // 通道恢复后,下一次退避重连成功(挂起的 200ms 退避到点触发)
     setVoiceRuntime({
       http: async (_method, path): Promise<VoiceHttpResponse> => {
         if (path === "/v1/voice/ticket") {
@@ -288,7 +291,7 @@ describe("断线重连(§二:指数退避,重换票→新连接,ASR 重连后重
         return { status: 404, body: "{}", retryAfterSeconds: null, headers: {} };
       },
     });
-    await new Promise((r) => setTimeout(r, 60));
+    await new Promise((r) => setTimeout(r, 250));
     expect(FakeWs.instances.length).toBeGreaterThan(1);
     FakeWs.instances[lastIndex()]!.open();
     expect(lastOf(FakeWs.instances[lastIndex()]!.textFrames())).toBe('{"type":"start"}');
