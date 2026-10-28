@@ -13,11 +13,13 @@ import {
   onTranslationDelta,
   onTranslationDone,
   onTranslationError,
+  settingsOpenTab,
   takePendingOpenBook,
   takePendingReaderImport,
   translateStream,
 } from "../lib/tauriBridge";
-import { loadSettingsAsync, hasValidSettings } from "../lib/settingsStore";
+import { syncSpeakRecordsSilently } from "../lib/speakRecords";
+import { loadSettingsAsync, hasValidSettings, loadSettings } from "../lib/settingsStore";
 import { classifyTtsError } from "../lib/ttsError";
 import {
   noteDelete,
@@ -55,13 +57,14 @@ import { parseNoteMarkdown } from "../core/noteParser";
 import type { NoteMeta, NoteReplay } from "../core/readerTypes";
 import { bookChapterIndexOf } from "../core/readerTypes";
 import { discoverImportProps, type BookImportDraft } from "../core/bookImport";
-import { loadGlobalReaderSettings, loadMicDeviceId, saveGlobalReaderSettings, saveMicDeviceId } from "./readerSettingsStore";
+import { loadGlobalReaderSettings, loadMicDeviceId, saveGlobalReaderSettings, saveMicDeviceId, resolveLegacyTtsMigrationAllowed } from "./readerSettingsStore";
 import { trayRefreshBadge } from "../lib/reminder";
 import { buildArticleFromText, normalizeWordKey } from "../core/articleBuilder";
 import { looksMostlyChinese, resolveTargetLanguage } from "../core/languageDetect";
 import {
   DEFAULT_READER_SETTINGS,
   mergeReaderSettings,
+  migrateLegacyTtsProviderValue,
   type Article,
   type ArticleSummary,
   type BookChapterMeta,
@@ -120,14 +123,18 @@ import { useShadowAssess } from "./useShadowAssess";
 import { mapWordsToText } from "../core/pronunciation";
 import {
   createEdgeEngine,
+  createGatewayEngine,
   createSapiEngine,
   createSpeechDispatcher,
   createXfyunEngine,
   type EdgeEngineConfig,
+  type GatewayEngineConfig,
   type XfyunEngineConfig,
 } from "./speechEngine";
 import { loadXfyunTtsCredentials } from "../lib/iseCredentials";
 import type { XfyunTtsCredentials } from "../core/xfyunTts";
+import { quotaDetailsOf, voiceErrorDisplayText, type VoiceRouteDecision } from "../lib/voice";
+import { readerEdgeFallbackNotice, routeReaderSpeech } from "./readerSpeechRoute";
 import { AssessStrip, PlayBar } from "./PlayBar";
 import { SpeakView } from "./SpeakView";
 import { BookTocModal } from "./BookTocModal";
@@ -213,6 +220,33 @@ const IMPORT_OPEN_TABS: readonly ImportOpenTab[] = [
   "feed",
 ];
 
+/** toast 附带的动作位（当前仅配额耗尽的「兑换更多额度」）。 */
+type ToastAction = "redeem";
+
+/** 从任意错误取服务端错误码（VoiceError/AuthError/WSS error 帧形状均兼容）。 */
+function voiceErrorCodeOf(error: unknown): string | null {
+  if (typeof error === "object" && error !== null) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && code !== "") return code;
+  }
+  return null;
+}
+
+/** 把运行时 quota_exceeded 归一成守卫同形的回落决策，供提示与「下一句转 Edge」共用。 */
+function quotaFallbackDecision(error: unknown): VoiceRouteDecision {
+  const details = quotaDetailsOf(error as { details?: unknown });
+  return {
+    engine: "off",
+    reason: "quota_exhausted",
+    hint: voiceErrorDisplayText(error as { code?: unknown; details?: unknown }),
+    quota: {
+      remaining: details.remaining,
+      allowance: details.allowance,
+      resetsAt: details.resetsAt,
+    },
+  };
+}
+
 export function ReaderApp() {
   // ---- 数据 ----
   const [globalSettings, setGlobalSettings] = useState<ReaderSettings>(DEFAULT_READER_SETTINGS);
@@ -223,6 +257,9 @@ export function ReaderApp() {
   // 书架是首页（对齐原型）：应用打开落在整页书架，点书卡/短文进阅读。
   const [view, setView] = useState<ViewRoute>("shelf");
   const [toast, setToast] = useState("");
+  const [toastAction, setToastAction] = useState<ToastAction | null>(null);
+  /** 旧 xfyun → cloud 的迁移允许（任一讯飞凭据存在或已登录沉浸云，启动时判定一次）。 */
+  const [legacyTtsMigrationAllowed, setLegacyTtsMigrationAllowed] = useState(false);
   // 弹出式书架浮层（v0.8）：由导航岛左上「书架 · 书名」触发，挂在根节点顶层。
   const [folioOpen, setFolioOpen] = useState(false);
   // ---- 笔记库 ----
@@ -295,11 +332,36 @@ export function ReaderApp() {
     globalSettingsRef.current = globalSettings;
   }, [globalSettings]);
 
-  const showToast = useCallback((message: string) => {
-    setToast(message);
-    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(""), 3200);
+  // 口语记录静默云同步（2026-10-28：speak-sessions/speak-assessments 跟账号走）：
+  // 登录后挂载即拉推一轮（SpeakView 挂载与设置页手动按钮另有入口）；未登录直接
+  // 跳过——零网络请求，记录仅本地，无登录墙。失败静默（汇总不展示）。
+  useEffect(() => {
+    void syncSpeakRecordsSilently();
   }, []);
+
+  const showToast = useCallback((message: string, action: ToastAction | null = null) => {
+    setToast(message);
+    setToastAction(action);
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast("");
+      setToastAction(null);
+    }, action ? 8000 : 3200);
+  }, []);
+  /** 守卫回落 / 配额同句恢复时的 Edge 提示，去重避免连读每句重复弹。 */
+  const fallbackNoticeKeyRef = useRef("");
+  const showEdgeFallback = useCallback(
+    (decision: VoiceRouteDecision) => {
+      const notice = readerEdgeFallbackNotice(decision);
+      const key = `${notice.message}|${notice.action ?? ""}`;
+      if (key === fallbackNoticeKeyRef.current) return;
+      fallbackNoticeKeyRef.current = key;
+      showToast(notice.message, notice.action);
+    },
+    [showToast],
+  );
+  const showEdgeFallbackRef = useRef(showEdgeFallback);
+  showEdgeFallbackRef.current = showEdgeFallback;
   /** 回整页书架（首页）。声明在前：删除文章/书等早于导航区的地方也要用。 */
   const goShelf = useCallback(() => {
     setFocusIds(null);
@@ -328,10 +390,11 @@ export function ReaderApp() {
     return () => window.removeEventListener("mousedown", onDown);
   }, [folioOpen]);
 
-  const effectiveSettings = useMemo(
-    () => mergeReaderSettings(globalSettings, article?.settings),
-    [globalSettings, article?.settings],
-  );
+  const effectiveSettings = useMemo(() => {
+    const merged = mergeReaderSettings(globalSettings, article?.settings);
+    const provider = migrateLegacyTtsProviderValue(merged.ttsProvider, legacyTtsMigrationAllowed);
+    return provider === merged.ttsProvider ? merged : { ...merged, ttsProvider: provider };
+  }, [globalSettings, article?.settings, legacyTtsMigrationAllowed]);
 
   // ---- 播放引擎 ----
   const textsRef = useRef<string[]>([]);
@@ -374,7 +437,7 @@ export function ReaderApp() {
   /** 短文结课条（定义在下方，同上持引用）。 */
   const showFinishCardRef = useRef<(a: Article) => void>(() => {});
 
-  // ---- 朗读引擎（Edge 在线免费 / 讯飞在线 / 本地 SAPI，凭据缺失自动回落本地） ----
+  // ---- 朗读引擎（Edge 在线免费 / 云音色 / 本地 SAPI，凭据缺失自动回落本地） ----
   const [ttsCreds, setTtsCreds] = useState<XfyunTtsCredentials | null>(null);
   const refreshTtsCreds = useCallback(() => {
     void loadXfyunTtsCredentials()
@@ -399,17 +462,75 @@ export function ReaderApp() {
   };
   const ttsProviderRef = useRef(effectiveSettings.ttsProvider);
   ttsProviderRef.current = effectiveSettings.ttsProvider;
+
+  /** 统一朗读错误入口：云网关错误按 §二映射且不透传原文，其余走既有归因。 */
+  const handleSpeechError = useCallback(
+    (error: unknown) => {
+      const code = voiceErrorCodeOf(error);
+      if (code !== null) {
+        const text = voiceErrorDisplayText(error as { code?: unknown; details?: unknown }) ||
+          "服务暂时不可用，请稍后再试";
+        showToast(`朗读失败，已停止：${text}`, code === "quota_exceeded" ? "redeem" : null);
+        return;
+      }
+      const info = classifyTtsError(error);
+      showToast(
+        `朗读失败，已停止：${info.message}（点播放键重试${info.allowSettings ? "，或到 设置 → 语音 检查" : ""}）`,
+      );
+    },
+    [showToast],
+  );
+
+  const gatewayCfgRef = useRef<GatewayEngineConfig>({ rate: 1 });
+  gatewayCfgRef.current = { voice: loadSettings().voiceGatewayVoice, rate: effectiveSettings.rate };
+  /** 首片播放后的异步失败（启动失败仍走 speak reject）。 */
+  const gatewayAsyncErrorRef = useRef<(error: unknown) => void>(() => {});
+  /** 运行时配额耗尽：本句转 Edge，后续句直接走 Edge（守卫缓存可能尚未感知）。 */
+  const gatewayQuotaErrorRef = useRef<unknown | null>(null);
+
   const sapiEngine = useMemo(() => createSapiEngine(), []);
   const xfyunEngine = useMemo(() => createXfyunEngine(() => ttsCfgRef.current), []);
   const edgeEngine = useMemo(() => createEdgeEngine(() => edgeCfgRef.current), []);
+  const gatewayEngine = useMemo(
+    () =>
+      createGatewayEngine(() => gatewayCfgRef.current, {
+        onAsyncError: (error) => gatewayAsyncErrorRef.current(error),
+      }),
+    [],
+  );
   const speechEngine = useMemo(
     () =>
-      createSpeechDispatcher(() => {
-        if (ttsProviderRef.current === "edge") return edgeEngine;
-        if (ttsProviderRef.current === "xfyun" && ttsCfgRef.current.creds) return xfyunEngine;
-        return sapiEngine;
-      }),
-    [sapiEngine, xfyunEngine, edgeEngine],
+      createSpeechDispatcher(
+        async () => {
+          const routed = await routeReaderSpeech({
+            provider: ttsProviderRef.current,
+            xfyunReady: ttsCfgRef.current.creds !== null,
+            engines: { edge: edgeEngine, xfyun: xfyunEngine, gateway: gatewayEngine, sapi: sapiEngine },
+          });
+          if (routed.engine === gatewayEngine && gatewayQuotaErrorRef.current !== null) {
+            showEdgeFallbackRef.current(quotaFallbackDecision(gatewayQuotaErrorRef.current));
+            return edgeEngine;
+          }
+          if (routed.fallback) {
+            showEdgeFallbackRef.current(routed.fallback);
+            return routed.engine;
+          }
+          if (routed.engine === gatewayEngine) fallbackNoticeKeyRef.current = "";
+          return routed.engine;
+        },
+        {
+          onSpeakError: (error, engine) => {
+            if (engine !== gatewayEngine) return null;
+            if (voiceErrorCodeOf(error) === "quota_exceeded") {
+              gatewayQuotaErrorRef.current = error;
+              showEdgeFallbackRef.current(quotaFallbackDecision(error));
+              return edgeEngine;
+            }
+            return null;
+          },
+        },
+      ),
+    [sapiEngine, xfyunEngine, edgeEngine, gatewayEngine],
   );
 
   const playback = usePlayback({
@@ -419,13 +540,13 @@ export function ReaderApp() {
     engine: speechEngine,
     onFinish: handleFinish,
     // P1：TTS 失败给明确归因（缺凭据/网络/系统），并指出出路（重试 / 去设置）。
-    onError: (error) => {
-      const info = classifyTtsError(error);
-      showToast(
-        `朗读失败，已停止：${info.message}（点播放键重试${info.allowSettings ? "，或到 设置 → 语音 检查" : ""}）`,
-      );
-    },
+    onError: handleSpeechError,
   });
+  gatewayAsyncErrorRef.current = (error) => {
+    if (voiceErrorCodeOf(error) === "quota_exceeded") gatewayQuotaErrorRef.current = error;
+    playback.stop();
+    handleSpeechError(error);
+  };
 
   // ---- 跟读评测（shadowingMode + shadowingAssess）----
   const [micDeviceId, setMicDeviceId] = useState<string>(() => loadMicDeviceId());
@@ -1086,30 +1207,41 @@ export function ReaderApp() {
         setTocBookId(null);
         setChapterEnd(null);
         setFinishCard(null);
-        setArticle(full);
-        articleRef.current = full;
-        openSecondsRef.current = full.progress.secondsListened;
-        playback.reset(full.progress.sentenceIdx);
-        scheduleSave({ ...full, lastReadAt: Date.now() });
-        if (full.bookId) {
+        // 文章级旧 xfyun 覆盖随迁移允许一并升格，未满足条件时保留旧语义。
+        const articleProvider = migrateLegacyTtsProviderValue(
+          full.settings?.ttsProvider ?? "edge",
+          legacyTtsMigrationAllowed,
+        );
+        const migratedArticle =
+          articleProvider === (full.settings?.ttsProvider ?? "edge")
+            ? full
+            : { ...full, settings: { ...(full.settings ?? {}), ttsProvider: articleProvider } };
+        setArticle(migratedArticle);
+        articleRef.current = migratedArticle;
+        openSecondsRef.current = migratedArticle.progress.secondsListened;
+        playback.reset(migratedArticle.progress.sentenceIdx);
+        scheduleSave({ ...migratedArticle, lastReadAt: Date.now() });
+        if (migratedArticle.bookId) {
           trackEvent("book_open", {
-            bookId: full.bookId,
-            chapterIdx: full.chapterIdx ?? 0,
-            sentenceIdx: full.progress.sentenceIdx,
+            bookId: migratedArticle.bookId,
+            chapterIdx: migratedArticle.chapterIdx ?? 0,
+            sentenceIdx: migratedArticle.progress.sentenceIdx,
           });
           // 云端埋点（Phase 0 §8）：同一触发点补发云端事件（口径与本地
           // book_open 一致：打开书的一章；chapterIdx 缺省归 0）。
-          track("book_open", { bookId: full.bookId, chapterIdx: full.chapterIdx ?? 0 });
-          scheduleBookMetaSave((b) => (b.id === full.bookId ? { ...b, lastReadAt: Date.now() } : b));
+          track("book_open", { bookId: migratedArticle.bookId, chapterIdx: migratedArticle.chapterIdx ?? 0 });
+          scheduleBookMetaSave((b) =>
+            b.id === migratedArticle.bookId ? { ...b, lastReadAt: Date.now() } : b,
+          );
         }
-        void ensureTranslated(full);
-        void loadSourceArticles([full.id]);
+        void ensureTranslated(migratedArticle);
+        void loadSourceArticles([migratedArticle.id]);
       } catch (error) {
         console.error("[reader] open article failed", error);
         showToast("打开文章失败");
       }
     },
-    [ensureTranslated, scheduleSave, showToast, playback, loadSourceArticles, scheduleBookMetaSave],
+    [ensureTranslated, scheduleSave, showToast, playback, loadSourceArticles, scheduleBookMetaSave, legacyTtsMigrationAllowed],
   );
 
   /** 书卡/提醒卡进书：直达书级断点章。 */
@@ -1163,7 +1295,16 @@ export function ReaderApp() {
   useEffect(() => {
     let active = true;
     (async () => {
-      setGlobalSettings(loadGlobalReaderSettings());
+      // 先判定旧 xfyun → cloud 迁移允许（任一讯飞凭据存在或已登录沉浸云），再加载全局设置。
+      const migrationAllowed = await resolveLegacyTtsMigrationAllowed();
+      if (!active) return;
+      setLegacyTtsMigrationAllowed(migrationAllowed);
+      const loaded = loadGlobalReaderSettings();
+      const migratedProvider = migrateLegacyTtsProviderValue(loaded.ttsProvider, migrationAllowed);
+      const migrated =
+        migratedProvider === loaded.ttsProvider ? loaded : { ...loaded, ttsProvider: migratedProvider };
+      setGlobalSettings(migrated);
+      if (migrated !== loaded) saveGlobalReaderSettings(migrated);
       const list = await refreshArticleList();
       const books = await refreshBooks();
       await refreshVocab();
@@ -2652,7 +2793,16 @@ export function ReaderApp() {
            这类操作反馈的唯一通道，缺了它读屏用户完全收不到确认信息。
            polite 而非 assertive：不必打断当前朗读。 */
         <div className="toast" role="status" aria-live="polite">
-          {toast}
+          <span>{toast}</span>
+          {toastAction === "redeem" && (
+            <button
+              type="button"
+              className="toast-action"
+              onClick={() => void settingsOpenTab("account").catch(() => undefined)}
+            >
+              兑换更多额度
+            </button>
+          )}
         </div>
       )}
     </div>

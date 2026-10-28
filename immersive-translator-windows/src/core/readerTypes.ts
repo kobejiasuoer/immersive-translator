@@ -257,8 +257,10 @@ export interface ReaderSettings {
   fontPair: ReaderFontPair;
   /** 系统音色名；空串 = 引擎默认。 */
   voice: string;
-  /** 朗读引擎：edge = 微软 Edge 在线合成（免费无凭据，默认），xfyun = 讯飞在线（云音色，凭据在设置抽屉），local = 系统 SAPI（离线）。 */
-  ttsProvider: "edge" | "local" | "xfyun";
+  /** 朗读引擎：edge = 微软 Edge 在线合成（免费无凭据，默认），cloud = 云音色
+   * （来源跟随语音页 voiceProvider），local = 系统 SAPI（离线）。
+   * xfyun 仅作旧数据兼容：满足迁移条件时升级为 cloud；不满足时保留旧讯飞/本地回落。 */
+  ttsProvider: "edge" | "local" | "cloud" | "xfyun";
   /** 讯飞合成发音人（vcn），中文句用它；空串 = xiaoyan。 */
   cloudVoice: string;
   /** 讯飞合成英文句发音人（vcn）；空串 = 回退 cloudVoice（再缺省 catherine）。 */
@@ -326,6 +328,28 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
 };
 
 /** 屏 B 字号步进器范围。 */
+/** 旧 xfyun → cloud 的迁移信号：与语音页迁移规则共用「任一讯飞凭据」口径。 */
+export interface LegacyTtsMigrationSignals {
+  hasAnyXfyunCredential: boolean;
+  loggedIn: boolean;
+}
+
+/** 仅旧值参与迁移；edge/local/cloud 永不被凭据或登录态改写。 */
+export function shouldMigrateLegacyTtsProvider(
+  provider: ReaderSettings["ttsProvider"],
+  signals: LegacyTtsMigrationSignals,
+): boolean {
+  return provider === "xfyun" && (signals.hasAnyXfyunCredential || signals.loggedIn);
+}
+
+/** 不满足迁移条件时保留旧 xfyun，避免原「缺凭据 → SAPI」用户被改成 Edge 回落。 */
+export function migrateLegacyTtsProviderValue(
+  provider: ReaderSettings["ttsProvider"],
+  migrationAllowed: boolean,
+): ReaderSettings["ttsProvider"] {
+  return migrationAllowed && provider === "xfyun" ? "cloud" : provider;
+}
+
 export const READER_FONT_SIZE_MIN = 14;
 export const READER_FONT_SIZE_MAX = 24;
 export const READER_RATE_MIN = 0.5;
@@ -371,7 +395,7 @@ export function mergeReaderSettings(
   }
   merged.fontPair = oneOf(override.fontPair, ["serif", "sans"]) ?? merged.fontPair;
   merged.voice = str(override.voice) ?? merged.voice;
-  merged.ttsProvider = oneOf(override.ttsProvider, ["edge", "local", "xfyun"]) ?? merged.ttsProvider;
+  merged.ttsProvider = oneOf(override.ttsProvider, ["edge", "local", "cloud", "xfyun"]) ?? merged.ttsProvider;
   merged.cloudVoice = str(override.cloudVoice) ?? merged.cloudVoice;
   merged.cloudVoiceEn = str(override.cloudVoiceEn) ?? merged.cloudVoiceEn;
   merged.edgeVoiceZh = str(override.edgeVoiceZh) ?? merged.edgeVoiceZh;

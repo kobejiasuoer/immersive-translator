@@ -22,9 +22,17 @@ import {
   type ReaderTheme,
   type ReviewModeSetting,
 } from "../core/readerTypes";
-import { ttsVoices, openSettings, type TtsVoiceInfo } from "../lib/tauriBridge";
+import {
+  authGetStatus,
+  listenAuthStateChanged,
+  ttsVoices,
+  openSettings,
+  settingsOpenTab,
+  type TtsVoiceInfo,
+} from "../lib/tauriBridge";
 import { listMicDevices } from "../core/micRecorder";
 import { iseCredsConfigured, xfyunTtsCredsConfigured } from "../lib/iseCredentials";
+import { loadSettings, resolveInitialVoiceProvider, type VoiceProvider } from "../lib/settingsStore";
 import {
   DEFAULT_TTS_VCN,
   DEFAULT_TTS_VCN_EN,
@@ -83,9 +91,14 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
   const [micDevices, setMicDevices] = useState<{ deviceId: string; label: string }[]>([]);
   const [credConfigured, setCredConfigured] = useState<boolean | null>(null);
   const [ttsConfigured, setTtsConfigured] = useState<boolean | null>(null);
+  /** 语音页生效服务商（云音色来源）；null = 读取中。 */
+  const [voiceProvider, setVoiceProvider] = useState<VoiceProvider | null>(null);
+  /** 沉浸云真实登录态；来源是 gateway 不代表已登录。 */
+  const [gatewayLoggedIn, setGatewayLoggedIn] = useState<boolean | null>(null);
 
   useEffect(() => {
     let active = true;
+    let unlistenAuth: (() => void) | null = null;
     ttsVoices()
       .then((list) => {
         if (active) setVoices(list);
@@ -115,8 +128,29 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
       .catch(() => {
         if (active) setTtsConfigured(false);
       });
+    resolveInitialVoiceProvider(loadSettings().voiceProvider)
+      .then((provider) => {
+        if (active) setVoiceProvider(provider);
+      })
+      .catch(() => {
+        if (active) setVoiceProvider("xfyun");
+      });
+    authGetStatus()
+      .then((status) => {
+        if (active) setGatewayLoggedIn(status.loggedIn);
+      })
+      .catch(() => {
+        if (active) setGatewayLoggedIn(false);
+      });
+    void listenAuthStateChanged((status) => {
+      if (active) setGatewayLoggedIn(status.loggedIn);
+    }).then((unlisten) => {
+      if (active) unlistenAuth = unlisten;
+      else unlisten();
+    });
     return () => {
       active = false;
+      unlistenAuth?.();
     };
   }, []);
 
@@ -398,7 +432,7 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
           </div>
 
           <div className="drawer-group-title">朗读</div>
-          <div className="drawer-row" title="Edge 在线 = 微软神经音色（免费、无需凭据，默认）；讯飞在线 = 云音色需凭据；本地 = Windows 系统 SAPI（离线可用）">
+          <div className="drawer-row" title="Edge 在线 = 微软神经音色（免费、无需凭据，默认）；云音色 = 跟随语音页所选服务商（沉浸云或讯飞）；本地 = Windows 系统 SAPI（离线可用）">
             <span className="label">朗读引擎</span>
             <div className="control">
               <div className="seg">
@@ -409,16 +443,16 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
                   Edge 在线
                 </button>
                 <button
-                  className={settings.ttsProvider === "xfyun" ? "active" : ""}
-                  onClick={() => onPatch({ ttsProvider: "xfyun" })}
+                  className={settings.ttsProvider === "cloud" || settings.ttsProvider === "xfyun" ? "active" : ""}
+                  onClick={() => onPatch({ ttsProvider: "cloud" })}
                 >
-                  讯飞在线
+                  云音色
                 </button>
                 <button
                   className={settings.ttsProvider === "local" ? "active" : ""}
                   onClick={() => onPatch({ ttsProvider: "local" })}
                 >
-                  本地系统
+                  系统语音
                 </button>
               </div>
             </div>
@@ -472,62 +506,107 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
               </div>
             </>
           )}
-          {settings.ttsProvider === "xfyun" && (
+          {(settings.ttsProvider === "cloud" || settings.ttsProvider === "xfyun") && (
             <>
-              <div className="drawer-row" title="讯飞中文发音人（vcn）：中文句用它读；完整列表在讯飞控制台「语音合成」可试听，未授权音色会提示 11200。已播句子进缓存（内存+磁盘），重听不耗每日次数">
-                <span className="label">云音色·中文</span>
-                <div className="control" style={{ flex: 1 }}>
-                  <input
-                    className="reader-cred-input"
-                    style={{ flex: 1, width: "auto" }}
-                    list="xfyun-vcn-list"
-                    placeholder={DEFAULT_TTS_VCN}
-                    value={settings.cloudVoice}
-                    autoComplete="off"
-                    spellCheck={false}
-                    onChange={(e) => onPatch({ cloudVoice: e.target.value.trim() })}
-                    aria-label="讯飞云音色（中文）"
-                  />
+              {voiceProvider === null ? (
+                <div className="drawer-row" title="正在读取语音页服务商">
+                  <span className="label">音色来源</span>
+                  <div className="control drawer-static" style={{ flex: 1, justifyContent: "flex-end" }}>
+                    读取中…
+                  </div>
                 </div>
-              </div>
-              <div className="drawer-row" title="讯飞英文发音人（vcn）：英文句用它读，跟读示范不再由中文音色代劳；留空沿用中文音色">
-                <span className="label">云音色·英文</span>
-                <div className="control" style={{ flex: 1 }}>
-                  <input
-                    className="reader-cred-input"
-                    style={{ flex: 1, width: "auto" }}
-                    list="xfyun-vcn-list"
-                    placeholder={DEFAULT_TTS_VCN_EN}
-                    value={settings.cloudVoiceEn}
-                    autoComplete="off"
-                    spellCheck={false}
-                    onChange={(e) => onPatch({ cloudVoiceEn: e.target.value.trim() })}
-                    aria-label="讯飞云音色（英文）"
-                  />
-                  <datalist id="xfyun-vcn-list">
-                    {XFUYUN_TTS_VOICE_SUGGESTIONS.map((v) => (
-                      <option key={v.vcn} value={v.vcn}>
-                        {v.label}
-                      </option>
-                    ))}
-                  </datalist>
-                </div>
-              </div>
-              <div className="drawer-row" title="讯飞凭据（评测/合成/听写）在主窗口 设置 → 语音 里集中配置">
-                <span className="label">合成凭据</span>
-                <div className="control" style={{ flex: 1, justifyContent: "flex-end", gap: 8 }}>
-                  <span className={`cred-state${ttsConfigured ? " ok" : ""}`}>
-                    {ttsConfigured === null ? "" : ttsConfigured ? "已配置 ✓" : "未配置"}
-                  </span>
-                  <button
-                    className="reader-tb-btn"
-                    onClick={() => void openSettings().catch(() => undefined)}
-                    title="打开总设置 → 语音"
-                  >
-                    设置
-                  </button>
-                </div>
-              </div>
+              ) : voiceProvider === "gateway" ? (
+                <>
+                  <div className="drawer-row" title="云音色来源跟随语音页所选服务商；这里不重复配置音色">
+                    <span className="label">音色来源</span>
+                    <div className="control drawer-static" style={{ flex: 1, justifyContent: "flex-end", gap: 8 }}>
+                      <span className={`cred-state${gatewayLoggedIn ? " ok" : ""}`}>
+                        {gatewayLoggedIn === null
+                          ? "沉浸云语音 · 正在读取登录状态…"
+                          : gatewayLoggedIn
+                            ? "沉浸云语音 · 已登录"
+                            : "沉浸云语音 · 未登录"}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="drawer-row" title="沉浸云按句流式合成，首个分片到达即开始播放；音色在语音页选择后即时生效">
+                    <span className="label">服务说明</span>
+                    <div className="control" style={{ flex: 1, justifyContent: "flex-end", gap: 8 }}>
+                      <span className="drawer-static">
+                        {gatewayLoggedIn === null
+                          ? "正在读取登录状态…"
+                          : gatewayLoggedIn
+                            ? "音色在语音页选择，此处不重复配置"
+                            : "当前未登录，播放会临时使用 Edge 朗读"}
+                      </span>
+                      <button
+                        className="reader-tb-btn"
+                        onClick={() => void settingsOpenTab("voice").catch(() => undefined)}
+                        title={gatewayLoggedIn === false ? "打开设置 → 语音页登录沉浸云" : "打开设置 → 语音页配置音色"}
+                      >
+                        {gatewayLoggedIn === false ? "去语音页登录" : "去语音页配置"}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="drawer-row" title="讯飞中文发音人（vcn）：中文句用它读；完整列表在讯飞控制台「语音合成」可试听，未授权音色会提示 11200。已播句子进缓存（内存+磁盘），重听不耗每日次数">
+                    <span className="label">云音色·中文</span>
+                    <div className="control" style={{ flex: 1 }}>
+                      <input
+                        className="reader-cred-input"
+                        style={{ flex: 1, width: "auto" }}
+                        list="xfyun-vcn-list"
+                        placeholder={DEFAULT_TTS_VCN}
+                        value={settings.cloudVoice}
+                        autoComplete="off"
+                        spellCheck={false}
+                        onChange={(e) => onPatch({ cloudVoice: e.target.value.trim() })}
+                        aria-label="讯飞云音色（中文）"
+                      />
+                    </div>
+                  </div>
+                  <div className="drawer-row" title="讯飞英文发音人（vcn）：英文句用它读，跟读示范不再由中文音色代劳；留空沿用中文音色">
+                    <span className="label">云音色·英文</span>
+                    <div className="control" style={{ flex: 1 }}>
+                      <input
+                        className="reader-cred-input"
+                        style={{ flex: 1, width: "auto" }}
+                        list="xfyun-vcn-list"
+                        placeholder={DEFAULT_TTS_VCN_EN}
+                        value={settings.cloudVoiceEn}
+                        autoComplete="off"
+                        spellCheck={false}
+                        onChange={(e) => onPatch({ cloudVoiceEn: e.target.value.trim() })}
+                        aria-label="讯飞云音色（英文）"
+                      />
+                      <datalist id="xfyun-vcn-list">
+                        {XFUYUN_TTS_VOICE_SUGGESTIONS.map((v) => (
+                          <option key={v.vcn} value={v.vcn}>
+                            {v.label}
+                          </option>
+                        ))}
+                      </datalist>
+                    </div>
+                  </div>
+                  <div className="drawer-row" title="讯飞凭据（评测/合成/听写）在主窗口 设置 → 语音 里集中配置">
+                    <span className="label">合成凭据</span>
+                    <div className="control" style={{ flex: 1, justifyContent: "flex-end", gap: 8 }}>
+                      <span className={`cred-state${ttsConfigured ? " ok" : ""}`}>
+                        {ttsConfigured === null ? "" : ttsConfigured ? "已配置 ✓" : "未配置"}
+                      </span>
+                      <button
+                        className="reader-tb-btn"
+                        onClick={() => void openSettings().catch(() => undefined)}
+                        title="打开总设置 → 语音"
+                      >
+                        设置
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
             </>
           )}
           <div className="drawer-row">
