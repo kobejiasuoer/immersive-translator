@@ -114,6 +114,7 @@ curl -sL --noproxy '*' "https://gh-proxy.com/https://github.com/kobejiasuoer/imm
 | tauri signer 各种 base64/utf-8 报错 | `-k` 传参姿势错 | 见第 6 节：`-k "$(base64 -w0 私钥文件)"` + `--password ""` |
 | GitHub Release 资产名被剥成 `_0.9.0_x64-setup.exe` 之类 | 资产 API 只认 ASCII，中文名被剥 | 资产名保持英文 `ImmersiveTranslator_...`（workflow 已处理，别改回中文） |
 | Release 工作流挂了想重跑 | — | 修复后 `git tag -f vX.Y.Z && git push -f origin vX.Y.Z`（mac 会 --clobber 重传，约 7 分钟/轮） |
+| CI「Run unit tests」偶发挂 1 例，本地重跑又过 | 时序型用例竞态：固定 sleep 窗口 vs 注入的快退避/异步宏任务（实例：voiceAsr.test「取票失败不终局」5ms 快退避 6 次≈30ms<40ms 窗口，满载时跑完即终局；DiscoverTab sha256 异步宏任务） | **别重跑碰运气，修用例**：给该用例单独注入长退避/轮询断言（flushUntil 模式），数学上消除竞态；修在 main 上推即可，tag 上的 CI 红不拦发布 |
 
 ## 9. 环境备忘
 
