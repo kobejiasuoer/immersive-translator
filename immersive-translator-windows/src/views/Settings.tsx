@@ -4,6 +4,8 @@ import { getVersion } from "@tauri-apps/api/app";
 import {
   loadSettingsFullAsync,
   saveSettingsFullAsync,
+  saveVoicePrefs,
+  stripVoicePrefs,
   DEFAULT_SETTINGS,
   hasValidSettings,
   isOnboardingDismissed,
@@ -11,6 +13,7 @@ import {
   providerIdFor,
   type AppSettings,
   type KeyVault,
+  type VoiceProvider,
 } from "../lib/settingsStore";
 import type { TranslationMode } from "../core/languageDetect";
 import {
@@ -65,7 +68,7 @@ import {
   IconVolume,
   IconUser,
 } from "../ui/icons";
-import { XfyunVoiceSection } from "./XfyunVoiceSection";
+import { VoiceSettingsTab } from "./VoiceSettingsTab";
 import { AccountSection, useAccountStatus } from "./AccountSection";
 
 type SettingsTab = "provider" | "translation" | "voice" | "glossary" | "hotkeys" | "account" | "about";
@@ -161,6 +164,30 @@ export function Settings() {
   }, []);
   const platformEp = platformBase ? platformEndpoint(platformBase) : undefined;
   const loggedIn = accountStatus?.loggedIn ?? false;
+
+  // ---- 登录自动切云（语音云决策 1）----
+  // 登录成功的瞬间（loggedIn false→true）自动把 voiceProvider 写为 gateway：
+  // 即时落盘 + 语音页卡片选中态随之切换 + 一条轻提示；讯飞凭据原样保留、随时可切回。
+  // 已是 gateway 无感；启动静默续登录（null→true）不算登录瞬间，不代切。
+  const prevLoggedInRef = useRef<boolean | null>(null);
+  const [switchedNotice, setSwitchedNotice] = useState(false);
+  const switchNoticeTimer = useRef<number | null>(null);
+  useEffect(() => {
+    const prev = prevLoggedInRef.current;
+    prevLoggedInRef.current = loggedIn;
+    if (prev !== false || !loggedIn) return;
+    if (settings.voiceProvider === "gateway") return;
+    applyVoicePrefs({ voiceProvider: "gateway" });
+    setSwitchedNotice(true);
+    if (switchNoticeTimer.current !== null) window.clearTimeout(switchNoticeTimer.current);
+    switchNoticeTimer.current = window.setTimeout(() => setSwitchedNotice(false), 4000);
+  }, [loggedIn]);
+  // 卸载时清掉未触发的提示定时器
+  useEffect(() => {
+    return () => {
+      if (switchNoticeTimer.current !== null) window.clearTimeout(switchNoticeTimer.current);
+    };
+  }, []);
   useEffect(() => {
     if (!loggedIn) {
       setPlatformModels([]);
@@ -230,14 +257,37 @@ export function Settings() {
   const currentIsLocal = isPlatform || (activePreset?.allowEmptyApiKey ?? isLocalhostEndpoint(settings.endpoint));
   const platformPreset = PROVIDER_PRESETS.find((p) => p.id === PLATFORM_PROVIDER_ID);
   const localPresets = PROVIDER_PRESETS.filter((p) => p.id !== PLATFORM_PROVIDER_ID);
+  // 语音偏好（voiceProvider 等）是即时保存字段：不进保存条 dirty 比较（契约 §三.2）。
   const dirty =
-    savedSnapshot !== null && JSON.stringify(settings) !== JSON.stringify(savedSnapshot);
+    savedSnapshot !== null &&
+    JSON.stringify(stripVoicePrefs(settings)) !== JSON.stringify(stripVoicePrefs(savedSnapshot));
 
   /** 编辑 Key：同时写进当前服务商的桶，切换服务商不串味。 */
   function updateApiKey(value: string) {
     setSettings((prev) => ({ ...prev, apiKey: value }));
     setVault((prev) => ({ ...prev, [activeProviderId]: value }));
     setSaved(false);
+  }
+
+  /** 语音偏好点选即写盘：更新表单态 + 同步快照（dirty 恒静）+ 立即合并落 localStorage。 */
+  function applyVoicePrefs(patch: {
+    voiceProvider?: VoiceProvider;
+    voiceGatewayVoice?: string;
+    voiceGatewayIseEnabled?: boolean;
+  }) {
+    setSettings((prev) => ({ ...prev, ...patch }));
+    setSavedSnapshot((prev) => (prev === null ? prev : { ...prev, ...patch }));
+    saveVoicePrefs(patch);
+  }
+
+  /** 语音页「兑换更多额度」：切账号 tab 后滚动/聚焦兑换码卡（契约 §三.10）。 */
+  function openAccountRedeem() {
+    setActiveTab("account");
+    window.setTimeout(() => {
+      const card = document.getElementById("account-redeem");
+      card?.scrollIntoView({ behavior: "smooth", block: "center" });
+      card?.focus();
+    }, 80);
   }
 
   /** 点服务商行：切换 endpoint + 模型 + 该服务商自己的 Key。 */
@@ -513,6 +563,12 @@ export function Settings() {
           <strong>{currentTabLabel}</strong>
         </div>
         <div className="set-content" ref={contentRef}>
+        {switchedNotice && (
+          <div className="msg-bar ok" role="status" style={{ marginBottom: 14 }}>
+            <IconCheck size={14} />
+            已切换为沉浸云语音——讯飞凭据已保留，可在「语音」页随时切回
+          </div>
+        )}
         {activeTab === "provider" && (
           <>
             <header className="set-pagehead">
@@ -947,20 +1003,19 @@ export function Settings() {
         )}
 
         {activeTab === "voice" && (
-          <>
-            <header className="set-pagehead">
-              <div className="set-pagehead-text">
-                <h2>语音</h2>
-                <p>填一组讯飞凭据，跟读打分、云端朗读、口语识别三个服务共用（需在讯飞控制台为应用开通对应服务）。经 DPAPI 加密存储。</p>
-              </div>
-            </header>
-            <div className="voice-layout">
-              <XfyunVoiceSection />
-            </div>
-            <p className="provider-caption">
-              之前在阅读室设置抽屉、口语陪练、录音直译里填过的凭据仍然有效（同一套加密存储），无需重复填写。
-            </p>
-          </>
+          <VoiceSettingsTab
+            platformBase={platformBase}
+            loggedIn={loggedIn}
+            email={accountStatus?.user?.email ?? ""}
+            voiceProvider={settings.voiceProvider}
+            voiceGatewayVoice={settings.voiceGatewayVoice}
+            voiceGatewayIseEnabled={settings.voiceGatewayIseEnabled ?? true}
+            onSelectProvider={(p) => applyVoicePrefs({ voiceProvider: p })}
+            onSelectVoice={(v) => applyVoicePrefs({ voiceGatewayVoice: v })}
+            onToggleIse={(on) => applyVoicePrefs({ voiceGatewayIseEnabled: on })}
+            onOpenRedeem={openAccountRedeem}
+            onOpenAccount={() => setActiveTab("account")}
+          />
         )}
 
         {activeTab === "glossary" && (

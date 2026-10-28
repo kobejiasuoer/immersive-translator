@@ -7,6 +7,7 @@ mod file_export;
 mod history;
 mod ocr;
 mod reader_store;
+mod redeem;
 mod review_reminder;
 mod scenario_catalog;
 mod screenshot;
@@ -18,6 +19,7 @@ mod translation;
 mod tray_badge;
 mod tts;
 mod uia;
+mod voice;
 mod web_extract;
 
 // 暴露给 main.rs（独立 bin crate）在 main() 第一行安装崩溃钩子；
@@ -1469,6 +1471,8 @@ pub fn run() {
             sync::sync_store_put,
             sync::sync_store_cursor_get,
             sync::sync_store_cursor_set,
+            redeem::redeem_code,
+            voice::voice_http_request,
             scenario_catalog::scenario_fetch_official,
             scenario_catalog::scenario_cache_read,
             scenario_catalog::scenario_cache_write,

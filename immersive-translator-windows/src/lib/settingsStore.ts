@@ -6,9 +6,14 @@ import {
   PLATFORM_PROVIDER_ID,
 } from "../core/providerPresets";
 import { authServerBaseUrl, secretGet, secretSet } from "./tauriBridge";
+import { xfyunCredentialPresence } from "./iseCredentials";
 
 /** 词典卡片模式：auto = 选中单词/短语时自动切换；off = 始终普通翻译。 */
 export type DictCardMode = "auto" | "off";
+
+/** 语音服务商（契约 §三.2）：gateway = 沉浸云官方，xfyun = 自带讯飞凭据。
+ *  与 LLM providerId 解耦；点卡即写盘（不经保存条），不纳入云同步（与 LLM provider 选择同口径）。 */
+export type VoiceProvider = "gateway" | "xfyun";
 
 export interface AppSettings {
   endpoint: string;
@@ -29,6 +34,13 @@ export interface AppSettings {
   ocrHotkey: string;
   /** 沉浸阅读室热键，Tauri 格式如 "Ctrl+Shift+R"。 */
   readerHotkey: string;
+  /** 语音服务商（gateway=沉浸云 / xfyun=讯飞 BYOK）。未存过时由迁移推断决定（§三.3）。
+   *  即时保存字段：改它不走保存条（Settings 里同步挪快照 + persistVoicePrefs 落盘）。 */
+  voiceProvider?: VoiceProvider;
+  /** 云模式朗读音色（me/config ttsVoices 里的 id，缺省用服务端默认音色）。即时保存。 */
+  voiceGatewayVoice?: string;
+  /** 云模式跟读打分本地开关（服务端 iseEnabled 之上的个人开关，缺省开）。即时保存。 */
+  voiceGatewayIseEnabled?: boolean;
 }
 
 /** 按服务商分桶的密钥库：providerId -> apiKey。整体经 DPAPI 加密落盘。 */
@@ -241,6 +253,81 @@ export function persistHotkeyField(
 export function savePersistedHotkey(hotkey: string): void {
   persistHotkeyField(
     hotkey,
+    () => localStorage.getItem(STORAGE_KEY),
+    (raw) => localStorage.setItem(STORAGE_KEY, raw),
+  );
+}
+
+// ---- 语音服务商偏好（voiceProvider / voiceGatewayVoice / voiceGatewayIseEnabled）----
+// 与保存条解耦（契约 §三.2）：点卡即写盘，这里只合并这几个字段、不触碰其余设置；
+// 同时从保存条 dirty 比较里剔除（stripVoicePrefs），云同步本就不含 AppSettings（决策 6）。
+
+/** 迁移推断（契约 §三.3，纯函数）：任一讯飞凭据存在 → 保持 xfyun（零感知）；否则默认 gateway。
+ *  高级覆盖用户可以只配单独凭据不配主凭据，所以三个槽位的「存在性」都算数。 */
+export function inferVoiceProvider(xfyunCreds: {
+  iseMain: boolean;
+  ttsOwn: boolean;
+  asrOwn: boolean;
+}): VoiceProvider {
+  return xfyunCreds.iseMain || xfyunCreds.ttsOwn || xfyunCreds.asrOwn ? "xfyun" : "gateway";
+}
+
+/**
+ * 语音页取生效服务商：已存值优先；未存过时按讯飞凭据存在性推断（§三.3）。
+ * 推断结果只作展示默认，不代写盘——首次用户点击时才落盘。
+ */
+export async function resolveInitialVoiceProvider(
+  stored: VoiceProvider | undefined,
+): Promise<VoiceProvider> {
+  if (stored === "gateway" || stored === "xfyun") return stored;
+  const presence = await xfyunCredentialPresence().catch(() => ({
+    iseMain: false,
+    ttsOwn: false,
+    asrOwn: false,
+  }));
+  return inferVoiceProvider(presence);
+}
+
+/** 保存条 dirty 比较用：剔除即时保存的语音偏好字段。 */
+export function stripVoicePrefs(
+  settings: AppSettings,
+): Omit<AppSettings, "voiceProvider" | "voiceGatewayVoice" | "voiceGatewayIseEnabled"> {
+  const { voiceProvider: _p, voiceGatewayVoice: _v, voiceGatewayIseEnabled: _i, ...rest } = settings;
+  return rest;
+}
+
+export interface VoicePrefsPatch {
+  voiceProvider?: VoiceProvider;
+  voiceGatewayVoice?: string;
+  voiceGatewayIseEnabled?: boolean;
+}
+
+/** 只把语音偏好字段合并进已保存设置（persistHotkeyField 同款注入式实现，便于单测）。 */
+export function persistVoicePrefsField(
+  patch: VoicePrefsPatch,
+  readRaw: PersistedRawReader,
+  writeRaw: (raw: string) => void,
+): void {
+  let persisted: Record<string, unknown>;
+  const raw = readRaw();
+  if (raw === null) {
+    const { apiKey: _ignored, ...defaults } = DEFAULT_SETTINGS;
+    persisted = defaults;
+  } else {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("已保存的设置格式无效");
+    }
+    const { apiKey: _ignored, ...withoutLegacySecret } = parsed as Record<string, unknown>;
+    persisted = withoutLegacySecret;
+  }
+  writeRaw(JSON.stringify({ ...persisted, ...patch }));
+}
+
+/** 点卡即写盘：语音偏好不等「保存设置」，立即合并进 localStorage。 */
+export function saveVoicePrefs(patch: VoicePrefsPatch): void {
+  persistVoicePrefsField(
+    patch,
     () => localStorage.getItem(STORAGE_KEY),
     (raw) => localStorage.setItem(STORAGE_KEY, raw),
   );

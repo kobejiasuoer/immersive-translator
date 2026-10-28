@@ -3,8 +3,9 @@
  * 双语滚动字幕，中→英 / 英→中可切；结束后可保存双语对照 .md / .txt。
  *
  * 链路：micRecorder（onChunk 流式，不留全量缓冲）→ LiveSegmenter（VAD 分句，
- * 收句即释放缓冲）→ 讯飞流式听写（xfyunAsr）→ translate_stream 句级翻译
- * （translateClient 按 tag 路由）。保存走 save_text_file 原生另存为。
+ * 收句即释放缓冲）→ 转写引擎按语音服务商路由（voiceRoute 守卫：gateway=沉浸云
+ * VoiceClient，xfyun=讯飞流式听写）→ translate_stream 句级翻译（translateClient
+ * 按 tag 路由）。保存走 save_text_file 原生另存为。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -21,7 +22,15 @@ import {
 } from "../core/liveCaption";
 import { transcribeSpeech } from "../core/xfyunAsr";
 import { resamplePcmTo16k, startMicRecorder, type MicRecorderHandle } from "../core/micRecorder";
+import type { IseCredentials } from "../core/pronunciation";
 import { loadAsrCredentials } from "../lib/iseCredentials";
+import {
+  pcm16kToBase64,
+  resolveVoiceRoute,
+  transcribeBatch,
+  voiceErrorDisplayText,
+  type VoiceRouteDecision,
+} from "../lib/voice";
 import { createTranslateClient } from "../lib/translateClient";
 import { openSettings, saveTextFile } from "../lib/tauriBridge";
 
@@ -42,6 +51,8 @@ export function LiveCaptionApp() {
   const segmenterRef = useRef<LiveSegmenter | null>(null);
   const clientRef = useRef<ReturnType<typeof createTranslateClient> | null>(null);
   const segmentsRef = useRef<CaptionSegment[]>([]);
+  /** 语音服务商路由决策：开麦那一刻定格（voiceRoute §三.5），整场录音共用。 */
+  const routeRef = useRef<VoiceRouteDecision | null>(null);
   const startedAtRef = useRef(0);
   const directionRef = useRef(direction);
   directionRef.current = direction;
@@ -97,9 +108,24 @@ export function LiveCaptionApp() {
     async (pcm: Float32Array) => {
       const dir = directionRef.current;
       const client = clientRef.current;
-      const creds = await loadAsrCredentials().catch(() => null);
-      if (!client || !creds) {
-        flash("讯飞听写凭据未配置：到 设置 → 语音 里填一次（或复用跟读评测那组）");
+      // 语音服务商路由（voiceRoute §三.5）：开麦那一刻已定（routeRef）；
+      // flush 尾句等 route 缺失的场景补一次。守卫不过：给引导、不开销任何额度。
+      let route = routeRef.current;
+      if (route === null) {
+        route = await resolveVoiceRoute("asr", { asrLang: asrLanguageOf(dir) });
+        routeRef.current = route;
+      }
+      let creds: IseCredentials | null = null;
+      if (route.engine === "xfyun") {
+        creds = await loadAsrCredentials().catch(() => null);
+        if (!creds) {
+          flash("讯飞听写凭据未配置：到 设置 → 语音 里填一次（或复用跟读评测那组）");
+          return;
+        }
+      }
+      if (!client) return;
+      if (route.engine === "off") {
+        flash(route.hint ?? "语音识别暂不可用");
         return;
       }
       const id = ++seqRef.current;
@@ -109,9 +135,21 @@ export function LiveCaptionApp() {
       ]);
       let text: string;
       try {
-        text = await transcribeSpeech(pcm, asrLanguageOf(dir), creds);
+        // gateway：句级 REST 转写（pcm 进来前已重采样 16k，见开麦侧）；xfyun：既有流式听写。
+        text =
+          route.engine === "gateway"
+            ? (await transcribeBatch(asrLanguageOf(dir), pcm16kToBase64(pcm, 16000).base64)).text
+            : await transcribeSpeech(pcm, asrLanguageOf(dir), creds!);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
+        // gateway 错误按 §二映射（quota_exceeded/封禁等，额度类拼重置时间），非信封
+        // 错误落通用兜底；讯飞分支保留原始 message（既有行为，零改动）。
+        const msg =
+          route.engine === "gateway"
+            ? voiceErrorDisplayText(e as { code?: unknown; details?: unknown }) ||
+              "服务暂时不可用，请稍后再试"
+            : e instanceof Error
+              ? e.message
+              : String(e);
         patchSegment(id, { state: "failed", source: `〔识别失败：${msg}〕` });
         return;
       }
@@ -148,11 +186,20 @@ export function LiveCaptionApp() {
   );
 
   const startRecording = useCallback(async () => {
-    // 前置检查：凭据缺了先说清楚，不开麦
-    const creds = await loadAsrCredentials().catch(() => null);
-    if (!creds) {
-      flash("讯飞听写凭据未配置：到 设置 → 语音 里填一次（或复用跟读评测那组）");
+    // 前置检查：语音服务商路由先定（voiceRoute §三.5 守卫），讯飞分支再查凭据；
+    // 守卫不过给「登录沉浸云即用」等引导，缺凭据给既有讯飞文案。都不开麦。
+    const route = await resolveVoiceRoute("asr", { asrLang: asrLanguageOf(directionRef.current) });
+    routeRef.current = route;
+    if (route.engine === "off") {
+      flash(route.hint ?? "语音识别暂不可用");
       return;
+    }
+    if (route.engine === "xfyun") {
+      const creds = await loadAsrCredentials().catch(() => null);
+      if (!creds) {
+        flash("讯飞听写凭据未配置：到 设置 → 语音 里填一次（或复用跟读评测那组）");
+        return;
+      }
     }
     try {
       stopPendingRef.current = false;
@@ -326,7 +373,7 @@ export function LiveCaptionApp() {
           </button>
         </div>
         <div className="lc-hint">
-          静音约 1 秒自动断句；讯飞听写凭据在 设置 → 语音 集中配置
+          静音约 1 秒自动断句；语音引擎在 设置 → 语音 里选择（沉浸云登录即用，或自带讯飞凭据）
           <button className="lc-creds-toggle" onClick={() => void openSettings().catch(() => undefined)}>
             打开设置
           </button>

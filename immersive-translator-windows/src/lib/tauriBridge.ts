@@ -517,6 +517,14 @@ export function authServerBaseUrl(): Promise<string | null> {
   return invoke<string | null>("auth_server_base_url");
 }
 
+/** POST /v1/redeem（兑换码核销，语音云契约 §三.10）：Bearer 会话 token 由 Rust
+ *  附带（with_auth，401 单飞刷新同 syncPull 口径）。非 2xx 是协议数据——
+ *  `redeem_code_not_found/expired/used` 等错误信封在 body 里，由 RedeemCard
+ *  映射文案；仅网络/致命鉴权错误 reject（AuthError）。 */
+export function redeemCode(code: string): Promise<SyncHttpText> {
+  return invoke("redeem_code", { code });
+}
+
 // ---------------------------------------------------------------------------
 // 云同步（升级计划 A0）：传输桥（Rust 附带鉴权）+ 本地同步存储桥。
 // 协议逻辑（游标/LWW/409/429）在 lib/syncEngine.ts，这里只做 IPC 封装。
