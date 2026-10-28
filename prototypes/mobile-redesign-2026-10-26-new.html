@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>沉浸口语 · iOS 移动端全量高保真原型 Master v5（18 屏全闭环 + Apple/邮箱登录）</title>
+<style>
+/* ========== 1. 视觉令牌（严格沿用暖纸墨色语言，精细校准对比度与层次） ========== */
+:root{
+  --bg:#FAF8F3; --surface:#FFFFFF; --surface-2:#F3F0E9; --surface-3:#EAE5DA;
+  --ink:#201D18; --ink-2:#524C42; --ink-3:#6E675B; --ink-4:#A69E90;
+  --hairline:#E7E2D6; --hairline-strong:#D5CEC0;
+  --accent:#2B567F; --accent-soft:rgba(43,86,127,.10); --accent-med:rgba(43,86,127,.22);
+  --on-ink:#FAF8F3;
+  --ok:#3A6B4C; --ok-soft:rgba(58,107,76,.11);
+  --warn:#946018; --warn-soft:rgba(148,96,24,.11);
+  --err:#AD4638; --err-soft:rgba(173,70,56,.10);
+  --font-serif:ui-serif,"New York",Georgia,"Source Serif 4",serif;
+  --font-sans:-apple-system,"SF Pro Text","PingFang SC","Hiragino Sans GB","Microsoft YaHei UI",system-ui,sans-serif;
+  --font-mono:ui-monospace,"SF Mono","JetBrains Mono",monospace;
+  --shadow-phone:0 26px 54px rgba(32,29,24,.20),0 3px 8px rgba(32,29,24,.18);
+  --shadow-card:0 4px 14px rgba(32,29,24,.05);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+::selection{background:var(--accent-soft);color:var(--accent)}
+body{font:14px/1.5 var(--font-sans);color:var(--ink);background:#E6E1D3;padding:28px 24px 96px;min-height:100vh}
+button,input,textarea{font:inherit;color:inherit;border:0;background:none;outline:none}
+button,a{cursor:pointer;text-decoration:none;color:inherit}
+.ico{width:22px;height:22px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.ico.sm{width:18px;height:18px}.ico.xs{width:14px;height:14px}
+.en{font-family:var(--font-serif)}
+.num{font-variant-numeric:tabular-nums;font-family:var(--font-mono)}
+
+/* ========== 2. 顶部控制台与筛选导航 ========== */
+.master-header{max-width:1820px;margin:0 auto 28px;background:var(--surface);border:1px solid var(--hairline);border-radius:22px;padding:20px 26px;box-shadow:0 12px 32px rgba(32,29,24,.06)}
+.mh-top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:16px}
+.mh-top h1{font-size:24px;font-weight:700;letter-spacing:.3px}
+.mh-top p{color:var(--ink-2);font-size:13.5px;margin-top:4px;max-width:920px}
+.mh-controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.seg-bar{display:flex;background:var(--surface-2);border-radius:12px;padding:4px;gap:3px;flex-wrap:wrap}
+.seg-bar button{padding:7px 14px;border-radius:9px;font-size:13px;font-weight:600;color:var(--ink-2);transition:all .18s ease}
+.seg-bar button.active{background:var(--surface);color:var(--ink);box-shadow:0 2px 6px rgba(32,29,24,.10)}
+.pin-toggle{display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border-radius:11px;border:1px solid var(--hairline-strong);font-size:13px;font-weight:600;background:var(--bg)}
+.pin-toggle i{width:9px;height:9px;border-radius:50%;background:var(--err)}
+
+.flow-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-top:16px;padding-top:16px;border-top:1px solid var(--hairline)}
+.flow-step{background:var(--bg);border:1px solid var(--hairline);border-radius:14px;padding:10px 14px}
+.flow-step b{display:block;font-size:13.5px;margin-bottom:2px;color:var(--ink)}
+.flow-step span{font-size:12px;color:var(--ink-3);line-height:1.45;display:block}
+
+/* ========== 3. 画板分节与手机壳容器 ========== */
+.sec{max-width:1820px;margin:0 auto 64px}
+.sec>h2{font-size:20px;margin-bottom:6px;display:flex;align-items:center;gap:10px;text-wrap:balance}
+.sec>h2 em{font-style:normal;font-size:12px;font-weight:600;color:var(--on-ink);background:var(--ink);border-radius:10px;padding:2px 10px}
+.sec>.sub{color:var(--ink-2);margin-bottom:24px;font-size:14px}
+.row{display:flex;flex-wrap:wrap;gap:46px 32px;align-items:flex-start}
+
+.dev{width:393px}
+.phone{width:393px;height:812px;border:10px solid #1F1C17;border-radius:52px;background:var(--bg);position:relative;overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow-phone)}
+.sb{height:50px;flex:none;display:flex;justify-content:space-between;align-items:flex-end;padding:0 26px 8px 30px;font-weight:600;font-size:15px;position:relative;z-index:6}
+.island{position:absolute;top:11px;left:50%;transform:translateX(-50%);width:110px;height:30px;background:#14120F;border-radius:99px}
+.sb .r{display:flex;gap:6px;align-items:center;font-size:12px}
+.sb svg{fill:currentColor}
+.body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;position:relative;display:flex;flex-direction:column;scrollbar-width:none}
+.body::-webkit-scrollbar{display:none}
+.tabbar{flex:none;height:82px;border-top:1px solid var(--hairline);background:rgba(250,248,243,.94);backdrop-filter:blur(12px);display:flex;padding:8px 6px 0;z-index:5}
+.tabbar a,.tabbar button{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;color:var(--ink-3);position:relative;min-height:44px}
+.tabbar .on{color:var(--ink);font-weight:700}
+.tabbar .on .ico{stroke-width:2.1}
+.tabbar .dot{position:absolute;top:0;left:calc(50% + 10px);width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.hi{position:absolute;bottom:7px;left:50%;transform:translateX(-50%);width:134px;height:5px;border-radius:3px;background:var(--ink);z-index:12;opacity:.85}
+
+/* ========== 4. 原子组件库 ========== */
+.ttl{font-size:28px;font-weight:700;letter-spacing:.3px;line-height:1.2;text-wrap:balance}
+.lbl{font-size:12px;color:var(--ink-3);letter-spacing:.2px}
+.card{background:var(--surface);border:1px solid var(--hairline);border-radius:18px}
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;line-height:1.5;padding:2px 10px;border-radius:99px;background:var(--surface-2);color:var(--ink-2);white-space:nowrap}
+.chip.acc{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.chip.ok{background:var(--ok-soft);color:var(--ok);font-weight:600}
+.chip.warn{background:var(--warn-soft);color:var(--warn);font-weight:600}
+.chip.err{background:var(--err-soft);color:var(--err);font-weight:600}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;height:50px;border-radius:14px;background:var(--ink);color:var(--on-ink);font-size:16px;font-weight:600;width:100%;transition:transform .12s ease,opacity .15s ease}
+.btn:active{transform:scale(.985)}
+.btn.apple{background:#000000;color:#FFFFFF;font-size:16px;letter-spacing:.2px}
+.btn.ghost{background:transparent;border:1px solid var(--hairline-strong);color:var(--ink)}
+.btn.soft{background:var(--accent-soft);color:var(--accent)}
+.btn.sm{height:36px;font-size:13px;border-radius:11px;padding:0 12px;width:auto;display:inline-flex}
+.cir{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;flex:none;transition:background .15s ease}
+.cir.line{border:1px solid var(--hairline-strong)}.cir.soft{background:var(--surface-2)}
+.seg{display:flex;background:var(--surface-2);border-radius:12px;padding:3px}
+.seg b,.seg button{flex:1;text-align:center;font-weight:500;font-size:13.5px;padding:6px 0;border-radius:9px;color:var(--ink-3);cursor:pointer}
+.seg .on{background:var(--surface);color:var(--ink);font-weight:700;box-shadow:0 1px 3px rgba(32,29,24,.10)}
+.prog{height:4px;border-radius:2px;background:var(--hairline);overflow:hidden}
+.prog i{display:block;height:100%;background:var(--accent);transition:width .3s ease}
+.x{border-bottom:1.5px dashed var(--accent);text-underline-offset:3px;cursor:pointer}
+.w{background:rgba(32,29,24,.07);border-radius:4px;padding:0 4px;cursor:pointer}
+.tgl{width:46px;height:28px;border-radius:14px;background:var(--ok);position:relative;flex:none;cursor:pointer;transition:background .2s ease}
+.tgl.off{background:var(--hairline-strong)}
+.tgl::after{content:"";position:absolute;top:3px;right:3px;width:22px;height:22px;border-radius:50%;background:#fff;transition:transform .2s ease;box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.tgl.off::after{transform:translateX(-18px)}
+.topbar{display:grid;grid-template-columns:48px 1fr 48px;align-items:center;height:48px;padding:0 12px;flex:none}
+.topbar .t{text-align:center;font-weight:700;font-size:17px}
+
+/* 表单输入框 */
+.field-group{display:flex;flex-direction:column;gap:11px;margin-top:14px}
+.field{background:var(--surface);border:1px solid var(--hairline-strong);border-radius:14px;padding:7px 14px;display:flex;align-items:center;gap:10px;min-height:52px;transition:border-color .15s ease,box-shadow .15s ease}
+.field:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.field.err-state{border-color:var(--err);background:var(--err-soft)}
+.field-inner{flex:1;min-width:0}
+.field-inner label{display:block;font-size:11px;color:var(--ink-3);line-height:1.2}
+.field-inner input{width:100%;font-size:15.5px;color:var(--ink);margin-top:2px;background:transparent}
+.field-inner input::placeholder{color:var(--ink-4)}
+.divider{display:flex;align-items:center;gap:12px;color:var(--ink-3);font-size:12px;margin:14px 0}
+.divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--hairline)}
+
+/* 设置列表 */
+.st{margin-top:6px;position:relative}
+.st-row{display:flex;gap:12px;align-items:center;padding:0 14px;min-height:52px;border-top:1px solid var(--hairline);cursor:pointer}
+.st-row:first-child{border-top:0}
+.st-row>div{flex:1;min-width:0}
+.st-row b{display:block;font-weight:600;line-height:1.3}
+.st-row small{display:block;font-size:12px;color:var(--ink-3);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st-row .ico:first-child{color:var(--ink-2)}
+.st-h{font-size:12px;color:var(--ink-3);letter-spacing:.3px;margin:13px 4px 0;font-weight:600}
+
+/* 底部抽屉 Bottom Sheet */
+.sheet-mask{position:absolute;inset:0;background:rgba(32,29,24,.32);backdrop-filter:blur(2px);display:flex;flex-direction:column;justify-content:flex-end;z-index:10}
+.sheet{background:var(--bg);border-radius:26px 26px 0 0;padding:10px 20px 28px;box-shadow:0 -12px 36px rgba(32,29,24,.18);border-top:1px solid var(--hairline-strong)}
+.sheet-grab{width:38px;height:5px;border-radius:3px;background:var(--hairline-strong);margin:0 auto 12px}
+
+/* 批注气泡与说明区 */
+.pin{position:absolute;z-index:15;width:20px;height:20px;border-radius:50%;background:var(--err);color:#fff;font:700 11px/20px var(--font-mono);text-align:center;box-shadow:0 2px 6px rgba(173,70,56,.38);transition:opacity .2s ease}
+body.hide-pins .pin{opacity:0;pointer-events:none}
+.cap{margin-top:16px}
+.cap h3{font-size:16px;font-weight:700;display:flex;align-items:center;gap:8px}
+.cap h3 span{font-size:11px;font-weight:600;padding:1px 7px;border-radius:6px;background:var(--surface-3);color:var(--ink-2)}
+.cap .was{font-size:12px;color:var(--ink-3);margin:2px 0 8px}
+.cap ol{list-style:none;display:grid;gap:7px}
+.cap li{display:flex;gap:8px;font-size:12.8px;color:var(--ink-2);line-height:1.55}
+.cap li i{flex:none;width:18px;height:18px;border-radius:50%;background:var(--err);color:#fff;font:700 10.5px/18px var(--font-mono);text-align:center;font-style:normal;margin-top:2px}
+.cap li b{color:var(--ink)}
+
+/* 名词与架构表 */
+.nm{width:760px;max-width:100%}
+.nm table{width:100%;border-collapse:collapse;font-size:13px}
+.nm th{text-align:left;font-size:12px;font-weight:600;color:var(--ink-3);padding:0 12px 8px}
+.nm td{padding:8px 12px;border-top:1px solid var(--hairline);vertical-align:top;line-height:1.5}
+.nm td:first-child{color:var(--ink-3);text-decoration:line-through;white-space:nowrap}
+.nm td:nth-child(2){font-weight:700;white-space:nowrap;color:var(--ink)}
+
+/* Toast 反馈 */
+.toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--ink);color:var(--on-ink);padding:10px 20px;border-radius:99px;font-size:13.5px;font-weight:600;box-shadow:0 12px 28px rgba(32,29,24,.28);opacity:0;pointer-events:none;transition:all .22s ease;z-index:100}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<div id="toast" class="toast">操作反馈</div>
+
+<!-- SVG 图标库 (统一 1.7px 描边) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-sig" viewBox="0 0 18 11"><rect x="0" y="7" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="6" rx=".8"/><rect x="10" y="2.5" width="3" height="8.5" rx=".8"/><rect x="15" y="0" width="3" height="11" rx=".8"/></symbol>
+<symbol id="i-bat" viewBox="0 0 27 12"><rect x=".5" y=".5" width="22" height="11" rx="3.2" fill="none" stroke="currentColor" opacity=".45"/><rect x="2" y="2" width="19" height="8" rx="2"/><path d="M24.5 4v4c.9-.3 1.5-1.1 1.5-2s-.6-1.7-1.5-2z" opacity=".5"/></symbol>
+<symbol id="i-apple" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43zm4.565 15.71c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45z"/></symbol>
+<symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 6.5l8.5 6 8.5-6"/></symbol>
+<symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+<symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.8"/></symbol>
+<symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L19 4M16 7l3 3"/></symbol>
+<symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.8-3.8 5-5.5 8-5.5s6.2 1.7 8 5.5"/></symbol>
+<symbol id="i-today" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M8 3v4M16 3v4M4 10h16"/><circle cx="12" cy="15" r="1.3" fill="currentColor" stroke="none"/></symbol>
+<symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></symbol>
+<symbol id="i-book" viewBox="0 0 24 24"><path d="M5 4v16M10 4v16M15 5l4 15M3 20h18"/></symbol>
+<symbol id="i-mark" viewBox="0 0 24 24"><path d="M7 4h10v16l-5-4-5 4z"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+<symbol id="i-fwd" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+<symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.3"/><circle cx="8" cy="17" r="2.3"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></symbol>
+<symbol id="i-prev" viewBox="0 0 24 24"><path d="M6.5 5v14M18 5.5v13L9 12z"/></symbol>
+<symbol id="i-next" viewBox="0 0 24 24"><path d="M17.5 5v14M6 5.5v13L15 12z"/></symbol>
+<symbol id="i-spk" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></symbol>
+<symbol id="i-kbd" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2.5"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+<symbol id="i-trans" viewBox="0 0 24 24"><path d="M4 6h9M8.5 4v2M6 6c.5 3 2.5 5.5 5.5 7M12 6c-.5 3-3 5.8-7 7.5M13 20l4-9 4 9M14.5 17h5"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+<symbol id="i-dots" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
+<symbol id="i-coffee" viewBox="0 0 24 24"><path d="M5 9h11v5a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5zM16 10h2a2.5 2.5 0 0 1 0 5h-2M8 3v3M12 3v3"/></symbol>
+<symbol id="i-plane" viewBox="0 0 24 24"><path d="M21 4L3 11l7 3 3 7zM10 14l11-10"/></symbol>
+<symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s6-5.5 6-11a6 6 0 0 0-12 0c0 5.5 6 11 6 11z"/><circle cx="12" cy="10" r="2.2"/></symbol>
+<symbol id="i-brief" viewBox="0 0 24 24"><rect x="3.5" y="7.5" width="17" height="12" rx="2.5"/><path d="M9 7.5V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5M3.5 13h17"/></symbol>
+<symbol id="i-wave" viewBox="0 0 24 24"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></symbol>
+<symbol id="i-repeat" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3M18 3v4h-4M6 21v-4h4"/></symbol>
+<symbol id="i-clip" viewBox="0 0 24 24"><rect x="6" y="4" width="12" height="17" rx="2.5"/><path d="M9.5 4V3h5v1M9 10h6M9 14h6"/></symbol>
+<symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 0 1-.5-9A6 6 0 0 1 18 10a4 4 0 0 1-.5 8z"/></symbol>
+<symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13h6l-1 8 8-10h-6z"/></symbol>
+<symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/></symbol>
+<symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 17v-6a6 6 0 0 1 12 0v6l1.5 2h-15zM10 21h4"/></symbol>
+<symbol id="i-flask" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></symbol>
+<symbol id="i-edit" viewBox="0 0 24 24"><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></symbol>
+</defs></svg>
+
+<!-- ==================== 顶部全局控制台 ==================== -->
+<header class="master-header">
+  <div class="mh-top">
+    <div>
+      <h1>沉浸口语 · iOS 移动端全量改版原型 Master v5（共 18 屏）</h1>
+      <p>全盘保留原稿 10 屏并逐一精修，同时补齐 4 屏 iOS 登录与账号同步体系（Apple 登录 + 邮箱密码登录/注册/找回，无短信登录）以及原稿缺失的 4 个核心闭环断点（阅读点词收词卡、表达闪卡复习页、+ 导入菜单、首日破冰冷启动）。</p>
+    </div>
+    <div class="mh-controls">
+      <div class="seg-bar">
+        <button class="active" onclick="filterSec('all', this)">全部 18 屏</button>
+        <button onclick="filterSec('auth', this)">0 · iOS 登录体系 (4 屏)</button>
+        <button onclick="filterSec('tabs', this)">A · 四个主 Tab (4 屏)</button>
+        <button onclick="filterSec('loop', this)">B · 阅读与开口闭环 (6 屏)</button>
+        <button onclick="filterSec('end', this)">C · 总结、设置与破冰 (4 屏)</button>
+      </div>
+      <button class="pin-toggle" onclick="document.body.classList.toggle('hide-pins')">
+        <i></i><span>显隐红点批注</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="flow-strip">
+    <div class="flow-step"><b>0 账号与破冰（新增）</b><span>Apple / 邮箱登录，或访客预装 3 个种子表达直接开练</span></div>
+    <div class="flow-step"><b>1 阅读点词（补齐抽屉）</b><span>读文章点虚线词块，弹出语境词卡一键收进「表达」</span></div>
+    <div class="flow-step"><b>2 表达复习（补齐闪卡）</b><span>到期表达自动排入今日任务，或 1 分钟开口闪卡复习</span></div>
+    <div class="flow-step"><b>3 场景开口（支持点按/按住）</b><span>在对话中用出目标表达，实时转写并自动打勾</span></div>
+    <div class="flow-step"><b>4 总结回流（高光+纠错）</b><span>肯定已用上的表达，最多 2 条地道改写一键存回「表达」</span></div>
+  </div>
+</header>
+
+
+<!-- =========================================================================
+     SECTION 0 · iOS 登录与账号体系（4 屏：欢迎分流 / 邮箱登录 / 邮箱注册 / 找回密码&错误态）
+     ========================================================================= -->
+<section class="sec" data-sec="auth">
+<h2>0 · iOS 登录与账号同步体系 <em>新增 4 屏 · 遵循 Apple HIG Guideline 4.8</em></h2>
+<p class="sub">仅保留 Apple 登录与邮箱密码登录（不含短信验证码）。支持「先逛逛」延迟登录、iCloud 钥匙串自动填充、单框密码注册合并本地数据、以及邮箱重置链接半屏抽屉。</p>
+<div class="row">
+
+<!-- 0-1 欢迎与 Apple 一键登录 -->
+<div class="dev">
+<div class="phone">
+<div class="sb"><span class="num">18:40</span><div class="island"></div><span class="r"><svg width="18" height="11"><use href="#i-sig"/></svg><span>5G</span><svg width="27" height="12"><use href="#i-bat"/></svg></span></div>
+<div class="body" style="padding:10px 24px 28px;justify-content:space-between">
+  <div style="display:flex;justify-content:flex-end">
+    <button class="chip" style="padding:5px 12px;font-weight:600" onclick="toast('已进入访客模式：预装 3 个种子表达，先体验 1 节口语后再提示绑定')">先逛逛 ›</button>
+  </div>
+
+  <div style="margin:auto 0;position:relative">
+    <div style="width:58px;height:58px;border-radius:17px;background:var(--ink);color:var(--on-ink);display:grid;place-items:center;box-shadow:0 10px 24px rgba(32,29,24,.18)">
+      <svg class="ico" style="width:28px;height:28px"><use href="#i-mic"/></svg>
+    </div>
+    <div class="en" style="font-size:15px;color:var(--accent);font-weight:600;margin-top:18px">Immersive Speaking</div>
+    <div class="ttl" style="font-size:32px;margin-top:4px">读进去，说出来。</div>
+    <p style="color:var(--ink-2);margin-top:8px;font-size:15px;line-height:1.6">在阅读里收集地道表达，在每天 3 分钟的场景对话里自然用出来。</p>
+
+    <div class="card" style="margin-top:22px;padding:14px 16px;background:var(--surface-2);border-color:transparent">
+      <div class="en" style="font-size:16.5px;line-height:1.5">“I'm slowly <span class="x">settling in</span> to the new neighborhood.”</div>
+      <div class="lbl" style="margin-top:6px">来自今日阅读 · 已排入 3 分钟口语任务</div>
+    </div>
+    <span class="pin" style="top:-8px;right:0">1</span>
+  </div>
+
+  <div style="position:relative">
+    <button class="btn apple" onclick="toast('已唤起 iOS 系统 Face ID / Apple ID 授权面板')">
+      <svg class="ico sm"><use href="#i-apple"/></svg>通过 Apple 登录
+    </button>
+    <button class="btn ghost" style="margin-top:10px" onclick="toast('进入右侧「邮箱与密码登录」页')">
+      <svg class="ico sm"><use href="#i-mail"/></svg>使用邮箱和密码登录
+    </button>
+    <div style="display:flex;align-items:flex-start;gap:8px;margin-top:16px;font-size:12px;color:var(--ink-3);line-height:1.45">
+      <span style="width:16px;height:16px;border-radius:5px;background:var(--ink);color:var(--on-ink);display:inline-grid;place-items:center;flex:none;margin-top:1px"><svg class="ico xs" style="width:11px;height:11px"><use href="#i-check"/></svg></span>
+      <span>登录即代表同意 <u style="color:var(--ink-2)">用户协议</u> 与 <u style="color:var(--ink-2)">隐私政策</u>。支持隐藏真实邮件地址。</span>
+    </div>
+    <span class="pin" style="top:-10px;right:-6px">2</span>
+  </div>
+</div>
+<div class="hi"></div>
+</div>
+<div class="cap">
+  <h3>01 · 欢迎与 Apple 登录 <span>新增</span></h3>
+  <div class="was">补齐首屏品牌定位与 iOS 认证分流</div>
+  <ol>
+    <li><i>1</i><span><b>右上角保留「先逛逛」。</b>允许用户免登录先体验一次阅读与 3 分钟对话，避免冷冰冰的登录墙劝退新用户。</span></li>
+    <li><i>2</i><span><b>Apple 登录居首 + 邮箱登录并列。</b>严格遵循 Apple HIG 纯黑按钮规范，彻底去除短信验证码入口。</span></li>
+  </ol>
+</div>
+</div>
+
+<!-- 0-2 邮箱与密码登录 (含 iCloud 钥匙串自动填充) -->
+<div class="dev">
+<div class="phone">
+<div class="sb"><span class="num">18:40</span><div class="island"></div><span class="r"><svg width="18" height="11"><use href="#i-sig"/></svg><span>5G</span><svg width="27" height="12"><use href="#i-bat"/></svg></span></div>
+<div class="body" style="padding:0 22px 24px">
+  <div class="topbar" style="padding:0;grid-template-columns:44px 1fr 72px">
+    <button class="cir" style="margin-left:-10px"><svg class="ico"><use href="#i-back"/></svg></button>
+    <span></span>
+    <button style="font-size:14px;color:var(--accent);font-weight:600;text-align:right" onclick="toast('切换至右侧「创建邮箱账号」')">注册新账号</button>
+  </div>
+
+  <div class="ttl" style="margin-top:6px">邮箱登录</div>
+  <p style="color:var(--ink-2);margin-top:4px;font-size:14px">使用已绑定的邮箱与密码同步学习进度</p>
+
+  <div class="field-group" style="margin-top:18px;position:relative">
+    <div class="field">
+      <svg class="ico sm" style="color:var(--ink-3)"><use href="#i-mail"/></svg>
+      <div class="field-inner">
+        <label>邮箱地址</label>
+        <input id="em-in" type="email" value="lin.chen@icloud.com" autocomplete="username">
+      </div>
+      <button onclick="document.getElementById('em-in').value=''"><svg class="ico xs" style="color:var(--ink-3)"><use href="#i-x"/></svg></button>
+    </div>
+
+    <div class="field">
+      <svg class="ico sm" style="color:var(--accent)"><use href="#i-lock"/></svg>
+      <div class="field-inner">
+        <label style="color:var(--accent)">密码</label>
+        <input id="pw-in" type="password" value="Speak2026!" autocomplete="current-password">
+      </div>
+      <button onclick="togglePw('pw-in')"><svg class="ico sm" style="color:var(--ink-3)"><use href="#i-eye"/></svg></button>
+    </div>
+    <span class="pin" style="top:-8px;right:-6px">1</span>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:13px">
+    <span style="color:var(--ink-3)">支持 iCloud 钥匙串自动填充</span>
+    <button style="color:var(--accent);font-weight:600" onclick="toast('唤起第 4 屏「重置密码」半屏抽屉')">忘记密码？</button>
+  </div>
+
+  <button class="btn" style="margin-top:18px" onclick="toast('登录成功！已同步 12 个表达与阅读进度')">登录</button>
+
+  <div class="divider">或</div>
+
+  <button class="btn apple" style="height:46px;font-size:15px" onclick="toast('唤起 Apple ID 授权')">
+    <svg class="ico sm"><use href="#i-apple"/></svg>改用 Apple 登录
+  </button>
+
+  <!-- iOS iCloud Keychain AutoFill 提示条 -->
+  <div style="margin-top:auto;background:var(--surface);border:1px solid var(--hairline-strong);border-radius:16px;padding:10px 14px;display:flex;align-items:center;gap:10px;position:relative;box-shadow:var(--shadow-card)">
+    <div class="cir soft" style="width:36px;height:36px;color:var(--accent)"><svg class="ico sm"><use href="#i-key"/></svg></div>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:12px;color:var(--ink-3)">密码自动填充 · iCloud 钥匙串</div>
+      <div class="num" style="font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">lin.chen@icloud.com</div>
+    </div>
+    <button class="chip acc" onclick="toast('已通过 Face ID 自动填入凭据')">一键填入</button>
+    <span class="pin" style="top:-8px;right:-6px">2</span>
+  </div>
+</div>
+<div class="hi"></div>
+</div>
+<div class="cap">
+  <h3>02 · 邮箱与密码登录 <span>新增</span></h3>
+  <div class="was">支持跨设备邮箱密码登录与系统钥匙串联动</div>
+  <ol>
+    <li><i>1</i><span><b>52pt 大触控输入框。</b>内置浮动双层标签、一键清空与密码明文切换（可点击小眼睛体验）。</span></li>
+    <li><i>2</i><span><b>原生对接 Password AutoFill。</b>底部展示 iOS 键盘上方的钥匙串凭证条，一键 Face ID 填入。</span></li>
+  </ol>
+</div>
+</div>
+
+<!-- 0-3 邮箱注册（单框密码 + 本机访客数据合并确认） -->
+<div class="dev">
+<div class="phone">
+<div class="sb"><span class="num">18:40</span><div class="island"></div><span class="r"><svg width="18" height="11"><use href="#i-sig"/></svg><span>5G</span><svg width="27" height="12"><use href="#i-bat"/></svg></span></div>
+<div class="body" style="padding:0 22px 24px">
+  <div class="topbar" style="padding:0;grid-template-columns:44px 1fr 72px">
+    <button class="cir" style="margin-left:-10px"><svg class="ico"><use href="#i-back"/></svg></button>
+    <span></span>
+    <span style="font-size:14px;color:var(--accent);font-weight:600;text-align:right">已有账号</span>
+  </div>
+
+  <div class="ttl" style="margin-top:6px">创建邮箱账号</div>
+  <p style="color:var(--ink-2);margin-top:4px;font-size:14px">注册后可在多台 iOS 设备间实时同步</p>
+
+  <!-- 访客数据无损合并提示卡 -->
+  <div class="card" style="margin-top:14px;padding:10px 14px;background:var(--ok-soft);border-color:transparent;display:flex;align-items:center;gap:10px;position:relative">
+    <span class="cir" style="width:28px;height:28px;background:var(--ok);color:#fff"><svg class="ico xs"><use href="#i-check"/></svg></span>
+    <div style="font-size:12.5px;color:var(--ink)">本机已有的 <b>12 个表达</b> 与 <b>2 篇阅读记录</b> 将自动合并至新账号，不会丢失。</div>
+    <span class="pin" style="top:-8px;right:-6px">1</span>
+  </div>
+
+  <div class="field-group" style="margin-top:14px;position:relative">
+    <div class="field">
+      <svg class="ico sm" style="color:var(--ink-3)"><use href="#i-user"/></svg>
+      <div class="field-inner">
+        <label>
