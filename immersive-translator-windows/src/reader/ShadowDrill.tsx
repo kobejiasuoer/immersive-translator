@@ -11,6 +11,13 @@ import { phoneTip, worstPhoneOf } from "../core/shadowDiagnose";
 import { startMicRecorder, type MicRecorderHandle } from "../core/micRecorder";
 import { useEscapeClose } from "./useEscapeClose";
 import { loadIseCredentials } from "../lib/iseCredentials";
+import { recordAssessmentSilently } from "../lib/speakRecords";
+import {
+  evaluatePronunciation,
+  pcm16kToBase64,
+  resolveVoiceRoute,
+  voiceErrorDisplayText,
+} from "../lib/voice";
 import type { DrillEntry } from "./ShadowReport";
 
 interface Props {
@@ -75,25 +82,48 @@ export function ShadowDrill(props: Props) {
       setStep({ kind: "idle" });
       return;
     }
-    const creds = await loadIseCredentials().catch(() => null);
-    if (!creds) {
-      onToast("未配置讯飞评测凭据：设置 → 语音");
+    // 评测引擎走路由守卫（voiceRoute §三.5）：gateway=VoiceClient，xfyun=既有直连；
+    // off=入口按态禁用——不烧任何额度，给「登录沉浸云即用」等引导。
+    const route = await resolveVoiceRoute("ise");
+    if (route.engine === "off") {
+      onToast(route.hint ?? "跟读打分暂不可用");
       setStep({ kind: "idle" });
       return;
     }
     let result: PronunciationResult;
-    try {
-      result = await evaluateSentence(pcm, entry.text, creds);
-    } catch (e) {
-      onToast(`评测失败：${e instanceof Error ? e.message : String(e)}`);
-      setStep({ kind: "idle" });
-      return;
+    if (route.engine === "gateway") {
+      try {
+        result = await evaluatePronunciation(entry.text, "en", pcm16kToBase64(pcm, 16000).base64);
+      } catch (e) {
+        // 云端错误按 §二映射（额度类拼重置时间）；非信封错误（网络/未接线）落通用兜底
+        onToast(
+          `评测失败：${voiceErrorDisplayText(e as { code?: unknown; details?: unknown }) || "服务暂时不可用，请稍后再试"}`,
+        );
+        setStep({ kind: "idle" });
+        return;
+      }
+    } else {
+      const creds = await loadIseCredentials().catch(() => null);
+      if (!creds) {
+        onToast("未配置讯飞评测凭据：设置 → 语音");
+        setStep({ kind: "idle" });
+        return;
+      }
+      try {
+        result = await evaluateSentence(pcm, entry.text, creds);
+      } catch (e) {
+        onToast(`评测失败：${e instanceof Error ? e.message : String(e)}`);
+        setStep({ kind: "idle" });
+        return;
+      }
     }
     if (result.isRejected || result.exceptInfo !== null) {
       onToast("这个没听清，再试一次（读准一点、声音大一点）");
       setStep({ kind: "idle" });
       return;
     }
+    // 评测记录入云（speak-assessments，source=coach；单词跟读也计，音频不上云）
+    recordAssessmentSilently({ result, source: "coach", refText: entry.text });
     const prev = entry.mark.score;
     setScores((s) => {
       const next = [...s];

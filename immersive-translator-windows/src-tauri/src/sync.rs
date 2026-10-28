@@ -23,7 +23,9 @@ pub const SYNC_STORE_SCHEMA_VERSION: u32 = 1;
 
 /// 本地允许持久化的集合（与服务端 SYNC_COLLECTIONS 白名单对齐；
 /// 集合名进文件路径，白名单即路径校验，防任意文件名读写）。
-const LOCAL_COLLECTIONS: &[&str] = &["speak-scenarios"];
+/// speak-sessions/speak-assessments：口语对话与跟读评测记录（2026-10-28，
+/// 记录跟账号走；入队/裁剪纯本地，游客零网络——协议在 src/lib/speakRecords.ts）。
+const LOCAL_COLLECTIONS: &[&str] = &["speak-scenarios", "speak-sessions", "speak-assessments"];
 
 // ---------------------------------------------------------------------------
 // IPC 可见类型（字段与前端 src/lib/tauriBridge.ts 导出类型一字不差）
@@ -447,6 +449,8 @@ mod tests {
         // LOCAL_COLLECTIONS 同时是文件名白名单：集合名直接进路径，
         // 白名单外（含路径穿越形态）必须拒绝。
         assert!(validate_collection("speak-scenarios").is_ok());
+        assert!(validate_collection("speak-sessions").is_ok());
+        assert!(validate_collection("speak-assessments").is_ok());
         for bad in ["../../etc/passwd", "history", "settings", ""] {
             assert!(validate_collection(bad).is_err(), "{bad}");
         }

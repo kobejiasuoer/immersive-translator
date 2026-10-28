@@ -55,22 +55,38 @@ import {
 import {
   evaluateSentence,
   mapWordsToText,
+  type IseCredentials,
   type PronunciationResult,
   type WordMark,
 } from "../core/pronunciation";
 import { startMicRecorder, type MicRecorderHandle } from "../core/micRecorder";
 import { createVadDetector, type VadDetector } from "../core/vad";
 import { loadAsrCredentials, loadIseCredentials } from "../lib/iseCredentials";
+import {
+  evaluatePronunciation,
+  pcm16kToBase64,
+  resolveVoiceRoute,
+  transcribeBatch,
+  voiceErrorDisplayText,
+} from "../lib/voice";
 import { loadSpeakListenMode, saveSpeakListenMode } from "./readerSettingsStore";
 import { track } from "../lib/analytics";
 import { speakListSessions, speakSaveSession } from "../lib/speakStore";
+import {
+  enqueueSessionRecordSilently,
+  listSessionRecords,
+  mergeSessionsWithRecords,
+  recordAssessmentSilently,
+  syncSpeakRecordsSilently,
+  type SpeakSessionRecord,
+} from "../lib/speakRecords";
 import {
   OFFICIAL_CATALOG_BADGE,
   officialCatalogSource,
   preloadScenarioCatalog,
   refreshOfficialScenarioCatalog,
 } from "../lib/scenarioCatalog";
-import { cancelTranslation, openSettings } from "../lib/tauriBridge";
+import { cancelTranslation, openSettings, settingsOpenTab } from "../lib/tauriBridge";
 import {
   filterScenarioPreview,
   findTargetSpans,
@@ -350,11 +366,23 @@ export function SpeakView({
   /** pendingSpeak 已消费的引用（同一 intent 不重复开会）。 */
   const pendingConsumedRef = useRef<PendingSpeakContext>(null);
 
-  // 挂载时拉历史会话（入口页「继续上次的对话」）
+  // 挂载时拉历史会话（入口页「继续上次的对话」）：本地富会话 + 云端精简记录
+  // 合并展示；随后静默云同步（登录后拉云端变更——B 端首拉即见云端记录；游客
+  // 零网络请求），有新记录落地时刷新一次列表。
   useEffect(() => {
-    void speakListSessions()
-      .then((list) => setRecent(list.slice(0, 5)))
-      .catch(() => undefined);
+    void (async () => {
+      const [local, records] = await Promise.all([
+        speakListSessions().catch(() => [] as SpeakSession[]),
+        listSessionRecords(),
+      ]);
+      const refresh = (rs: SpeakSessionRecord[]) =>
+        setRecent(mergeSessionsWithRecords(local, rs).slice(0, 5));
+      refresh(records);
+      const summaries = await syncSpeakRecordsSilently();
+      if (summaries.some((s) => s.appliedRemote > 0)) {
+        refresh(await listSessionRecords());
+      }
+    })();
   }, []);
 
   // 挂载时装载场景目录（A1）：先 preload（官方缓存+同步的用户场景），再拉取
@@ -417,9 +445,17 @@ export function SpeakView({
   );
 
   const persist = useCallback((next: SpeakSession) => {
-    void speakSaveSession(next)
-      .then(() => speakListSessions().then((l) => setRecent(l.slice(0, 5))).catch(() => undefined))
-      .catch(() => undefined);
+    // 本地富会话照旧落盘（Rust speak_store，重开对话的完整数据源）
+    void speakSaveSession(next).catch(() => undefined);
+    // 云端精简投影入队（本地写 + dirty，游客零网络；音频/跟读报告/提示不上云）
+    enqueueSessionRecordSilently(next);
+    void (async () => {
+      const [list, records] = await Promise.all([
+        speakListSessions().catch(() => [] as SpeakSession[]),
+        listSessionRecords(),
+      ]);
+      setRecent(mergeSessionsWithRecords(list, records).slice(0, 5));
+    })();
   }, []);
 
   /** 给最后一个 user 轮补字段（pron / coachDiff 异步落盘共用；读最新会话态再写）。 */
@@ -610,19 +646,39 @@ export function SpeakView({
       onToast("没听到声音——离麦克风近一点再说一次");
       return;
     }
-    const creds = await loadAsrCredentials().catch(() => null);
-    if (!creds) {
+    // 语音服务商路由（voiceRoute §三.5）：开麦时已守卫过，这里按态分派并兜住中途变化。
+    const route = await resolveVoiceRoute("asr", { asrLang: "en_us" });
+    if (route.engine === "off") {
       setPhase("error");
-      setRoundError("未配置讯飞听写凭据：到 设置 → 语音 里填一次（或复用跟读评测那组）");
+      setRoundError(route.hint ?? "语音识别暂不可用");
       return;
+    }
+    let creds: IseCredentials | null = null;
+    if (route.engine === "xfyun") {
+      creds = await loadAsrCredentials().catch(() => null);
+      if (!creds) {
+        setPhase("error");
+        setRoundError("未配置讯飞听写凭据：到 设置 → 语音 里填一次（或复用跟读评测那组）");
+        return;
+      }
     }
     let userText: string;
     try {
-      userText = await transcribeSpeech(pcm, "en_us", creds);
+      // gateway：REST 批量转写（pcm 已是 micRecorder 出来的 16k）；xfyun：既有流式听写。
+      userText =
+        route.engine === "gateway"
+          ? (await transcribeBatch("en_us", pcm16kToBase64(pcm, 16000).base64)).text
+          : await transcribeSpeech(pcm, "en_us", creds!);
     } catch (e) {
       if (epochRef.current !== epoch) return;
       setPhase("error");
-      setRoundError(`语音识别失败：${e instanceof Error ? e.message : String(e)}`);
+      setRoundError(
+        route.engine === "gateway"
+          ? // 云端错误按 §二映射（额度/封禁/网络，额度类拼重置时间），非信封错误落通用兜底
+            voiceErrorDisplayText(e as { code?: unknown; details?: unknown }) ||
+              "服务暂时不可用，请稍后再试"
+          : `语音识别失败：${e instanceof Error ? e.message : String(e)}`,
+      );
       return;
     }
     if (epochRef.current !== epoch) return;
@@ -670,27 +726,47 @@ export function SpeakView({
       }
     }
 
-    // 发音评测：同一录音送 ISE（凭据缺失/失败仅降级：user 轮没有 pron，不阻塞对话）
+    // 发音评测：同一录音送评测（路由守卫分派：gateway=VoiceClient，xfyun=既有直连；
+    // off/失败仅降级：user 轮没有 pron，不阻塞对话）
     void (async () => {
-      const iseCreds = await loadIseCredentials().catch(() => null);
-      if (!iseCreds) return;
-      try {
-        const result = await evaluateSentence(pcm, userText, iseCreds);
-        if (epochRef.current !== epoch) return;
-        if (result.isRejected || result.exceptInfo !== null) return; // 异常不计入（同跟读语义）
-        patchLastUserTurn({
-          pron: {
-            at: Date.now(),
-            total: result.total,
-            accuracy: result.accuracy,
-            fluency: result.fluency,
-            integrity: result.integrity,
-            words: result.words,
-          },
-        });
-      } catch {
-        /* 降级：不写 pron */
+      const iseRoute = await resolveVoiceRoute("ise");
+      let result: PronunciationResult | null = null;
+      if (iseRoute.engine === "gateway") {
+        try {
+          result = await evaluatePronunciation(userText, "en", pcm16kToBase64(pcm, 16000).base64);
+        } catch {
+          return; // 降级：不写 pron
+        }
+      } else if (iseRoute.engine === "xfyun") {
+        const iseCreds = await loadIseCredentials().catch(() => null);
+        if (!iseCreds) return;
+        try {
+          result = await evaluateSentence(pcm, userText, iseCreds);
+        } catch {
+          return; // 降级：不写 pron
+        }
+      } else {
+        return; // off：守卫不过（未登录/未开通/额度尽），静默跳过不打扰对话
       }
+      if (epochRef.current !== epoch) return;
+      if (result.isRejected || result.exceptInfo !== null) return; // 异常不计入（同跟读语义）
+      // 评测记录入云（speak-assessments，source=coach；仅分数与逐词精简，音频不上云）
+      recordAssessmentSilently({
+        result,
+        source: "coach",
+        refText: userText,
+        sessionId: withUser.id,
+      });
+      patchLastUserTurn({
+        pron: {
+          at: Date.now(),
+          total: result.total,
+          accuracy: result.accuracy,
+          fluency: result.fluency,
+          integrity: result.integrity,
+          words: result.words,
+        },
+      });
     })();
 
     // LLM 回复（流式上屏）
@@ -772,12 +848,21 @@ export function SpeakView({
     if (shadow.phase === "recording" || shadow.phase === "evaluating") return; // 跟读占用麦克风
     setRoundError(""); // 新一轮开始：上一轮的提示条（含「已跳过」这类 idle 态提示）一并收起
     stopSpeak();
-    setPhase("recording");
     setLevel(0);
     releasePendingRef.current = false;
     finishingRef.current = false;
     const epoch = epochRef.current;
     void (async () => {
+      // 入口守卫（voiceRoute §三.5）：gateway 守卫不过 → 不开麦，给「登录沉浸云即用」引导；
+      // xfyun 存量用户不经守卫，识别阶段才查凭据（行为不变）。
+      const route = await resolveVoiceRoute("asr", { asrLang: "en_us" });
+      if (epoch !== epochRef.current) return; // 期间已换场景/跳过
+      if (route.engine === "off") {
+        setPhase("error");
+        setRoundError(route.hint ?? "语音识别暂不可用");
+        return;
+      }
+      setPhase("recording");
       try {
         const vad = createVadDetector({
           silenceMs: TALK_SILENCE_MS,
@@ -952,17 +1037,40 @@ export function SpeakView({
       setShadow({ ...SHADOW_IDLE, phase: "error", error: "没听到声音，离麦克风近一点" });
       return;
     }
-    const creds = await loadIseCredentials().catch(() => null);
-    if (!creds) {
-      setShadow({ ...SHADOW_IDLE, phase: "error", error: "未配置讯飞评测凭据：设置 → 语音" });
+    // 跟读评测走路由守卫（voiceRoute §三.5）：gateway=VoiceClient，xfyun=既有直连；
+    // off=入口按态禁用——不烧任何额度，给「登录沉浸云即用」等引导。
+    const route = await resolveVoiceRoute("ise");
+    if (route.engine === "off") {
+      setShadow({ ...SHADOW_IDLE, phase: "error", error: route.hint ?? "跟读打分暂不可用" });
       return;
     }
     let result: PronunciationResult;
-    try {
-      result = await evaluateSentence(pcm, target, creds);
-    } catch (e) {
-      setShadow({ ...SHADOW_IDLE, phase: "error", error: e instanceof Error ? e.message : String(e) });
-      return;
+    if (route.engine === "gateway") {
+      try {
+        result = await evaluatePronunciation(target, "en", pcm16kToBase64(pcm, 16000).base64);
+      } catch (e) {
+        setShadow({
+          ...SHADOW_IDLE,
+          phase: "error",
+          // 云端错误按 §二映射（额度类拼重置时间）；非信封错误（网络/未接线）落通用兜底
+          error:
+            voiceErrorDisplayText(e as { code?: unknown; details?: unknown }) ||
+            "服务暂时不可用，请稍后再试",
+        });
+        return;
+      }
+    } else {
+      const creds = await loadIseCredentials().catch(() => null);
+      if (!creds) {
+        setShadow({ ...SHADOW_IDLE, phase: "error", error: "未配置讯飞评测凭据：设置 → 语音" });
+        return;
+      }
+      try {
+        result = await evaluateSentence(pcm, target, creds);
+      } catch (e) {
+        setShadow({ ...SHADOW_IDLE, phase: "error", error: e instanceof Error ? e.message : String(e) });
+        return;
+      }
     }
     // 录音留在内存，报告卡「听我的录音」可回放对照
     shadowPcmRef.current = pcm;
@@ -992,6 +1100,14 @@ export function SpeakView({
     }
 
     setShadow({ ...SHADOW_IDLE, phase: "done" });
+
+    // 评测记录入云（speak-assessments，source=coach；仅分数与逐词精简，音频不上云）
+    recordAssessmentSilently({
+      result,
+      source: "coach",
+      refText: target,
+      sessionId: sessionRef.current?.id,
+    });
 
     // 报告回写会话（找到最后一个 assistant 轮；每轮最多留 10 次）
     const attempt: ShadowAttempt = {
@@ -1577,6 +1693,15 @@ export function SpeakView({
     noticeActions.push({
       label: "去设置",
       onClick: () => void openSettings().catch(() => undefined),
+      primary: true,
+    });
+  }
+  // 额度用尽：「兑换更多额度」→ 设置窗账号 tab 兑换码卡（id=account-redeem，
+  // Settings.openAccountRedeem 的跨窗同款，定位走既有 settings_open_tab 通道）。
+  if (notice?.kind === "redeem") {
+    noticeActions.push({
+      label: "兑换更多额度",
+      onClick: () => void settingsOpenTab("account").catch(() => undefined),
       primary: true,
     });
   }
