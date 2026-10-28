@@ -32,7 +32,7 @@ export function nextTargetKey(keys: readonly string[], hit: ReadonlySet<string>)
   return null;
 }
 
-export type NoticeKind = "mic" | "credential" | "network" | "other";
+export type NoticeKind = "mic" | "credential" | "redeem" | "network" | "other";
 
 export interface FriendlyNotice {
   kind: NoticeKind;
@@ -65,6 +65,11 @@ export function friendlyNotice(raw: string): FriendlyNotice {
   }
   if (text.includes("未配置") && text.includes("凭据")) {
     return { kind: "credential", message: text };
+  }
+  // 沉浸云额度用尽（§二 quota_exceeded，含路由守卫的额度 hint 与
+  // voiceErrorDisplayText 拼好的重置时间）：给「兑换更多额度」动作位。
+  if (text.includes("额度已用完")) {
+    return { kind: "redeem", message: text };
   }
   if (text.startsWith("语音识别失败") || text.startsWith("回复生成失败")) {
     return { kind: "network", message: "网络好像不太稳，这一句没送出去。再说一次试试。", detail: text };

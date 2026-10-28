@@ -71,6 +71,17 @@ describe("friendlyNotice（输入取自 SpeakView / useShadowAssess 真实报错
     expect(n.kind).toBe("credential");
     expect(n.message).toBe(raw);
   });
+  it("额度用尽（§二 quota_exceeded 的展示文案，含重置时间后缀）→ redeem", () => {
+    // voiceErrorDisplayText 拼接后的两种形态：带重置时间 / 带兑换指路（服务端
+    // resetsAt 未下发时）。
+    const withReset = friendlyNotice("本月朗读额度已用完，11 月 1 日重置");
+    const withPointer = friendlyNotice("本月跟读打分额度已用完，可在「设置 → 账号」用兑换码补足");
+    const guardHint = friendlyNotice("本月识别额度已用完，可在「设置 → 账号」用兑换码补足");
+    for (const n of [withReset, withPointer, guardHint]) {
+      expect(n.kind).toBe("redeem");
+      expect(n.message).toContain("额度已用完");
+    }
+  });
   it("识别/回复失败 → network", () => {
     expect(friendlyNotice("语音识别失败：Network Error").kind).toBe("network");
     expect(friendlyNotice("回复生成失败：timeout").kind).toBe("network");
