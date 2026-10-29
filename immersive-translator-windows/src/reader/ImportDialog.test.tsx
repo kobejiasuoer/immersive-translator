@@ -160,9 +160,14 @@ async function flush(rounds = 4): Promise<void> {
   for (let i = 0; i < rounds; i += 1) await act(async () => {});
 }
 
-/** 冲刷微任务直到条件成立（parseEpub 多轮 await 的解析链路）。 */
-async function until(cond: () => boolean, rounds = 25): Promise<void> {
-  for (let i = 0; i < rounds && !cond(); i += 1) await act(async () => {});
+/** 冲刷到条件成立（parseEpub 下载/解析链路含真实宏任务——verifyEpubSha256 走
+ * crypto.subtle.digest——纯微任务冲刷在满载 CI 上偶发轮空；每轮先冲微任务
+ * 再让出一个宏任务轮，同 DiscoverTab 的 flushUntil 口径）。 */
+async function until(cond: () => boolean, rounds = 60): Promise<void> {
+  for (let i = 0; i < rounds && !cond(); i += 1) {
+    await act(async () => {});
+    await new Promise((r) => setTimeout(r, 0));
+  }
   expect(cond()).toBe(true);
 }
 

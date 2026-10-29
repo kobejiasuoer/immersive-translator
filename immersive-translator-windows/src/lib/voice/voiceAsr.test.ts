@@ -268,12 +268,14 @@ describe("断线重连(§二:指数退避,重换票→新连接,ASR 重连后重
   });
 
   it("取票失败(网络类):并入退避重连,不终局", async () => {
+    // 退避曲线在 AsrStreamSession 构造时捕获(deps.backoffMs ?? testBackoffMs),
+    // 必须先于 harness() 建会话注入,放在 harness 之后不生效(v1 修复踩坑)。
+    // 200ms 长退避使 40ms 断言窗口内数学上不可能耗尽 6 次重试终局
+    // (全局 5ms 快退避下 6×5ms≈30ms<40ms,满载时会偶发跑完)。
+    setAsrBackoffForTests(() => 200);
     const h = harness();
     await settle();
     FakeWs.instances[0]!.open();
-    // 本用例退避拉长到 200ms:断言窗口 40ms 内数学上不可能耗尽 6 次重试
-    // (全局 5ms 快退避下 6×5ms≈30ms<40ms,套件满载时会偶发跑完而终局)。
-    setAsrBackoffForTests(() => 200);
     // 换票通道断掉:下一次重连取票失败
     setVoiceRuntime({ http: async () => { throw new Error("offline"); } });
     FakeWs.instances[0]!.drop(1006);
