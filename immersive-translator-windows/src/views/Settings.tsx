@@ -70,6 +70,7 @@ import {
 } from "../ui/icons";
 import { VoiceSettingsTab } from "./VoiceSettingsTab";
 import { AccountSection, useAccountStatus } from "./AccountSection";
+import { PrivacyPolicyCard } from "./PrivacyPolicyCard";
 
 type SettingsTab = "provider" | "translation" | "voice" | "glossary" | "hotkeys" | "account" | "about";
 
@@ -1320,6 +1321,8 @@ export function Settings() {
                 )}
                 {ocrMsg && <StatusBar msg={ocrMsg} />}
               </section>
+
+              <PrivacyPolicyCard />
             </div>
 
             <section className="danger-zone">
