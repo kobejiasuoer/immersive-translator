@@ -6,7 +6,7 @@
     Package/Identity/Publisher CN=6C32A8A6-A9B5-4B39-9FC3-E1AC3A8949DD
   Version 由 scripts/pack-msix.ps1 打包时从 tauri.conf.json 读取并替换 @VERSION@。
   商店会对通过审核的 MSIX 自动重签名，本地打包无需代码签名证书；
-  本地安装调试用 `winapp cert generate` + `winapp pack --cert`。
+  本地安装调试用 winapp cert generate 生成证书、winapp pack 加证书参数重打包。
 -->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -45,9 +45,7 @@
         BackgroundColor="#1B1B1B"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
-        <uap:DefaultTile
-          Square71x71Logo="Assets\Square71x71Logo.png"
-          Square310x310Logo="Assets\Square310x310Logo.png" />
+        <uap:DefaultTile Square71x71Logo="Assets\Square71x71Logo.png" />
       </uap:VisualElements>
     </Application>
   </Applications>
