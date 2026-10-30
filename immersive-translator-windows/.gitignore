@@ -29,6 +29,10 @@ signing/
 # 发布产物（构建后生成，通过 GitHub Release 分发，不入仓库）
 release-v*/
 
+# MSIX 打包产物（pack-msix.ps1 输出，走 GitHub Release/Partner Center，不入仓库；
+# store-shots 商店截图除外——runbook 引用，需入库）
+build/msix/
+
 # UI 静态预览稿（可由 scripts/gen-ui-preview.mjs 重新生成）
 ui-preview.html
 
