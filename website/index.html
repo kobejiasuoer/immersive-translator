@@ -153,6 +153,17 @@
         white-space: nowrap;
         font-weight: 700;
       }
+      .brand-icon-frame {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: none;
+        width: 38px;
+        height: 38px;
+        padding: 4px;
+        border-radius: 10px;
+        background: var(--paper);
+      }
       .brand img {
         width: 30px;
         height: 30px;
@@ -1035,7 +1046,9 @@
     <header class="site-header" id="site-header">
       <div class="container header-inner">
         <a class="brand" href="#top" aria-label="沉浸口语首页"
-          ><img src="assets/brand-icon.png" width="30" height="30" alt="" />沉浸口语</a
+          ><span class="brand-icon-frame" aria-hidden="true"
+            ><img src="assets/brand-icon.png" width="30" height="30" alt="" /></span
+          >沉浸口语</a
         >
         <nav class="desktop-nav" aria-label="主导航">
           <a class="nav-link" href="#reader">Windows</a><a class="nav-link" href="#mobile">手机端预览</a
