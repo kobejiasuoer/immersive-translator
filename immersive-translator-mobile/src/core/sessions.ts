@@ -8,6 +8,7 @@
  */
 import { useSyncExternalStore } from "react";
 import type { ChatTurn } from "./demo";
+import { actions, getState } from "../store";
 import type { SpeakDifficulty } from "./speak";
 
 export interface SpeakSession {
@@ -27,32 +28,11 @@ export interface SpeakSession {
   chat: ChatTurn[];
 }
 
-const KEY = "ita.v3.speak.sessions";
 const MAX = 12;
-
 const listeners = new Set<() => void>();
-let cache: SpeakSession[] | null = null;
-
-function load(): SpeakSession[] {
-  if (cache) return cache;
-  try {
-    const raw = JSON.parse(localStorage.getItem(KEY) || "[]") as SpeakSession[];
-    cache = Array.isArray(raw) ? raw : [];
-  } catch {
-    cache = [];
-  }
-  return cache;
-}
-
-function persist(list: SpeakSession[]) {
-  cache = list;
-  try {
-    localStorage.setItem(KEY, JSON.stringify(list));
-  } catch {
-    /* 存储满/隐私模式静默 */
-  }
-  listeners.forEach((l) => l());
-}
+function load(): SpeakSession[] { return getState().sessions; }
+function persist(list: SpeakSession[]) { actions.setSessions(list); listeners.forEach(l => l()); }
+window.addEventListener("mobile-profile-change", () => listeners.forEach(l => l()));
 
 export function listSessions(): SpeakSession[] {
   return load();
@@ -94,26 +74,8 @@ export function useSpeakSessions(): SpeakSession[] {
 
 /* ---------- 难度偏好（场景页三档 Seg ↔ 对话页 system prompt） ---------- */
 
-const DIFF_KEY = "ita.v3.speak.diff";
-
-/** 上次选择的难度（入门 easy / 进阶 medium / 挑战 hard）；坏值/未选过 → easy。 */
-export function loadSpeakDiff(): SpeakDifficulty {
-  try {
-    const v = localStorage.getItem(DIFF_KEY);
-    if (v === "easy" || v === "medium" || v === "hard") return v;
-  } catch {
-    /* 隐私模式静默 */
-  }
-  return "easy";
-}
-
-export function saveSpeakDiff(d: SpeakDifficulty): void {
-  try {
-    localStorage.setItem(DIFF_KEY, d);
-  } catch {
-    /* 静默 */
-  }
-}
+export function loadSpeakDiff(): SpeakDifficulty { return getState().speakDifficulty; }
+export function saveSpeakDiff(d: SpeakDifficulty): void { actions.setSpeakDifficulty(d); }
 
 /** 列表时间签：「今天 21:07 / 昨天 / 9月22日」。 */
 export function sessionWhen(at: number, now = new Date()): string {

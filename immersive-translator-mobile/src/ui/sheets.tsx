@@ -1,3 +1,4 @@
+import { openPractice } from "../screens/LearningHome";
 /**
  * 底部 sheet 集（§2.2）——词典/词块卡（两级查询 #40/#41）、Aa 面板、语速、
  * 本篇菜单、文内搜索、退出复习确认、陪练小结、直译导出、导入四路、只练差词。
@@ -9,6 +10,8 @@ import { Icon } from "./icons";
 import { Seg } from "./kit";
 import { useNav } from "./nav";
 import { chatStream, llmConfigured, lookupWord } from "../services/translate";
+import { useCloud } from "../services/cloud";
+import { canContinueDictionaryLogin } from "../services/authGate";
 import { isTauri, readClipboard, shareText, writeClipboard } from "../services/device";
 import { norm } from "../core/judge";
 import { EXAM_TAGS, LIB_ARTICLES, libMeta, libToday, libToArticle, type LibArticle } from "../core/library";
@@ -66,7 +69,7 @@ const SHEET_TITLES: Record<Sheet["kind"], string> = {
   diffwords: "只练差词",
 };
 
-export function SheetHost() {
+export function SheetHost({ inert = false }: { inert?: boolean }) {
   const sheet = useApp((s) => s.sheet);
   const sheetElRef = useRef<HTMLDivElement>(null);
   const drag = useRef({ sy: 0, dy: 0, t0: 0, on: false, taken: false });
@@ -141,7 +144,7 @@ export function SheetHost() {
   return (
     <>
       <div className={`sheet-dim ${open ? "on" : ""}`} aria-hidden="true" onClick={() => actions.setSheet(null)} />
-      <div ref={sheetElRef} role="dialog" aria-modal="true" aria-label={sheet ? SHEET_TITLES[sheet.kind] : undefined} className={`sheet ${open ? "on" : ""}`}>
+      <div ref={sheetElRef} inert={inert || undefined} role="dialog" aria-modal="true" aria-label={sheet ? SHEET_TITLES[sheet.kind] : undefined} className={`sheet ${open ? "on" : ""}`}>
         <div className="sheet-grab">
           <i />
         </div>
@@ -154,7 +157,7 @@ export function SheetHost() {
 function SheetContent({ sheet }: { sheet: Sheet }) {
   switch (sheet.kind) {
     case "dict":
-      return <DictSheet entry={sheet.entry} />;
+      return <DictSheet key={[sheet.entry.word, sheet.entry.articleId, sheet.entry.sentIdx].join("|")} entry={sheet.entry} />;
     case "aa":
       return <AaSheet />;
     case "rate":
@@ -178,6 +181,16 @@ function SheetContent({ sheet }: { sheet: Sheet }) {
 
 /* ---------- 词典卡 / 词块卡（§3.7） ---------- */
 function DictSheet({ entry }: { entry: DictEntry }) {
+  const nav = useNav();
+  const generation = useCloud().generation;
+  const requests = useRef(new Set<AbortController>());
+  useEffect(() => {
+    const active = requests.current;
+    return () => { active.forEach(controller => controller.abort()); active.clear(); };
+  }, [entry]);
+  useEffect(() => {
+    for (const controller of requests.current) if (!canContinueDictionaryLogin(entry,controller.signal)) controller.abort();
+  }, [generation, entry]);
   const vocab = useApp((s) => s.vocab);
   const articles = useApp((s) => s.articles);
   const [detail, setDetail] = useState(false);
@@ -214,38 +227,17 @@ function DictSheet({ entry }: { entry: DictEntry }) {
   }
 
   function runDetail() {
-    if (llmConfigured()) {
-      setDetail(true);
-      setDetailDone(false);
-      lookupWord(entry.word).then((r) => {
-        setDetailRes(r);
-        setDetailDone(true);
-      });
-    } else {
-      /* 未配置：lookupWord 即时返回未配置引导文案——结果就绪后一次性上屏，不闪 skeleton */
-      void lookupWord(entry.word).then((r) => {
-        setDetailRes(r);
-        setDetail(true);
-        setDetailDone(true);
-      });
-    }
+    if (requests.current.size) return;
+    const controller = new AbortController(); requests.current.add(controller);
+    setDetail(true); setDetailDone(false);
+    void lookupWord(entry.word, controller.signal, entry).then(result => { if (!controller.signal.aborted) setDetailRes(result); }).catch(error => { if (!controller.signal.aborted) setDetailRes({ defs: [{ pos: "查询未完成", cn: error instanceof Error ? error.message : String(error) }] }); }).finally(() => { requests.current.delete(controller); if (!controller.signal.aborted) setDetailDone(true); });
   }
 
   function runLlm() {
-    if (llmConfigured()) {
-      setLlm(true);
-      lookupWord(entry.word).then((r) => {
-        setLlmRes(r.defs[0]?.cn || "（未取得释义）");
-        setLlmDone(true);
-      });
-    } else {
-      /* 同 runDetail：未配置跳过 skeleton，引导文案立即呈现 */
-      void lookupWord(entry.word).then((r) => {
-        setLlmRes(r.defs[0]?.cn || "（未取得释义）");
-        setLlm(true);
-        setLlmDone(true);
-      });
-    }
+    if (requests.current.size) return;
+    const controller = new AbortController(); requests.current.add(controller);
+    setLlm(true); setLlmDone(false);
+    void lookupWord(entry.word, controller.signal, entry).then(result => { if (!controller.signal.aborted) setLlmRes(result.defs[0]?.cn || "未取得释义"); }).catch(error => { if (!controller.signal.aborted) setLlmRes(error instanceof Error ? error.message : String(error)); }).finally(() => { requests.current.delete(controller); if (!controller.signal.aborted) setLlmDone(true); });
   }
 
   return (
@@ -344,10 +336,14 @@ function DictSheet({ entry }: { entry: DictEntry }) {
         </button>
       )}
 
+      <button className="btn" style={{margin:"14px 22px",width:"calc(100% - 44px)"}} onClick={()=>{
+        if(!saved) collect(); else actions.setSheet(null);
+        void openPractice(nav,{mode:"word",title:entry.word,word:entry.word,reference:"用 "+entry.word+" 说一句自己的话。",...(entry.articleId?{source:{articleId:entry.articleId,sentenceIdx:entry.sentIdx??0}}:{})});
+      }}>{saved?"用这个表达说一句":"收藏并用它说一句"}</button>
       {/* 已收藏态的「已在生词本」不能当 flex 项与按钮行并排——会把「详细查词典」挤到折行，所以这里只做分支不做统一容器 */}
       {entry.type === "missing" ? (
         <div className="dict-actions">
-          <button className="da" onClick={runLlm}>
+          <button className="da" disabled={llm && !llmDone} onClick={runLlm}>
             <Icon name="bolt" size={15} />
             模型兜底查一次
           </button>
@@ -373,7 +369,7 @@ function DictSheet({ entry }: { entry: DictEntry }) {
               <Icon name="trash" size={15} />
               移除
             </button>
-            <button className="da" onClick={runDetail}>
+            <button className="da" disabled={detail && !detailDone} onClick={runDetail}>
               <Icon name="search" size={15} />
               详细查词典
             </button>
@@ -385,7 +381,7 @@ function DictSheet({ entry }: { entry: DictEntry }) {
             <Icon name="plus" size={15} />
             收进生词本
           </button>
-          <button className="da" onClick={runDetail}>
+          <button className="da" disabled={detail && !detailDone} onClick={runDetail}>
             <Icon name="search" size={15} />
             详细查词典
           </button>

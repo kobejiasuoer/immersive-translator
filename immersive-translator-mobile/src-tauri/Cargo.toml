@@ -16,6 +16,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "native-tls"] }
 futures-util = "0.3"
 # 讯飞 WS 三链路（IAT/ISE/TTS）：tokio 定时器竞速 + tungstenite(native-tls，与 reqwest 同 TLS 栈)
@@ -26,8 +27,6 @@ base64 = "0.22"
 hmac = "0.12"
 sha2 = "0.10"
 md-5 = "0.10"
-# iOS Keychain（secret_put/get/delete，service="ita.secrets"）：API Key 只存钥匙串
-security-framework = "2"
 # 设备能力插件（A2 经官方 JS 包消费）：通知/震动/剪贴板/分享/深链
 tauri-plugin-notification = "2"
 tauri-plugin-haptics = "2"
@@ -42,6 +41,10 @@ tauri-plugin-opener = "2"
 # iOS 专属：AVAudioSession 设 playback 类别（否则 WKWebView 音频受静音拨片控制）
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = "0.6"
+
+# Apple Keychain is not available in the Windows preview build.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+security-framework = "2"
 
 [profile.release]
 panic = "abort"

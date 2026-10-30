@@ -1,3 +1,4 @@
+import { openPractice } from "./LearningHome";
 /**
  * 阅读页（push）—— §3.6「从读到练」轴心。
  * 点句=单句朗读，再点=从该句连播（治 I4）；点词 → 词典卡、点词块 → 词块卡；
@@ -6,7 +7,7 @@
  * 逐句 TTS 连播（#44，onend + 兜底双保险）；段级翻译重试（#35，导入文章 zh=null）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
-import { actions, speak, stopSpeak, useApp } from "../store";
+import { actions, speak, stopSpeak, toast, useApp } from "../store";
 import { Icon } from "../ui/icons";
 import { PNav } from "../ui/kit";
 import { useNav } from "../ui/nav";
@@ -42,6 +43,7 @@ export default function ReaderScreen({ article }: { article: Article }) {
   const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const translated = useRef(false);
+  const translations = useRef(new Map<number, { stop(): void }>());
 
   const paras = useMemo(
     () => article.paragraphStarts.map((_, pi) => article.sentences.filter((s) => s.paragraphIdx === pi)),
@@ -57,6 +59,8 @@ export default function ReaderScreen({ article }: { article: Article }) {
       play.current.active = false;
       playGen.current++; /* 失效所有在途回调 */
       stopSpeak();
+      translations.current.forEach(engine => engine.stop());
+      translations.current.clear();
       /* 滚动防抖一并清（治 home-6）：退出前 300ms 内最后一次滚动的回调在卸载后触发，
          bodyRef 已被置空直接 return——最后一段滚动进度不落盘，断点回退到旧句 */
       if (peekTimer.current) clearTimeout(peekTimer.current);
@@ -289,9 +293,11 @@ export default function ReaderScreen({ article }: { article: Article }) {
     if (!s || s.zh) return;
     setUncfg((prev) => new Set([...prev].filter((x) => x !== i))); /* 重试路径先撤引导态 */
     setTranslating((prev) => new Set(prev).add(i));
-    startTranslate(s.en, {
+    if (translations.current.has(i)) return;
+    const engine = startTranslate(s.en, {
       onDelta: (out) => actions.fillSentenceZh(article.id, i, out),
       onDone: (out) => {
+        translations.current.delete(i);
         actions.fillSentenceZh(article.id, i, out);
         setTranslating((prev) => {
           const nx = new Set(prev);
@@ -299,15 +305,17 @@ export default function ReaderScreen({ article }: { article: Article }) {
           return nx;
         });
       },
-      onFail: () => setTranslating((prev) => new Set([...prev].filter((x) => x !== i))),
+      onFail: (message) => { translations.current.delete(i); toast(message); setTranslating((prev) => new Set([...prev].filter((x) => x !== i))); },
       /* 未配置模型：startTranslate 只回调此处（无 onDone/onFail），必须在这里撤
          translating，否则 skeleton 永挂；引导文案走组件态而非 fillSentenceZh——
          那会把文案持久化成正式译文，配置 Key 后这句就再也进不了真翻译（!s.zh 挡住） */
       onUnconfigured: () => {
+        translations.current.delete(i);
         setTranslating((prev) => new Set([...prev].filter((x) => x !== i)));
         setUncfg((prev) => new Set(prev).add(i));
       },
     });
+    translations.current.set(i, engine);
   }
 
   /* 读完庆祝（#49 P2：文案级） */
@@ -413,9 +421,12 @@ export default function ReaderScreen({ article }: { article: Article }) {
             ))}
           </div>
         ))}
-        <div className="meta" style={{ textAlign: "center", padding: "6px 0 10px" }}>
-          读完啦 · 把生词复习一遍吧
-        </div>
+        <section className="learning-card">
+          <h2>读完这一篇，试着用一次</h2>
+          <p>选择刚才的一句跟读，或用收藏的表达说说自己的想法。</p>
+          <button className="btn" onClick={() => { stopPlay(); void openPractice(nav, { mode: "follow", title: article.title, reference: article.sentences[sent]?.en || article.sentences[0]?.en || "", source: { articleId: article.id, sentenceIdx: sent } }).catch(error => toast(String(error))); }}>跟读当前这句</button>
+          <button className="btn-ghost" onClick={() => nav.push("review")}>复习收藏的表达</button>
+        </section>
       </div>
       <div className="rd-playbar">
         <button
@@ -468,7 +479,7 @@ export default function ReaderScreen({ article }: { article: Article }) {
           aria-label="跟读此句"
           onClick={() => {
             stopPlay();
-            nav.push("shadow", { fromArticle: article.title, sentIdx: sent });
+            void openPractice(nav, { mode: "follow", title: article.title, reference: article.sentences.find(s => s.idx === sent)?.en || "", source: { articleId: article.id, sentenceIdx: sent } });
           }}
         >
           <Icon name="mic" size={18} />
