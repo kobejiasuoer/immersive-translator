@@ -1,0 +1,1099 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>沉浸口语 · 手机端登录后交互原型 2026-10-28</title>
+<style>
+/* 令牌 1:1 取自桌面端「护眼」灰绿板（reader-room / notes-review 优化稿 2026-10-26）。
+   手机端只改形态（底部 Tab、抽屉、拇指区），不换颜色、字体和命名。
+   --voice 是桌面口语页麦克风的靛蓝，只用在「你的声音」：麦克风、你说的话、录音态。 */
+:root{
+  --accent:#1f6b57; --accent-hover:#185646; --accent-soft:#e3f0ea; --accent-line:#b9d8cc;
+  --bg:#eef1ee; --surface:#fff; --surface-2:#f6f8f6;
+  --border:#e1e6e2; --border-strong:#c9d1cc;
+  --text-1:#1f2329; --text-2:#48505a; --text-3:#5f6873; --text-4:#8f98a3;
+  --ok:#2f8f5b; --warn:#a1620f; --warn-soft:#fbf1e1; --bad:#b4423a; --bad-soft:#fbeae8;
+  --tape:#e9dfc2; --tape-line:#cdbf93;
+  --voice:#4c5ff0; --voice-soft:#eef0fe; --voice-hl:#dde2fd;
+  --font-ui:-apple-system,"PingFang SC","Segoe UI","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+  --font-en:"Source Serif 4",Georgia,"Times New Roman",serif;
+  --r-sm:8px; --r-md:12px; --r-lg:18px; --r-pill:999px;
+  --ease:cubic-bezier(.32,.72,0,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+button{font:inherit;color:inherit;border:0;background:none;cursor:pointer;text-align:inherit}
+button:focus-visible,[role=button]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+.ico{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.ico.sm{width:15px;height:15px}.ico.lg{width:22px;height:22px}
+.en{font-family:var(--font-en)}
+.muted{color:var(--text-3)}
+
+/* ---------- 看板：索引 | 手机 | 桌面对照 ---------- */
+body{font:14px/1.6 var(--font-ui);color:var(--text-1);background:#dfe4e0;min-height:100vh}
+.board{display:grid;grid-template-columns:250px 410px minmax(340px,1fr);gap:40px;max-width:1340px;margin:0 auto;padding:36px 32px 48px;align-items:start}
+.board>*{position:sticky;top:24px}
+.intro h1{font-size:19px;line-height:1.4;font-weight:700}
+.intro p{margin-top:8px;font-size:13px;color:var(--text-2);line-height:1.65}
+.idx{margin-top:22px;display:grid;gap:2px}
+.idx h2{font-size:12px;font-weight:600;color:var(--text-3);margin:14px 10px 4px}
+.idx h2:first-child{margin-top:0}
+.idx button{display:flex;justify-content:space-between;gap:8px;padding:7px 10px;border-radius:var(--r-sm);font-size:13.5px;color:var(--text-2)}
+.idx button:hover{background:rgba(255,255,255,.55)}
+.idx button.on{background:var(--surface);color:var(--text-1);font-weight:600;box-shadow:0 0 0 1px var(--border)}
+.idx button small{color:var(--text-4);font-size:12px;font-weight:400}
+.replay{margin-top:18px;display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:var(--r-pill);border:1px solid var(--border-strong);background:var(--surface);font-size:13px;font-weight:600}
+.replay:hover{background:var(--surface-2)}
+@media (max-width:1100px){
+  .board{grid-template-columns:410px minmax(300px,1fr)}
+  .intro{grid-column:1/-1;position:static}
+}
+@media (max-width:760px){
+  .board{grid-template-columns:1fr;padding:20px 12px}
+  .board>*{position:static}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
+
+/* ---------- 手机壳与外壳（桌面三段外壳的手机形态） ---------- */
+.phone{width:410px;height:864px;border:10px solid #22262b;border-radius:56px;background:var(--bg);position:relative;overflow:hidden;box-shadow:0 30px 60px rgba(31,35,41,.22),0 2px 6px rgba(31,35,41,.25);margin:0 auto}
+.sb{position:absolute;top:0;left:0;right:0;height:50px;z-index:30;display:flex;justify-content:space-between;align-items:flex-end;padding:0 30px 7px 34px;font-weight:600;font-size:15px;pointer-events:none}
+.sb .r{display:flex;gap:6px;align-items:center}
+.sb svg{fill:currentColor}
+.home-ind{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);width:134px;height:5px;border-radius:3px;background:var(--text-1);z-index:40;pointer-events:none}
+.view{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--bg)}
+.view.push{animation:pushIn .34s var(--ease)}
+@keyframes pushIn{from{transform:translateX(100%)}to{transform:none}}
+.vbody{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;position:relative;padding:0 18px 120px;scrollbar-width:none}
+.vbody::-webkit-scrollbar{display:none}
+
+/* 根页页头：桌面左上「I 书架」胶囊 → 手机左上同一枚 monogram，点它开账号与同步 */
+.rhead{flex:none;display:flex;align-items:center;gap:10px;padding:58px 18px 12px}
+.seal{width:34px;height:34px;border-radius:50%;background:var(--text-1);color:#fff;display:grid;place-items:center;font:italic 700 17px var(--font-en);position:relative;flex:none}
+.seal i{position:absolute;right:-1px;bottom:-1px;width:11px;height:11px;border-radius:50%;background:var(--ok);border:2px solid var(--bg)}
+.seal i.ing{background:var(--surface);border-color:var(--text-4);animation:spin 1s linear infinite;border-top-color:transparent}
+@keyframes spin{to{transform:rotate(360deg)}}
+.rtitle{font-size:24px;font-weight:700;letter-spacing:.02em;flex:1}
+.ibtn{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;color:var(--text-2);background:var(--surface);border:1px solid var(--border);flex:none}
+
+/* 推入页页头：返回 · 标题 · 动作 */
+.nhead{flex:none;display:grid;grid-template-columns:40px 1fr auto;align-items:center;gap:6px;padding:54px 12px 8px;min-height:100px}
+.nhead .nt{text-align:center;min-width:0}
+.nhead .nt b{display:block;font-size:15.5px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nhead .nt small{display:block;font-size:12px;color:var(--text-3);line-height:1.3}
+.nhead .act{display:flex;gap:4px;justify-self:end}
+.back{width:40px;height:40px;display:grid;place-items:center;border-radius:50%}
+
+/* 底部 Tab：桌面中间导航岛「阅读 / 口语 / 笔记与复习」原样落到拇指区 */
+.tabbar{position:absolute;left:14px;right:14px;bottom:24px;z-index:20;display:flex;gap:2px;padding:5px;border-radius:var(--r-pill);background:var(--surface);border:1px solid var(--border);box-shadow:0 8px 24px rgba(31,35,41,.12)}
+.tabbar button{flex:1 1 auto;padding:0 10px;display:flex;align-items:center;justify-content:center;gap:6px;height:46px;border-radius:var(--r-pill);color:var(--text-2);font-size:14px;white-space:nowrap}
+.tabbar button.on{background:var(--text-1);color:#fff;font-weight:600}
+.tabbar .bdg{font-size:11.5px;line-height:18px;min-width:20px;padding:0 6px;border-radius:var(--r-pill);background:var(--accent-soft);color:var(--accent);font-weight:600;text-align:center}
+.tabbar button.on .bdg{background:rgba(255,255,255,.18);color:#fff}
+
+/* ---------- 基元（与桌面 folio 同名同值） ---------- */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:44px;padding:0 20px;border-radius:var(--r-pill);font-weight:600;font-size:14.5px;border:1px solid var(--border-strong);background:var(--surface);white-space:nowrap}
+.btn:hover{background:var(--surface-2)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{background:var(--accent-hover)}
+.btn.sm{height:34px;padding:0 14px;font-size:13px;font-weight:500}
+.btn.block{width:100%}
+.tag{display:inline-flex;align-items:center;gap:4px;font-size:12px;line-height:20px;padding:0 8px;border-radius:6px;background:var(--accent-soft);color:var(--accent);white-space:nowrap}
+.tag.grey{background:var(--surface-2);color:var(--text-2);box-shadow:inset 0 0 0 1px var(--border)}
+.tag.warn{background:var(--warn-soft);color:var(--warn)}
+.chip{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 13px;border-radius:var(--r-pill);border:1px solid var(--border);background:var(--surface);font-size:13px;color:var(--text-2);white-space:nowrap}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.seg{display:inline-flex;gap:2px;padding:3px;border-radius:var(--r-pill);background:var(--surface);border:1px solid var(--border)}
+.seg button{height:32px;padding:0 16px;border-radius:var(--r-pill);font-size:13.5px;color:var(--text-2)}
+.seg button.on{background:var(--text-1);color:#fff;font-weight:600}
+.seg.soft{background:var(--surface-2)}
+.seg.soft button.on{background:var(--surface);color:var(--text-1);box-shadow:0 0 0 1px var(--border)}
+.sw{width:40px;height:24px;border-radius:12px;background:var(--border-strong);position:relative;flex:none;transition:background .2s}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform .2s var(--ease)}
+.sw.on{background:var(--accent)}
+.sw.on::after{transform:translateX(16px)}
+.ring{flex:none}
+.sec-h{display:flex;justify-content:space-between;align-items:baseline;margin:22px 2px 10px}
+.sec-h b{font-size:15px}
+.sec-h span{font-size:12.5px;color:var(--text-3)}
+.dash{border-bottom:1.5px dashed var(--accent-line);cursor:pointer}
+.dash:hover{border-bottom-color:var(--accent)}
+
+/* ---------- 书架：接力卡是全应用唯一的「跨端」造型，原句用衬线 ---------- */
+.relay{padding:16px 16px 14px;position:relative;overflow:hidden}
+.relay-src{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text-3)}
+.relay-src b{color:var(--text-1);font-weight:600}
+.relay-q{margin:10px 0 2px;padding:2px 0 2px 12px;border-left:3px solid var(--accent);font:17px/1.55 var(--font-en);color:var(--text-1)}
+.relay-at{font-size:12.5px;color:var(--text-3);padding-left:15px}
+.relay-bar{display:flex;align-items:center;gap:10px;margin:12px 0 14px}
+.relay-bar b{font-size:13px}
+.pbar{flex:1;height:5px;border-radius:3px;background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--border);overflow:hidden}
+.pbar i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.relay-cta{display:flex;gap:8px}
+.relay-cta .primary{flex:1}
+.relay.arrive .relay-q{animation:quoteIn .7s var(--ease) both}
+@keyframes quoteIn{from{opacity:0;transform:translateY(6px);border-left-color:var(--surface)}to{opacity:1;transform:none}}
+.skel{height:12px;border-radius:6px;background:linear-gradient(90deg,var(--surface-2) 0,#e9ede9 50%,var(--surface-2) 100%);background-size:200% 100%;animation:shim 1.2s linear infinite}
+@keyframes shim{to{background-position:-200% 0}}
+.today{display:grid;grid-template-columns:1fr 1fr;margin-top:10px}
+.today>div{display:flex;gap:10px;align-items:center;padding:12px 14px}
+.today>div+div{border-left:1px solid var(--border)}
+.today b{display:block;font-size:14px;line-height:1.3}
+.today small{display:block;font-size:12px;color:var(--text-3);line-height:1.35}
+.today .lk{color:var(--accent);font-weight:600}
+.book{display:flex;gap:14px;padding:14px}
+.cover{width:62px;height:86px;border-radius:6px;flex:none;background:linear-gradient(160deg,#2a7a63,#174d3f);color:#fff;padding:8px 7px;font:700 11px/1.15 var(--font-en);box-shadow:0 4px 10px rgba(23,77,63,.25)}
+.book .bt{font:700 16px/1.3 var(--font-en)}
+.book .meta{font-size:12.5px;color:var(--text-3);margin:2px 0 8px}
+.row-li{display:flex;align-items:center;gap:12px;padding:13px 14px;width:100%}
+.row-li+.row-li{border-top:1px solid var(--border)}
+.row-li .tx{flex:1;min-width:0}
+.row-li .tx b{display:block;font-size:14px;font-weight:600;line-height:1.35}
+.row-li .tx small{display:block;font-size:12.5px;color:var(--text-3);line-height:1.4}
+.row-li .ic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);flex:none}
+.row-li .chev{color:var(--text-4)}
+
+/* ---------- 阅读页 ---------- */
+.rmeta{display:flex;align-items:center;justify-content:space-between;padding:0 18px 10px;font-size:12.5px;color:var(--text-3);border-bottom:1px solid var(--border);flex:none}
+.rmeta .mk{display:flex;align-items:center;gap:8px;color:var(--text-1);font-weight:600;font-size:13px}
+.view.reading,.view.reading .rmeta{background:var(--surface)}
+.resume{position:sticky;top:10px;z-index:4;display:flex;align-items:center;gap:8px;margin:10px 0 4px;box-shadow:0 0 0 1px var(--accent-line),0 6px 16px rgba(31,35,41,.08);padding:9px 12px;border-radius:var(--r-md);background:var(--accent-soft);color:var(--accent);font-size:13px}
+.resume b{font-weight:700}
+.resume .x{margin-left:auto;color:var(--accent);opacity:.7}
+.ch-kick{font-size:12.5px;color:var(--text-3);margin-top:18px}
+.ch-title{font:700 26px/1.25 var(--font-en);margin-top:4px}
+.ch-sub{display:flex;align-items:center;justify-content:space-between;margin:4px 0 14px;font-size:14px;color:var(--text-3)}
+.prose{font:18px/1.78 var(--font-en);color:var(--text-1)}
+.prose p{margin-bottom:14px}
+.s{border-radius:4px;cursor:pointer;transition:background .2s}
+.s.on{background:var(--accent-soft);box-shadow:0 0 0 3px var(--accent-soft)}
+.s.on.play{background:var(--voice-hl);box-shadow:0 0 0 3px var(--voice-hl)}
+.cn{display:block;font:14px/1.6 var(--font-ui);color:var(--text-2);margin:2px 0 6px}
+.playbar{position:absolute;left:18px;right:18px;bottom:30px;z-index:15;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:var(--r-pill);background:var(--surface);border:1px solid var(--border);box-shadow:0 8px 24px rgba(31,35,41,.12)}
+.playbar .pp{width:42px;height:42px;border-radius:50%;background:var(--text-1);color:#fff;display:grid;place-items:center;flex:none}
+.playbar .sk{width:36px;height:36px;display:grid;place-items:center;color:var(--text-2);flex:none}
+.playbar .pos{font-size:12.5px;color:var(--text-2);font-variant-numeric:tabular-nums;white-space:nowrap}
+.playbar .spd{height:30px;padding:0 10px;border-radius:var(--r-pill);border:1px solid var(--border);font-size:12.5px;flex:none}
+
+/* ---------- 口语 ---------- */
+.ch-card{padding:16px}
+.ch-card h3{font-size:17px;line-height:1.35}
+.ch-card p{font-size:13px;color:var(--text-2);margin-top:3px}
+.words{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}
+.wd{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 11px;border-radius:var(--r-pill);background:var(--surface);border:1px solid var(--border);font-size:12px;color:var(--text-3);white-space:nowrap;flex:none}
+.wd b{font:700 14px var(--font-en);color:var(--text-1)}
+.wd .ck{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--border-strong);display:grid;place-items:center;flex:none}
+.wd.done{background:var(--accent-soft);border-color:transparent}
+.wd.done b{color:var(--accent)}
+.wd.done .ck{background:var(--accent);border-color:var(--accent);color:#fff}
+.wd.next{border-color:var(--voice);box-shadow:0 0 0 1px var(--voice)}
+.used{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--text-2);margin-bottom:14px}
+.lv{font-size:12px;padding:0 8px;line-height:20px;border-radius:6px;border:1px solid var(--border);color:var(--text-3)}
+
+/* ---------- 生词造句闯关（桌面口语页的手机形态） ---------- */
+.view.drill{background:var(--surface)}
+.dtop{flex:none;padding:0 18px 10px;border-bottom:1px solid var(--border);background:var(--surface-2)}
+.dtop .used{margin:2px 0 8px}
+.wrail{display:flex;gap:6px;overflow-x:auto;margin:0 -18px;padding:0 18px 2px;scrollbar-width:none}
+.wrail::-webkit-scrollbar{display:none}
+.thread{padding:16px 18px 210px}
+.aimeta{display:flex;align-items:center;gap:12px;font-size:12px;color:var(--text-3);margin-bottom:6px}
+.aimeta button{display:inline-flex;align-items:center;gap:4px;color:var(--text-3);font-size:12px}
+.aimeta button.on{color:var(--accent);font-weight:600}
+.ai{font:17.5px/1.62 var(--font-en);color:var(--text-1)}
+.ai strong{font-weight:700}
+.ai-cn{font-size:13.5px;color:var(--text-2);margin-top:4px}
+.hintbox{display:flex;gap:8px;margin:12px 0 4px;padding:10px 12px;border:1px dashed var(--border-strong);border-radius:var(--r-md);background:var(--surface-2);font-size:13px;color:var(--text-2);line-height:1.55}
+.hintbox b{color:var(--text-1)}
+.you{margin:22px 0 0 34px}
+.you-meta{text-align:right;font-size:12px;color:var(--text-3);margin-bottom:4px}
+.you-meta em{font-style:normal;color:var(--voice)}
+.bub{padding:11px 14px;border-radius:16px 16px 4px 16px;background:var(--voice-soft);font:16.5px/1.6 var(--font-en)}
+.bub .hit{color:var(--accent);font-weight:700}
+.bub .wav{text-decoration:underline wavy #c98a2b;text-underline-offset:4px;cursor:pointer}
+.bub.live{background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--voice)}
+.caret{display:inline-block;width:2px;height:17px;background:var(--voice);vertical-align:-3px;margin-left:2px;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.verdict{display:flex;justify-content:flex-end;margin-top:6px}
+.verdict span{font-size:12.5px;padding:2px 10px;border-radius:var(--r-pill);background:var(--accent-soft);color:var(--accent)}
+.next-ai{margin-top:22px}
+.sysline{margin-top:20px;text-align:center;font-size:12.5px;color:var(--text-3)}
+.dock{position:absolute;left:0;right:0;bottom:0;z-index:15;background:var(--surface);border-top:1px solid var(--border);padding:12px 16px 30px}
+.dock-row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px}
+.dock-row .l{display:flex;gap:6px}
+.dock-row .r{display:flex;justify-content:flex-end}
+.mic{width:64px;height:64px;border-radius:50%;background:var(--voice);color:#fff;display:grid;place-items:center;box-shadow:0 8px 20px rgba(76,95,240,.32);position:relative}
+.mic.rec::before{content:"";position:absolute;inset:-7px;border-radius:50%;border:2px solid var(--voice);opacity:.35;animation:pulse 1.4s ease-out infinite}
+@keyframes pulse{from{transform:scale(.92);opacity:.5}to{transform:scale(1.18);opacity:0}}
+.mic .stop{width:20px;height:20px;border-radius:5px;background:#fff}
+.dock-cap{text-align:center;font-size:12px;color:var(--text-3);margin-top:8px}
+.wave{display:flex;gap:3px;align-items:center;justify-content:center;height:26px;margin-bottom:8px}
+.wave i{width:3px;border-radius:2px;background:var(--voice);animation:wv 1s ease-in-out infinite}
+@keyframes wv{0%,100%{transform:scaleY(.35)}50%{transform:scaleY(1)}}
+.lnk{font-size:13px;font-weight:600;color:var(--text-1);white-space:nowrap}
+
+/* ---------- 本轮复盘 ---------- */
+.rc-hero{text-align:center;padding:18px 16px 16px}
+.rc-hero .big{font-size:40px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums}
+.rc-hero .big span{font-size:22px;color:var(--text-3)}
+.rc-hero p{font-size:13px;color:var(--text-2);margin-top:4px}
+.score{display:flex;gap:16px;align-items:center;padding:14px 16px}
+.bars{flex:1;display:grid;gap:8px}
+.bars>div{display:grid;grid-template-columns:34px 1fr 28px;align-items:center;gap:8px;font-size:12.5px;color:var(--text-2)}
+.bars .pbar i{background:var(--ok)}
+.bars em{font-style:normal;text-align:right;font-variant-numeric:tabular-nums}
+.fix{padding:14px 16px}
+.fix .was{font:15px/1.5 var(--font-en);color:var(--bad);text-decoration:line-through;text-decoration-color:rgba(180,66,58,.45)}
+.fix .now{font:700 16px/1.5 var(--font-en);margin-top:4px}
+.fix .why{font-size:12.5px;color:var(--text-2);margin-top:6px}
+.fix-act{display:flex;align-items:center;gap:8px;margin-top:12px}
+.synced{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--ok)}
+.dock2{position:absolute;left:0;right:0;bottom:0;z-index:15;display:flex;gap:10px;padding:12px 18px 30px;background:var(--bg);border-top:1px solid var(--border)}
+.dock2 .btn{flex:1;height:48px}
+
+/* ---------- 笔记与复习 ---------- */
+.due{padding:18px 16px 16px;background:linear-gradient(180deg,#e9f3ee,#f3f8f5);border-color:var(--accent-line)}
+.due h3{font-size:20px;font-weight:600;line-height:1.35}
+.due h3 .n{font:700 24px var(--font-en)}
+.due p{font-size:13px;color:var(--text-2);margin:2px 0 12px}
+.due .modes{display:flex;gap:6px;margin-bottom:14px}
+.stage{padding:14px 16px}
+.stack{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--surface-2);margin:10px 0 12px}
+.stack i{display:block;height:100%}
+.legend{display:grid;gap:6px;font-size:13px}
+.legend div{display:flex;align-items:center;gap:8px}
+.legend .dot{width:8px;height:8px;border-radius:50%;flex:none}
+.legend em{font-style:normal;margin-left:auto;font-weight:600;font-variant-numeric:tabular-nums}
+.heat{display:grid;grid-template-columns:repeat(14,1fr);gap:4px;margin-top:10px}
+.heat i{aspect-ratio:1;border-radius:3px;background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--border)}
+.heat i.l1{background:var(--accent-line);box-shadow:none}
+.heat i.l2{background:#7fb3a1;box-shadow:none}
+.heat i.now{box-shadow:inset 0 0 0 2px var(--accent)}
+.heat i.now.l2{box-shadow:inset 0 0 0 2px var(--accent-hover)}
+.note{padding:14px 2px;border-top:1px solid var(--border)}
+.note:first-of-type{border-top:0}
+.note-h{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--text-3)}
+.note-s{font:16px/1.6 var(--font-en);margin-top:6px}
+.note-s .w{font-weight:700;color:var(--accent)}
+.tape{display:inline-block;min-width:96px;height:1.2em;vertical-align:-3px;border-radius:4px;cursor:pointer;background:repeating-linear-gradient(-45deg,var(--tape) 0 6px,#f1e9d2 6px 12px);box-shadow:inset 0 0 0 1px var(--tape-line)}
+.ans{display:inline-block;padding:0 6px;border-radius:5px;background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--accent-line);color:var(--accent);font-weight:700}
+.rail-x{display:flex;gap:6px;overflow-x:auto;margin:14px -18px 4px;padding:0 18px;scrollbar-width:none}
+.rail-x::-webkit-scrollbar{display:none}
+.rail-x .chip small{opacity:.7}
+.warnbox{margin-top:12px;padding:10px 12px;border-radius:var(--r-md);background:var(--warn-soft);color:var(--warn);font-size:13px;line-height:1.5}
+.warnbox u{cursor:pointer}
+
+/* ---------- 复习中 ---------- */
+.rv-top{flex:none;display:flex;align-items:center;gap:12px;padding:56px 18px 12px}
+.rv-top .pbar{height:6px}
+.rv-top .ct{font-size:13px;color:var(--text-2);font-variant-numeric:tabular-nums}
+.rv-card{margin:6px 18px 0;padding:18px 16px}
+.rv-s{font:20px/1.75 var(--font-en);margin-top:12px}
+.rv-s .tape{min-width:120px;height:1.25em}
+.rv-ex{margin-top:14px;padding:12px 14px;border-radius:var(--r-md);background:var(--surface-2);border:1px solid var(--border);font-size:13.5px;color:var(--text-2);line-height:1.6}
+.rv-ex .def{color:var(--text-3);font-size:12.5px;margin-top:2px}
+.rv-acts{display:flex;gap:14px;margin-top:12px;font-size:13px;color:var(--text-2)}
+.rv-acts button{display:inline-flex;align-items:center;gap:4px}
+.grades{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.grades button{padding:10px 4px;border-radius:var(--r-md);border:1px solid var(--border-strong);background:var(--surface);text-align:center}
+.grades b{display:block;font-size:14.5px}
+.grades small{display:block;font-size:11.5px;color:var(--text-3)}
+.grades button:hover{background:var(--surface-2)}
+.think{text-align:center;font-size:13px;color:var(--text-3);margin-bottom:10px}
+.done-box{text-align:center;padding:40px 24px 0}
+.done-box h3{font-size:22px;margin-top:14px}
+.done-box p{text-wrap:balance;font-size:13.5px;color:var(--text-2);margin-top:6px;line-height:1.6}
+.tally{display:grid;grid-template-columns:repeat(3,1fr);margin:22px 0 0}
+.tally div{padding:12px 0}
+.tally div+div{border-left:1px solid var(--border)}
+.tally b{display:block;font-size:22px;font-variant-numeric:tabular-nums}
+.tally small{font-size:12px;color:var(--text-3)}
+
+/* ---------- 底部抽屉：桌面右栏 / 句子浮层的手机形态 ---------- */
+.scrim{position:absolute;inset:0;z-index:50;background:rgba(31,35,41,.32)}
+.scrim.in{animation:fade .22s ease}
+@keyframes fade{from{opacity:0}}
+.sheet{position:absolute;left:0;right:0;bottom:0;z-index:51;max-height:76%;display:flex;flex-direction:column;background:var(--surface);border-radius:22px 22px 0 0;box-shadow:0 -10px 40px rgba(31,35,41,.18)}
+.sheet.in{animation:up .32s var(--ease)}
+@keyframes up{from{transform:translateY(100%)}}
+.grab{width:38px;height:5px;border-radius:3px;background:var(--border-strong);margin:8px auto 2px;flex:none}
+.sh-head{flex:none;padding:8px 18px 12px;border-bottom:1px solid var(--border)}
+.sh-head .q{font:17px/1.6 var(--font-en)}
+.sh-body{flex:1;min-height:0;overflow-y:auto;padding:14px 18px 34px;scrollbar-width:none}
+.sh-body::-webkit-scrollbar{display:none}
+.mask{display:flex;align-items:center;gap:8px;margin-top:10px;padding:10px 12px;border-radius:var(--r-md);font-size:13.5px;color:var(--text-2);background:repeating-linear-gradient(-45deg,var(--surface-2) 0 8px,#eef1ee 8px 16px);border:1px solid var(--border);width:100%}
+.mask.open{background:var(--surface-2);color:var(--text-1)}
+.sh-acts{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+.sh-acts .btn{height:34px;padding:0 13px;font-size:13px;font-weight:500}
+.sh-tabs{display:flex;gap:2px;padding:3px;border-radius:var(--r-pill);background:var(--surface-2);border:1px solid var(--border);margin-bottom:14px}
+.sh-tabs button{flex:1;height:32px;border-radius:var(--r-pill);font-size:13.5px;color:var(--text-2);text-align:center}
+.sh-tabs button.on{background:var(--surface);color:var(--text-1);font-weight:600;box-shadow:0 0 0 1px var(--border)}
+.trunk{padding:12px 14px;border-radius:var(--r-md);background:var(--accent-soft);border:1px solid var(--accent-line)}
+.trunk small{font-size:12px;color:var(--accent);font-weight:600}
+.trunk div{font:700 16px/1.45 var(--font-en);margin-top:2px}
+.parts{margin-top:14px;display:grid;gap:12px}
+.part .k{display:inline-block;font-size:11.5px;font-weight:600;color:#fff;background:var(--accent);border-radius:5px;padding:0 7px;line-height:19px}
+.part .k.mod{background:#4b5a9a}
+.part .v{font:700 15px/1.4 var(--font-en);margin-top:4px}
+.part .d{font-size:12.5px;color:var(--text-2)}
+.part.sub{margin-left:14px;padding-left:12px;border-left:1.5px solid var(--border-strong)}
+.dict .hw{font:700 24px var(--font-en)}
+.dict .ph{font-size:13px;color:var(--text-3);margin-left:6px}
+.dict .ps{font-size:14px;color:var(--text-2);margin-top:4px}
+.dict .eg{margin-top:12px;padding:10px 12px;border-radius:var(--r-md);background:var(--surface-2);font:15px/1.6 var(--font-en)}
+.dict .eg small{display:block;font:12px var(--font-ui);color:var(--text-3);margin-top:4px}
+.vlist .row-li{padding:11px 2px}
+.ph-pills{display:flex;gap:6px;margin:10px 0}
+.ph-pills span{font:600 14px var(--font-en);padding:2px 10px;border-radius:6px;background:var(--accent-soft);color:var(--accent)}
+.ph-pills span.bad{background:var(--warn-soft);color:var(--warn)}
+.acct{display:flex;gap:12px;align-items:center}
+.av{width:48px;height:48px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:19px;font-weight:600;flex:none}
+.syncrow{display:flex;align-items:center;gap:10px;margin-top:14px;padding:12px 14px;border-radius:var(--r-md);background:var(--accent-soft);color:var(--accent);font-size:13px}
+.syncrow b{display:block;font-size:13.5px}
+.syncrow small{display:block;font-size:12px;opacity:.85}
+.syncrow .btn{margin-left:auto}
+.list-h{font-size:12px;font-weight:600;color:var(--text-3);margin:18px 2px 6px}
+.lst{border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden}
+.lst .row-li{padding:11px 12px}
+.ok-ic{color:var(--ok)}
+
+/* ---------- 提示条 ---------- */
+.toast{position:absolute;left:18px;right:18px;top:60px;z-index:60;display:flex;gap:10px;align-items:center;padding:11px 14px;border-radius:var(--r-md);background:var(--text-1);color:#fff;font-size:13px;line-height:1.5;box-shadow:0 10px 30px rgba(31,35,41,.25)}
+.toast.in{animation:drop .3s var(--ease)}
+@keyframes drop{from{transform:translateY(-14px);opacity:0}}
+.toast .ico{color:#9fd3bf}
+
+/* ---------- 右侧：这一屏在 Windows 上长什么样 ---------- */
+.desk{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:20px 22px 22px}
+.desk-k{font-size:12.5px;color:var(--text-3)}
+.desk h2{font-size:18px;line-height:1.35;margin-top:2px}
+.desk .lead{font-size:13.5px;color:var(--text-2);line-height:1.65;margin-top:6px}
+.win{margin-top:16px;border:1px solid var(--border-strong);border-radius:12px;background:var(--bg);overflow:hidden}
+.win-bar{height:22px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:5px;padding:0 9px}
+.win-bar i{width:7px;height:7px;border-radius:50%;background:var(--border-strong)}
+.win-bar span{font-size:10.5px;color:var(--text-3);margin-left:6px}
+.win-in{padding:8px;display:grid;gap:7px}
+.w-top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:6px}
+.w-pill{height:20px;border-radius:10px;background:var(--surface);border:1px solid var(--border);display:flex;align-items:center;gap:4px;padding:0 6px;font-size:10px;color:var(--text-2);white-space:nowrap;transition:box-shadow .2s,background .2s}
+.w-pill.brand{justify-self:start}
+.w-pill.tools{justify-self:end;width:46px}
+.w-pill .sl{width:12px;height:12px;border-radius:50%;background:var(--text-1);flex:none}
+.w-tabs{display:flex;gap:2px;padding:2px}
+.w-tabs span{padding:0 7px;line-height:15px;border-radius:8px;font-size:10px}
+.w-tabs span.on{background:var(--text-1);color:#fff}
+.w-main{display:grid;gap:7px;height:182px}
+.w-b{border-radius:8px;background:var(--surface);border:1px solid var(--border);position:relative;padding:6px 7px;font-size:10px;color:var(--text-3);overflow:hidden;transition:box-shadow .2s,background .2s}
+.w-b .ln{height:5px;border-radius:3px;background:var(--surface-2);margin-top:5px}
+.w-b .ln.g{background:var(--accent-line)}
+.w-b .ln.v{background:var(--voice-hl)}
+.w-dock{position:absolute;left:30%;right:30%;bottom:6px;height:12px;border-radius:6px;background:var(--text-1)}
+.on-m{box-shadow:0 0 0 2px var(--accent)!important;background:var(--accent-soft)!important;color:var(--accent)!important}
+.w-tabs.on-m{border-radius:10px}
+.map{margin-top:16px;display:grid}
+.map-h,.map-r{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.map-h{font-size:12px;font-weight:600;color:var(--text-3);padding:0 0 6px}
+.map-r{padding:9px 0;border-top:1px solid var(--border);font-size:13px;line-height:1.55}
+.map-r div:first-child{color:var(--text-2)}
+.map-r div:last-child{color:var(--text-1)}
+.desk-why{margin-top:14px;padding:11px 13px;border-radius:var(--r-md);background:var(--surface-2);border:1px solid var(--border);font-size:13px;color:var(--text-2);line-height:1.6}
+.desk-why b{color:var(--text-1)}
+
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-book" viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2zM22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/></symbol>
+<symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5"/></symbol>
+<symbol id="i-note" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></symbol>
+<symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+<symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z" fill="currentColor" stroke="none"/></symbol>
+<symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" stroke-width="3"/></symbol>
+<symbol id="i-prev" viewBox="0 0 24 24"><path d="M6 5v14M19 5.5v13L9 12z"/></symbol>
+<symbol id="i-next" viewBox="0 0 24 24"><path d="M18 5v14M5 5.5v13L15 12z"/></symbol>
+<symbol id="i-spk" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"/><path d="M16 9a4 4 0 0 1 0 6"/></symbol>
+<symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+<symbol id="i-swap" viewBox="0 0 24 24"><path d="M4 8h14l-3-3M20 16H6l3 3"/></symbol>
+<symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></symbol>
+<symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor"/></symbol>
+<symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 13a8 8 0 0 0 14.3 4.9L20 16M4 4v4h4M20 20v-4h-4"/></symbol>
+<symbol id="i-win" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></symbol>
+<symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></symbol>
+<symbol id="i-aa" viewBox="0 0 24 24"><path d="M3 18l5-12 5 12M4.8 14h6.4M14 18l3.5-8 3.5 8M15 15.5h5"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-rss" viewBox="0 0 24 24"><path d="M5 11a8 8 0 0 1 8 8M5 5a14 14 0 0 1 14 14"/><circle cx="6" cy="18" r="1.3" fill="currentColor"/></symbol>
+<symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20l4-1L19 8l-3-3L5 16z"/></symbol>
+<symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z"/></symbol>
+<symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/></symbol>
+<symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 17v-6a6 6 0 0 1 12 0v6l1.5 2h-15zM10 21h4"/></symbol>
+<symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2"/></symbol>
+<symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></symbol>
+<symbol id="i-wave" viewBox="0 0 24 24"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></symbol>
+</defs></svg>
+
+<main class="board">
+  <section class="intro">
+    <h1>沉浸口语 · 手机端<br>登录后交互原型</h1>
+    <p>和 Windows 端同一套三档：阅读、口语、笔记与复习，同一个账号、同一份数据。手机里的按钮都能点，左边可以直接跳到某一屏，右边是这一屏在 Windows 上的样子。</p>
+    <nav class="idx" id="idx" aria-label="跳到某一屏"></nav>
+    <button class="replay" data-act="replay"><svg class="ico sm"><use href="#i-sync"/></svg>重放登录后的同步</button>
+  </section>
+  <section aria-label="手机预览"><div class="phone" id="phone"></div></section>
+  <aside class="desk" id="desk" aria-live="polite"></aside>
+</main>
+
+<script>
+/* ===== 数据：与 Windows 优化稿同一份示例（同一本书、同一句、同五条复习） ===== */
+const SENT = [
+  ["The King's son was going to be married, so there were general rejoicings.", "国王的儿子要结婚了，举国上下一片欢腾。"],
+  ["He had waited a whole year for his bride, and at last she had arrived.", "他等了新娘整整一年，她终于到了。"],
+  ["She was a Russian Princess, and had driven all the way from Finland in a sledge drawn by six reindeer.", "她是一位俄国公主，坐着六头驯鹿拉的雪橇，从芬兰一路赶来。"],
+  ["The sledge was shaped like a great golden swan, and between the swan's wings lay the little Princess herself.", "雪橇形似一只金色的大天鹅，小公主就躺在天鹅的双翼之间。"],
+  ["Her long ermine-cloak reached right down to her feet, and on her head was a tiny cap of silver tissue.", "她长长的貂皮斗篷一直垂到脚边，头上戴着一顶银丝小帽。"],
+  ["She was as pale as the Snow Palace in which she had always lived.", "她苍白得像她一直住着的那座雪宫。"],
+  ["So pale was she that as she drove through the streets all the people wondered.", "她苍白得让沿街的人都看呆了。"],
+  ["At the gate of the Castle the Prince was waiting to receive her.", "王子在城堡门口等着迎接她。"],
+  ["He had dreamy violet eyes, and his hair was like fine gold.", "他有一双梦幻般的紫罗兰色眼睛，头发像纯金一样。"],
+  ["When he saw her he sank upon one knee, and kissed her hand.", "一见到她，他便单膝跪下，吻了她的手。"],
+  ["“Your picture was beautiful,” he murmured, “but you are more beautiful than your picture”; and the little Princess blushed.", "「你的画像很美，」他低声说，「可你比画像还要美」；小公主脸红了。"],
+];
+const PARAS = [[0, 1], [2, 3, 4, 5, 6], [7, 8, 9, 10]];
+const RESUME = 8; /* 第 9 句（0 起） */
+const DICT = {
+  "rejoicings": ["/rɪˈdʒɔɪsɪŋz/", "n. 欢庆，庆祝活动（常用复数）", 0],
+  "sledge": ["/sledʒ/", "n. 雪橇", 2],
+  "reindeer": ["/ˈreɪndɪə/", "n. 驯鹿（单复数同形）", 2],
+  "ermine": ["/ˈɜːmɪn/", "n. 白鼬皮，貂皮", 4],
+  "receive": ["/rɪˈsiːv/", "v. 迎接，接待", 7],
+  "dreamy": ["/ˈdriːmi/", "adj. 梦幻般的；（眼神）朦胧的", 8],
+  "violet": ["/ˈvaɪələt/", "adj. 紫罗兰色的", 8],
+  "sank upon one knee": ["", "单膝跪下（sink 的过去式，比 kneel 更书面）", 9],
+  "murmured": ["/ˈmɜːməd/", "v. 低声说，喃喃道", 10],
+  "blushed": ["/blʌʃt/", "v. 脸红", 10],
+};
+const PARSE = {
+  2: { trunk: "She was a Russian Princess and had driven", parts: [
+    ["主语", "She", "指前文提到的新娘", 0], ["谓语 1", "was a Russian Princess", "系表结构，说明她的身份", 0],
+    ["谓语 2", "had driven", "并列谓语，过去完成时表示先于「到达」发生", 0],
+    ["状语", "all the way from Finland", "地点与路径状语，说明行程之远", 1], ["方式状语", "in a sledge", "出行所用的交通工具", 1],
+    ["后置定语", "drawn by six reindeer", "过去分词短语，修饰 sledge", 2]] },
+  7: { trunk: "the Prince was waiting", parts: [
+    ["地点状语", "At the gate of the Castle", "提到句首，先交代场景", 0], ["主语", "the Prince", "", 0],
+    ["谓语", "was waiting", "过去进行时：她到达时他已经在等", 0], ["目的状语", "to receive her", "不定式表目的", 1]] },
+  8: { trunk: "He had eyes, and his hair was like gold", parts: [
+    ["主语", "He", "指王子", 0], ["谓语 1", "had dreamy violet eyes", "两个形容词叠用：先说感觉 dreamy，再说颜色 violet", 0],
+    ["并列分句", "and his hair was like fine gold", "and 连接两个完整分句", 0], ["比喻", "like fine gold", "介词短语作表语，把头发比作纯金", 1]] },
+  9: { trunk: "he sank upon one knee, and kissed her hand", parts: [
+    ["时间状语从句", "When he saw her", "", 0], ["主语", "he", "", 0],
+    ["谓语 1", "sank upon one knee", "sink upon one knee = 单膝跪下", 0], ["谓语 2", "kissed her hand", "并列谓语，动作紧接着发生", 0]] },
+};
+const TARGET = [["volunteers", "志愿者"], ["inconsistent with", "与…不一致"], ["standardize", "使标准化"], ["inconsistency", "不一致之处"], ["fix a command", "修复命令"]];
+const REVIEW = [
+  { type: "单词", src: "《The Speed of Reading》", pre: "Researchers measured how fast ", ans: "volunteers", post: " could move through a text.", cn: "研究人员测量了志愿者阅读一段文本的速度。", def: "volunteers · n. 志愿者（volunteer 的复数）" },
+  { type: "词块", src: "《I am wondering if others have experienced…》", pre: "Locations on Booking.com and Ctrip are also similarly ", ans: "inconsistent with", post: " the street address.", cn: "Booking.com 和携程上的位置同样与街道地址对不上。", def: "be inconsistent with · 与……不一致" },
+  { type: "单词", src: "划词收藏", pre: "Our company wants to ", ans: "standardize", post: " all reports so everyone uses the same simple format.", cn: "公司想把所有报告标准化，大家都用同一种简单格式。", def: "standardize · v. 使标准化" },
+  { type: "单词", src: "划词收藏", pre: "There is an ", ans: "inconsistency", post: " between the two versions of the file.", cn: "这份文件的两个版本之间有一处不一致。", def: "inconsistency · n. 不一致之处" },
+  { type: "词块", src: "划词收藏", pre: "Can you help me ", ans: "fix a command", post: " that keeps failing in the terminal?", cn: "你能帮我修好一条在终端里一直报错的命令吗？", def: "fix a command · 修复一条命令" },
+];
+
+/* ===== 状态 ===== */
+const S = {
+  tab: "read", stack: [], sheet: null, sheetTab: "parse", toast: null,
+  synced: false, arrive: false, shelfSeg: "book",
+  reader: { mask: true, active: RESUME, playing: false, cn: {}, shown: false, word: null, follow: true, banner: true },
+  saved: [], drill: { phase: "ask", cn: false }, fixSaved: false,
+  vault: { seg: "today", mode: "填空", filter: "全部" },
+  rev: { i: 0, shown: false, grades: [] },
+};
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const I = (id, c = "") => `<svg class="ico ${c}" aria-hidden="true"><use href="#i-${id}"/></svg>`;
+const topV = () => S.stack[S.stack.length - 1] || null;
+const dueLeft = () => Math.max(0, REVIEW.length - S.rev.grades.length);
+const vaultBadge = () => dueLeft() + S.saved.length;
+const SCREENS = {}, SHEETS = {};
+const STATUS = `<div class="sb"><span>9:41</span><span class="r"><svg width="18" height="11"><rect x="0" y="7" width="3" height="4" rx=".8"/><rect x="5" y="5" width="3" height="6" rx=".8"/><rect x="10" y="2.5" width="3" height="8.5" rx=".8"/><rect x="15" y="0" width="3" height="11" rx=".8"/></svg><svg width="26" height="12"><rect x=".5" y=".5" width="22" height="11" rx="3.2" fill="none" stroke="currentColor" opacity=".45"/><rect x="2" y="2" width="17" height="8" rx="2"/></svg></span></div>`;
+
+function ring(n, d, size = 42, stroke = 4, label) {
+  const r = (size - stroke) / 2, c = 2 * Math.PI * r, f = d ? Math.min(1, n / d) : 0;
+  return `<svg class="ring" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--surface-2)" stroke-width="${stroke}"/>${f > 0 ? `<circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--accent)" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${(c * f).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 ${size / 2} ${size / 2})"/>` : ""}<text x="50%" y="50%" dominant-baseline="central" text-anchor="middle" font-size="${size > 50 ? 17 : 11}" font-weight="700" fill="var(--text-1)">${label ?? `${n}/${d}`}</text></svg>`;
+}
+
+/* ===== 渲染：每次状态变化整屏重绘；滚动位置、入场动画只在真正切换时触发 ===== */
+let last = { key: null, sheet: null, toast: null };
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function render() {
+  const key = topV()?.v || S.tab;
+  const ph = $("#phone");
+  const oldBody = $(".vbody", ph), oldSheet = $(".sh-body", ph);
+  const keep = last.key === key && oldBody ? oldBody.scrollTop : null;
+  const keepSheet = last.sheet === S.sheet && oldSheet ? oldSheet.scrollTop : 0;
+  const pushIn = last.key !== key && S._dir === "push";
+  const fa = document.activeElement?.closest?.("#phone [data-act]");
+  const focusSel = fa ? `[data-act="${fa.dataset.act}"]${["v", "i", "w"].map((k) => (fa.dataset[k] != null ? `[data-${k}="${CSS.escape(fa.dataset[k])}"]` : "")).join("")}` : null;
+  S._dir = null;
+  const v = SCREENS[key]();
+  let h = STATUS + `<div class="view ${v.cls || ""}${pushIn ? " push" : ""}">${v.html}</div>`;
+  if (!topV()) h += tabbar();
+  if (S.sheet) {
+    const fresh = last.sheet !== S.sheet ? " in" : "";
+    h += `<div class="scrim${fresh}" data-act="close-sheet"></div><div class="sheet${fresh}" role="dialog" aria-modal="true"><div class="grab"></div>${SHEETS[S.sheet]()}</div>`;
+  }
+  if (S.toast) h += `<div class="toast${last.toast !== S.toast.id ? " in" : ""}" role="status">${I(S.toast.ic)}<span>${S.toast.t}</span></div>`;
+  h += `<div class="home-ind"></div>`;
+  ph.innerHTML = h;
+
+  const nb = $(".vbody", ph), ns = $(".sh-body", ph);
+  if (nb && keep !== null) nb.scrollTop = keep;
+  if (ns) ns.scrollTop = keepSheet;
+  if (key === "reader" && S.reader.follow && nb) follow(nb);
+  if (S._scrollEnd && nb) { nb.scrollTop = nb.scrollHeight; S._scrollEnd = false; }
+  const nx = $(".wrail .wd.next", ph);
+  if (nx) nx.parentElement.scrollLeft = Math.max(0, nx.offsetLeft - 18);
+  if (focusSel) $(focusSel, ph)?.focus({ preventScroll: true });
+  last = { key, sheet: S.sheet, toast: S.toast?.id ?? null };
+  renderDesk();
+  markIndex();
+}
+
+function follow(nb) {
+  const el = nb.querySelector(`.s[data-s="${S.reader.active}"]`);
+  const y = S.reader.follow === "top" ? el?.offsetTop - 16 : el?.offsetTop - nb.clientHeight * 0.3;
+  if (el) nb.scrollTo({ top: Math.max(0, y), behavior: S.reader.follow === "smooth" && !reduced ? "smooth" : "auto" });
+  S.reader.follow = false;
+}
+
+let toastTimer;
+function toast(t, ic = "check") {
+  clearTimeout(toastTimer);
+  S.toast = { t, ic, id: Date.now() };
+  toastTimer = setTimeout(() => { S.toast = null; render(); }, 2800);
+}
+
+function push(v) { S.stack.push({ v }); S._dir = "push"; S.sheet = null; }
+function pop() { S.stack.pop(); S.sheet = null; stopPlay(); }
+
+let playTimer;
+function startPlay() {
+  S.reader.playing = true;
+  clearInterval(playTimer);
+  playTimer = setInterval(() => {
+    if (topV()?.v !== "reader") { stopPlay(); return; }
+    if (S.reader.active >= SENT.length - 1) { stopPlay(); render(); return; }
+    S.reader.active++;
+    S.reader.follow = "smooth";
+    render();
+  }, 2600);
+}
+function stopPlay() { S.reader.playing = false; clearInterval(playTimer); }
+
+function tabbar() {
+  const b = vaultBadge();
+  const t = (id, ic, label, extra = "") =>
+    `<button class="${S.tab === id ? "on" : ""}" data-act="tab" data-v="${id}"${S.tab === id ? ' aria-current="page"' : ""}>${I(ic, "sm")}<span>${label}</span>${extra}</button>`;
+  return `<nav class="tabbar" aria-label="主导航">${t("read", "book", "阅读")}${t("speak", "mic", "口语")}${t("vault", "note", "笔记与复习", b ? `<span class="bdg">${b}</span>` : "")}</nav>`;
+}
+
+/* 根页页头：monogram 同桌面左上角，右下小点 = 同步状态 */
+function rhead(title, right = "") {
+  return `<header class="rhead"><button class="seal" data-act="account" aria-label="账号与同步（${S.synced ? "已同步" : "同步中"}）">I<i class="${S.synced ? "" : "ing"}"></i></button><h1 class="rtitle">${title}</h1>${right}</header>`;
+}
+function nhead(title, sub, act = "") {
+  return `<header class="nhead"><button class="back" data-act="back" aria-label="返回">${I("back", "lg")}</button><div class="nt"><b>${title}</b>${sub ? `<small>${sub}</small>` : ""}</div><div class="act">${act}</div></header>`;
+}
+
+/* ===== 阅读：书架（接力卡）→ 阅读页 → 句子抽屉 ===== */
+const SHORTS = [
+  ["The Speed of Reading", "粘贴导入", "读完了"],
+  ["I am wondering if others have experienced what I am seeing", "英文资讯订阅", "读到第 3 句"],
+  ["Why Cities Need Trees", "精选经典", "读到第 6 句"],
+];
+const say = (t) => `data-act="say" data-t="${esc(t)}"`;
+
+function relayCard() {
+  if (!S.synced) return `<article class="card relay" aria-busy="true">
+    <div class="relay-src">${I("sync", "sm")}<span>正在从你的账号取回阅读进度…</span></div>
+    <div class="skel" style="margin:16px 0 8px"></div><div class="skel" style="width:72%"></div>
+    <div class="relay-bar"><div class="pbar"></div></div>
+    <div class="relay-cta"><button class="btn primary" disabled style="opacity:.45">继续读</button></div></article>`;
+  return `<article class="card relay${S.arrive ? " arrive" : ""}">
+    <div class="relay-src">${I("win", "sm")}<span>你在 <b>Windows</b> 上读到这里 · 今天 08:12</span></div>
+    <p class="relay-q">${esc(SENT[RESUME][0])}</p>
+    <div class="relay-at">Classic Short Stories 第 5 章 · The Remarkable Rocket</div>
+    <div class="relay-bar"><b>67%</b><div class="pbar"><i style="width:67%"></i></div><span class="muted" style="font-size:12.5px">第 5 / 6 章</span></div>
+    <div class="relay-cta"><button class="btn primary" data-act="open-reader">${I("play", "sm")}继续读 · 第 5 章第 9 句</button><button class="btn" ${say("目录在这版原型里没展开")}>目录</button></div></article>`;
+}
+
+SCREENS.read = () => {
+  const g = S.rev.grades.length, left = dueLeft();
+  const today = `<div class="card today">
+    <div>${ring(1, 10)}<div><b>今日阅读</b><small>还差 9 分钟</small></div></div>
+    <div data-act="tab" data-v="vault" role="button" tabindex="0" style="cursor:pointer">${ring(g, 5)}<div><b>今日复习</b><small>${left ? `${left} 张到期 <span class="lk">去复习</span>` : "今天复习完了"}</small></div></div></div>`;
+  const book = `<div class="card book" data-act="open-reader" role="button" tabindex="0" style="cursor:pointer">
+    <div class="cover">Classic<br>Short<br>Stories</div>
+    <div style="flex:1;min-width:0"><div class="bt">Classic Short Stories</div>
+      <div class="meta">Oscar Wilde &amp; Jack London · 6 章 · 约 2.5 小时</div><span class="tag">考研 · 大纲词 1,660</span>
+      <div class="relay-bar" style="margin:10px 0 0"><b style="font-size:12.5px">67%</b><div class="pbar"><i style="width:67%"></i></div></div></div></div>`;
+  const shorts = `<div class="card">${SHORTS.map(([t, src, st]) => `<button class="row-li" ${say("短文阅读页和书一样，这版原型只做了书")}><div class="tx"><b class="en" style="font-size:15px">${esc(t)}</b><small>${src} · ${st}</small></div>${I("chev", "sm chev")}</button>`).join("")}
+    <button class="row-li" ${say("短文列表在这版原型里没展开")}><div class="tx"><small>还有 6 篇</small></div>${I("chev", "sm chev")}</button></div>`;
+  const disc = [["book", "精选经典", "按难度和考纲词表挑选公版名著与短篇"], ["rss", "英文资讯订阅", "订阅常用新闻源，每天自动收到可读短文"], ["plus", "导入自己的内容", "手机上可以粘贴文本或分享网页；导入文件在 Windows 上做"]];
+  return { html: rhead("书架", `<button class="ibtn" ${say("全文检索在这版原型里没展开")} aria-label="搜索">${I("search")}</button>`) + `<div class="vbody">
+    ${relayCard()}${today}
+    <div class="sec-h" style="align-items:center"><div class="seg"><button class="${S.shelfSeg === "book" ? "on" : ""}" data-act="shelf-seg" data-v="book">书 · 1</button><button class="${S.shelfSeg === "short" ? "on" : ""}" data-act="shelf-seg" data-v="short">短文 · 9</button></div>
+      <button class="btn sm" ${say("导入：粘贴文本或分享网页链接")}>${I("plus", "sm")}导入</button></div>
+    ${S.shelfSeg === "book" ? book : shorts}
+    <div class="sec-h"><b>发现更多可读内容</b></div>
+    <div class="card">${disc.map(([ic, t, d]) => `<button class="row-li" ${say(t + "在这版原型里没展开")}><span class="ic">${I(ic, "sm")}</span><div class="tx"><b>${t}</b><small>${d}</small></div>${I("chev", "sm chev")}</button>`).join("")}</div>
+  </div>` };
+};
+
+/* ---------- 阅读页 ---------- */
+function marked(i) {
+  let t = esc(SENT[i][0]);
+  for (const w of Object.keys(DICT)) if (DICT[w][2] === i) t = t.replace(w, `<span class="dash" data-act="word" data-w="${w}" role="button" tabindex="0">${w}</span>`);
+  return t;
+}
+function sentHTML(i) {
+  const r = S.reader, on = i === r.active ? " on" + (r.playing ? " play" : "") : "";
+  const cn = !r.mask || r.cn[i] ? `<span class="cn">${SENT[i][1]}</span>` : "";
+  return `<span class="s${on}" data-act="sent" data-i="${i}" data-s="${i}" role="button" tabindex="0">${marked(i)}</span>${cn}`;
+}
+SCREENS.reader = () => {
+  const r = S.reader, opened = Object.keys(r.cn).length;
+  const acts = `<button class="back" ${say("目录在这版原型里没展开")} aria-label="目录">${I("list")}</button><button class="back" ${say("阅读设置：字号、行距、主题，跟账号同步")} aria-label="阅读设置">${I("aa")}</button>`;
+  return { cls: "reading", html: nhead(`<span class="en">The Remarkable Rocket</span>`, "Classic Short Stories 第 5 章", acts) + `
+    <div class="rmeta"><span>4,362 词 · 约 22 分钟</span><button class="mk" data-act="mask" aria-pressed="${r.mask}"><span class="sw${r.mask ? " on" : ""}"></span>译文遮罩<small class="muted" style="font-weight:400">${r.mask ? `已揭开 ${opened} 句` : ""}</small></button></div>
+    <div class="vbody">
+      ${r.banner ? `<div class="resume">${I("win", "sm")}<span>从 Windows 接着读：<b>第 9 句</b></span><button class="x" data-act="banner-x" aria-label="关闭提示">${I("x", "sm")}</button></div>` : ""}
+      <div class="ch-kick">Classic Short Stories 第 5 章</div>
+      <h2 class="ch-title">The Remarkable Rocket</h2>
+      <div class="ch-sub"><span>非凡的火箭</span><button class="chip" data-act="drill" style="color:var(--accent);background:var(--accent-soft);border-color:var(--accent-line)">${I("mic", "sm")}围绕本章练口语</button></div>
+      <div class="prose">${PARAS.map((p) => `<p>${p.map(sentHTML).join(" ")}</p>`).join("")}</div>
+    </div>
+    <div class="playbar"><button class="sk" data-act="prev" aria-label="上一句">${I("prev")}</button><button class="pp" data-act="play" aria-label="${r.playing ? "暂停" : "朗读"}">${I(r.playing ? "pause" : "play")}</button><button class="sk" data-act="next" aria-label="下一句">${I("next")}</button>
+      <div class="pbar" style="margin:0 6px"><i style="width:${(((r.active + 1) / 283) * 100).toFixed(1)}%"></i></div><span class="pos">${r.active + 1} / 283</span><button class="spd" ${say("语速 0.75×，和你在 Windows 上设的一样")}>0.75×</button></div>` };
+};
+
+/* ---------- 句子抽屉：桌面右栏「句子解析 / 查词 / 本章生词」 ---------- */
+SHEETS.sentence = () => {
+  const r = S.reader, i = r.active, shown = r.cn[i];
+  const tabs = [["parse", "句子解析"], ["dict", "查词"], ["vocab", "本章生词"]];
+  const body = { parse: parseHTML, dict: dictHTML, vocab: vocabHTML }[S.sheetTab](i);
+  return `<div class="sh-head"><div class="muted" style="font-size:12px">第 ${i + 1} 句</div><div class="q">${marked(i)}</div>
+    <button class="mask${shown ? " open" : ""}" data-act="reveal">${shown ? esc(SENT[i][1]) : I("eye", "sm") + "点击显示译文"}</button>
+    <div class="sh-acts"><button class="btn" ${say("朗读这一句（用本机的朗读音色）")}>${I("spk", "sm")}朗读</button><button class="btn" data-act="drill">${I("mic", "sm")}练口语</button><button class="btn" ${say("改过的译文会同步到 Windows")}>${I("pen", "sm")}编辑译文</button></div></div>
+    <div class="sh-body"><div class="sh-tabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${S.sheetTab === k}" class="${S.sheetTab === k ? "on" : ""}" data-act="sheet-tab" data-v="${k}">${l}</button>`).join("")}</div>${body}</div>`;
+};
+function parseHTML(i) {
+  const p = PARSE[i];
+  if (!p) return `<div class="trunk"><small>句子主干</small><div>${esc(SENT[i][0])}</div></div><p class="muted" style="font-size:13px;margin-top:12px">原型只给第 3、8、9、10 句写了结构拆解，点这几句看。</p>`;
+  return `<div class="trunk"><small>句子主干</small><div>${p.trunk}</div></div><div class="parts">${p.parts.map(([k, v, d, lv]) =>
+    `<div class="part${lv ? " sub" : ""}"${lv > 1 ? ' style="margin-left:28px"' : ""}><span class="k${/状语|定语|比喻/.test(k) ? " mod" : ""}">${k}</span><div class="v">${v}</div>${d ? `<div class="d">${d}</div>` : ""}</div>`).join("")}</div>`;
+}
+function dictHTML(i) {
+  const w = S.reader.word && DICT[S.reader.word] ? S.reader.word : Object.keys(DICT).find((k) => DICT[k][2] === i);
+  if (!w) return `<p class="muted" style="font-size:13px">这句没有标出的生词。点正文里带虚线的词，或者换到「本章生词」。</p>`;
+  const [ph, ps, si] = DICT[w], saved = S.saved.includes(w);
+  return `<div class="dict"><div><span class="hw">${w}</span><span class="ph">${ph}</span></div><div class="ps">${ps}</div>
+    <div class="eg">${esc(SENT[si][0]).replace(w, `<b>${w}</b>`)}<small>出自第 ${si + 1} 句</small></div>
+    <div class="sh-acts" style="margin-top:14px"><button class="btn" ${say("朗读：" + w)}>${I("spk", "sm")}发音</button><button class="btn${saved ? "" : " primary"}" data-act="save-word" data-w="${w}">${saved ? I("check", "sm") + "已收藏" : I("star", "sm") + "收藏这个词"}</button></div></div>`;
+}
+function vocabHTML() {
+  return `<div class="vlist">${Object.keys(DICT).map((w) => `<button class="row-li" data-act="pick-word" data-w="${w}"><div class="tx"><b class="en" style="font-size:15.5px">${w}</b><small>${DICT[w][1]}</small></div>${S.saved.includes(w) ? '<span class="tag">已收藏</span>' : ""}${I("chev", "sm chev")}</button>`).join("")}</div>`;
+}
+
+/* ===== 口语：首页 → 今日生词造句闯关 → 本轮复盘 ===== */
+const SCENES = [["寒暄", "日常", "和新同事、邻居聊天"], ["旅行", "日常", "机场、酒店、问路"], ["点餐", "轻松", "餐厅点单、提要求"], ["面试", "进阶", "自我介绍、回答追问"]];
+const AI = [
+  ["Imagine you're organizing a weekend book fair. You have a lot of <strong>volunteers</strong>, but they keep giving visitors different answers. What would you do about it?", "想象你在组织一场周末书展。志愿者很多，但他们给访客的回答总不一样。你会怎么办？"],
+  ["That's a smart move. And if a visitor complains about a mistake, how would you <strong>standardize</strong> the way your team handles it?", "这招很聪明。如果有访客投诉出错了，你会怎么让团队统一处理方式？"],
+  ["Sounds like a plan. You've used three of today's words — want to stop here and review?", "听起来可行。你已经用上了今天的三个词，要不要停下来复盘？"],
+];
+const ANS = [
+  ["I would give all the <span class=\"hit\">volunteers</span> the same <span class=\"wav\" data-act=\"pron\" role=\"button\" tabindex=\"0\">guide</span>, so their answers are not <span class=\"hit\">inconsistent with</span> each other.", "I would give all the volunteers the same guide, so their answers are not", 86, 2],
+  ["I would write one simple process and <span class=\"hit\">standardize</span> how everyone replies.", "I would write one simple process and", 91, 1],
+];
+const PH = ["ask", "rec1", "ans1", "rec2", "ans2"];
+const at = (p) => PH.indexOf(S.drill.phase) >= PH.indexOf(p);
+const usedWords = () => (at("ans2") ? [0, 1, 2] : at("ans1") ? [0, 1] : []);
+
+function wordChip(i, opts = {}) {
+  const [en, cn] = TARGET[i], done = usedWords().includes(i), next = !done && opts.next === i;
+  return `<span class="wd${done ? " done" : ""}${next ? " next" : ""}"><span class="ck">${done ? I("check", "sm") : ""}</span><b>${en}</b>${cn}</span>`;
+}
+
+SCREENS.speak = () => {
+  const used = usedWords().length;
+  const scenes = SCENES.map(([t, lv, d]) => `<button class="row-li" ${say("「" + t + "」场景的对话页和闯关同一套，这版原型只做了闯关")}><div class="tx"><b>${t}</b><small>${d}</small></div><span class="lv">${lv}</span>${I("chev", "sm chev")}</button>`).join("");
+  return { html: rhead("口语", `<button class="ibtn" ${say("发音评分由讯飞提供；语音服务设置只存在这台设备")} aria-label="发音反馈说明">${I("wave")}</button>`) + `<div class="vbody">
+    <article class="card ch-card"><h3>今日生词造句闯关</h3><p>回答 AI 的生活化提问时，用上待复习的词就算过关。</p>
+      <div class="words">${TARGET.map((_, i) => wordChip(i)).join("")}</div>
+      <div class="used"><span class="lv">日常难度</span><div class="pbar"><i style="width:${used * 20}%"></i></div><span>已用上 ${used} / 5 个词</span></div>
+      <button class="btn primary block" data-act="drill">${I("mic", "sm")}${used ? "接着闯关" : "开始闯关"}</button></article>
+    <div class="sec-h"><b>切换场景</b><span>内置 4 个 · 自定义 1 个</span></div>
+    <div class="card">${scenes}<button class="row-li" ${say("自定义场景在 Windows 上编辑，手机上可以直接练")}><div class="tx"><b>周会汇报</b><small>你在 Windows 上建的自定义场景</small></div><span class="tag grey">${I("win", "sm")}已同步</span>${I("chev", "sm chev")}</button></div>
+    <div class="sec-h"><b>跟读</b></div>
+    <div class="card"><button class="row-li" ${say("影子跟读：每次 3 句，读得不准的词标红")}><span class="ic">${I("wave", "sm")}</span><div class="tx"><b>影子跟读</b><small>从书架里正在读的那一章取句子</small></div>${I("chev", "sm chev")}</button></div>
+    <div class="sec-h"><b>最近练习</b><span>跟账号同步</span></div>
+    <div class="card">
+      <button class="row-li" ${say("这条练习记录来自 Windows")}><div class="tx"><b>今日生词造句闯关</b><small>昨天 21:40 · Windows · 6 轮 · 发音 84</small></div>${I("chev", "sm chev")}</button>
+      <button class="row-li" ${say("这条练习记录来自这台手机")}><div class="tx"><b>点餐</b><small>10月24日 · 这台手机 · 4 轮 · 发音 79</small></div>${I("chev", "sm chev")}</button></div>
+  </div>` };
+};
+
+SCREENS.drill = () => {
+  const d = S.drill, ph = d.phase, used = usedWords().length;
+  const aiBlock = (n) => `<div class="${n ? "next-ai" : ""}"><div class="aimeta"><span>AI 陪练 · 寒暄</span><button ${say("重听：用本机的朗读音色")}>${I("spk", "sm")}重听</button><button class="${d.cn ? "on" : ""}" data-act="drill-cn">显示中文</button></div>
+    <div class="ai">${AI[n][0]}</div>${d.cn ? `<div class="ai-cn">${AI[n][1]}</div>` : ""}</div>`;
+  const you = (n, live) => live
+    ? `<div class="you"><div class="you-meta"><em>正在听…</em></div><div class="bub live">${ANS[n][1]}<span class="caret"></span></div></div>`
+    : `<div class="you"><div class="you-meta">你 · 刚刚</div><div class="bub">${ANS[n][0]}</div><div class="verdict"><span>✓ 用上 ${ANS[n][3]} 个目标词 · 发音 ${ANS[n][2]}</span></div></div>`;
+  let t = aiBlock(0) + `<div class="hintbox">${I("target", "sm")}<span><b>用你自己的话回答就行。</b>说出任意一个目标词就算用上，标蓝的词最贴合这一题。</span></div>`;
+  if (ph === "rec1") t += you(0, true);
+  if (at("ans1")) t += you(0) + aiBlock(1);
+  if (ph === "rec2") t += you(1, true);
+  if (at("ans2")) t += you(1) + aiBlock(2) + `<p class="sysline">已用上 3 / 5 个词，可以结束并复盘，也可以继续答。</p>`;
+  const rec = ph === "rec1" || ph === "rec2";
+  const wave = rec ? `<div class="wave" aria-hidden="true">${[8, 14, 22, 12, 26, 18, 10, 24, 16, 9].map((h, k) => `<i style="height:${h}px;animation-delay:${k * 0.08}s"></i>`).join("")}</div>` : "";
+  return { cls: "drill", html: nhead("今日生词造句闯关", "日常难度", `<button class="lnk" data-act="recap" style="padding:0 6px">结束并复盘</button>`) + `
+    <div class="dtop"><div class="used"><div class="pbar"><i style="width:${used * 20}%"></i></div><span>已用上 ${used} / 5 个词</span><button class="chip" style="height:28px" ${say("听力模式：AI 的话先不显示文字，听完再看")}>听力模式</button></div>
+      <div class="wrail">${TARGET.map((_, i) => wordChip(i, { next: at("ans1") ? 2 : 1 })).join("")}</div></div>
+    <div class="vbody" style="padding:0"><div class="thread">${t}</div></div>
+    <div class="dock">${wave}<div class="dock-row"><div class="l"><button class="btn sm" ${say("跟读这句：先听 AI 读一遍，再跟着读，打分")}>跟读这句</button></div>
+      <button class="mic${rec ? " rec" : ""}" data-act="mic" aria-label="${rec ? "说完了" : "开始回答"}">${rec ? '<span class="stop"></span>' : I("mic", "lg")}</button>
+      <div class="r"><button class="btn sm" data-act="hint">给点提示</button></div></div>
+      <p class="dock-cap">${rec ? "说完点一下，结束这次回答" : ph === "ans2" ? "点一下继续回答" : "点一下，用英语回答"}</p></div>` };
+};
+
+SHEETS.pron = () => `<div class="sh-head"><div class="muted" style="font-size:12px">这句的发音</div>
+  <div class="score" style="padding:8px 0 0">${ring(86, 100, 64, 6, "86")}<div class="bars"><div>准确<div class="pbar"><i style="width:82%"></i></div><em>82</em></div><div>流利<div class="pbar"><i style="width:90%"></i></div><em>90</em></div><div>完整<div class="pbar"><i style="width:100%"></i></div><em>100</em></div></div></div></div>
+  <div class="sh-body"><div class="dict"><div><span class="hw">guide</span><span class="ph">/ɡaɪd/</span><span style="float:right;font-weight:700;color:var(--warn)">62</span></div>
+    <div class="ph-pills"><span>ɡ</span><span>aɪ</span><span class="bad">d</span></div>
+    <p style="font-size:13.5px;color:var(--text-2)">结尾的 /d/ 被吞掉了，听起来像 "guy"。舌尖抵上齿龈，轻轻收个尾。</p>
+    <div class="sh-acts" style="margin-top:14px"><button class="btn" ${say("慢速示范：guide")}>${I("spk", "sm")}慢速示范</button><button class="btn" ${say("单练这个词：读三遍，取最好的一次")}>${I("mic", "sm")}单练这个词</button></div></div></div>`;
+
+SCREENS.recap = () => {
+  const used = usedWords();
+  return { html: nhead("本轮复盘", "今日生词造句闯关 · 日常难度") + `<div class="vbody">
+    <div class="card rc-hero"><div class="big">${used.length}<span> / 5</span></div><p>个目标词用上了 · ${at("ans2") ? 2 : at("ans1") ? 1 : 0} 轮回答 · 4 分 10 秒</p>
+      <div class="words" style="justify-content:center;margin-bottom:0">${TARGET.map((_, i) => wordChip(i)).join("")}</div>
+      <p style="margin-top:10px">没用上的 ${5 - used.length} 个词留在明天的闯关里。用上的词，在笔记里升到「能说出口」。</p></div>
+    <div class="sec-h"><b>发音</b><span>讯飞评分 · 两句平均</span></div>
+    <div class="card score">${ring(88, 100, 64, 6, "88")}<div class="bars"><div>准确<div class="pbar"><i style="width:84%"></i></div><em>84</em></div><div>流利<div class="pbar"><i style="width:91%"></i></div><em>91</em></div><div>完整<div class="pbar"><i style="width:100%"></i></div><em>100</em></div></div></div>
+    <div class="sec-h"><b>值得改一改</b><span>1 处</span></div>
+    <div class="card fix"><div class="was">so their answers are not inconsistent with each other</div><div class="now">so their answers stay consistent</div>
+      <div class="why">双重否定 not inconsistent 听起来绕，直接说 consistent 更自然。</div>
+      <div class="fix-act">${S.fixSaved ? `<span class="synced">${I("check", "sm")}已收进「口语纠偏」，Windows 上也能复习</span>` : `<button class="btn sm primary" data-act="save-fix">${I("note", "sm")}收进笔记</button><span class="muted" style="font-size:12.5px">进「口语纠偏」，和划词收藏一起复习</span>`}</div></div>
+  </div><div class="dock2"><button class="btn" data-act="again">再来一轮</button><button class="btn primary" data-act="done-recap">完成</button></div>` };
+};
+
+/* ===== 笔记与复习：今日复习 / 全部笔记 → 复习中 → 复习完；账号与同步 ===== */
+const STAGE_C = { 刚收集: "#c9a227", 眼熟: "#7fb3a1", 能说出口: "#1f6b57" };
+function stages() {
+  const said = usedWords().length;
+  return [["刚收集", S.saved.length, STAGE_C.刚收集], ["眼熟（读到能懂）", REVIEW.length - said, STAGE_C.眼熟], ["能说出口", said, STAGE_C.能说出口]];
+}
+const clozeLine = (r, open) => `${esc(r.pre)}${open ? `<span class="ans">${r.ans}</span>` : `<span class="tape" role="button" tabindex="0" aria-label="点开看答案"></span>`}${esc(r.post)}`;
+
+SCREENS.vault = () => {
+  const v = S.vault;
+  return { html: rhead("笔记与复习", `<button class="ibtn" ${say("导出笔记（Anki / Markdown）在 Windows 上做")} aria-label="导出笔记">${I("note")}</button>`) + `<div class="vbody">
+    <div class="seg soft" style="margin-bottom:14px"><button class="${v.seg === "today" ? "on" : ""}" data-act="vault-seg" data-v="today">今日复习</button><button class="${v.seg === "all" ? "on" : ""}" data-act="vault-seg" data-v="all">全部笔记</button></div>
+    ${v.seg === "today" ? todayHTML() : allHTML()}</div>` };
+};
+
+function todayHTML() {
+  const left = dueLeft(), st = stages(), tot = st.reduce((a, [, n]) => a + n, 0) || 1, g = S.rev.grades.length;
+  const hero = left
+    ? `<article class="card due"><h3>今天有 <span class="n">${left}</span> 条要复习</h3><p>约 ${Math.max(1, Math.round(left * 0.6))} 分钟 · 都是你最近读到、收藏过的表达</p>
+        <div class="modes">${["填空", "听音", "开口"].map((m) => `<button class="chip${S.vault.mode === m ? " on" : ""}" data-act="mode" data-v="${m}">${m}</button>`).join("")}</div>
+        <button class="btn primary block" data-act="start-review">${I("play", "sm")}开始复习</button></article>`
+    : `<article class="card due"><h3>今日复习完成</h3><p>记录已同步，Windows 上打开也是「已完成」。想再练练，就去口语里用一用今天的词。</p><button class="btn block" data-act="drill">${I("mic", "sm")}去口语里用一次</button></article>`;
+  const heat = Array.from({ length: 28 }, (_, k) => {
+    const l = [3, 4, 8, 11, 12, 15, 18, 19, 22, 24, 25, 26].includes(k) ? ([4, 12, 19, 25].includes(k) ? " l2" : " l1") : "";
+    return k === 27 ? `<i class="now${g ? " l2" : ""}"></i>` : `<i class="${l.trim()}"></i>`;
+  }).join("");
+  const preview = REVIEW.slice(g, g + 2).map((r, k) => `<div class="note"><div class="note-h"><span class="tag">${r.type}</span>${esc(r.src)}</div><div class="note-s" data-act="peek" data-i="${g + k}">${clozeLine(r, S.vault.peek === g + k)}</div></div>`).join("");
+  return `${hero}
+    <div class="card stage" style="margin-top:12px;display:flex;gap:14px;align-items:center">${ring(g, 5, 52, 5)}<div><b>今日进度</b><div class="muted" style="font-size:12.5px">${left ? `还差 ${left} 条` : "已完成"} · 手机和 Windows 合计</div></div></div>
+    <div class="card stage" style="margin-top:12px"><b>掌握阶段</b>
+      <div class="stack">${st.map(([, n, c]) => `<i style="width:${(n / tot) * 100}%;background:${c}"></i>`).join("")}</div>
+      <div class="legend">${st.map(([k, n, c]) => `<div><span class="dot" style="background:${c}"></span>${k}<em>${n}</em></div>`).join("")}</div></div>
+    <div class="card stage" style="margin-top:12px"><b>近 28 天</b><div class="heat" aria-hidden="true">${heat}</div><p class="muted" style="font-size:12.5px;margin-top:8px">深色格是在 Windows 或手机上复习过的日子。</p></div>
+    ${preview ? `<div class="sec-h"><b>接下来要复习</b><span>先自己想一想，点胶带看答案</span></div><div class="card" style="padding:0 14px">${preview}</div>` : ""}`;
+}
+
+function allHTML() {
+  const items = [
+    ...REVIEW.map((r) => ({ type: r.type, src: r.src.replace(/[《》]/g, ""), tag: r.src, s: `${esc(r.pre)}<span class="w">${r.ans}</span>${esc(r.post)}` })),
+    ...S.saved.map((w) => ({ type: "单词", src: "划词收藏", tag: "划词收藏 · 刚收集", s: esc(SENT[DICT[w][2]][0]).replace(w, `<span class="w">${w}</span>`) })),
+    ...(S.fixSaved ? [{ type: "词块", src: "口语纠偏", tag: "口语纠偏 · 今日生词造句闯关", s: `so their answers <span class="w">stay consistent</span>` }] : []),
+  ];
+  const n = (f) => items.filter(f).length;
+  const F = [["全部", () => true], ["The Speed of Reading", (x) => x.src === "The Speed of Reading"], ["划词收藏", (x) => x.src === "划词收藏"], ["口语纠偏", (x) => x.src === "口语纠偏"], ["单词", (x) => x.type === "单词"], ["词块 / 短语", (x) => x.type === "词块"]];
+  const cur = F.find(([k]) => k === S.vault.filter) || F[0];
+  return `<div class="rail-x" role="toolbar" aria-label="筛选">${F.map(([k, f]) => `<button class="chip${S.vault.filter === k ? " on" : ""}" data-act="filter" data-v="${k}">${k} <small>${n(f)}</small></button>`).join("")}</div>
+    <div class="card" style="padding:0 14px;margin-top:10px">${items.filter(cur[1]).map((x) => `<div class="note"><div class="note-h"><span class="tag">${x.type}</span>${esc(x.tag)}</div><div class="note-s">${x.s}</div></div>`).join("") || `<p class="muted" style="padding:16px 0;font-size:13px">这一类还没有笔记。</p>`}</div>
+    <div class="warnbox">有 1 条内容未整理，可能不是词汇（如命令行）。<u data-act="say" data-t="整理入口在这版原型里没展开" role="button" tabindex="0">去处理</u></div>`;
+}
+
+/* ---------- 复习中：一屏一条，胶带遮答案，三档记忆 ---------- */
+SCREENS.review = () => {
+  const rv = S.rev, i = rv.i;
+  if (i >= REVIEW.length) return reviewDone();
+  const r = REVIEW[i];
+  const dock = rv.shown
+    ? `<div class="grades"><button data-act="grade" data-v="0"><b>没记住</b><small>10 分钟后再来</small></button><button data-act="grade" data-v="1"><b>有点模糊</b><small>明天再看</small></button><button data-act="grade" data-v="2"><b>记住了</b><small>4 天后再看</small></button></div>`
+    : `<p class="think">先自己想一想</p><div style="display:flex;gap:8px"><button class="btn" data-act="say" data-t="提示：${r.ans[0]} 开头，${r.ans.replace(/ /g, "").length} 个字母" style="flex:1">${I("bulb", "sm")}给点提示</button><button class="btn primary" data-act="tape" style="flex:2">看答案</button></div>`;
+  return { html: `<div class="rv-top"><button class="back" data-act="back" aria-label="退出复习">${I("x", "lg")}</button><div class="pbar"><i style="width:${(i / REVIEW.length) * 100}%"></i></div><span class="ct">${i + 1} / ${REVIEW.length}</span></div>
+    <div class="vbody" style="padding:0 0 200px"><article class="card rv-card"><div class="note-h"><span class="tag">${r.type}</span>${esc(r.src)}<span style="margin-left:auto" class="tag grey">${S.vault.mode}</span></div>
+      <div class="rv-s" data-act="tape">${clozeLine(r, rv.shown)}</div>
+      ${rv.shown ? `<div class="rv-ex">${r.cn}<div class="def">${r.def}</div></div>` : ""}
+      <div class="rv-acts"><button ${say("听原句：用本机的朗读音色")}>${I("spk", "sm")}听原句</button><button data-act="drill">${I("mic", "sm")}去口语里用一次</button></div></article></div>
+    <div class="dock">${dock}</div>` };
+};
+function reviewDone() {
+  const g = S.rev.grades, c = (v) => g.filter((x) => x === v).length;
+  return { html: `<div class="rv-top"><button class="back" data-act="back" aria-label="关闭">${I("x", "lg")}</button><div class="pbar"><i style="width:100%"></i></div><span class="ct">5 / 5</span></div>
+    <div class="vbody"><div class="done-box">${ring(5, 5, 84, 7, "✓")}<h3>今日复习完成</h3><p>没记住的 ${c(0)} 条 10 分钟后再来。<br>进度已同步，Windows 上不会重复出题。</p>
+      <div class="card tally"><div><b>${c(2)}</b><small>记住了</small></div><div><b>${c(1)}</b><small>有点模糊</small></div><div><b>${c(0)}</b><small>没记住</small></div></div></div></div>
+    <div class="dock2"><button class="btn" data-act="drill">去口语里用一次</button><button class="btn primary" data-act="back">完成</button></div>` };
+}
+
+/* ---------- 账号与同步（点左上 monogram） ---------- */
+SHEETS.account = () => `<div class="sh-body" style="padding-top:8px">
+  <div class="acct"><span class="av">林</span><div><b style="font-size:16px">林知夏</b><div class="muted" style="font-size:13px">lin@example.com</div></div></div>
+  <div class="syncrow">${I(S.synced ? "check" : "sync", "sm")}<div><b>${S.synced ? "已同步 · 刚刚" : "同步中…"}</b><small>在哪台设备上学，进度都接得上</small></div><button class="btn sm" data-act="sync-now" ${S.synced ? "" : "disabled"}>立即同步</button></div>
+  <div class="list-h">登录过的设备</div>
+  <div class="lst"><div class="row-li">${I("win")}<div class="tx"><b>Windows · 办公室电脑</b><small>今天 08:12 · 读到第 5 章第 9 句</small></div></div>
+    <div class="row-li">${I("phone")}<div class="tx"><b>iPhone · 这台设备</b><small>正在使用</small></div></div></div>
+  <div class="list-h">跟账号走（两端一致）</div>
+  <div class="lst">${["书架与阅读进度", "笔记、划词收藏与复习记录", "口语练习记录与发音评分", "自定义口语场景", "阅读设置（字号、主题、语速）"].map((t) => `<div class="row-li">${I("check", "sm ok-ic")}<div class="tx"><b style="font-weight:500">${t}</b></div></div>`).join("")}</div>
+  <div class="list-h">只存在这台设备</div>
+  <div class="lst"><div class="row-li">${I("lock", "sm")}<div class="tx"><b style="font-weight:500">语音服务与朗读音色</b><small>手机和电脑可以用不同的朗读声音</small></div></div>
+    <div class="row-li">${I("bell", "sm")}<div class="tx"><b style="font-weight:500">提醒时间</b><small>每天 21:30</small></div></div></div>
+  <div class="list-h">设置</div>
+  <div class="lst">${[["aa", "阅读设置"], ["mic", "语音服务"], ["sun", "主题：护眼"]].map(([ic, t]) => `<button class="row-li" ${say(t + "在这版原型里没展开")}>${I(ic, "sm")}<div class="tx"><b style="font-weight:500">${t}</b></div>${I("chev", "sm chev")}</button>`).join("")}</div>
+  <button class="btn block" style="margin-top:18px;color:var(--bad)" ${say("退出登录：本机缓存保留，下次登录自动接上")}>退出登录</button></div>`;
+
+/* ===== 右栏：这一屏在 Windows 上的位置（示意图 + 对照表） ===== */
+function win(view, hl) {
+  const R = (id) => (hl.includes(id) ? " on-m" : "");
+  const tab = (t) => `<span class="${t === view.tab ? "on" : ""}">${t}</span>`;
+  const lines = (n, cls = "") => Array.from({ length: n }, (_, k) => `<div class="ln ${k === 1 ? cls : ""}" style="width:${[92, 70, 84, 60, 78][k % 5]}%"></div>`).join("");
+  const L = {
+    shelf: `<div class="w-main" style="grid-template-columns:2fr 1fr;grid-template-rows:1fr 44px">
+      <div class="w-b${R("card")}">书卡 · 继续读 · 第 5 章第 9 句${lines(3, "g")}</div>
+      <div class="w-b${R("side")}">今日阅读 / 今日复习${lines(2, "g")}</div>
+      <div class="w-b${R("disc")}" style="grid-column:1/-1">发现更多可读内容 · 三张卡</div></div>`,
+    reading: `<div class="w-main" style="grid-template-columns:2fr 1fr">
+      <div class="w-b${R("stage")}">正文 · 上次读到第 9 句 · 译文遮罩${lines(5, "g")}<div class="w-dock${R("bar")}"></div></div>
+      <div class="w-b${R("panel")}">句子解析 · 查词 · 本章生词${lines(4, "g")}</div></div>`,
+    speak: `<div class="w-main" style="grid-template-columns:2fr 1fr">
+      <div class="w-b${R("stage")}" style="display:flex;flex-direction:column;gap:5px">
+        <div class="w-b${R("head")}" style="padding:2px 6px">今日生词造句闯关 · 切换场景</div>
+        <div class="w-b${R("words")}" style="padding:2px 6px">本轮目标词</div>
+        <div style="flex:1">${lines(3, "v")}</div>
+        <div class="w-b${R("mic")}" style="padding:2px 6px;text-align:center">跟读这句 · 麦克风 · 结束并复盘</div></div>
+      <div class="w-b${R("panel")}">发音反馈 / 本轮小结${lines(3, "g")}</div></div>`,
+    vault: `<div class="w-main" style="grid-template-columns:.8fr 2fr 1fr">
+      <div class="w-b${R("rail")}">内容来源 / 类型${lines(4)}</div>
+      <div class="w-b${R("stage")}" style="display:flex;flex-direction:column;gap:5px">
+        <div class="w-b${R("seg")}" style="padding:2px 6px">今日复习 · 全部笔记</div>
+        <div class="w-b${R("hero")}" style="padding:2px 6px;height:40px">今天有 5 条要复习</div><div>${lines(3, "g")}</div></div>
+      <div class="w-b${R("board")}">今日进度 · 掌握阶段 · 近 28 天${lines(3, "g")}</div></div>`,
+    focus: `<div class="w-main" style="grid-template-columns:1fr">
+      <div class="w-b${R("stage")}" style="display:flex;flex-direction:column;gap:6px;padding:8px 14%">专注填空 · 顶部导航收起${lines(3, "g")}
+        <div class="w-b${R("grades")}" style="padding:2px 6px;text-align:center">没记住 · 有点模糊 · 记住了</div></div></div>`,
+    settings: `<div class="w-main" style="grid-template-columns:2fr 1fr">
+      <div class="w-b" style="opacity:.55">当前页面${lines(4)}</div>
+      <div class="w-b${R("panel")}">设置 · 账号与同步${lines(4, "g")}</div></div>`,
+  };
+  const tabsHidden = view.layout === "focus";
+  return `<div class="win" aria-hidden="true"><div class="win-bar"><i></i><i></i><i></i><span>沉浸口语 · Windows</span></div><div class="win-in">
+    <div class="w-top"><div class="w-pill brand${R("brand")}"><span class="sl"></span>书架</div>
+      <div class="w-pill w-tabs${R("tabs")}"${tabsHidden ? ' style="visibility:hidden"' : ""}>${tab("阅读")}${tab("口语")}${tab("笔记与复习")}</div>
+      <div class="w-pill tools${R("tools")}"><svg class="ico" style="width:10px;height:10px"><use href="#i-search"/></svg><svg class="ico" style="width:10px;height:10px"><use href="#i-sun"/></svg></div></div>${L[view.layout]}</div></div>`;
+}
+
+const DESK = {
+  read: { title: "书架首页", layout: "shelf", tab: "阅读", hl: ["card", "side", "tabs"],
+    lead: "Windows 打开就是书架，手机也一样。不同在第一张卡：在手机上最常做的是接着电脑上的进度读，所以「继续读」做成接力卡，直接显示你在 Windows 上停下的那一句。",
+    rows: [["顶部导航岛：阅读 / 口语 / 笔记与复习", "底部 Tab，同三档、同顺序、同角标"], ["左上「I 书架」胶囊", "左上同一枚 I，点开「账号与同步」"], ["书卡按钮：继续读 · 第 5 章第 9 句", "接力卡：设备、时间、停下的原句，按钮文案不变"], ["右栏：今日阅读 / 今日复习", "接力卡下方一行两格，点「今日复习」直达"], ["发现更多可读内容", "同三项，改成列表；导入文件留在 Windows"]],
+    why: "<b>保持一致的</b>：三档结构、名词、颜色、主按钮的写法。<b>换掉的</b>：横向三栏改成上下一列，悬停改成点按。" },
+  reader: { title: "阅读页", layout: "reading", tab: "阅读", hl: ["stage", "bar"],
+    lead: "同一本书、同一章、同一句。从接力卡进来直接停在第 9 句并高亮，和 Windows 上「上次读到第 9 句 · 回到那里」是同一个位置。",
+    rows: [["上次读到第 9 句 · 回到那里", "进门已经在第 9 句，横条只提示「从 Windows 接着读」"], ["译文遮罩 · 已揭开 N 句", "放在章节信息行，同名同规则"], ["点句子：显示译文 / 朗读 / 练口语 / 编辑译文", "点句子弹出底部抽屉，同四个动作"], ["右栏：句子解析 / 查词 / 本章生词", "收进同一个抽屉的三个分页"], ["悬浮播放条 · 0.75×", "同一条播放条，语速跟账号同步"]],
+    why: "<b>为什么用抽屉</b>：手机放不下右栏。抽屉拉起时正文还露在上方，读和查不用来回切页。" },
+  "reader:sentence": { title: "句子抽屉", layout: "reading", tab: "阅读", hl: ["panel"],
+    lead: "Windows 上这些内容分在两处：句子下方的小浮层和右栏。手机上合成一个抽屉，上半是这句话和四个动作，下半是右栏的三个分页。",
+    rows: [["句子浮层：点击显示译文", "抽屉顶部同一条斜纹遮罩"], ["右栏「句子解析」：主干 + 结构拆解", "同样的主干绿框和成分标签"], ["右栏「查词」", "点正文里的虚线词，抽屉直接落在「查词」"], ["划词收藏", "「收藏这个词」进笔记的「划词收藏」"]],
+    why: "试一下：点「收藏这个词」，底部「笔记与复习」角标加一，Windows「全部笔记 · 划词收藏」里也会多出这一条。" },
+  speak: { title: "口语首页", layout: "speak", tab: "口语", hl: ["head", "words"],
+    lead: "Windows 进口语直接就是今日生词造句闯关，场景收在「切换场景」里。手机多一个首页：闯关放第一张，场景、跟读和练习记录排在下面，因为在手机上更常是挑一个练几分钟。",
+    rows: [["今日生词造句闯关 · 本轮目标词", "第一张卡，同名、同五个词"], ["切换场景", "首页的场景列表；Windows 上建的自定义场景同步过来，可以直接练"], ["编辑场景", "只在 Windows 上做，手机上能练不能改"], ["练习记录", "最近练习列表，写明在哪台设备上练的"]],
+    why: "<b>取舍</b>：编辑场景要填目标、角色和开场白，长表单不适合拇指操作，留在 Windows。" },
+  drill: { title: "生词造句闯关", layout: "speak", tab: "口语", hl: ["words", "mic"],
+    lead: "和 Windows 同一个流程：AI 用生活化的问题提问，你用英语回答，用上目标词就打勾。按钮名字一个没改。",
+    rows: [["本轮目标词（两行）", "顶部横滑一行，打勾、标蓝规则不变"], ["用你自己的话回答就行（虚线框）", "同一个提示框"], ["麦克风：点击或按住空格", "点一下开始，说完再点一下"], ["跟读这句 · 给点提示 · 结束并复盘", "同三个按钮，位置左中右不变"], ["右栏：发音反馈", "点你那句话里带波浪线的词，在抽屉里看"]],
+    why: "试一下：点两次麦克风答完一轮，再点「guide」下面的波浪线。" },
+  "drill:pron": { title: "发音反馈", layout: "speak", tab: "口语", hl: ["panel"],
+    lead: "Windows 右栏常驻的「这句的发音」，在手机上点到才出现。分数和讲解来自同一个评分服务，记录跟账号同步。",
+    rows: [["整句总分：准确 / 流利 / 完整", "抽屉顶部同一组三项"], ["点句中的词看细节", "点波浪线的词打开，直接落在那个词"], ["慢速示范 · 单练这个词", "同两个按钮"]],
+    why: "<b>为什么不常驻</b>：答一句看一次分就够了，常驻会把对话挤得一屏放不下。" },
+  recap: { title: "本轮复盘", layout: "speak", tab: "口语", hl: ["panel"],
+    lead: "Windows 右栏的「本轮小结」只有两行。手机上点「结束并复盘」后单独一页，把这一轮讲完整。",
+    rows: [["本轮小结：已用上 N / 5", "顶部大数字 + 五个词的打勾状态"], ["这句的发音", "两句回答的平均分"], ["笔记来源「口语纠偏」", "「值得改一改」一键收进「口语纠偏」"], ["掌握阶段「能说出口」", "用上的词在笔记里升到「能说出口」"]],
+    why: "试一下：点「收进笔记」，再去「笔记与复习 → 全部笔记」看「口语纠偏」。" },
+  vault: { title: "笔记与复习", layout: "vault", tab: "笔记与复习", hl: () => (S.vault.seg === "all" ? ["rail", "seg"] : ["hero", "board", "seg"]),
+    lead: "同样两个分页：今日复习、全部笔记。复习卡、胶带、三档按钮都不变。左栏筛选和右栏看板收进同一列。",
+    rows: [["今日复习 / 全部笔记", "同一个分段，同名"], ["今天有 5 条要复习 · 填空 / 听音 / 开口", "同一张绿色卡，同三种方式"], ["右栏：今日进度 · 掌握阶段 · 近 28 天", "绿色卡下方三张小卡"], ["左栏：内容来源 / 类型", "「全部笔记」顶部一排横滑筛选"], ["导出笔记", "右上角入口，导出在 Windows 上做"]],
+    why: "<b>一致的地方</b>：这 5 条就是 Windows 上那 5 条。在手机上复习了，电脑上的进度跟着走，不会重复出题。" },
+  review: { title: "复习中", layout: "focus", tab: "笔记与复习", hl: ["stage", "grades"],
+    lead: "对应 Windows 的「专注填空」：顶部导航收起，只留一张卡。手机上一屏一条，答案和按钮都在拇指够得到的地方。",
+    rows: [["胶带遮住答案，点胶带看答案", "同一条胶带，点胶带或「看答案」"], ["没记住 · 有点模糊 · 记住了", "同三档、同间隔：10 分钟 / 明天 / 4 天"], ["听原句 · 去口语里用一次", "同两个动作"], ["按 Enter 也可以开始", "没有键盘，主按钮放在拇指区"]],
+    why: "试一下：五条全部点完再回「今日复习」，进度环和近 28 天会一起变。" },
+  account: { title: "账号与同步", layout: "settings", tab: "阅读", hl: ["tools", "panel"],
+    lead: "Windows 上账号和同步在设置里。手机上点左上角的 I 就能打开，因为在手机上更常要确认的是：电脑上的进度过来了没有。",
+    rows: [["设置 → 账号：手动同步", "「立即同步」按钮，状态写在旁边"], ["同步范围", "一张清单写明哪些跟账号走"], ["语音服务配置只在本机", "单列「只存在这台设备」，免得以为丢了"], ["（无）", "登录过的设备，以及电脑上停在哪"]],
+    why: "<b>依据</b>：同步范围按服务端同步协议的集合列表写；语音服务只存本机，按口语记录同步方案里的约定。" },
+};
+const deskKey = () => (S.sheet === "account" ? "account" : `${topV()?.v || S.tab}${S.sheet === "sentence" ? ":sentence" : S.sheet === "pron" ? ":pron" : ""}`);
+
+function renderDesk() {
+  const c = DESK[deskKey()] || DESK[topV()?.v || S.tab];
+  const hl = typeof c.hl === "function" ? c.hl() : c.hl;
+  $("#desk").innerHTML = `<div class="desk-k">这一屏在 Windows 上</div><h2>${c.title}</h2><p class="lead">${c.lead}</p>${win(c, hl)}
+    <div class="map"><div class="map-h"><div>Windows</div><div>手机</div></div>${c.rows.map(([a, b]) => `<div class="map-r"><div>${a}</div><div>${b}</div></div>`).join("")}</div>
+    <p class="desk-why">${c.why}</p>`;
+}
+
+/* ===== 交互：所有可点的东西都走 data-act；左侧索引走 data-go ===== */
+const A = {
+  tab: (el) => { S.tab = el.dataset.v; S.stack = []; S.sheet = null; stopPlay(); },
+  account: () => { S.sheet = "account"; },
+  "close-sheet": () => { S.sheet = null; },
+  back: () => { if (S.sheet) S.sheet = null; else pop(); },
+  say: (el) => toast(esc(el.dataset.t), "info"),
+  "shelf-seg": (el) => { S.shelfSeg = el.dataset.v; },
+  "open-reader": () => { push("reader"); Object.assign(S.reader, { active: RESUME, follow: true, banner: true }); },
+  mask: () => { S.reader.mask = !S.reader.mask; },
+  "banner-x": () => { S.reader.banner = false; },
+  sent: (el) => { stopPlay(); Object.assign(S.reader, { active: +el.dataset.i, word: null, follow: "top" }); S.sheetTab = PARSE[S.reader.active] ? "parse" : "dict"; S.sheet = "sentence"; },
+  word: (el) => { stopPlay(); const w = el.dataset.w; Object.assign(S.reader, { word: w, active: DICT[w][2], follow: "top" }); S.sheetTab = "dict"; S.sheet = "sentence"; },
+  "pick-word": (el) => { const w = el.dataset.w; Object.assign(S.reader, { word: w, active: DICT[w][2], follow: "top" }); S.sheetTab = "dict"; },
+  reveal: () => { const i = S.reader.active; S.reader.cn = { ...S.reader.cn, [i]: !S.reader.cn[i] }; },
+  "sheet-tab": (el) => { S.sheetTab = el.dataset.v; },
+  "save-word": (el) => {
+    const w = el.dataset.w;
+    if (S.saved.includes(w)) return;
+    S.saved = [...S.saved, w];
+    toast(`已收藏「${w}」。Windows 的「全部笔记 · 划词收藏」里也会出现`);
+  },
+  play: () => (S.reader.playing ? stopPlay() : startPlay()),
+  prev: () => { S.reader.active = Math.max(0, S.reader.active - 1); S.reader.follow = "smooth"; },
+  next: () => { S.reader.active = Math.min(SENT.length - 1, S.reader.active + 1); S.reader.follow = "smooth"; },
+  drill: () => { stopPlay(); S.tab = "speak"; S.stack = []; push("drill"); },
+  "drill-cn": () => { S.drill.cn = !S.drill.cn; },
+  mic: () => {
+    const nx = { ask: "rec1", rec1: "ans1", ans1: "rec2", rec2: "ans2" }[S.drill.phase];
+    if (!nx) return toast("这一轮已经用上 3 个词，点右上「结束并复盘」看小结", "info");
+    S.drill.phase = nx;
+    S._scrollEnd = true;
+  },
+  hint: () => toast(at("ans1") ? "可以这样开头：I would make one simple rule so everyone…" : "可以这样开头：I would give all the volunteers…", "bulb"),
+  pron: () => { S.sheet = "pron"; },
+  recap: () => { S.stack = [{ v: "recap" }]; S._dir = "push"; S.sheet = null; },
+  "save-fix": () => { S.fixSaved = true; toast("已收进「口语纠偏」，Windows 上也能复习"); },
+  again: () => { S.drill = { phase: "ask", cn: false }; S.stack = [{ v: "drill" }]; S._dir = "push"; },
+  "done-recap": () => { S.stack = []; S.tab = "speak"; },
+  "vault-seg": (el) => { S.vault.seg = el.dataset.v; },
+  mode: (el) => { S.vault.mode = el.dataset.v; },
+  filter: (el) => { S.vault.filter = el.dataset.v; },
+  peek: (el) => { const i = +el.dataset.i; S.vault.peek = S.vault.peek === i ? null : i; },
+  "start-review": () => { if (S.rev.i >= REVIEW.length) S.rev = { i: 0, shown: false, grades: [] }; push("review"); },
+  tape: () => { S.rev.shown = true; },
+  grade: (el) => { S.rev.grades = [...S.rev.grades, +el.dataset.v]; S.rev.i++; S.rev.shown = false; },
+  "sync-now": () => {
+    S.synced = false;
+    setTimeout(() => { S.synced = true; toast("已同步 · 两台设备一致"); render(); }, 900);
+  },
+  replay: () => arrive(),
+};
+
+/* ---------- 左侧索引：直接跳到某一屏 ---------- */
+function reset() { stopPlay(); S.stack = []; S.sheet = null; S.toast = null; clearTimeout(toastTimer); }
+const GO = {
+  shelf: () => { S.tab = "read"; },
+  reader: () => { S.tab = "read"; A["open-reader"](); },
+  sentence: () => { GO.reader(); S.reader.word = null; S.reader.follow = "top"; S.sheetTab = "parse"; S.sheet = "sentence"; },
+  speak: () => { S.tab = "speak"; },
+  drill: () => { S.tab = "speak"; push("drill"); if (!at("ans1")) S.drill.phase = "ans1"; },
+  pron: () => { GO.drill(); S.sheet = "pron"; },
+  recap: () => { S.tab = "speak"; if (!at("ans2")) S.drill.phase = "ans2"; push("recap"); },
+  vault: () => { S.tab = "vault"; S.vault.seg = "today"; },
+  notes: () => { S.tab = "vault"; S.vault.seg = "all"; },
+  review: () => { S.tab = "vault"; A["start-review"](); },
+  account: () => { S.sheet = "account"; },
+};
+const IDX = [
+  ["阅读", [["shelf", "书架 · 接力卡"], ["reader", "阅读页 · 第 9 句"], ["sentence", "句子抽屉"]]],
+  ["口语", [["speak", "口语首页"], ["drill", "生词造句闯关"], ["pron", "发音反馈"], ["recap", "本轮复盘"]]],
+  ["笔记与复习", [["vault", "今日复习"], ["notes", "全部笔记"], ["review", "复习中"]]],
+  ["账号", [["account", "账号与同步"]]],
+];
+function curIdx() {
+  if (S.sheet === "account") return "account";
+  const v = topV()?.v;
+  if (v === "reader") return S.sheet === "sentence" ? "sentence" : "reader";
+  if (v === "drill") return S.sheet === "pron" ? "pron" : "drill";
+  if (v) return v;
+  return { read: "shelf", speak: "speak" }[S.tab] || (S.vault.seg === "all" ? "notes" : "vault");
+}
+function markIndex() {
+  const c = curIdx();
+  document.querySelectorAll("#idx button").forEach((b) => b.classList.toggle("on", b.dataset.go === c));
+}
+
+/* ---------- 登录后进门：先取回进度，再亮出接力卡（全原型唯一一处编排动效） ---------- */
+function arrive() {
+  reset();
+  Object.assign(S, { tab: "read", synced: false, arrive: false });
+  render();
+  setTimeout(() => {
+    S.synced = true;
+    S.arrive = true;
+    toast("已同步：阅读进度、5 条今日复习、昨天的口语记录");
+    render();
+    setTimeout(() => { S.arrive = false; }, 1200);
+  }, reduced ? 200 : 1500);
+}
+
+document.addEventListener("click", (e) => {
+  const go = e.target.closest("[data-go]");
+  if (go) { reset(); GO[go.dataset.go](); render(); return; }
+  const el = e.target.closest("[data-act]");
+  if (!el || el.disabled || !A[el.dataset.act]) return;
+  A[el.dataset.act](el);
+  render();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && S.sheet) { S.sheet = null; render(); return; }
+  const el = e.target;
+  if ((e.key === "Enter" || e.key === " ") && el.getAttribute?.("role") === "button") { e.preventDefault(); el.click(); }
+});
+
+$("#idx").innerHTML = IDX.map(([h, items]) => `<h2>${h}</h2>` + items.map(([id, l]) => `<button data-go="${id}">${l}</button>`).join("")).join("");
+arrive();
+
+</script>
+</body>
+</html>
