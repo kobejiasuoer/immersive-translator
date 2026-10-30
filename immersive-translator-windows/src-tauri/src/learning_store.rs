@@ -227,24 +227,46 @@ fn practice_time(value: Option<&Value>) -> i64 {
     value.and_then(Value::as_i64).unwrap_or(0).max(0)
 }
 type PracticeRegisters = std::collections::BTreeMap<String, (i64, Option<Value>)>;
-fn practice_escape(key: &str) -> String { key.replace('~', "~0").replace('/', "~1") }
-fn practice_parts(path: &str) -> Vec<String> { path[1..].split('/').map(|p| p.replace("~1", "/").replace("~0", "~")).collect() }
+fn practice_escape(key: &str) -> String {
+    key.replace('~', "~0").replace('/', "~1")
+}
+fn practice_parts(path: &str) -> Vec<String> {
+    path[1..]
+        .split('/')
+        .map(|p| p.replace("~1", "/").replace("~0", "~"))
+        .collect()
+}
 fn practice_flatten(row: &Value) -> std::collections::BTreeMap<String, Value> {
     fn visit(value: &Value, path: String, out: &mut std::collections::BTreeMap<String, Value>) {
         if let Some(fields) = value.as_object().filter(|o| !o.is_empty()) {
-            for (key, value) in fields { visit(value, format!("{}/{}", path, practice_escape(key)), out); }
-        } else { out.insert(path, value.clone()); }
+            for (key, value) in fields {
+                visit(value, format!("{}/{}", path, practice_escape(key)), out);
+            }
+        } else {
+            out.insert(path, value.clone());
+        }
     }
     let mut out = std::collections::BTreeMap::new();
-    if let Some(fields) = row.as_object() { for (key, value) in fields {
-        if !matches!(key.as_str(), "updatedAt" | "fieldUpdatedAt" | "fieldShadow" | "attempts" | "removedAttemptIds") { visit(value, format!("/{}", practice_escape(key)), &mut out); }
-    } }
+    if let Some(fields) = row.as_object() {
+        for (key, value) in fields {
+            if !matches!(
+                key.as_str(),
+                "updatedAt" | "fieldUpdatedAt" | "fieldShadow" | "attempts" | "removedAttemptIds"
+            ) {
+                visit(value, format!("/{}", practice_escape(key)), &mut out);
+            }
+        }
+    }
     out
 }
 fn practice_registers(row: &Value, fallback: i64) -> PracticeRegisters {
     let mut values = practice_flatten(row);
     if let Some(shadows) = row.get("fieldShadow").and_then(Value::as_object) {
-        for (path, value) in shadows { if path.starts_with('/') { values.insert(path.clone(), value.clone()); } }
+        for (path, value) in shadows {
+            if path.starts_with('/') {
+                values.insert(path.clone(), value.clone());
+            }
+        }
     }
     let clocks = row.get("fieldUpdatedAt").and_then(Value::as_object);
     let mut result = PracticeRegisters::new();
@@ -252,57 +274,125 @@ fn practice_registers(row: &Value, fallback: i64) -> PracticeRegisters {
         let root = practice_parts(&path)[0].clone();
         let explicit = practice_time(clocks.and_then(|c| c.get(&path)));
         let legacy = practice_time(clocks.and_then(|c| c.get(&root)));
-        result.insert(path, (if explicit > 0 { explicit } else if legacy > 0 { legacy } else { fallback }, Some(value)));
+        result.insert(
+            path,
+            (
+                if explicit > 0 {
+                    explicit
+                } else if legacy > 0 {
+                    legacy
+                } else {
+                    fallback
+                },
+                Some(value),
+            ),
+        );
     }
-    if let Some(clocks) = clocks { for (key, at) in clocks {
-        let path = if key.starts_with('/') { key.clone() } else { format!("/{}", practice_escape(key)) };
-        if !result.contains_key(&path) && (key.starts_with('/') || row.get(key).is_none()) { result.insert(path, (practice_time(Some(at)), None)); }
-    } }
+    if let Some(clocks) = clocks {
+        for (key, at) in clocks {
+            let path = if key.starts_with('/') {
+                key.clone()
+            } else {
+                format!("/{}", practice_escape(key))
+            };
+            if !result.contains_key(&path) && (key.starts_with('/') || row.get(key).is_none()) {
+                result.insert(path, (practice_time(Some(at)), None));
+            }
+        }
+    }
     result
 }
 fn practice_rank(a: &(i64, Option<Value>), b: &(i64, Option<Value>)) -> std::cmp::Ordering {
-    a.0.cmp(&b.0).then_with(|| a.1.as_ref().map(canonical).unwrap_or_else(|| "􏿿".into()).cmp(&b.1.as_ref().map(canonical).unwrap_or_else(|| "􏿿".into())))
+    a.0.cmp(&b.0).then_with(|| {
+        a.1.as_ref()
+            .map(canonical)
+            .unwrap_or_else(|| "􏿿".into())
+            .cmp(&b.1.as_ref().map(canonical).unwrap_or_else(|| "􏿿".into()))
+    })
 }
 fn practice_materialize(regs: &PracticeRegisters, updated_at: i64) -> Value {
-    let blocked = |path: &str, reg: &(i64, Option<Value>)| regs.iter().any(|(p,r)| path.starts_with(&format!("{}/", p)) && !practice_rank(r,reg).is_lt());
+    let blocked = |path: &str, reg: &(i64, Option<Value>)| {
+        regs.iter()
+            .any(|(p, r)| path.starts_with(&format!("{}/", p)) && !practice_rank(r, reg).is_lt())
+    };
     let mut visible = std::collections::BTreeMap::new();
     for (path, reg) in regs {
-        if reg.1.is_none() || blocked(path,reg) { continue; }
-        let descendant = regs.iter().any(|(p,r)| p.starts_with(&format!("{}/",path)) && r.1.is_some() && practice_rank(r,reg).is_gt() && !blocked(p,r));
-        if !descendant { visible.insert(path.clone(), reg.1.as_ref().unwrap().clone()); }
+        if reg.1.is_none() || blocked(path, reg) {
+            continue;
+        }
+        let descendant = regs.iter().any(|(p, r)| {
+            p.starts_with(&format!("{}/", path))
+                && r.1.is_some()
+                && practice_rank(r, reg).is_gt()
+                && !blocked(p, r)
+        });
+        if !descendant {
+            visible.insert(path.clone(), reg.1.as_ref().unwrap().clone());
+        }
     }
     let mut result = json!({});
-    for (path,value) in &visible {
-        let parts = practice_parts(path); let mut target = &mut result;
-        for key in &parts[..parts.len()-1] {
-            if !target.is_object() { *target = json!({}); }
-            if !target.get(key).map(Value::is_object).unwrap_or(false) { target[key] = json!({}); }
+    for (path, value) in &visible {
+        let parts = practice_parts(path);
+        let mut target = &mut result;
+        for key in &parts[..parts.len() - 1] {
+            if !target.is_object() {
+                *target = json!({});
+            }
+            if !target.get(key).map(Value::is_object).unwrap_or(false) {
+                target[key] = json!({});
+            }
             target = &mut target[key];
         }
-        target[&parts[parts.len()-1]] = value.clone();
+        target[&parts[parts.len() - 1]] = value.clone();
     }
-    let mut clocks = serde_json::Map::new(); let mut shadows = serde_json::Map::new(); let mut latest = updated_at;
+    let mut clocks = serde_json::Map::new();
+    let mut shadows = serde_json::Map::new();
+    let mut latest = updated_at;
     for (path, (at, value)) in regs {
-        clocks.insert(path.clone(), json!(at)); latest = latest.max(*at);
-        if !visible.contains_key(path) { if let Some(value) = value { shadows.insert(path.clone(), value.clone()); } }
+        clocks.insert(path.clone(), json!(at));
+        latest = latest.max(*at);
+        if !visible.contains_key(path) {
+            if let Some(value) = value {
+                shadows.insert(path.clone(), value.clone());
+            }
+        }
     }
-    result["updatedAt"] = json!(latest); result["fieldUpdatedAt"] = Value::Object(clocks);
-    if !shadows.is_empty() { result["fieldShadow"] = Value::Object(shadows); }
+    result["updatedAt"] = json!(latest);
+    result["fieldUpdatedAt"] = Value::Object(clocks);
+    if !shadows.is_empty() {
+        result["fieldShadow"] = Value::Object(shadows);
+    }
     result
 }
 fn merge_practice_fields(a: &Value, b: &Value, ta: i64, tb: i64) -> Value {
     let mut regs = practice_registers(a, ta);
     for (path, reg) in practice_registers(b, tb) {
-        if regs.get(&path).map(|old| practice_rank(&reg,old).is_gt()).unwrap_or(true) { regs.insert(path, reg); }
+        if regs
+            .get(&path)
+            .map(|old| practice_rank(&reg, old).is_gt())
+            .unwrap_or(true)
+        {
+            regs.insert(path, reg);
+        }
     }
-    practice_materialize(&regs,ta.max(tb).max(practice_time(a.get("updatedAt"))).max(practice_time(b.get("updatedAt"))))
+    practice_materialize(
+        &regs,
+        ta.max(tb)
+            .max(practice_time(a.get("updatedAt")))
+            .max(practice_time(b.get("updatedAt"))),
+    )
 }
 fn merge_practice_payload(a: &Value, b: &Value) -> Option<Value> {
     if a.get("kind").and_then(Value::as_str) != Some("practice-task")
-        || b.get("kind").and_then(Value::as_str) != Some("practice-task") { return None; }
+        || b.get("kind").and_then(Value::as_str) != Some("practice-task")
+    {
+        return None;
+    }
     let (left, right) = (a.get("task")?, b.get("task")?);
     let id = left.get("id")?.as_str()?;
-    if right.get("id").and_then(Value::as_str) != Some(id) { return None; }
+    if right.get("id").and_then(Value::as_str) != Some(id) {
+        return None;
+    }
     let ta = practice_time(left.get("updatedAt"));
     let tb = practice_time(right.get("updatedAt"));
     let mut task = merge_practice_fields(left, right, ta, tb);
@@ -314,37 +404,84 @@ fn merge_practice_payload(a: &Value, b: &Value) -> Option<Value> {
     }
     let mut attempts = std::collections::BTreeMap::<String, Value>::new();
     for (row, fallback) in [(left, ta), (right, tb)] {
-        if let Some(rows) = row.get("attempts").and_then(Value::as_array) { for attempt in rows {
-            let Some(id) = attempt.get("id").and_then(Value::as_str) else { continue; };
-            if removed.contains(id) { continue; }
-            let at = practice_time(attempt.get("updatedAt"));
-            let at = if at > 0 { at } else { fallback };
-            let normalized = merge_practice_fields(attempt, attempt, at, at);
-            let merged = attempts.get(id).map(|old| merge_practice_fields(old, &normalized, practice_time(old.get("updatedAt")), practice_time(normalized.get("updatedAt")))).unwrap_or(normalized);
-            attempts.insert(id.to_string(), merged);
-        } }
+        if let Some(rows) = row.get("attempts").and_then(Value::as_array) {
+            for attempt in rows {
+                let Some(id) = attempt.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                if removed.contains(id) {
+                    continue;
+                }
+                let at = practice_time(attempt.get("updatedAt"));
+                let at = if at > 0 { at } else { fallback };
+                let normalized = merge_practice_fields(attempt, attempt, at, at);
+                let merged = attempts
+                    .get(id)
+                    .map(|old| {
+                        merge_practice_fields(
+                            old,
+                            &normalized,
+                            practice_time(old.get("updatedAt")),
+                            practice_time(normalized.get("updatedAt")),
+                        )
+                    })
+                    .unwrap_or(normalized);
+                attempts.insert(id.to_string(), merged);
+            }
+        }
     }
     let mut rows = attempts.into_values().collect::<Vec<_>>();
-    rows.sort_by(|a, b| practice_time(a.get("createdAt")).cmp(&practice_time(b.get("createdAt"))).then_with(|| a.get("id").and_then(Value::as_str).cmp(&b.get("id").and_then(Value::as_str))));
+    rows.sort_by(|a, b| {
+        practice_time(a.get("createdAt"))
+            .cmp(&practice_time(b.get("createdAt")))
+            .then_with(|| {
+                a.get("id")
+                    .and_then(Value::as_str)
+                    .cmp(&b.get("id").and_then(Value::as_str))
+            })
+    });
     task["attempts"] = Value::Array(rows);
-    if !removed.is_empty() { task["removedAttemptIds"] = json!(removed); }
+    if !removed.is_empty() {
+        task["removedAttemptIds"] = json!(removed);
+    }
     let ea = practice_time(a.get("updatedAt"));
     let eb = practice_time(b.get("updatedAt"));
-    let mut envelope_a = a.clone(); let mut envelope_b = b.clone();
-    envelope_a.as_object_mut()?.remove("task"); envelope_b.as_object_mut()?.remove("task");
-    envelope_a["endedAt"] = json!(ea.max(eb)); envelope_b["endedAt"] = json!(ea.max(eb));
-    let mut result = merge_practice_fields(&envelope_a,&envelope_b,ea,eb);
+    let mut envelope_a = a.clone();
+    let mut envelope_b = b.clone();
+    envelope_a.as_object_mut()?.remove("task");
+    envelope_b.as_object_mut()?.remove("task");
+    envelope_a["endedAt"] = json!(ea.max(eb));
+    envelope_b["endedAt"] = json!(ea.max(eb));
+    let mut result = merge_practice_fields(&envelope_a, &envelope_b, ea, eb);
     result["updatedAt"] = json!(ea.max(eb).max(practice_time(task.get("updatedAt"))));
     result["endedAt"] = result["updatedAt"].clone();
     result["task"] = task;
     Some(result)
 }
-fn merge_practice_entity(old: &StoredSyncEntity, incoming: &StoredSyncEntity) -> Option<StoredSyncEntity> {
-    let is_task = |e: &StoredSyncEntity| e.payload.as_ref().and_then(|p| p.get("kind")).and_then(Value::as_str) == Some("practice-task");
-    if !is_task(old) && !is_task(incoming) { return None; }
+fn merge_practice_entity(
+    old: &StoredSyncEntity,
+    incoming: &StoredSyncEntity,
+) -> Option<StoredSyncEntity> {
+    let is_task = |e: &StoredSyncEntity| {
+        e.payload
+            .as_ref()
+            .and_then(|p| p.get("kind"))
+            .and_then(Value::as_str)
+            == Some("practice-task")
+    };
+    if !is_task(old) && !is_task(incoming) {
+        return None;
+    }
     let mut result = incoming.clone();
-    if incoming.deleted { return Some(result); }
-    if old.deleted { result = old.clone(); result.base_version = old.base_version.max(incoming.base_version); result.dirty = true; return Some(result); }
+    if incoming.deleted {
+        return Some(result);
+    }
+    if old.deleted {
+        result = old.clone();
+        result.base_version = old.base_version.max(incoming.base_version);
+        result.dirty = true;
+        return Some(result);
+    }
     let payload = merge_practice_payload(old.payload.as_ref()?, incoming.payload.as_ref()?)?;
     result.dirty = incoming.dirty || incoming.payload.as_ref() != Some(&payload);
     result.payload = Some(payload);
@@ -997,7 +1134,9 @@ pub fn put(
     let ns = namespace();
     let current = list_db(&tx, &ns, collection)?;
     let pending = if replace {
-        current.iter().cloned()
+        current
+            .iter()
+            .cloned()
             .filter(|e| e.dirty)
             .collect::<Vec<_>>()
     } else {
@@ -1016,7 +1155,10 @@ pub fn put(
             if collection == "review-events" && old.payload != incoming.payload {
                 return Err("Immutable review event conflict".into());
             }
-            if let Some(merged) = (collection == "speak-sessions").then(|| merge_practice_entity(old, &incoming)).flatten() {
+            if let Some(merged) = (collection == "speak-sessions")
+                .then(|| merge_practice_entity(old, &incoming))
+                .flatten()
+            {
                 incoming = merged;
             } else if old.dirty
                 && (old.updated_at > incoming.updated_at
@@ -1031,7 +1173,9 @@ pub fn put(
     }
     for mut e in pending {
         if let Some(server) = entities.iter().find(|s| s.id == e.id) {
-            if collection == "speak-sessions" && merge_practice_entity(&e, server).is_some() { continue; }
+            if collection == "speak-sessions" && merge_practice_entity(&e, server).is_some() {
+                continue;
+            }
             e.base_version = server.base_version;
         } else {
             e.base_version = 0;
@@ -1127,7 +1271,24 @@ fn tombstone(
     put_db(db, ns, collection, &e)
 }
 fn private_audio_key(key: &str) -> bool {
-    let private = |part: &str| matches!(part.to_lowercase().as_str(), "audio" | "audiobase64" | "audiob64" | "pcmb64" | "wavb64" | "audio_base64" | "pcm" | "pcm_base64" | "wav" | "blob" | "audiofile" | "audiopath" | "localpath");
+    let private = |part: &str| {
+        matches!(
+            part.to_lowercase().as_str(),
+            "audio"
+                | "audiobase64"
+                | "audiob64"
+                | "pcmb64"
+                | "wavb64"
+                | "audio_base64"
+                | "pcm"
+                | "pcm_base64"
+                | "wav"
+                | "blob"
+                | "audiofile"
+                | "audiopath"
+                | "localpath"
+        )
+    };
     private(key) || key.starts_with('/') && practice_parts(key).iter().any(|part| private(part))
 }
 fn scrub(value: &Value) -> Value {
@@ -1783,12 +1944,27 @@ mod tests {
         json!({"kind":"practice-task","id":"task","updatedAt":at,"task":{"id":"task","updatedAt":at,"draft":"","attempts":attempts}})
     }
     fn practice_entity(payload: Option<Value>, deleted: bool, dirty: bool) -> StoredSyncEntity {
-        StoredSyncEntity { id: "task".into(), base_version: 1, updated_at: 20, deleted, schema_version: 2, origin_device: None, payload, dirty }
+        StoredSyncEntity {
+            id: "task".into(),
+            base_version: 1,
+            updated_at: 20,
+            deleted,
+            schema_version: 2,
+            origin_device: None,
+            payload,
+            dirty,
+        }
     }
     #[test]
     fn practice_merge_keeps_offline_attempts_feedback_and_ise() {
-        let a = practice_fixture(20, json!([{"id":"same","text":"a","createdAt":1,"feedback":{"message":"Good","future":true}},{"id":"windows","createdAt":2}]));
-        let b = practice_fixture(30, json!([{"id":"same","text":"b","createdAt":1,"pronunciation":{"total":4.5}},{"id":"phone","createdAt":3}]));
+        let a = practice_fixture(
+            20,
+            json!([{"id":"same","text":"a","createdAt":1,"feedback":{"message":"Good","future":true}},{"id":"windows","createdAt":2}]),
+        );
+        let b = practice_fixture(
+            30,
+            json!([{"id":"same","text":"b","createdAt":1,"pronunciation":{"total":4.5}},{"id":"phone","createdAt":3}]),
+        );
         let merged = merge_practice_payload(&a, &b).unwrap();
         assert_eq!(merged, merge_practice_payload(&b, &a).unwrap());
         assert_eq!(merged, merge_practice_payload(&merged, &merged).unwrap());
@@ -1810,14 +1986,18 @@ mod tests {
         removed.base_version = 9;
         assert!(merge_practice_entity(&old, &removed).unwrap().deleted);
         let restored = merge_practice_entity(&removed, &old).unwrap();
-        assert!(restored.deleted); assert!(restored.dirty); assert_eq!(restored.base_version, 9);
+        assert!(restored.deleted);
+        assert!(restored.dirty);
+        assert_eq!(restored.base_version, 9);
     }
     #[test]
     fn practice_clocks_preserve_independent_fields_and_explicit_clears() {
         let a = json!({"updatedAt":20,"draft":"phone","step":0,"fieldUpdatedAt":{"draft":20,"step":10,"error":20}});
         let b = json!({"updatedAt":30,"draft":"","step":1,"error":"old","fieldUpdatedAt":{"draft":10,"step":30,"error":10}});
         let merged = merge_practice_fields(&a, &b, 20, 30);
-        assert_eq!(merged["draft"], "phone"); assert_eq!(merged["step"], 1); assert!(merged.get("error").is_none());
+        assert_eq!(merged["draft"], "phone");
+        assert_eq!(merged["step"], 1);
+        assert!(merged.get("error").is_none());
         assert_eq!(merged, merge_practice_fields(&b, &a, 30, 20));
     }
     #[test]
@@ -1825,43 +2005,67 @@ mod tests {
         let a = json!({"future":{"x":"A","z":0},"updatedAt":10});
         let b = json!({"future":{"x":"B","y":0},"updatedAt":10});
         let c = json!({"future":{"x":"C","a":0},"updatedAt":10});
-        let left = merge_practice_fields(&merge_practice_fields(&a,&b,10,10),&c,10,10);
-        let right = merge_practice_fields(&a,&merge_practice_fields(&b,&c,10,10),10,10);
-        assert_eq!(left,right); assert_eq!(left["future"]["x"],"C");
-        let a=json!({"feedback":{"message":"newer"},"updatedAt":20});
-        let b=json!({"feedback":{"future":{"version":2}},"updatedAt":30});
-        let c=json!({"feedback":{"message":"older"},"updatedAt":10});
-        let left=merge_practice_fields(&merge_practice_fields(&a,&b,20,30),&c,30,10);
-        let right=merge_practice_fields(&a,&merge_practice_fields(&b,&c,30,10),20,30);
-        assert_eq!(left,right);assert_eq!(left["feedback"]["message"],"newer");
-        assert_eq!(left["feedback"]["future"]["version"],2);
+        let left = merge_practice_fields(&merge_practice_fields(&a, &b, 10, 10), &c, 10, 10);
+        let right = merge_practice_fields(&a, &merge_practice_fields(&b, &c, 10, 10), 10, 10);
+        assert_eq!(left, right);
+        assert_eq!(left["future"]["x"], "C");
+        let a = json!({"feedback":{"message":"newer"},"updatedAt":20});
+        let b = json!({"feedback":{"future":{"version":2}},"updatedAt":30});
+        let c = json!({"feedback":{"message":"older"},"updatedAt":10});
+        let left = merge_practice_fields(&merge_practice_fields(&a, &b, 20, 30), &c, 30, 10);
+        let right = merge_practice_fields(&a, &merge_practice_fields(&b, &c, 30, 10), 20, 30);
+        assert_eq!(left, right);
+        assert_eq!(left["feedback"]["message"], "newer");
+        assert_eq!(left["feedback"]["future"]["version"], 2);
     }
     #[test]
     fn practice_type_changes_retain_shadow_registers_to_converge() {
-        let a=json!({"future":{"x":1},"updatedAt":10});
-        let b=json!({"future":0,"updatedAt":20});
-        let c=json!({"future":{"y":2},"updatedAt":30});
-        let left=merge_practice_fields(&merge_practice_fields(&a,&b,10,20),&c,20,30);
-        let right=merge_practice_fields(&a,&merge_practice_fields(&b,&c,20,30),10,30);
-        assert_eq!(left,right);assert_eq!(left["future"],json!({"y":2}));
-        assert_eq!(left,merge_practice_fields(&left,&left,30,30));
+        let a = json!({"future":{"x":1},"updatedAt":10});
+        let b = json!({"future":0,"updatedAt":20});
+        let c = json!({"future":{"y":2},"updatedAt":30});
+        let left = merge_practice_fields(&merge_practice_fields(&a, &b, 10, 20), &c, 20, 30);
+        let right = merge_practice_fields(&a, &merge_practice_fields(&b, &c, 20, 30), 10, 30);
+        assert_eq!(left, right);
+        assert_eq!(left["future"], json!({"y":2}));
+        assert_eq!(left, merge_practice_fields(&left, &left, 30, 30));
     }
     #[test]
     fn practice_shadow_metadata_cannot_transport_private_audio() {
-        let input=json!({"clipId":"local","fieldShadow":{"/audioB64":"secret","/future/pcm":"secret","/future/data":{"audio":"secret","safe":true},"/clipId":"local"},"fieldUpdatedAt":{"/audioB64":10,"/clipId":10}});
-        assert_eq!(scrub(&input),json!({"clipId":"local","fieldShadow":{"/future/data":{"safe":true},"/clipId":"local"},"fieldUpdatedAt":{"/clipId":10}}));
+        let input = json!({"clipId":"local","fieldShadow":{"/audioB64":"secret","/future/pcm":"secret","/future/data":{"audio":"secret","safe":true},"/clipId":"local"},"fieldUpdatedAt":{"/audioB64":10,"/clipId":10}});
+        assert_eq!(
+            scrub(&input),
+            json!({"clipId":"local","fieldShadow":{"/future/data":{"safe":true},"/clipId":"local"},"fieldUpdatedAt":{"/clipId":10}})
+        );
     }
     #[test]
     fn practice_transaction_merge_marks_union_dirty_and_ack_clears_it() {
-        let local = practice_entity(Some(practice_fixture(20, json!([{"id":"windows"}]))), false, true);
-        let mut remote = practice_entity(Some(practice_fixture(30, json!([{"id":"phone"}]))), false, false);
+        let local = practice_entity(
+            Some(practice_fixture(20, json!([{"id":"windows"}]))),
+            false,
+            true,
+        );
+        let mut remote = practice_entity(
+            Some(practice_fixture(30, json!([{"id":"phone"}]))),
+            false,
+            false,
+        );
         remote.base_version = 8;
         let merged = merge_practice_entity(&local, &remote).unwrap();
-        assert!(merged.dirty); assert_eq!(merged.base_version, 8);
-        assert_eq!(merged.payload.as_ref().unwrap()["task"]["attempts"].as_array().unwrap().len(), 2);
-        let mut accepted = merged.clone(); accepted.dirty = false; accepted.base_version = 9;
+        assert!(merged.dirty);
+        assert_eq!(merged.base_version, 8);
+        assert_eq!(
+            merged.payload.as_ref().unwrap()["task"]["attempts"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let mut accepted = merged.clone();
+        accepted.dirty = false;
+        accepted.base_version = 9;
         let ack = merge_practice_entity(&merged, &accepted).unwrap();
-        assert!(!ack.dirty); assert_eq!(ack.base_version, 9);
+        assert!(!ack.dirty);
+        assert_eq!(ack.base_version, 9);
     }
     #[test]
     fn account_names_are_isolated_and_path_safe() {
