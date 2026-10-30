@@ -59,3 +59,7 @@ docs/private/
 
 # mobile-v3 设计迭代过程截图（round1/round2/audit 等 91M·777 张，纯本地工作证据，文档与代码零引用；定稿决策已沉淀进 docs/mobile-v3-*.md）
 prototypes/shots/mobile-v3/
+
+# Python 字节码缓存（make-icon.py 等脚本的运行残留）
+__pycache__/
+*.pyc
