@@ -524,10 +524,49 @@ fn load_articles_from_path(path: &std::path::Path) -> Result<ArticlesFile, Strin
     if text.trim().is_empty() {
         return Ok(empty_articles_file());
     }
-    let file: ArticlesFile =
-        serde_json::from_str(&text).map_err(|e| format!("文章数据损坏: {e}"))?;
-    check_schema(file.schema_version)?;
-    Ok(file)
+    match serde_json::from_str::<ArticlesFile>(&text) {
+        Ok(file) => {
+            check_schema(file.schema_version)?;
+            Ok(file)
+        }
+        // JSON 合法但有条目反序列化失败（事故：v2 同步 hydrate 曾把缺 id 的
+        // content-chunk 实体写进文章数组，整库读不出 → 书架空、打开文章必失败）：
+        // 抢救全部合法条目并回写自愈；只有坏条目被剔除，正文数据不丢。
+        Err(original) => match salvage_articles_file(&text) {
+            Ok(file) => {
+                if let Ok(clean) = serde_json::to_string(&file) {
+                    let _ = crate::learning_store::write_path(path, &clean);
+                }
+                Ok(file)
+            }
+            Err(_) => Err(format!("文章数据损坏: {original}")),
+        },
+    }
+}
+
+/// 从「JSON 合法但部分条目损坏」的文章文件里抢救：只保留能完整反序列化为
+/// Article 的条目。schemaVersion 取文件值；JSON 本身坏掉时不救（返回 Err，
+/// 让调用方报错保护数据，绝不静默清空）。
+fn salvage_articles_file(text: &str) -> Result<ArticlesFile, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("文章数据损坏: {e}"))?;
+    let schema_version = value
+        .get("schemaVersion")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(READER_SCHEMA_VERSION as u64) as u32;
+    check_schema(schema_version)?;
+    let mut articles = Vec::new();
+    if let Some(rows) = value.get("articles").and_then(|v| v.as_array()) {
+        for row in rows {
+            if let Ok(a) = serde_json::from_value::<Article>(row.clone()) {
+                articles.push(a);
+            }
+        }
+    }
+    Ok(ArticlesFile {
+        schema_version,
+        articles,
+    })
 }
 
 fn load_vocab(app: &AppHandle) -> Result<VocabFile, String> {
@@ -1278,6 +1317,52 @@ mod tests {
         let vocab = load_vocab_from_path(&path).unwrap();
         assert_eq!(vocab.schema_version, READER_SCHEMA_VERSION);
         assert!(vocab.words.is_empty());
+    }
+
+    #[test]
+    fn articles_file_polluted_by_sync_chunks_is_salvaged_and_healed() {
+        // 真实事故（2026-10-30）：v2 同步 hydrate 把缺 id 的 content-chunk 实体
+        // 写进了文章数组 → serde 整库反序列化失败 → 书架空、打开文章必失败。
+        // 期望：合法条目全部抢救回来，坏条目剔除，读一次后文件自愈。
+        let path = temporary_path("polluted-articles.json");
+        let good_article = r#"{
+            "id": "a1", "title": "T", "titleCnState": "done", "sourceType": "paste",
+            "wordCount": 1, "createdAt": 0, "lastReadAt": 0,
+            "progress": { "sentenceIdx": 0, "percent": 0, "secondsListened": 0 },
+            "sentences": [{ "idx": 0, "paragraphIdx": 0, "en": "Hi.", "zh": null, "zhState": "pending" }]
+        }"#;
+        let chunk_entity = r#"{
+            "v": 2, "kind": "content-chunk", "articleId": "a1",
+            "contentRevision": "125pf3a",
+            "sentences": [{ "en": "Hi.", "id": "a1:s0", "idx": 0, "paragraphIdx": 0 }]
+        }"#;
+        std::fs::write(
+            &path,
+            format!(r#"{{"schemaVersion":1,"articles":[{good_article},{chunk_entity}]}}"#),
+        )
+        .unwrap();
+
+        let file = load_articles_from_path(&path).unwrap();
+        assert_eq!(file.schema_version, READER_SCHEMA_VERSION);
+        assert_eq!(file.articles.len(), 1);
+        assert_eq!(file.articles[0].id, "a1");
+
+        // 回写自愈：再读一遍是纯好消息（不再含坏条目，也无二次报错）。
+        let healed = load_articles_from_path(&path).unwrap();
+        assert_eq!(healed.articles.len(), 1);
+        let healed_text = std::fs::read_to_string(&path).unwrap();
+        assert!(!healed_text.contains("content-chunk"), "{healed_text}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn fully_corrupt_articles_json_is_an_error_not_salvaged() {
+        // JSON 本身坏掉 ≠ 条目损坏：必须报错保护数据，绝不静默给空库。
+        let path = temporary_path("broken-articles.json");
+        std::fs::write(&path, "{\"schemaVersion\":1,\"articles\":[{\"id\":").unwrap();
+        let err = load_articles_from_path(&path).unwrap_err();
+        assert!(err.starts_with("文章数据损坏"), "{err}");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
