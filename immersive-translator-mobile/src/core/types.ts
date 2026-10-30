@@ -16,6 +16,8 @@ export interface SentenceChunk {
 }
 
 export interface SentencePair {
+  id?: string;
+  zhState?: "empty" | "machine" | "edited";
   idx: number;
   paragraphIdx: number;
   en: string;
@@ -24,6 +26,15 @@ export interface SentencePair {
 }
 
 export interface Article {
+  createdAt?: number;
+  updatedAt?: number;
+  lastReadAt?: number;
+  contentRevision?: string;
+  sourceUrl?: string;
+  sourceType?: "sample" | "paste" | "url" | "book" | "rss" | "relay";
+  bookId?: string;
+  archived?: boolean;
+  [key: string]: unknown;
   id: string;
   title: string;
   titleCn: string;
@@ -40,6 +51,14 @@ export interface VocabSense {
 }
 
 export interface VocabWord {
+  createdAt?: number;
+  updatedAt?: number;
+  generation?: string;
+  srs?: import("../../../packages/learning-core/src/index").SrsState;
+  srsBaseline?: import("../../../packages/learning-core/src/index").SrsState;
+  paused?: boolean;
+  note?: string;
+  [key: string]: unknown;
   id: string;
   word: string;
   kind?: VocabKind;

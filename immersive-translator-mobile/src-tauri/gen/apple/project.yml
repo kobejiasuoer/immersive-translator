@@ -2,7 +2,7 @@ name: imreader-mobile
 options:
   bundleIdPrefix: com.kobejiasuoer.reader
   deploymentTarget:
-    iOS: 14.0
+    iOS: 16.0
 fileGroups: [../../src]
 configs:
   debug: debug

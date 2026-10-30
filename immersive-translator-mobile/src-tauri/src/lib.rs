@@ -7,23 +7,21 @@
 //! - BYOK：凭据由前端每次调用时传入，Rust 不落盘。
 
 mod keychain;
+mod persistence;
+mod persistence_commands;
+mod audio_store;
+mod mobile_http;
+mod request_cancellation;
 mod ocr;
 mod voice;
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+use request_cancellation::RequestKind;
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{Emitter, Manager};
-
-/// 代数中止：translate_abort 递增代数，流式循环发现代数变了就断流（保留已译部分）。
-static ABORT_GEN: AtomicU64 = AtomicU64::new(0);
-
-/// llm_chat 专用代数中止（治 services-6）：独立计数器，与翻译互不影响——
-/// 陪练「跳过」/笔记页退出只掐自己的对话流，不误伤在途翻译（反之亦然）。
-static CHAT_ABORT_GEN: AtomicU64 = AtomicU64::new(0);
 
 /// BYOK 客户端超时：此前四处 Client::new() 无任何超时——端点挂起（captive portal / SYN 丢包）时
 /// 命令永不返回、前端「连接中」永转且 translate_abort 都终止不了（无数据到达时中止检查不执行）。
@@ -279,13 +277,12 @@ fn visible_chunk_text(v: &serde_json::Value) -> Option<String> {
 
 /// SSE 收流公用骨架（translate_text / llm_chat 复用）：
 /// 逐 `data:` 行解析 chunk，每个可见 delta 立即回调 `on_delta`（逐 delta 派发，
-/// 不攒批），返回累计全文（未剥 think 的原始流）。`should_abort` 每轮收流前轮询。
+/// 不攒批），返回累计全文（未剥 think 的原始流）。外层 Abortable 中止整个 HTTP 等待。
 async fn run_sse(
     client: &reqwest::Client,
     cfg: &LlmCfg,
     body: serde_json::Value,
     mut on_delta: impl FnMut(&str),
-    should_abort: impl Fn() -> bool,
 ) -> Result<String, String> {
     let resp = send(client, cfg, body).await?;
     if !resp.status().is_success() {
@@ -304,9 +301,6 @@ async fn run_sse(
             Some(c) => c,
             None => break,
         };
-        if should_abort() {
-            break;
-        }
         let chunk = chunk.map_err(|e| format!("流中断：{e}"))?;
         /* 按字节累积、切出完整行后再解码：多字节字符（中文译文）跨 TCP chunk 被劈开时，
            逐 chunk from_utf8_lossy 会产 U+FFFD 乱码并进流式增量与最终译文（治 rust-core-3）。
@@ -366,8 +360,8 @@ async fn translate_probe(cfg: LlmCfg) -> Result<String, String> {
 }
 
 /// 流式翻译：每个 SSE delta 一次 `translate-delta` emit（载荷 {reqId, text:本次增量}，
-/// 前端按 reqId 过滤，治 rust-core-2），返回全量译文。中止：translate_abort 改代数，
-/// 循环察觉即停并返回已译部分。think 剥离：按「可见前缀增量」发——剥离后的可见文本
+/// 前端按 reqId 过滤，治 rust-core-2），返回全量译文。中止按 reqId 隔离且返回取消错误。
+/// think 剥离：按「可见前缀增量」发——剥离后的可见文本
 /// 每增长一段才 emit 一次，思考期内可见文本不增长就不发（真流式，禁止假打字机）。
 /// 增量只取 stable_visible_len 的稳定前缀：尾部半截 think 标签按住不发，
 /// 防止标签补全后被剥掉导致可见文本回缩、字节游标错位（多字节切片 panic）。
@@ -378,7 +372,13 @@ async fn translate_text(
     cfg: LlmCfg,
     req_id: String,
 ) -> Result<String, String> {
-    let gen = ABORT_GEN.load(Ordering::SeqCst);
+    let request = request_cancellation::begin(RequestKind::Translate, Some(&req_id))?;
+    request.run(translate_text_request(app, text, cfg, req_id)).await
+}
+
+async fn translate_text_request(
+    app: tauri::AppHandle, text: String, cfg: LlmCfg, req_id: String,
+) -> Result<String, String> {
     let client = sse_client();
     let mut body = serde_json::json!({
         "model": cfg.model,
@@ -411,20 +411,20 @@ async fn translate_text(
             // if let Some(win) = app.get_webview_window("main") { let _ = win.emit("translate-delta", &payload); }
             let _ = app.emit("translate-delta", TranslateDeltaPayload { req_id: req_id.clone(), text: inc });
         }
-    }, || ABORT_GEN.load(Ordering::SeqCst) != gen)
+    })
     .await?;
     Ok(strip_think_tags(&full).trim().to_string())
 }
 
 #[tauri::command]
-fn translate_abort() {
-    ABORT_GEN.fetch_add(1, Ordering::SeqCst);
+fn translate_abort(req_id: Option<String>) -> Result<(), String> {
+    request_cancellation::cancel(RequestKind::Translate, req_id.as_deref())
 }
 
-/// 中止在途的 llm_chat 流（chatStream.stop() 调用；代数通道与 translate_text 同款，治 services-6）。
+/// 带 reqId 仅中止对应流；省略参数时兼容旧版的全类中止。
 #[tauri::command]
-fn llm_abort() {
-    CHAT_ABORT_GEN.fetch_add(1, Ordering::SeqCst);
+fn llm_abort(req_id: Option<String>) -> Result<(), String> {
+    request_cancellation::cancel(RequestKind::Chat, req_id.as_deref())
 }
 
 /// 通用对话补全：自定义 systemPrompt + 多轮 messages，事件 `chat-delta`
@@ -437,6 +437,13 @@ async fn llm_chat(
     system_prompt: String,
     messages: Vec<ChatMsg>,
     req_id: String,
+) -> Result<String, String> {
+    let request = request_cancellation::begin(RequestKind::Chat, Some(&req_id))?;
+    request.run(llm_chat_request(app, cfg, system_prompt, messages, req_id)).await
+}
+
+async fn llm_chat_request(
+    app: tauri::AppHandle, cfg: LlmCfg, system_prompt: String, messages: Vec<ChatMsg>, req_id: String,
 ) -> Result<String, String> {
     let client = sse_client();
     let mut msgs: Vec<serde_json::Value> = Vec::with_capacity(messages.len() + 1);
@@ -462,23 +469,26 @@ async fn llm_chat(
     let t0 = Instant::now();
     let mut seq: u64 = 0;
     let mut acc = String::new();
-    /* 代数中止（治 services-6）：此前 `|| false` 完全不可中止——陪练「跳过」、笔记页
-       退出后整段回复仍在后台拉完，BYOK token 照烧 */
-    let gen = CHAT_ABORT_GEN.load(Ordering::SeqCst);
+    // 外层请求句柄覆盖连接、等待首字和静默收流，取消无需等待下一条 delta。
     let full = run_sse(&client, &cfg, body, |delta| {
         acc.push_str(delta);
         let visible = strip_think_tags(&acc);
         seq += 1;
         eprintln!("[cd] req={req_id} seq={seq} ms={} chars={}", t0.elapsed().as_millis(), visible.chars().count());
         let _ = app.emit("chat-delta", ChatDeltaPayload { req_id: req_id.clone(), text: visible });
-    }, || CHAT_ABORT_GEN.load(Ordering::SeqCst) != gen)
+    })
     .await?;
     Ok(strip_think_tags(&full).trim().to_string())
 }
 
 /// AI 词典：非流式，提示词产出 JSON（defs + 例句），容错解析（剥代码围栏）。
 #[tauri::command]
-async fn dict_lookup(word: String, cfg: LlmCfg) -> Result<serde_json::Value, String> {
+async fn dict_lookup(word: String, cfg: LlmCfg, req_id: Option<String>) -> Result<serde_json::Value, String> {
+    let request = request_cancellation::begin(RequestKind::Dictionary, req_id.as_deref())?;
+    request.run(dict_lookup_request(word, cfg)).await
+}
+
+async fn dict_lookup_request(word: String, cfg: LlmCfg) -> Result<serde_json::Value, String> {
     let client = once_client();
     let sys = "你是词典引擎。对给定的英文单词或短语给出简明中文释义。只输出 JSON，格式：{\"defs\":[{\"pos\":\"词性缩写\",\"cn\":\"中文释义\"}],\"ex\":\"一句英文例句 + 中文翻译\"}。defs 给 2-4 条。不要输出 JSON 以外的任何文字。";
     let body = serde_json::json!({
@@ -510,6 +520,11 @@ async fn dict_lookup(word: String, cfg: LlmCfg) -> Result<serde_json::Value, Str
         return Err("释义解析失败".to_string());
     }
     Ok(parsed)
+}
+
+#[tauri::command]
+fn dict_abort(req_id: Option<String>) -> Result<(), String> {
+    request_cancellation::cancel(RequestKind::Dictionary, req_id.as_deref())
 }
 
 /// iOS 音频会话：设为 playback 类别——默认 soloAmbient 受静音拨片控制（拨片一拨
@@ -574,9 +589,16 @@ fn enable_playback_audio_session() {
 /// 调用本命令；与启动时同款设置（幂等），非 iOS 平台无操作。
 /// AVAudioSession 非线程安全：命令在 tokio 工作线程跑，必须派回主队列执行。
 #[tauri::command]
-fn restore_playback_audio() {
+async fn restore_playback_audio(app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "ios")]
-    enable_playback_audio_session_on_main();
+    {
+        let (tx,rx) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || { enable_playback_audio_session(); let _ = tx.send(()); }).map_err(|e| e.to_string())?;
+        rx.await.map_err(|_| "音频播放会话恢复未完成".to_string())?;
+    }
+    #[cfg(not(target_os = "ios"))]
+    let _ = app;
+    Ok(())
 }
 
 /// 把闭包派到主队列执行。dispatch 符号经 dlopen/dlsym 运行时取（同 AVFAudio 的
@@ -740,6 +762,7 @@ pub fn run() {
             translate_abort,
             llm_abort,
             dict_lookup,
+            dict_abort,
             llm_chat,
             voice::iat::asr_start,
             voice::iat::asr_push,
@@ -751,7 +774,24 @@ pub fn run() {
             ocr::ocr_image,
             keychain::secret_put,
             keychain::secret_get,
-            keychain::secret_delete
+            keychain::secret_delete,
+            persistence_commands::persistence_load,
+            persistence_commands::persistence_initialize,
+            persistence_commands::persistence_commit,
+            persistence_commands::persistence_migrate,
+            persistence_commands::persistence_record,
+            persistence_commands::persistence_records,
+            persistence_commands::persistence_events,
+            persistence_commands::persistence_outbox,
+            persistence_commands::persistence_ack_outbox,
+            persistence_commands::audio_clip_begin,
+            persistence_commands::audio_clip_append,
+            persistence_commands::audio_clip_finalize,
+            persistence_commands::audio_clip_read,
+            persistence_commands::audio_clip_delete,
+            persistence_commands::audio_clip_manifest,
+            mobile_http::mobile_http_request,
+            mobile_http::mobile_http_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

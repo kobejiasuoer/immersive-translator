@@ -1,16 +1,19 @@
 /**
- * store v3 —— 演进自 spike 内存态（§6.3）：
- *  · 保持 actions API 形状（setTheme/setSheet/saveWord/deleteWord/gradeWord），
- *    底层换 localStorage 持久化 + 启动 hydrate（版本化，可迁移；Rust SQLite 为真机落点）。
+ * 身份隔离的学习状态仓储，沿用 spike 的 actions API。
+ *  · 浏览器用 IndexedDB，原生用 Rust SQLite；启动 hydrate 与旧数据迁移先于页面显示。
  *  · 新增 reviewStats（#52 三处同源）、settings/history/notes/reader 切片。
  *  · 左滑删除 = 移除 + 快照入 trash，5s 后真正提交；撤销恢复快照（评审要点 7②）。
- *  · 演示数据仅未改动时兜底，标注「演示」；DEMO_VOCAB/DEMO_ARTICLES 沿用 core 数据。
+ *  · 首次打开只提供明确的入门样文，不制造收藏、练习或复习历史。
  */
 import { useSyncExternalStore } from "react";
 import type { Article, VocabWord } from "./core/types";
-import { DEMO_VOCAB } from "./core/data";
+import { createPersistence, type Repository, type CommitInput } from "./core/persistence";
+import { canonicalJson, initialSrs, mergePracticeTask, reduceReviewEvents, stampPracticeTask, type ReviewEvent } from "../../packages/learning-core/src/index";
+import type { PracticeTask } from "./services/practice";
+import type { SpeakSession } from "./core/sessions";
+import type { GlossaryPair } from "./core/glossary";
 import { DEMO_SLOW, DEMO_TREES, type ChatTurn } from "./core/demo";
-import { GRADE_INTERVALS, type ReviewGrade } from "./core/srs";
+import { type ReviewGrade } from "./core/srs";
 import { haptic, invokeRaw, isTauri, reportDiag, scheduleDailyReminder } from "./services/device";
 import { cloudAvailable, speakCloud } from "./services/voice";
 
@@ -32,7 +35,7 @@ export interface Settings {
   provider: string;
   /** API Key 已入系统钥匙串（真机）：true 时 localStorage 不再落明文（persistable 置空） */
   keyStored: boolean;
-  /** API Key 明文（内存态；真机入钥匙串后仅会话内持有。keyStored=false 时明文兜底 localStorage——浏览器态/迁移失败，Key 不丢） */
+  /** API Key 仅在内存和当前资料的系统钥匙串中保存。 */
   apiKey: string;
   /** 接口地址覆盖；空 = 用 provider 预设（custom 时必填） */
   baseUrl: string;
@@ -76,6 +79,12 @@ export interface NoteItem {
   sub: string;
   body: string;
   insight: string;
+  createdAt?: number;
+  updatedAt?: number;
+  taskId?: string;
+  attemptId?: string;
+  sourceArticleId?: string;
+  sourceSentenceIdx?: number;
 }
 
 export interface DictSenses {
@@ -123,6 +132,7 @@ export interface Stats {
   /** 今日已清过的卡片 id（去重计数：forgot 10 分钟回流再清不重复 +1，folio 分母不漂移，治 state-5） */
   clearedIds: string[];
   streak: number;
+  lastReviewStreakDay?: string;
   week: { review: number; add: number; trap: number };
   day: string;
   /** 本周归属（ISO 周一口径 "年-周"）：hydrate 时变化 → week 三项归零（自然周重置） */
@@ -136,7 +146,12 @@ export interface DiagItem {
   msg: string;
 }
 
-interface AppState {
+export interface AppState {
+  tasks: PracticeTask[];
+  reviewEvents: ReviewEvent[];
+  sessions: SpeakSession[];
+  glossary: GlossaryPair[];
+  speakDifficulty: "easy" | "medium" | "hard";
   theme: Theme;
   onboarded: boolean;
   tab: Tab;
@@ -161,7 +176,7 @@ interface AppState {
   /** 最近一次评分（5s 撤销用，治 I7）；counted=本次评分是否计入了当日清卡数（回流卡不重复计）；
       wasTrap=本次评分是否计入过 week.trap（撤销时同步回滚，治 state-7 虚高）；
       prevWrongAt=评分前该词的 lastWrongAt（撤销时还原判错标记，治 ux-cross-1）。 */
-  lastGrade: { id: string; prevDueAt: number; counted?: boolean; wasTrap?: boolean; prevWrongAt?: number | null } | null;
+  lastGrade: { id: string; eventId?: string; prevDueAt: number; counted?: boolean; wasTrap?: boolean; prevWrongAt?: number | null } | null;
   /** 「重新遮住全部译文」信号（nonce，仅会话内；ReaderScreen 监听后清空 revealed，治 P-25） */
   remaskAt: number;
   /** 深链/分享扩展送入的待处理文本（#share?text=… / ita://share?text=…；ShareScreen 消费，仅会话内不落盘） */
@@ -198,9 +213,10 @@ function demoState(): AppState {
     theme: window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light",
     onboarded: false,
     tab: "today",
-    vocab: [...DEMO_VOCAB],
-    articles: [DEMO_TREES, DEMO_SLOW],
-    progress: { trees: 7, slow: 0 },
+    vocab: [],
+    tasks: [], reviewEvents: [], sessions: [], glossary: [], speakDifficulty: "easy",
+    articles: [DEMO_TREES, DEMO_SLOW].map(a => ({ ...a, sourceType: "sample" as const })),
+    progress: {},
     settings: {
       themePref: "system",
       provider: "openai",
@@ -221,7 +237,7 @@ function demoState(): AppState {
       fsScale: 1,
       stream: true,
       voice: false,
-      daily: true,
+      daily: false,
       dnd: false,
       remindTime: "21:30",
       goal: "读外刊与原版书",
@@ -248,31 +264,45 @@ function demoState(): AppState {
 
 /* ---------- 持久化（版本化 hydrate；旧版本/坏数据 → 演示态） ---------- */
 const STORE_KEY = "ita.v3.state";
-const STORE_VERSION = 3;
+const STORE_VERSION = 4;
 /** API Key 的钥匙串条目 key（Rust keychain.rs service="ita.secrets"，account 即此值）。 */
 const KEYCHAIN_APIKEY = "apiKey";
 /** 讯飞三件套的钥匙串条目 key（U-11：与模型 Key 同路径，不再明文落 localStorage）。 */
 const KEYCHAIN_VOICE_APPID = "voiceAppId";
 const KEYCHAIN_VOICE_KEY = "voiceApiKey";
 const KEYCHAIN_VOICE_SECRET = "voiceApiSecret";
+let credentialQueue: Promise<unknown> = Promise.resolve();
+const profileSecret = (identity: string, key: string) => `mobile.profile.${encodeURIComponent(identity)}.${key}`;
+function credentialWork<T>(work: () => Promise<T>): Promise<T> {
+  const next = credentialQueue.catch(() => undefined).then(work); credentialQueue = next; return next;
+}
+async function readCredential(identity: string, key: string): Promise<string | null> {
+  return credentialWork(async () => {
+    const scoped = profileSecret(identity, key);
+    const value = await invokeRaw<string | null>("secret_get", { key: scoped });
+    if (value !== null || identity !== "guest") return value;
+    const legacy = await invokeRaw<string | null>("secret_get", { key });
+    if (legacy !== null) { await invokeRaw("secret_put", {key: scoped, value: legacy}); await invokeRaw("secret_delete", {key}); }
+    return legacy;
+  });
+}
 
 function persistable(s: AppState) {
   return {
     version: STORE_VERSION,
+    tasks: s.tasks, reviewEvents: s.reviewEvents, sessions: s.sessions, glossary: s.glossary, speakDifficulty: s.speakDifficulty,
     theme: s.theme,
     onboarded: s.onboarded,
     vocab: s.vocab,
     articles: s.articles,
     progress: s.progress,
-    /* B6 ①：API Key 只存钥匙串——keyStored（已入钥匙串）时落盘置空，localStorage 不再明文；
-       未入钥匙串（浏览器态/迁移失败）保留明文兜底，Key 不丢（见 setApiKey/启动迁移）。
-       U-11：讯飞三件套同路径，voiceKeyStored 时三件一并置空。 */
+    /* Secrets never enter the snapshot, including browser preview and failed Keychain writes. */
     settings: {
       ...s.settings,
-      apiKey: s.settings.keyStored ? "" : s.settings.apiKey,
-      voiceAppId: s.settings.voiceKeyStored ? "" : s.settings.voiceAppId,
-      voiceApiKey: s.settings.voiceKeyStored ? "" : s.settings.voiceApiKey,
-      voiceApiSecret: s.settings.voiceKeyStored ? "" : s.settings.voiceApiSecret,
+      apiKey: "",
+      voiceAppId: "",
+      voiceApiKey: "",
+      voiceApiSecret: "",
     },
     history: s.history,
     notes: s.notes,
@@ -288,7 +318,8 @@ function persistable(s: AppState) {
 }
 
 function migrate(raw: Record<string, unknown>): AppState | null {
-  if (raw.version !== STORE_VERSION) return null;
+  if (raw.version !== 3 && raw.version !== STORE_VERSION) return null;
+  if (![raw.vocab, raw.articles, raw.history, raw.notes].every(Array.isArray)) return null;
   const base = demoState();
   try {
     const themePref = (raw.settings as Settings | undefined)?.themePref;
@@ -305,10 +336,19 @@ function migrate(raw: Record<string, unknown>): AppState | null {
     };
     return {
       ...base,
+      tasks: Array.isArray(raw.tasks) ? raw.tasks as PracticeTask[] : [],
+      reviewEvents: Array.isArray(raw.reviewEvents) ? raw.reviewEvents as ReviewEvent[] : [],
+      sessions: Array.isArray(raw.sessions) ? raw.sessions as SpeakSession[] : [],
+      glossary: Array.isArray(raw.glossary) ? raw.glossary as GlossaryPair[] : [],
+      speakDifficulty: raw.speakDifficulty === "medium" || raw.speakDifficulty === "hard" ? raw.speakDifficulty : "easy",
       theme,
       onboarded: Boolean(raw.onboarded),
       tab: "today",
-      vocab: (raw.vocab as VocabWord[]) || base.vocab,
+      vocab: (raw.vocab as VocabWord[]).map(word => {
+        const baseline = word.srsBaseline ?? word.baseline ?? word.srs ?? initialSrs(word.dueAt);
+        const hasEvents = Array.isArray(raw.reviewEvents) && (raw.reviewEvents as ReviewEvent[]).some(event => event.wordId === word.id);
+        return { ...word, generation: word.generation ?? `legacy-${word.addedAt ?? word.createdAt ?? 0}`, srsBaseline: baseline as VocabWord["srsBaseline"], baseline, baselineRecall: word.baselineRecall ?? (hasEvents ? undefined : word.recall) ?? {total:{pass:0,wrong:0,trap:0},byMode:{}} };
+      }),
       articles: (raw.articles as Article[]) || base.articles,
       progress: (raw.progress as Record<string, number>) || base.progress,
       settings: { ...base.settings, ...((raw.settings as Partial<Settings>) || {}), themePref: themePref || "system" },
@@ -335,52 +375,61 @@ function migrate(raw: Record<string, unknown>): AppState | null {
   }
 }
 
-function hydrate(): AppState {
-  let s = demoState();
-  try {
-    const raw = JSON.parse(localStorage.getItem(STORE_KEY) || "null") as Record<string, unknown> | null;
-    if (raw) {
-      const migrated = migrate(raw);
-      if (migrated) {
-        s = migrated;
-        /* 跨零点：streak 只在 finishReviewStreak（退出完成页）累加，此处仅判定保留或清零——
-           昨日有清且上次活跃日就是昨天 → 保留（昨天已 +1 过）；否则清零（隔整天未打开/昨日没清）。
-           治双重累加：此前这里再 +1，同一天清完被记两次（N 天记成 2N-1）。 */
-        if (s.stats.day !== todayKey()) {
-          s.stats = {
-            ...s.stats,
-            streak: s.stats.clearedToday > 0 && s.stats.day === yesterdayKey() ? s.stats.streak : 0,
-            clearedToday: 0,
-            clearedIds: [],
-            day: todayKey(),
-          };
-        }
-        /* 自然周重置（治缺口：原逻辑只处理 streak/clearedToday）：ISO 周变化 → 本周三项归零。
-           streak/clearedToday 仍按日口径独立判定，互不影响。 */
-        if (s.stats.weekKey !== isoWeekKey()) {
-          s.stats = { ...s.stats, week: { review: 0, add: 0, trap: 0 }, weekKey: isoWeekKey() };
-        }
-      } else {
-        /* 版本不符/字段损坏回退演示态前，先把原始数据备份到 .bak 键：随后 demo 态的首次落盘
-           会覆盖主键，没有这份备份用户数据就无迹可寻（治 state-4 整包覆盖丢失）。 */
-        try {
-          localStorage.setItem(STORE_KEY + ".bak", JSON.stringify(raw));
-        } catch {
-          /* 存储满/隐私模式：尽力而为 */
-        }
-      }
-    }
-  } catch {
-    /* 坏数据兜底演示态 */
-  }
-  /* B6 ①：浏览器态无钥匙串——keyStored/voiceKeyStored 复位 false，防老数据 stored=true 时
-     persistable 置空把 localStorage 里唯一一份明文 Key 抹掉（真机由启动迁移维护）。 */
-  if (!isTauri()) s.settings = { ...s.settings, keyStored: false, voiceKeyStored: false };
-  return s;
+let state: AppState = demoState();
+let repository: Repository | null = null;
+let revision = 0;
+let writeQueue: Promise<void> = Promise.resolve();
+let profileQueue: Promise<unknown> = Promise.resolve();
+let persistenceFailure: unknown = null;
+export function activeRepository(): Repository {
+  if (!repository) throw new Error("本地资料尚未载入");
+  return repository;
 }
-
-let state: AppState = hydrate();
-state.theme = resolveTheme(state.settings.themePref);
+export function profileIdentity(): string { return activeRepository().identity; }
+function enqueue(work: () => Promise<void>, target = activeRepository()): Promise<void> {
+  const next = writeQueue.then(async () => {
+    if (repository !== target) throw new DOMException("本地资料已切换", "AbortError");
+    if (persistenceFailure) throw persistenceFailure;
+    await work();
+  });
+  writeQueue = next;
+  void next.catch(error => {
+    if (repository !== target) return;
+    persistenceFailure = error;
+    window.dispatchEvent(new CustomEvent("mobile-storage-error", { detail: String(error) }));
+  });
+  return next;
+}
+export function commitRepository(input: Omit<CommitInput, "expectedRevision">): Promise<void> {
+  const target = activeRepository();
+  return enqueue(async () => {
+    const result = await target.commit({ ...input, expectedRevision: revision });
+    revision = result.revision;
+  }, target);
+}
+export function replaceSyncedState(patch: Partial<AppState> | ((current: AppState) => Partial<AppState>), extra: Omit<CommitInput, "expectedRevision" | "state"> = {}, applyIf?: () => boolean): Promise<void> {
+  const target = activeRepository();
+  return enqueue(async () => {
+    if (applyIf && !applyIf()) return;
+    const previous = state;
+    const changes = typeof patch === "function" ? patch(previous) : patch;
+    const next = { ...previous, ...changes };
+    state = next;
+    try {
+      const result = await target.commit({ ...extra, expectedRevision: revision, state: persistable(next) });
+      revision = result.revision; listeners.forEach(fn => fn());
+    } catch (error) {
+      // Preserve later user edits; undo only fields still owned by this failed patch.
+      const rollback: Partial<AppState> = {};
+      for (const key of Object.keys(changes) as (keyof AppState)[]) {
+        if (state[key] === next[key]) Object.assign(rollback, { [key]: previous[key] });
+      }
+      state = { ...state, ...rollback };
+      listeners.forEach(fn => fn());
+      throw error;
+    }
+  }, target);
+}
 
 function resolveTheme(pref: ThemePref): Theme {
   if (pref === "system") {
@@ -390,33 +439,207 @@ function resolveTheme(pref: ThemePref): Theme {
 }
 
 const listeners = new Set<() => void>();
-let persistTimer: ReturnType<typeof setTimeout> | null = null;
-
 function emit() {
-  listeners.forEach((l) => l());
-  if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
-    try {
-      localStorage.setItem(STORE_KEY, JSON.stringify(persistable(state)));
-    } catch {
-      /* 存储满/隐私模式静默 */
-    }
-  }, 200);
+  listeners.forEach(fn => fn());
+  if (!repository) return;
+  void commitRepository({ state: persistable(state) });
+  window.dispatchEvent(new Event("mobile-state-change"));
+}
+export async function flushPersist(): Promise<void> {
+  // Include mutations queued while an earlier durable write was in flight.
+  let pending: Promise<void>;
+  do { pending = writeQueue; await pending; } while (pending !== writeQueue);
+}
+function serializeProfile<T>(work: () => Promise<T>): Promise<T> {
+  const next = profileQueue.catch(() => undefined).then(work); profileQueue = next; return next;
 }
 
-/** 立即落盘（App.tsx 在 visibilitychange hidden / pagehide 时调用，治 state-8）：
- *  emit 的 200ms 防抖在 iOS 切后台时 WKWebView 会挂起定时器——评分后立刻切后台/杀 App，
- *  最后一张卡的 dueAt 与统计可能未写盘，重启后该卡重新到期、clearedToday 回退。 */
-export function flushPersist(): void {
-  if (persistTimer) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
+export async function initializeStore(identity = "guest"): Promise<void> {
+  await serializeProfile(async () => { await initializeStoreNow(identity); });
+}
+interface ProfileSwitchOptions { valid?: () => boolean; retainSheet?: { sheet: Sheet; valid: () => boolean } }
+async function initializeStoreNow(identity: string, options: ProfileSwitchOptions = {}): Promise<AppState | null> {
+  if (repository) await flushPersist();
+  if (options.valid && !options.valid()) throw new DOMException("资料切换已取消", "AbortError");
+  if (repository?.identity === identity) return state;
+  const next = await createPersistence(identity);
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(persistable(state)));
-  } catch {
-    /* 存储满/隐私模式静默 */
+    const snapshot = await next.loadSnapshot<Record<string, unknown>>();
+    let loaded = demoState();
+    let nextRevision = snapshot.revision;
+    if (snapshot.state) {
+      const restored = migrate(snapshot.state);
+      if (!restored) throw new Error("本地资料版本或内容异常，原资料已保留；未重置成样例");
+      loaded = restored;
+    } else {
+      const raw = identity === "guest" ? localStorage.getItem(STORE_KEY) : null;
+      if (raw) {
+        const legacy = migrate(JSON.parse(raw));
+        if (!legacy) throw new Error("旧版资料无法迁移，原始资料已保留");
+        const keys = [[KEYCHAIN_APIKEY, legacy.settings.apiKey], [KEYCHAIN_VOICE_APPID, legacy.settings.voiceAppId], [KEYCHAIN_VOICE_KEY, legacy.settings.voiceApiKey], [KEYCHAIN_VOICE_SECRET, legacy.settings.voiceApiSecret]];
+        if (keys.some(([, value]) => value)) {
+          if (!isTauri()) throw new Error("旧资料含服务密钥，请在原生应用迁移到系统钥匙串；原资料未改动");
+          for (const [key, value] of keys) if (value) await credentialWork(() => invokeRaw("secret_put", { key: profileSecret(identity, key), value }));
+        }
+        loaded = legacy;
+        const sessions = localStorage.getItem("ita.v3.speak.sessions");
+        const glossary = localStorage.getItem("ita.v3.glossary");
+        loaded.sessions = sessions ? JSON.parse(sessions) : [];
+        loaded.glossary = glossary ? JSON.parse(glossary) : [];
+        if (!Array.isArray(loaded.sessions) || !Array.isArray(loaded.glossary)) throw new Error("旧版附属资料损坏，原资料未改动");
+        const safe = persistable(loaded);
+        nextRevision = (await next.migrateLegacy({ migrationId: "v3-to-v4", entries: { [STORE_KEY]: JSON.stringify(safe), "ita.v3.speak.sessions": sessions, "ita.v3.glossary": glossary }, state: safe })).revision;
+        for (const key of [STORE_KEY, STORE_KEY + ".bak", "ita.v3.speak.sessions", "ita.v3.glossary", "ita.v3.speak.diff"]) localStorage.removeItem(key);
+      } else nextRevision = (await next.saveSnapshot(persistable(loaded), nextRevision)).revision;
+    }
+    if (isTauri()) {
+      const keys = [KEYCHAIN_APIKEY, KEYCHAIN_VOICE_APPID, KEYCHAIN_VOICE_KEY, KEYCHAIN_VOICE_SECRET];
+      const values = await Promise.all(keys.map(key => readCredential(identity, key).catch(error => { if(import.meta.env.DEV && String(error).includes("SECURE_STORAGE_UNSUPPORTED")) return null; throw error; })));
+      loaded.settings = { ...loaded.settings, apiKey: values[0] || "", voiceAppId: values[1] || "", voiceApiKey: values[2] || "", voiceApiSecret: values[3] || "", keyStored: true, voiceKeyStored: true };
+    }
+    // Loading the target store can take time. Drain writes produced in the old
+    // profile during that time before closing it and resetting the queue.
+    if (repository) await flushPersist();
+    if (options.valid && !options.valid()) throw new DOMException("资料切换已取消", "AbortError");
+    const previous = repository ? state : null;
+    const retained = options.retainSheet;
+    if (retained && state.sheet === retained.sheet && retained.valid()) loaded.sheet = retained.sheet;
+    repository?.close(); repository = next; revision = nextRevision; persistenceFailure = null; writeQueue = Promise.resolve();
+    state = loaded; state.theme = resolveTheme(state.settings.themePref);
+    applyThemeDom(state.theme); applyFsDom(state.settings.fsScale); rolloverIfDue();
+    listeners.forEach(fn => fn());
+    window.dispatchEvent(new Event("mobile-profile-change"));
+    return previous;
+  } catch (error) { next.close(); throw error; }
+}
+
+export function deviceId(): string {
+  let id = localStorage.getItem("mobile.device.id");
+  if (!id) { id = crypto.randomUUID(); localStorage.setItem("mobile.device.id", id); }
+  return id;
+}
+export async function switchProfile(identity: string, bringGuest: boolean, options: ProfileSwitchOptions = {}): Promise<void> {
+  const claim = bringGuest && identity !== "guest" ? await prepareGuestClaim(identity, true) : null;
+  await serializeProfile(async () => {
+  await initializeStoreNow(identity, options);
+  if (claim) {
+    await replaceSyncedState(current => mergeGuestClaim(current, claim.state));
+    window.dispatchEvent(new Event("mobile-state-change"));
   }
+  });
+  if (claim) await finishGuestClaim(identity);
+}
+
+type GuestClaimState = Pick<AppState, "articles" | "vocab" | "notes" | "tasks" | "reviewEvents" | "sessions" | "history" | "glossary" | "progress">;
+export interface GuestClaim { version: 1; accountId: string; state: GuestClaimState }
+const GUEST_CLAIMS = "local-guest-claims";
+/** Move selected guest data into an account-bound recovery record atomically.
+ * The record survives a crash between the two profile repositories' commits. */
+export async function prepareGuestClaim(accountId: string, all: boolean, selection: { taskId?: string; articleId?: string } = {}, valid: () => boolean = () => true, recoverOnly = false): Promise<GuestClaim | null> {
+  if (!accountId || accountId === "guest") throw new Error("认领需要有效账号");
+  return serializeProfile(async () => {
+    const live = repository?.identity === "guest";
+    if (live) await flushPersist();
+    if (!valid()) throw new DOMException("资料认领已取消", "AbortError");
+    const guest = live ? activeRepository() : await createPersistence("guest");
+    try {
+      const previous = await guest.get<GuestClaim>(GUEST_CLAIMS, accountId);
+      if (!valid()) throw new DOMException("资料认领已取消", "AbortError");
+      let reserved: GuestClaim | null = null;
+      if (previous && !previous.deleted && previous.payload) {
+        const claim = previous.payload;
+        if (claim.version !== 1 || claim.accountId !== accountId || !claim.state || ![claim.state.articles,claim.state.tasks,claim.state.vocab,claim.state.notes,claim.state.reviewEvents,claim.state.sessions,claim.state.history,claim.state.glossary].every(Array.isArray)) throw new Error("待认领资料损坏，原资料已保留");
+        reserved = claim;
+      }
+      if (!live || recoverOnly) return reserved;
+      let claim: GuestClaim | null = reserved;
+      const records: NonNullable<CommitInput["records"]> = [];
+      await replaceSyncedState(current => {
+      const task = current.tasks.find(row => row.id === selection.taskId);
+      const articleId = selection.articleId ?? task?.source?.articleId;
+      const articles = all ? current.articles : current.articles.filter(row => row.id === articleId);
+      const tasks = all ? current.tasks : task ? [task] : [];
+      const selected: GuestClaimState = { articles, tasks, vocab: all ? current.vocab : [], notes: all ? current.notes : [], reviewEvents: all ? current.reviewEvents : [], sessions: all ? current.sessions : [], history: all ? current.history : [], glossary: all ? current.glossary : [], progress: all ? current.progress : Object.fromEntries(Object.entries(current.progress).filter(([id]) => id === articleId)) };
+      if (![selected.articles,selected.tasks,selected.vocab,selected.notes,selected.reviewEvents,selected.sessions,selected.history,selected.glossary].some(rows => rows.length) && !Object.keys(selected.progress).length) return {};
+      // The existing recovery batch already belongs to this account. Extend it
+      // with the current explicit selection, atomically with removing that
+      // selection from guest; a retry cannot drop either login's source task.
+      const {onboarded: _onboarded, ...combined} = mergeGuestClaim(reserved?.state ?? {articles:[],tasks:[],vocab:[],notes:[],reviewEvents:[],sessions:[],history:[],glossary:[],progress:{}}, selected);
+      claim = { version: 1, accountId, state: combined };
+      const samples = demoState();
+      const remainingArticles = current.articles.filter(row => !articles.some(item => item.id === row.id));
+      // Sample text remains available, with the claimed reading/translation state reset.
+      const sampleIds = new Set(articles.filter(row => row.sourceType === "sample").map(row => row.id));
+      remainingArticles.push(...samples.articles.filter(row => sampleIds.has(row.id)));
+      records.push({ collection: GUEST_CLAIMS, id: accountId, payload: claim, expectedVersion: previous?.version ?? 0 });
+      return { articles: remainingArticles, tasks: current.tasks.filter(row => !tasks.some(item => item.id === row.id)), progress: Object.fromEntries(Object.entries(current.progress).filter(([id]) => !articles.some(row => row.id === id))), ...(all ? { vocab: [], notes: [], reviewEvents: [], sessions: [], history: [], glossary: [], stats: samples.stats, clip: null, trash: null, lastGrade: null } : {}) };
+      }, {records}, valid);
+      if (!valid()) throw new DOMException("资料认领已取消", "AbortError");
+      return claim;
+    } finally { if (!live) guest.close(); }
+  });
+}
+export function mergeGuestClaim(current: GuestClaimState, guest: GuestClaimState): GuestClaimState & { onboarded: true } {
+  const same = (left: unknown, right: unknown) => canonicalJson(left) === canonicalJson(right);
+  const copyId = (id: string, value: unknown) => {
+    let hash = 2166136261;
+    const text = canonicalJson(value);
+    for (let i=0;i<text.length;i++) { hash ^= text.charCodeAt(i); hash = Math.imul(hash,16777619); }
+    return id.slice(0,90) + "~guest-" + (hash>>>0).toString(36);
+  };
+  const merge = <T extends { id: string }>(left: T[], right: T[], combine?: (old:T,row:T)=>T): T[] => {
+    const result = [...left];
+    for (const row of right) {
+      const index = result.findIndex(old=>old.id===row.id);
+      if (index<0) { result.push(row); continue; }
+      if (same(result[index],row)) continue;
+      if (combine) { result[index]=combine(result[index],row); continue; }
+      const id=copyId(row.id,row), previous=result.find(old=>old.id===id);
+      if (previous && !same(previous,{...row,id})) throw new Error("访客冲突副本 ID 重复，原资料仍保留");
+      if (!previous) result.push({...row,id});
+    }
+    return result;
+  };
+  const sampleContent = (article:Article) => ({title:article.title,titleCn:article.titleCn,sentences:article.sentences,paragraphStarts:article.paragraphStarts});
+  const articleIds = new Map<string,string>(), articles = [...current.articles];
+  for (const row of guest.articles) {
+    const index=articles.findIndex(old=>old.id===row.id), old=articles[index];
+    const sample=demoState().articles.find(item=>item.id===row.id);
+    if (index<0) { articles.push(row); articleIds.set(row.id,row.id); }
+    else if (same(old,row)) articleIds.set(row.id,row.id);
+    else if (sample && same(sampleContent(old),sampleContent(sample))) { articles[index]=row;articleIds.set(row.id,row.id); }
+    else if (same(sampleContent(old),sampleContent(row))) { articles[index]={...old,lastReadAt:Math.max(old.lastReadAt??0,row.lastReadAt??0)};articleIds.set(row.id,row.id); }
+    else {
+      const id=copyId(row.id,row), copy={...row,id};
+      const previous=articles.find(item=>item.id===id);
+      if(previous&&!same(previous,copy))throw new Error("文章冲突副本 ID 重复，原资料仍保留");
+      if(!previous)articles.push(copy);
+      articleIds.set(row.id,id);
+    }
+  }
+  const articleId = (id:string|undefined) => id ? articleIds.get(id)??id : id;
+  const tasks = guest.tasks.map(row=>({...row,...(row.source?{source:{...row.source,articleId:articleId(row.source.articleId)!}}:{})}));
+  const notes = guest.notes.map(row=>({...row,...(row.sourceArticleId?{sourceArticleId:articleId(row.sourceArticleId)}:{})}));
+  const vocab = guest.vocab.map(row=>({...row,sourceArticleId:articleId(row.sourceArticleId)!}));
+  const vocabIds = new Map(vocab.map(row=>{const old=current.vocab.find(item=>item.id===row.id);return [row.id,old&&!same(old,row)?copyId(row.id,row):row.id];}));
+  const reviewEvents = guest.reviewEvents.map(row=>({...row,wordId:vocabIds.get(row.wordId)??row.wordId}));
+  for(const row of reviewEvents){const old=current.reviewEvents.find(item=>item.id===row.id);if(old&&!same(old,row))throw new Error("复习事件 ID 内容冲突，访客资料仍保留待恢复");}
+  const progress = {...current.progress};
+  for(const [id,value] of Object.entries(guest.progress)){const target=articleId(id)!;progress[target]=Math.max(progress[target]??0,value);}
+  return { articles, vocab: merge(current.vocab,vocab), notes: merge(current.notes,notes), tasks: merge(current.tasks,tasks,mergePracticeTask), reviewEvents: [...current.reviewEvents,...reviewEvents.filter(row=>!current.reviewEvents.some(old=>old.id===row.id))], sessions: merge(current.sessions,guest.sessions), history: merge(current.history,guest.history), glossary: [...current.glossary,...guest.glossary.filter(pair=>!current.glossary.some(old=>same(old,pair)))], progress, onboarded: true };
+}
+export async function finishGuestClaim(accountId: string, valid: () => boolean = () => true): Promise<void> {
+  await serializeProfile(async () => {
+    if (!valid() || repository?.identity !== accountId) throw new DOMException("资料认领已取消", "AbortError");
+    const guest = await createPersistence("guest");
+    try {
+      const claim = await guest.get<GuestClaim>(GUEST_CLAIMS,accountId);
+      if (!claim || claim.deleted) return;
+      if (claim.payload?.accountId !== accountId) throw new Error("认领账号不匹配");
+      const snapshot = await guest.loadSnapshot();
+      await guest.commit({ expectedRevision: snapshot.revision, records: [{collection:GUEST_CLAIMS,id:accountId,payload:null,deleted:true,expectedVersion:claim.version}] });
+    } finally { guest.close(); }
+  });
 }
 
 function subscribe(l: () => void) {
@@ -515,7 +738,7 @@ let statsCache: { src: AppState; at: number; out: ReviewStats } | null = null;
 export function reviewStats(s: AppState): ReviewStats {
   const now = Date.now();
   if (statsCache && statsCache.src === s && now - statsCache.at < 30_000) return statsCache.out;
-  const dueList = s.vocab.filter((v) => v.dueAt <= now);
+  const dueList = s.vocab.filter((v) => !v.paused && v.dueAt <= now);
   const dueWords = dueList.filter((v) => v.kind !== "chunk").length;
   const out: ReviewStats = {
     due: dueList.length,
@@ -545,7 +768,7 @@ export const actions = {
     emit();
   },
   setTab(tab: Tab) {
-    state = { ...state, tab };
+    state = { ...state, tab: tab === "shelf" || tab === "me" ? "today" : tab };
     emit();
   },
   setOnboarded() {
@@ -573,90 +796,59 @@ export const actions = {
     emit();
   },
 
-  /* ---------- B6 ①：API Key 唯一写入口（Key 只存钥匙串） ----------
-     真机：值变化即 secret_put 入钥匙串，成功后 keyStored=true（persistable 随之置空，
-     localStorage 不再落明文）；失败 → keyStored=false 明文兜底 + 诊断，Key 不丢。
-     清空：同步 secret_delete（防下次启动 hydrate 从钥匙串回填复活旧 Key）。
-     浏览器：无钥匙串，明文 localStorage 兜底（hydrate 已把 keyStored 复位 false）。 */
+  /* Per-profile secure writes are serialized so an older keystroke cannot
+     overwrite a newer value. Browser preview keeps secrets in memory only. */
   setApiKey(v: string) {
-    const prev = state.settings.apiKey.trim();
     const next = v.trim();
+    const target = repository, identity = target?.identity ?? "guest";
     state = { ...state, settings: { ...state.settings, apiKey: v, keyStored: false } };
     emit();
     if (!isTauri()) return;
-    if (next) {
-      void invokeRaw<void>("secret_put", { key: KEYCHAIN_APIKEY, value: next })
+      void credentialWork(() => next ? invokeRaw<void>("secret_put", { key: profileSecret(identity, KEYCHAIN_APIKEY), value: next }) : invokeRaw<void>("secret_delete", { key: profileSecret(identity, KEYCHAIN_APIKEY) }))
         .then(() => {
           /* 输入又变了（旧请求晚到）→ 放弃本次标记，以最新输入为准 */
-          if (getState().settings.apiKey.trim() !== next) return;
+          if (repository !== target || getState().settings.apiKey.trim() !== next) return;
           state = { ...state, settings: { ...state.settings, keyStored: true } };
           emit();
         })
         .catch((err: unknown) => {
+          if (repository !== target) return;
           actions.pushDiag({
             time: Date.now(),
             kind: "keychain",
-            msg: `Key 存入钥匙串失败，暂以明文保存在本机：${err instanceof Error ? err.message : String(err)}`,
+            msg: `Key 存入钥匙串失败，仅本次会话可用，未持久保存：${err instanceof Error ? err.message : String(err)}`,
           });
         });
-    } else if (prev) {
-      void invokeRaw<void>("secret_delete", { key: KEYCHAIN_APIKEY }).catch((err: unknown) => {
-        actions.pushDiag({
-          time: Date.now(),
-          kind: "keychain",
-          msg: `钥匙串清理失败（下次启动可能回填旧 Key）：${err instanceof Error ? err.message : String(err)}`,
-        });
-      });
-    }
   },
 
   /* ---------- U-11：讯飞三件套唯一写入口（与模型 Key 同路径） ----------
      真机：任一凭据非空即三件 secret_put 入钥匙串，成功后 voiceKeyStored=true（落盘置空）；
-     失败 → voiceKeyStored=false 明文兜底 + 诊断。清空：三件同步 secret_delete。
-     浏览器：无钥匙串，明文 localStorage 兜底（hydrate 已把 voiceKeyStored 复位 false）。 */
+     失败仅本次会话可用。浏览器预览不持久保存凭据。 */
   setVoiceCreds(voiceAppId: string, voiceApiKey: string, voiceApiSecret: string) {
-    const prev = [
-      state.settings.voiceAppId.trim(),
-      state.settings.voiceApiKey.trim(),
-      state.settings.voiceApiSecret.trim(),
-    ];
+    const target = repository, identity = target?.identity ?? "guest";
     const next = [voiceAppId.trim(), voiceApiKey.trim(), voiceApiSecret.trim()];
     state = { ...state, settings: { ...state.settings, voiceAppId, voiceApiKey, voiceApiSecret, voiceKeyStored: false } };
     emit();
     if (!isTauri()) return;
-    if (next[1] || next[2]) {
-      void Promise.all([
-        invokeRaw<void>("secret_put", { key: KEYCHAIN_VOICE_APPID, value: voiceAppId }),
-        invokeRaw<void>("secret_put", { key: KEYCHAIN_VOICE_KEY, value: voiceApiKey }),
-        invokeRaw<void>("secret_put", { key: KEYCHAIN_VOICE_SECRET, value: voiceApiSecret }),
-      ])
+      void credentialWork(async () => {
+        const keys = [KEYCHAIN_VOICE_APPID,KEYCHAIN_VOICE_KEY,KEYCHAIN_VOICE_SECRET];
+        for (let index=0;index<keys.length;index++) { const key = profileSecret(identity,keys[index]); if (next[index]) await invokeRaw<void>("secret_put", {key,value:next[index]}); else await invokeRaw<void>("secret_delete", {key}); }
+      })
         .then(() => {
           /* 输入又变了（旧请求晚到）→ 放弃本次标记，以最新输入为准 */
           const cur = getState().settings;
-          if (cur.voiceAppId.trim() !== next[0] || cur.voiceApiKey.trim() !== next[1] || cur.voiceApiSecret.trim() !== next[2]) return;
+          if (repository !== target || cur.voiceAppId.trim() !== next[0] || cur.voiceApiKey.trim() !== next[1] || cur.voiceApiSecret.trim() !== next[2]) return;
           state = { ...state, settings: { ...state.settings, voiceKeyStored: true } };
           emit();
         })
         .catch((err: unknown) => {
+          if (repository !== target) return;
           actions.pushDiag({
             time: Date.now(),
             kind: "keychain",
-            msg: `讯飞凭据存入钥匙串失败，暂以明文保存在本机：${err instanceof Error ? err.message : String(err)}`,
+            msg: `讯飞凭据存入钥匙串失败，仅本次会话可用，未持久保存：${err instanceof Error ? err.message : String(err)}`,
           });
         });
-    } else if (prev[1] || prev[2]) {
-      void Promise.all([
-        invokeRaw<void>("secret_delete", { key: KEYCHAIN_VOICE_APPID }),
-        invokeRaw<void>("secret_delete", { key: KEYCHAIN_VOICE_KEY }),
-        invokeRaw<void>("secret_delete", { key: KEYCHAIN_VOICE_SECRET }),
-      ]).catch((err: unknown) => {
-        actions.pushDiag({
-          time: Date.now(),
-          kind: "keychain",
-          msg: `讯飞凭据钥匙串清理失败（下次启动可能回填旧值）：${err instanceof Error ? err.message : String(err)}`,
-        });
-      });
-    }
   },
 
   /* 收词：出处为真实参数（§6.3④，替代 spike 的 sourceArticleId:"trees" 硬编码） */
@@ -685,7 +877,7 @@ export const actions = {
       trap: entry.trap,
       sourceArticleId: source?.articleId || state.readingArticleId || "",
       sourceSentenceIdx: source?.sentIdx ?? 0,
-      dueAt: Date.now(),
+      dueAt: Date.now(), createdAt: Date.now(), updatedAt: Date.now(), generation: crypto.randomUUID(), srs: initialSrs(Date.now()),
     };
     state = {
       ...state,
@@ -714,7 +906,7 @@ export const actions = {
     if (idx < 0) return;
     const snap = state.articles[idx];
     commitTrash();
-    state = { ...state, articles: state.articles.filter((a) => a.id !== id), trash: { kind: "article", index: idx, article: snap } };
+    state = { ...state, articles: state.articles.map(a => a.id === id ? { ...a, archived: true, updatedAt: Date.now() } : a), trash: { kind: "article", index: idx, article: snap } };
     emit();
     startTrashTimer();
     toast(`已移出书架 · ${snap.title}`, { action: "撤销", onAction: () => actions.undoTrash() });
@@ -748,8 +940,7 @@ export const actions = {
       vocab.splice(Math.min(t.index, vocab.length), 0, t.vocab);
       state = { ...state, vocab, trash: null };
     } else if (t.kind === "article" && t.article) {
-      const articles = [...state.articles];
-      articles.splice(Math.min(t.index, articles.length), 0, t.article);
+      const articles = state.articles.map(article => article.id === t.article!.id ? { ...article, archived: !!t.article!.archived, updatedAt: Date.now() } : article);
       state = { ...state, articles, trash: null };
     } else if (t.kind === "history" && t.item) {
       const history = [...state.history];
@@ -769,9 +960,22 @@ export const actions = {
     state = { ...state, vocab: state.vocab.map((v) => (v.id === id ? { ...v, dueAt } : v)) };
     emit();
   },
-  gradeVocab(id: string, grade: ReviewGrade, extra?: { trap?: boolean }) {
+  gradeVocab(id: string, grade: ReviewGrade, extra?: { eventId?: string; trap?: boolean; mode?: string; answer?: string; expected?: string; bucket?: "pass" | "wrong" | "trap" }): string | undefined {
     const prev = state.vocab.find((v) => v.id === id);
-    const dueAt = Date.now() + GRADE_INTERVALS[grade].ms;
+    if (!prev) return;
+    if (extra?.eventId) {
+      const old = state.reviewEvents.find(event => event.id === extra.eventId);
+      if (old) {
+        if (old.kind !== "grade" || old.wordId !== id || old.grade !== grade || old.mode !== (extra.mode ?? "recognition") || old.generation !== prev.generation || old.recall?.bucket !== extra.bucket || old.recall?.answer !== extra.answer || old.recall?.expected !== extra.expected) throw new Error("复习事件 ID 已用于其他评分，请恢复原记录后继续");
+        return old.id;
+      }
+    }
+    const event: ReviewEvent = { v: 2, id: extra?.eventId ?? crypto.randomUUID(), wordId: id, deviceId: deviceId(), reviewedAt: Date.now(), kind: "grade", grade, day: new Date().toLocaleDateString("en-CA"), mode: extra?.mode ?? "recognition", ...(extra?.bucket ? { recall: { bucket:extra.bucket,answer:extra.answer,expected:extra.expected } } : {}), generation: prev.generation };
+    const events = [...state.reviewEvents, event];
+    const baseline = prev.srsBaseline ?? (prev.baseline as typeof prev.srs) ?? prev.srs ?? initialSrs(prev.dueAt);
+    const baselineRecall = (prev.baselineRecall ?? (state.reviewEvents.some(e => e.wordId === id) ? undefined : prev.recall)) as ReturnType<typeof reduceReviewEvents>["recall"] | undefined;
+    const { srs, recall } = reduceReviewEvents(baseline, events, id, prev.generation, baselineRecall);
+    const dueAt = srs.dueAt;
     /* 同一张卡当日只计一次清卡/复习：forgot 10 分钟回流再清不重复计数，
        folio「已清 N/M」分母不再随回流变大（治 state-5；上限 200 防异常增长）。 */
     const counted = !state.stats.clearedIds.includes(id);
@@ -780,8 +984,9 @@ export const actions = {
     const isWrong = grade === "forgot" || !!extra?.trap;
     state = {
       ...state,
+      reviewEvents: events,
       vocab: state.vocab.map((v) =>
-        v.id === id ? { ...v, dueAt, ...(isWrong ? { lastWrongAt: Date.now() } : {}) } : v,
+        v.id === id ? { ...v, srs, srsBaseline: baseline, baseline, baselineRecall: baselineRecall ?? { total: {pass:0,wrong:0,trap:0},byMode:{} }, recall, updatedAt: Date.now(), dueAt, ...(isWrong ? { lastWrongAt: Date.now() } : {}) } : v,
       ),
       stats: {
         ...state.stats,
@@ -794,14 +999,25 @@ export const actions = {
         },
       },
       lastGrade: prev
-        ? { id, prevDueAt: prev.dueAt, counted, wasTrap: !!(extra?.trap && counted), prevWrongAt: prev.lastWrongAt ?? null }
+        ? { id, eventId: event.id, prevDueAt: prev.dueAt, counted, wasTrap: !!(extra?.trap && counted), prevWrongAt: prev.lastWrongAt ?? null }
         : null,
     };
     emit();
+    return event.id;
   },
   undoGrade() {
     const lg = state.lastGrade;
     if (!lg) return;
+    if (lg.eventId) {
+      const word = state.vocab.find(v => v.id === lg.id);
+      if (!word) return;
+      const event: ReviewEvent = { v: 2, id: crypto.randomUUID(), wordId: word.id, deviceId: deviceId(), reviewedAt: Date.now(), kind: "undo", mode: "recognition", generation: word.generation, reversesEventId: lg.eventId };
+      const events = [...state.reviewEvents, event];
+      const { srs, recall } = reduceReviewEvents(word.srsBaseline ?? initialSrs(lg.prevDueAt), events, word.id, word.generation, word.baselineRecall as ReturnType<typeof reduceReviewEvents>["recall"] | undefined);
+      const dec = lg.counted === false ? 0 : 1;
+      state = { ...state, reviewEvents: events, vocab: state.vocab.map(v => v.id === word.id ? { ...v, srs, recall, dueAt: srs.dueAt, lastWrongAt: lg.prevWrongAt ?? undefined, updatedAt: Date.now() } : v), stats: { ...state.stats, clearedToday: Math.max(0, state.stats.clearedToday-dec), clearedIds: dec ? state.stats.clearedIds.filter(id => id !== word.id) : state.stats.clearedIds, week: { ...state.stats.week, review: Math.max(0,state.stats.week.review-dec), trap: Math.max(0,state.stats.week.trap-(lg.wasTrap?1:0)) } }, lastGrade: null };
+      emit(); return;
+    }
     /* 只有确实计过数的那次才回退（回流卡的重复评分没计数，撤销也不该减成负数）；
        trap 同步回滚（治 state-7：撤销评分后本周「直译陷阱」不再虚高到跨周） */
     const dec = lg.counted === false ? 0 : 1;
@@ -827,7 +1043,7 @@ export const actions = {
 
   setProgress(articleId: string, sent: number) {
     if ((state.progress[articleId] ?? -1) === sent) return;
-    state = { ...state, progress: { ...state.progress, [articleId]: sent } };
+    state = { ...state, progress: { ...state.progress, [articleId]: sent }, articles: state.articles.map(a => a.id === articleId ? { ...a, lastReadAt: Date.now(), updatedAt: Date.now() } : a) };
     emit();
   },
   /** 段级翻译回填（#35：导入文章 zh=null → 翻译管线逐句补齐）。 */
@@ -836,14 +1052,14 @@ export const actions = {
       ...state,
       articles: state.articles.map((a) =>
         a.id === articleId
-          ? { ...a, sentences: a.sentences.map((s) => (s.idx === sentIdx ? { ...s, zh } : s)) }
+          ? { ...a, sentences: a.sentences.map((s) => (s.idx === sentIdx && s.zhState !== "edited" ? { ...s, zh, zhState: "machine" as const } : s)) }
           : a,
       ),
     };
     emit();
   },
   addArticle(a: Article) {
-    state = { ...state, articles: [a, ...state.articles] };
+    state = { ...state, articles: [{ ...a, createdAt: a.createdAt ?? Date.now(), updatedAt: Date.now() }, ...state.articles.filter(old => old.id !== a.id)] };
     emit();
   },
   setReading(articleId: string | null) {
@@ -864,8 +1080,19 @@ export const actions = {
     state = { ...state, history: [full, ...state.history] };
     emit();
   },
+  async upsertTask(task: PracticeTask): Promise<void> {
+    await replaceSyncedState(current => ({ tasks: [stampPracticeTask(current.tasks.find(t => t.id === task.id), task, Date.now()), ...current.tasks.filter(t => t.id !== task.id)] }));
+    window.dispatchEvent(new Event("mobile-state-change"));
+  },
+  updateWord(id: string, patch: Partial<VocabWord>) {
+    state = { ...state, vocab: state.vocab.map(w => w.id === id ? { ...w, ...patch, id, updatedAt: Date.now() } : w) }; emit();
+  },
+  setSessions(sessions: SpeakSession[]) { state = { ...state, sessions }; emit(); },
+  setGlossary(glossary: GlossaryPair[]) { state = { ...state, glossary }; emit(); },
+  setSpeakDifficulty(speakDifficulty: AppState["speakDifficulty"]) { state = { ...state, speakDifficulty }; emit(); },
+  saveNote(note: NoteItem) { state = { ...state, notes: [{ ...note, updatedAt: Date.now() }, ...state.notes.filter(n => n.id !== note.id)] }; emit(); },
   addNote(n: Omit<NoteItem, "id">) {
-    state = { ...state, notes: [{ id: "n" + Date.now(), ...n }, ...state.notes] };
+    state = { ...state, notes: [{ id: crypto.randomUUID(), createdAt: Date.now(), updatedAt: Date.now(), ...n }, ...state.notes] };
     emit();
   },
   setClip(en: string, zh: string) {
@@ -902,8 +1129,18 @@ export const actions = {
   /** 结束一轮完整复习：streak +1（当日全部清完时由调用方判定 due===0）。
       全库唯一累加点——hydrate 跨天只保留/清零、不再 +1（治双重累加）。 */
   finishReviewStreak() {
-    state = { ...state, stats: { ...state.stats, streak: state.stats.streak + 1 } };
+    const day = todayKey();
+    if (state.stats.lastReviewStreakDay === day) return;
+    state = { ...state, stats: { ...state.stats, streak: state.stats.streak + 1, lastReviewStreakDay: day } };
     emit();
+  },
+  async completeReviewSession(draftId: string, countStreak: boolean) {
+    await replaceSyncedState(current => {
+      const day = todayKey();
+      return countStreak && current.stats.lastReviewStreakDay !== day
+        ? { stats: { ...current.stats, streak: current.stats.streak + 1, lastReviewStreakDay: day } }
+        : {};
+    }, { records: [{ collection: "local.review", id: draftId, payload: null, deleted: true }] });
   },
 };
 
@@ -1048,7 +1285,7 @@ let speakToken = 0;
     stopSpeak 需要云句柄才能中断在播音轨（speakWithFallback 返回 void 拿不到句柄）；
     「云优先→失败降级+诊断」语义与其等价（其早期版本降级会回调 store.speak，委托即互调环）。 */
 export function speak(text: string, rate = 1, onend?: () => void, lang: "en" | "zh" = "en"): void {
-  if (cloudAvailable()) {
+  if (repository?.identity !== "guest" && cloudAvailable()) {
     const token = ++speakToken;
     cloudStopper?.();
     cloudStopper = null;
@@ -1093,74 +1330,3 @@ actions.pushDiag({
   kind: "boot",
   msg: `启动 · ${isTauri() ? "真机" : "浏览器"} · 朗读引擎 ${state.settings.ttsEngine}${state.settings.edgeVoice ? `（${state.settings.edgeVoice}）` : ""}`,
 });
-
-/* ---------- B6 ①：启动 Key 迁移/补拉（真机；hydrate 后异步执行） ----------
-   · localStorage 有明文（迁移前老数据/上次迁移失败）→ secret_put 入钥匙串，
-     成功后 keyStored=true，persistable 落盘即不再带明文（「Key 只存钥匙串」由此成立）；
-     失败 → 保留明文兜底 + 诊断，Key 不丢。
-   · localStorage 空（已迁移/新设备钥匙串已有）→ secret_get 回填内存态。
-   · 浏览器无钥匙串，跳过（明文 localStorage 兜底）。 */
-if (isTauri()) {
-  void (async () => {
-    try {
-      const stored = await invokeRaw<string | null>("secret_get", { key: KEYCHAIN_APIKEY });
-      const local = getState().settings.apiKey.trim();
-      if (local) {
-        try {
-          await invokeRaw<void>("secret_put", { key: KEYCHAIN_APIKEY, value: local });
-          state = { ...state, settings: { ...state.settings, apiKey: local, keyStored: true } };
-          emit();
-        } catch (err) {
-          actions.pushDiag({
-            time: Date.now(),
-            kind: "keychain",
-            msg: `Key 迁移钥匙串失败，继续以明文保存在本机：${err instanceof Error ? err.message : String(err)}`,
-          });
-        }
-      } else if (stored) {
-        actions.setSettings({ apiKey: stored, keyStored: true });
-      }
-    } catch (err) {
-      actions.pushDiag({
-        time: Date.now(),
-        kind: "keychain",
-        msg: `钥匙串读取失败：${err instanceof Error ? err.message : String(err)}`,
-      });
-    }
-  })();
-
-  /* U-11：讯飞三件套启动迁移/回填（与模型 Key 同款逻辑；三件任一在即整组入钥匙串）。 */
-  void (async () => {
-    try {
-      const s = getState().settings;
-      const local = [s.voiceAppId, s.voiceApiKey, s.voiceApiSecret];
-      if (local.some((v) => v.trim())) {
-        await Promise.all([
-          invokeRaw<void>("secret_put", { key: KEYCHAIN_VOICE_APPID, value: local[0] }),
-          invokeRaw<void>("secret_put", { key: KEYCHAIN_VOICE_KEY, value: local[1] }),
-          invokeRaw<void>("secret_put", { key: KEYCHAIN_VOICE_SECRET, value: local[2] }),
-        ]);
-        const cur = getState().settings;
-        if (cur.voiceAppId === local[0] && cur.voiceApiKey === local[1] && cur.voiceApiSecret === local[2]) {
-          state = { ...state, settings: { ...state.settings, voiceKeyStored: true } };
-          emit();
-        }
-      } else {
-        const stored = await Promise.all([
-          invokeRaw<string | null>("secret_get", { key: KEYCHAIN_VOICE_APPID }),
-          invokeRaw<string | null>("secret_get", { key: KEYCHAIN_VOICE_KEY }),
-          invokeRaw<string | null>("secret_get", { key: KEYCHAIN_VOICE_SECRET }),
-        ]);
-        if (stored[1] || stored[2]) {
-          actions.setSettings({ voiceAppId: stored[0] || "", voiceApiKey: stored[1] || "", voiceApiSecret: stored[2] || "", voiceKeyStored: true });
-        }
-      }
-    } catch (err) {
-      actions.pushDiag({
-        time: Date.now(),
-        kind: "keychain",
-        msg: `讯飞凭据钥匙串迁移失败，继续以明文保存在本机：${err instanceof Error ? err.message : String(err)}`,
-      });
-    }
-  })();
-}

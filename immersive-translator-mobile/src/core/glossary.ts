@@ -11,34 +11,9 @@ export interface GlossaryPair {
   b: string;
 }
 
-const KEY = "ita.v3.glossary";
-
-/** 读术语表；坏数据/未初始化 → 空表（不抛错，翻译链路不因术语表阻塞）。 */
-export function readGlossary(): GlossaryPair[] {
-  try {
-    const raw = JSON.parse(localStorage.getItem(KEY) || "[]") as unknown;
-    if (!Array.isArray(raw)) return [];
-    const out: GlossaryPair[] = [];
-    for (const item of raw) {
-      const a = typeof (item as GlossaryPair)?.a === "string" ? ((item as GlossaryPair).a ?? "").trim() : "";
-      const b = typeof (item as GlossaryPair)?.b === "string" ? ((item as GlossaryPair).b ?? "").trim() : "";
-      if (a && b) out.push({ a, b });
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-/** 写术语表（空条目过滤；存储满/隐私模式静默失败）。 */
-export function saveGlossary(list: GlossaryPair[]): void {
-  try {
-    const clean = list.filter((p) => p && p.a.trim() && p.b.trim());
-    localStorage.setItem(KEY, JSON.stringify(clean));
-  } catch {
-    /* 存储满/隐私模式静默 */
-  }
-}
+import { actions, getState } from "../store";
+export function readGlossary(): GlossaryPair[] { return getState().glossary; }
+export function saveGlossary(list: GlossaryPair[]): void { actions.setGlossary(list.filter(p => p.a.trim() && p.b.trim())); }
 
 /**
  * 解析多行文本为术语表：每行一条，支持

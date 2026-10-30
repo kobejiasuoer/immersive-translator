@@ -9,7 +9,7 @@
  *
  * chunk ≈2048 样本（128ms@16k）以 base64 交付；stop() 返回整段 {pcmB64, peak, ms}。
  * 15s 录音上限由调用方控制（跟读/听写各自超时口径不同）。
- * 拒绝授权 → 返回 null，由调用方降级（模拟电平等）。
+ * 拒绝授权 → 返回 null，由调用方显示真实拒权态或文字输入。
  */
 import { invoke } from "./device";
 
@@ -78,14 +78,27 @@ class ItaPcmCaptureProcessor extends AudioWorkletProcessor {
     this.chunkLen = 0;
     this.smoothed = 0;
     this.peak = 0;
+    this.finished = false;
     this.port.onmessage = (e) => {
       if (e.data && e.data.type === 'flush') {
-        // 停止握手：保证此前排队的 chunk 消息全部送达主线程后再回执
+        if (!this.finished) {
+          const tail = [];
+          for (let p = this.pos; p < this.carry.length; p += this.ratio) {
+            const i = p | 0, frac = p - i;
+            tail.push(this.carry[i] * (1 - frac) + this.carry[Math.min(i + 1, this.carry.length - 1)] * frac);
+          }
+          this.accumulate(tail);
+          this.carry = new Float32Array(0);
+          if (this.chunkLen > 0) { this.emit(this.chunk.slice(0,this.chunkLen)); this.chunkLen = 0; }
+          this.finished = true;
+        }
+        // 排空尾部不足一整块的采样后再回执
         this.port.postMessage({ type: 'flushed' });
       }
     };
   }
   process(inputs) {
+    if (this.finished) return true;
     const ch = inputs[0] && inputs[0][0];
     if (!ch) return true;
     // 拼接待重采样缓冲
@@ -101,9 +114,14 @@ class ItaPcmCaptureProcessor extends AudioWorkletProcessor {
       out.push(buf[i] * (1 - frac) + buf[i + 1] * frac);
       p += this.ratio;
     }
-    const consumed = p | 0;
+    // 下采样可能越过本块末尾；保留越过的相位，不能把下一块从 0 重启。
+    const consumed = Math.min(p | 0, buf.length);
     this.carry = buf.slice(consumed);
     this.pos = p - consumed;
+    this.accumulate(out);
+    return true;
+  }
+  accumulate(out) {
     // 累积成 CHUNK_SAMPLES 块
     for (let i = 0; i < out.length; i++) {
       const s = out[i];
@@ -116,7 +134,6 @@ class ItaPcmCaptureProcessor extends AudioWorkletProcessor {
         this.chunkLen = 0;
       }
     }
-    return true;
   }
   emit(f32) {
     // 逐块 RMS → 平滑（MicRecorder.swift:226-232：smoothed = 0.6*prev + 0.4*rms）
@@ -160,7 +177,22 @@ function makeFallbackBlockHandler(state: CaptureState, ctxRate: number) {
   let pos = 0;
   let chunk = new Float32Array(CHUNK_SAMPLES);
   let chunkLen = 0;
-  return (ch: Float32Array) => {
+  let finished = false;
+  const accumulate = (samples: number[]) => {
+    for (const s of samples) {
+      const abs = Math.abs(s);
+      if (abs > state.peak) state.peak = abs;
+      chunk[chunkLen++] = s;
+      if (chunkLen === chunk.length) {
+        deliverChunk(state, chunk, () => {
+          chunk = new Float32Array(CHUNK_SAMPLES);
+          chunkLen = 0;
+        });
+      }
+    }
+  };
+  const handle = (ch: Float32Array) => {
+    if (finished) return;
     const buf = new Float32Array(carry.length + ch.length);
     buf.set(carry, 0);
     buf.set(ch, carry.length);
@@ -172,22 +204,22 @@ function makeFallbackBlockHandler(state: CaptureState, ctxRate: number) {
       out.push(buf[i] * (1 - frac) + buf[i + 1] * frac);
       p += ratio;
     }
-    const consumed = p | 0;
+    const consumed = Math.min(p | 0, buf.length);
     carry = buf.slice(consumed);
     pos = p - consumed;
-    for (let i = 0; i < out.length; i++) {
-      const s = out[i];
-      const abs = s < 0 ? -s : s;
-      if (abs > state.peak) state.peak = abs;
-      chunk[chunkLen++] = s;
-      if (chunkLen === chunk.length) {
-        deliverChunk(state, chunk, () => {
-          chunk = new Float32Array(CHUNK_SAMPLES);
-          chunkLen = 0;
-        });
-      }
-    }
+    accumulate(out);
   };
+  return { process: handle, flush() {
+    if (finished) return;
+    const tail: number[] = [];
+    for (let p = pos; p < carry.length; p += ratio) {
+      const i = p | 0, frac = p - i;
+      tail.push(carry[i] * (1 - frac) + carry[Math.min(i + 1, carry.length - 1)] * frac);
+    }
+    accumulate(tail); carry = new Float32Array(0);
+    if (chunkLen > 0) deliverChunk(state, chunk.slice(0, chunkLen), () => { chunkLen = 0; });
+    finished = true;
+  } };
 }
 
 /** 交付一块：RMS 平滑 + Int16 转换 + 回调（两路径共用）。 */
@@ -264,6 +296,8 @@ export async function startPcmCapture(opts: CaptureOpts = {}): Promise<Capture |
   let legacyNode: ScriptProcessorNode | null = null;
   let workletUrl: string | null = null;
   let stopped = false;
+  let teardownFlight: Promise<void> | null = null;
+  let flushFallback: (()=>void) | null = null;
 
   try {
     workletUrl = URL.createObjectURL(new Blob([WORKLET_SRC], { type: "application/javascript" }));
@@ -292,10 +326,11 @@ export async function startPcmCapture(opts: CaptureOpts = {}): Promise<Capture |
     console.warn("[audio] AudioWorklet 不可用，降级 ScriptProcessor", err);
     workletNode = null;
     const handleBlock = makeFallbackBlockHandler(state, ctx.sampleRate);
+    flushFallback = handleBlock.flush;
     legacyNode = ctx.createScriptProcessor(4096, 1, 1);
     legacyNode.onaudioprocess = (e) => {
       if (stopped) return;
-      handleBlock(e.inputBuffer.getChannelData(0));
+      handleBlock.process(e.inputBuffer.getChannelData(0));
     };
     src.connect(legacyNode);
     // ScriptProcessor 必须连 destination 才回调；增益 0 防啸叫
@@ -305,7 +340,7 @@ export async function startPcmCapture(opts: CaptureOpts = {}): Promise<Capture |
     mute.connect(ctx.destination);
   }
 
-  async function teardown(flushWorklet: boolean): Promise<void> {
+  async function performTeardown(flushWorklet: boolean): Promise<void> {
     if (stopped) return;
     stopped = true;
     stream.getTracks().forEach((t) => t.stop());
@@ -344,6 +379,7 @@ export async function startPcmCapture(opts: CaptureOpts = {}): Promise<Capture |
       }
     }
     if (legacyNode) {
+      if(flushWorklet) flushFallback?.();
       legacyNode.onaudioprocess = null;
       try {
         legacyNode.disconnect();
@@ -360,7 +396,11 @@ export async function startPcmCapture(opts: CaptureOpts = {}): Promise<Capture |
     /* 录音后重设 playback 音频会话（治「录完就播全无声」）：WebKit 录音时把会话切到
        PlayAndRecord，停止后的自动恢复有竞态窗——录制刚停就播的云 TTS（陪练句队）
        会掉进听筒路由/中断态。fire-and-forget：浏览器/失败均静默（会话设置幂等）。 */
-    void invoke("restore_playback_audio");
+    await invoke("restore_playback_audio");
+  }
+  function teardown(flushWorklet: boolean): Promise<void> {
+    if (!teardownFlight) teardownFlight = performTeardown(flushWorklet);
+    return teardownFlight;
   }
 
   return {

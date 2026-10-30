@@ -1,22 +1,17 @@
 /**
- * 应用外壳 —— 5 Tab（§2.1）+ push 栈（§2.2，320ms push/pop）+ 底部 sheet +
+ * 应用外壳 —— 阅读/口语/笔记与复习三标签 + push 栈 + 底部 sheet +
  * 应用内通知横幅（60s 无操作自动收起 §3.14）+ 首启 Onboarding + 深链（ita:// 等价 hash）。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { actions, flushPersist, getState, reviewStats, rolloverIfDue, toast, useApp } from "./store";
+import { actions, flushPersist, reviewStats, rolloverIfDue, toast, useApp } from "./store";
 import { Icon } from "./ui/icons";
 import { NavCtx, useNav, type Nav, type PushName, type PushProps } from "./ui/nav";
 import { SheetHost } from "./ui/sheets";
-import { haptic, invoke, onDeepLink, readClipboard, registerDiagSink } from "./services/device";
+import { haptic, invoke, onDeepLink, registerDiagSink } from "./services/device";
 /* 静态导入（非动态 chunk）：诊断模块共享 store/voice 模块，动态 import 会让
    rollup 给入口 chunk 加 export 门面，jsdom 冒烟的 new Function 执行不了 */
 import { runTtsSelftest } from "./services/selftest";
 
-import TodayScreen from "./screens/TodayScreen";
-import PracticeScreen from "./screens/PracticeScreen";
-import ShelfScreen from "./screens/ShelfScreen";
-import VocabScreen from "./screens/VocabScreen";
-import MeScreen from "./screens/MeScreen";
 import ReaderScreen from "./screens/ReaderScreen";
 import ReviewScreen from "./screens/ReviewScreen";
 import QuickReview from "./screens/QuickReview";
@@ -29,6 +24,12 @@ import { NotesGen, NotesLib, NoteDetail } from "./screens/NotesScreens";
 import { AboutScreen, DiagScreen, GlossaryScreen, HistoryScreen, ShareScreen } from "./screens/MiscScreens";
 import { SetLookScreen, SetModelScreen, SetPrefScreen, SetRemindScreen, SetVoiceScreen } from "./screens/SettingsScreens";
 import OnboardingScreen from "./screens/OnboardingScreen";
+import GlassNav from "./ui/GlassNav";
+import { ReadingHome, SpeakingHome, LearningVault, WordDetail, LearningNote, LearningSearch } from "./screens/LearningHome";
+import LearningImport from "./screens/LearningImport";
+import { LearningPractice } from "./screens/LearningPractice";
+import AccountScreen, { LoginHost } from "./screens/AccountScreen";
+import { useLoginIntent } from "./services/authGate";
 import type { Article } from "./core/types";
 import type { SpeakSession } from "./core/sessions";
 
@@ -40,16 +41,10 @@ interface Entry {
   closing: boolean;
 }
 
-const TABS: { key: "today" | "practice" | "shelf" | "vocab" | "me"; label: string; icon: string }[] = [
-  { key: "today", label: "今天", icon: "today" },
-  { key: "practice", label: "练", icon: "wave" },
-  { key: "shelf", label: "书架", icon: "shelf" },
-  { key: "vocab", label: "生词", icon: "mark" },
-  { key: "me", label: "我的", icon: "me" },
-];
+const TABS = [{ key: "today" }, { key: "practice" }, { key: "vocab" }] as const;
 
 /* push 页名称 → 读屏名称（U-17：.push 根 role=dialog 的 aria-label；与各屏 PNav 标题同口径） */
-const PUSH_TITLES: Record<PushName, string> = {
+const PUSH_TITLES: Record<PushName, string> = { learningPractice: "口语练习", account: "账号与设置", learningImport: "加入阅读", learningWord: "表达详情", learningNote: "学习笔记", learningSearch: "搜索",
   reader: "阅读",
   review: "复习",
   quick: "快速复习",
@@ -169,11 +164,11 @@ export default function App() {
     const h = window.location.hash.replace(/^#/, "");
     if (h === "quick") nav.push("quick", { fromNotify: true });
     else if (h === "translate") nav.push("translate");
-    else if (h === "vocab" || h === "shelf") actions.setTab(h);
+    else if (h === "vocab" || h === "shelf") actions.setTab(h === "shelf" ? "today" : "vocab");
     else if (h === "share" || h.startsWith("share?")) {
       const text = new URLSearchParams(h.slice("share".length).replace(/^\?/, "")).get("text");
       actions.setShareIn(text ? { text, source: "hash" } : null);
-      nav.push("share");
+      nav.push("learningImport");
     }
     if (h) history.replaceState(null, "", location.pathname + location.search);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -187,7 +182,7 @@ export default function App() {
         if (u.protocol === "ita:" && u.host === "share") {
           const text = u.searchParams.get("text");
           actions.setShareIn(text ? { text, source: "safari" } : null);
-          nav.push("share");
+          nav.push("learningImport");
         }
       } catch {
         /* 非法深链静默忽略 */
@@ -203,43 +198,10 @@ export default function App() {
      新文本 ≠ 当前 clip.en、长度 8..5000 → setClip(text, "")（zh 空串，点翻译走真实链路）；
      同一文本 60s 节流。iOS 粘贴许可由系统弹窗，拒绝 → readClipboard 返 null 静默。 ---------- */
   useEffect(() => {
-    let lastText = "";
-    let lastAt = 0;
-    let alive = true;
-    const check = async () => {
-      const text = await readClipboard();
-      if (!alive || !text) return;
-      const t = text.trim();
-      if (t.length < 8 || t.length > 5000) return;
-      const now = Date.now();
-      if (t === lastText && now - lastAt < 60_000) return;
-      if (getState().clip?.en === t) return;
-      lastText = t;
-      lastAt = now;
-      actions.setClip(t, "");
-    };
-    const onVis = () => {
-      if (document.visibilityState === "visible") {
-        /* 回前台先重算跨天/跨周（治 state-2）：iOS 切后台保活跨零点回来，
-           clearedToday/week 不能仍是昨日口径；幂等，当天已对齐时无操作 */
-        rolloverIfDue();
-        void check();
-      } else if (document.visibilityState === "hidden") {
-        /* 离前台立即落盘（治 state-8）：200ms 防抖定时器在挂起的 WKWebView 里不会跑 */
-        flushPersist();
-      }
-    };
-    const onPage = (e: PageTransitionEvent) => {
-      if (e.persisted) void check(); /* bfcache 恢复视为回前台；首次加载不读 */
-    };
-    document.addEventListener("visibilitychange", onVis);
-    window.addEventListener("pageshow", onPage);
-    return () => {
-      alive = false;
-      document.removeEventListener("visibilitychange", onVis);
-      window.removeEventListener("pageshow", onPage);
-    };
-  }, []);
+    const onVis = () => { if(document.visibilityState === "visible") rolloverIfDue(); else void flushPersist().catch(error => toast(String(error))); };
+    document.addEventListener("visibilitychange",onVis);
+    return () => document.removeEventListener("visibilitychange",onVis);
+  },[]);
 
   /* ---------- 诊断队列（demo 20 数据半）：services 层异常经 registerDiagSink 汇入 store 环形 30 条 ---------- */
   useEffect(() => {
@@ -299,6 +261,12 @@ export default function App() {
   function view(e: Entry) {
     const p = e.props;
     switch (e.name) {
+      case "learningPractice": return <LearningPractice taskId={String(p.taskId)} />;
+      case "account": return <AccountScreen />;
+      case "learningImport": return <LearningImport />;
+      case "learningWord": return <WordDetail id={String(p.id)} />;
+      case "learningNote": return <LearningNote id={p.id as string | undefined} />;
+      case "learningSearch": return <LearningSearch />;
       case "reader": {
         const article = (p.article as Article | undefined) || articles.find((a) => a.id === p.articleId);
         return article ? <ReaderScreen article={article} /> : <Missing onBack={nav.pop} />;
@@ -354,39 +322,22 @@ export default function App() {
 
   /* U-17：任一模态层（push/sheet/首启）打开时，底层 pane 与 tabbar 一律 inert——
      读屏与点按都无法穿层（sheet 与 push 共用这一套机制） */
-  const overlayOpen = stack.length > 0 || !!sheet || !onboarded;
+  const loginIntent = useLoginIntent();
+  const overlayOpen = stack.length > 0 || !!sheet || !onboarded || !!loginIntent;
 
   return (
     <NavCtx.Provider value={nav}>
       <div className="app">
         {TABS.map((t) => (
           <div key={t.key} className={`pane ${tab === t.key ? "on" : ""}`} inert={overlayOpen || undefined}>
-            {t.key === "today" && <TodayScreen />}
-            {t.key === "practice" && <PracticeScreen />}
-            {t.key === "shelf" && <ShelfScreen />}
-            {t.key === "vocab" && <VocabScreen />}
-            {t.key === "me" && <MeScreen />}
+            {t.key === "today" && <ReadingHome />}
+            {t.key === "practice" && <SpeakingHome />}
+            {t.key === "vocab" && <LearningVault />}
           </div>
         ))}
 
-        <nav className={`tabbar ${stack.length > 0 ? "behind" : ""}`} inert={overlayOpen || undefined}>
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              className={`tab ${tab === t.key ? "on" : ""}`}
-              aria-label={st.due > 0 && t.key === "vocab" ? `生词，${st.due} 个到期` : t.label}
-              aria-current={tab === t.key ? "true" : undefined}
-              onClick={() => {
-                haptic("light");
-                actions.setTab(t.key);
-              }}
-            >
-              <Icon name={t.icon} size={25} />
-              {t.key === "vocab" && st.due > 0 && <span className="tbadge num">{st.due}</span>}
-              <span>{t.label}</span>
-            </button>
-          ))}
-        </nav>
+        <GlassNav hidden={stack.length > 0} inert={overlayOpen} />
+        <LoginHost />
 
         {/* U-37：push 存在期间底层压暗 + tab 栏视差左移，「盖纸」变「推入」 */}
         <div className={`push-scrim ${stack.length > 0 ? "on" : ""}`} />
@@ -400,7 +351,7 @@ export default function App() {
             aria-modal="true"
             aria-label={PUSH_TITLES[e.name]}
             className={`push ${e.entered && !e.closing ? "in" : ""} ${e.closing ? "out" : ""}`}
-            inert={i < stack.length - 1 || undefined}
+            inert={!!loginIntent || !!sheet || i < stack.length - 1 || undefined}
           >
             {view(e)}
           </div>
@@ -414,9 +365,9 @@ export default function App() {
         )}
 
         {/* 通知横幅（U-05：进出场 400ms） */}
-        <BannerHost />
+        {!loginIntent && <BannerHost />}
 
-        <SheetHost />
+        <SheetHost inert={!!loginIntent} />
       </div>
     </NavCtx.Provider>
   );

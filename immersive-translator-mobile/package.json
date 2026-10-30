@@ -9,7 +9,16 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "storage:test": "node scripts/storage-test.mjs",
+    "discovery:test": "node scripts/discovery-test.mjs",
+    "sync:test": "node scripts/sync-test.mjs",
+    "auth:test": "node scripts/auth-test.mjs",
+    "audio:test": "node scripts/audio-test.mjs",
+    "draft:test": "node scripts/draft-test.mjs",
+    "translate:test": "node scripts/translate-test.mjs",
+    "dict-login:test": "node scripts/dict-login-test.mjs",
+    "nav:test": "node scripts/nav-test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -17,6 +26,7 @@
     "@tauri-apps/plugin-deep-link": "^2",
     "@tauri-apps/plugin-haptics": "^2",
     "@tauri-apps/plugin-notification": "^2",
+    "jszip": "^3.10.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "tauri-plugin-share": "^2.0.4"
@@ -26,6 +36,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.7.0",
+    "fake-indexeddb": "^6.2.6",
     "jsdom": "^29.1.1",
     "typescript": "^6.0.3",
     "vite": "^6.0.3"

@@ -4,6 +4,7 @@
 import { createContext, useContext } from "react";
 
 export type PushName =
+  | "learningPractice" | "account" | "learningImport" | "learningWord" | "learningNote" | "learningSearch"
   | "reader"
   | "review"
   | "quick"

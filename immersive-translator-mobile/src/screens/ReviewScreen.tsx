@@ -8,7 +8,7 @@
  * 回滚 dueAt 与计数，下次评分重新计，与「评分即落盘」互补。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { actions, reviewStats, speak, stopSpeak, toast, useApp } from "../store";
+import { actions, activeRepository, commitRepository, flushPersist, getState, profileIdentity, reviewStats, speak, stopSpeak, toast, useApp } from "../store";
 import { Icon } from "../ui/icons";
 import { useNav } from "../ui/nav";
 import { haptic } from "../services/device";
@@ -53,6 +53,10 @@ export default function ReviewScreen({ wordId, from, cards }: ReviewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const [restored, setRestored] = useState(false);
+  const identity = useRef(profileIdentity());
+  const sessionId = useRef<string>(crypto.randomUUID());
+  const saveDraft = useRef<Promise<void>>(Promise.resolve());
   const [pos, setPos] = useState(0);
   const [cs, setCs] = useState<CardState>(() => initCard(queue[0]));
   const [results, setResults] = useState<{ mode: ReviewCard["mode"]; judged: Verdict | null }[]>([]);
@@ -90,14 +94,49 @@ export default function ReviewScreen({ wordId, from, cards }: ReviewProps) {
      的队列不含「进入时已到期」承诺，判完不 +1（治 home-2：streak 虚高且可同日反复刷）。 */
   const streakEligible = !wordId && from !== "vocab" && !(cards && cards.length);
   function exitFinished() {
-    if (!streakCommitted.current) {
-      streakCommitted.current = true;
-      if (streakEligible && queue.length > 0 && results.length === queue.length && st.due === 0) {
-        actions.finishReviewStreak();
-      }
-    }
-    nav.popAll();
+    if (streakCommitted.current) return;
+    streakCommitted.current = true;
+    const eligible = streakEligible && queue.length > 0 && results.length === queue.length && st.due === 0;
+    void saveDraft.current.then(() => actions.completeReviewSession(wordId || "current", eligible)).then(() => nav.popAll()).catch(error => { streakCommitted.current = false; toast(String(error)); });
   }
+
+  useEffect(() => {
+    let alive=true;
+    void activeRepository().get<{ sessionId?:string;queue:ReviewCard[];pos:number;cs:CardState;input:string;results:{mode:ReviewCard["mode"];judged:Verdict|null}[];finished:boolean }>("local.review",wordId||"current").then(row=>{
+      if(!alive || identity.current !== profileIdentity())return;
+      const draft=row?.payload;
+      if(draft && Array.isArray(draft.queue) && draft.queue.length && draft.pos<draft.queue.length && draft.queue.every(c=>getState().vocab.some(w=>w.id===c.id))) {
+        queue.splice(0,queue.length,...draft.queue);
+        if (draft.sessionId) sessionId.current = draft.sessionId;
+        const events = getState().reviewEvents;
+        const reversed = new Set(events.filter(e => e.kind === "undo").map(e => e.reversesEventId));
+        const recovered: {mode:ReviewCard["mode"];judged:Verdict|null}[] = [];
+        for (let index = 0; index < queue.length; index++) {
+          const prefix = "review:" + sessionId.current + ":" + index + ":";
+          const grade = events.find(e => e.kind === "grade" && e.id.startsWith(prefix) && !reversed.has(e.id));
+          if (!grade) break;
+          recovered.push({ mode: queue[index].mode, judged: grade.recall?.bucket === "trap" ? "trap" : grade.recall?.bucket === "wrong" ? "wrong" : "perfect" });
+        }
+        const nextPos = draft.sessionId ? recovered.length : draft.pos;
+        const done = nextPos >= queue.length;
+        setPos(Math.min(nextPos, queue.length - 1));
+        setCs(nextPos === draft.pos ? draft.cs : initCard(queue[nextPos]));
+        setInput(nextPos === draft.pos ? draft.input : "");
+        setResults(draft.sessionId ? recovered : draft.results);
+        setFinished(done || !draft.sessionId && draft.finished); finishedRef.current = done;
+      }
+      setRestored(true);
+    }).catch(error=>{toast(String(error));setRestored(true);});
+    return ()=>{alive=false;};
+  },[]);
+  useEffect(()=>{
+    if(!restored || profileIdentity()!==identity.current)return;
+    const payload={sessionId:sessionId.current,queue,pos,cs,input,results,finished};
+    saveDraft.current=saveDraft.current.then(()=>{if(profileIdentity()!==identity.current)return;return commitRepository({records:[{collection:"local.review",id:wordId||"current",payload}]});});
+    void saveDraft.current.catch(error=>toast(String(error)));
+  },[restored,pos,cs,input,results,finished]);
+
+  if (!restored) return <div className="learning-body" role="status">正在恢复复习进度…</div>;
 
   if (finished) {
     const dayDone = st.due === 0 && results.length === queue.length;
@@ -123,7 +162,7 @@ export default function ReviewScreen({ wordId, from, cards }: ReviewProps) {
                 今天的 {st.cleared} 张清完了
               </div>
               <div className="meta" style={{ textAlign: "center", marginTop: 6 }}>
-                连续 {dayDone ? st.streak + 1 : st.streak} 天 · 明晚再见
+                连续 {dayDone ? getState().stats.lastReviewStreakDay === getState().stats.day ? st.streak : st.streak + 1 : st.streak} 天 · 明晚再见
               </div>
             </>
           )}
@@ -133,7 +172,7 @@ export default function ReviewScreen({ wordId, from, cards }: ReviewProps) {
             整理成笔记
           </button>
           <button className="btn-ghost" style={{ marginTop: 10 }} onClick={exitFinished}>
-            回到今天
+            回到阅读
           </button>
         </div>
       </>
@@ -175,9 +214,12 @@ export default function ReviewScreen({ wordId, from, cards }: ReviewProps) {
     setCs((s) => ({ ...s, phase: "graded", input: s.input || "", judged: "wrong" }));
   }
 
-  function grade(g: ReviewGrade) {
-    if (gradeLock.current) return; /* P-11：评分一次性，自动前进窗口内连点只落第一档 */
+
+  async function grade(g: ReviewGrade) {
+    if (!restored || gradeLock.current) return; /* P-11：评分一次性，自动前进窗口内连点只落第一档 */
     gradeLock.current = true;
+    try { await saveDraft.current; await flushPersist(); } catch(error) { gradeLock.current = false; toast(String(error)); return; }
+    if (profileIdentity() !== identity.current) { gradeLock.current = false; return; }
     undone.current = false;
     gradedPos.current = pos;
     snap.current = { ...cs };
@@ -191,7 +233,12 @@ export default function ReviewScreen({ wordId, from, cards }: ReviewProps) {
             ? "close"
             : "wrong"
         : cs.judged;
-    actions.gradeVocab(card.id, g, { trap: judged === "trap" });
+    const prefix = "review:" + sessionId.current + ":" + pos + ":";
+    const ordinal = getState().reviewEvents.filter(e => e.kind === "grade" && e.id.startsWith(prefix)).length;
+    try {
+      actions.gradeVocab(card.id, g, { eventId:prefix+ordinal, trap: judged === "trap", mode:card.mode, answer:input, expected:card.answer, bucket:judged === "trap" ? "trap" : judged === "wrong" ? "wrong" : "pass" });
+      await flushPersist();
+    } catch (error) { gradeLock.current = false; toast(String(error)); return; }
     setResults((r) => [...r, { mode: card.mode, judged }]);
     toast(`已记 · ${GRADE_INTERVALS[g].label}后再见`, {
       action: "撤销",

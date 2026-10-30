@@ -94,7 +94,7 @@ export function buildCard(v: VocabWord, articles: Article[]): ReviewCard {
 
 /** 今日队列：单词识别与词块完形交错；每 4 张插一张听写（有出处句的词块）。 */
 export function buildReviewQueue(vocab: VocabWord[], articles: Article[]): ReviewCard[] {
-  const due = vocab.filter((v) => v.dueAt <= Date.now());
+  const due = vocab.filter((v) => !v.paused && v.dueAt <= Date.now());
   const cards = due.map((v) => buildCard(v, articles));
   const words = cards.filter((c) => c.kind === "word");
   const chunks = cards.filter((c) => c.kind === "chunk");
