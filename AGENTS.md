@@ -12,7 +12,8 @@
 
 | 你要做的任务 | 先读 |
 |---|---|
-| **发版 / 打 tag / 微软商店更新 / 碰 Partner Center** | `docs/microsoft-store-update-runbook-2026-10-30.md`（标准流程 + 踩坑实录，**照抄即可**） |
+| **发版 / 打 tag / GitHub Release / 应用内自动更新问题** | `docs/github-release-runbook-2026-10-30.md`（两段式发版：CI 出包 + 本地补签 latest.json，**照抄即可**） |
+| **微软商店更新 / 碰 Partner Center** | `docs/microsoft-store-update-runbook-2026-10-30.md`（标准流程 + 踩坑实录，**照抄即可**） |
 | 商店提交相关的背景与决策 | `docs/microsoft-store-submission-plan-2026-10-27.md` |
 | 改隐私政策文案 | `docs/privacy-policy.md`（注意三处同步：应用内 `src/views/privacyPolicy.ts`、仓库页、商店属性页提交文本） |
 
@@ -23,6 +24,7 @@
 - **pack-msix.ps1 / 任何 PS 5.1 脚本读 UTF-8 文件必须显式 `-Encoding UTF8`**：否则中文按 GBK 误读，`tauri.conf.json` 直接解析失败。
 - MSIX 包内清单必须叫 `AppxManifest.xml`，XML 注释不能含 `--`（makeappx 硬约束，见 runbook §4）。
 - CI 的 MSIX 打包步骤 `continue-on-error: true`：**发版后必须去 GitHub Release 页确认 `.msix` 资产真实存在**，CI 绿不等于包打出来了。
+- **发版必须完成「补签段」**：`latest.json` + `.sig` 提交到 `release-updater/vX.Y.Z/` 推送（updater-assets.yml 自动附件）。缺了它应用内更新**静默失效**——用户端永远显示「已是最新」，无任何报错。
 
 ## 仓库约定
 
