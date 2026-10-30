@@ -2,7 +2,8 @@
  * 登录窗口（label=login，420×560）：验证码主流程（自动建号）+ 密码页签。
  * 状态机：邮箱页 → 验证码页（60s 重发倒计时，localStorage 持久化恢复）→ 成功 → 自动关窗。
  * 错误文案唯一出口 authErrorText（设计 §3）；banned 阻断、rate_limited 倒计时禁用不自动重试。
- * 已登录时显示兜底卡片（设计 §6 LoginView 行）。
+ * 已登录时显示兜底卡片（设计 §6 LoginView 行）；登录态随事件/焦点同步——
+ * 窗口常驻不重挂载，快照会过期（会话失效后不得再显示「已登录」）。
  * 视觉对齐 prototypes/windows-login-redesign-2026-09-27.html（品牌条带 + 分段控件）。
  */
 import { useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
@@ -13,6 +14,7 @@ import {
   authLoginPassword,
   authSendOtp,
   authVerifyOtp,
+  listenAuthStateChanged,
   settingsOpenTab,
   type AuthStatus,
 } from "../lib/tauriBridge";
@@ -63,16 +65,30 @@ export function LoginView() {
 
   const codeValue = cells.join("");
 
-  // 挂载时检查登录态：已登录则显示兜底卡片，不打扰已登录用户重走流程。
+  // 登录态同步（与 AccountSection 同一套事件驱动口径）：login 窗随应用启动
+  // 常驻（tauri.conf visible:false），show_window 重现只 show+focus 不重挂载，
+  // 挂载时查到的快照会变僵尸（会话在窗口隐藏期间失效后，弹窗仍显示「已登录」）。
+  // 三路对齐 Rust 权威态：挂载查询 + auth-state-changed 事件 + 重获焦点重查。
   useEffect(() => {
     let active = true;
-    void authGetStatus()
-      .then((s) => {
-        if (active && s.loggedIn) setExisting(s);
-      })
-      .catch(() => undefined);
+    const sync = (): void => {
+      void authGetStatus()
+        .then((s) => {
+          if (active) setExisting(s.loggedIn ? s : null);
+        })
+        .catch(() => undefined);
+    };
+    sync();
+    const unlistenStateP = listenAuthStateChanged((s) => {
+      if (active) setExisting(s.loggedIn ? s : null);
+    });
+    const unlistenFocusP = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (focused) sync();
+    });
     return () => {
       active = false;
+      void unlistenStateP.then((u) => u());
+      void unlistenFocusP.then((u) => u());
     };
   }, []);
 

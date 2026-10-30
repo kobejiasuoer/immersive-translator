@@ -25,7 +25,18 @@ pub const SYNC_STORE_SCHEMA_VERSION: u32 = 1;
 /// 集合名进文件路径，白名单即路径校验，防任意文件名读写）。
 /// speak-sessions/speak-assessments：口语对话与跟读评测记录（2026-10-28，
 /// 记录跟账号走；入队/裁剪纯本地，游客零网络——协议在 src/lib/speakRecords.ts）。
-const LOCAL_COLLECTIONS: &[&str] = &["speak-scenarios", "speak-sessions", "speak-assessments"];
+const LOCAL_COLLECTIONS: &[&str] = &[
+    "history",
+    "reading-articles",
+    "reading-vocab",
+    "notes",
+    "glossary",
+    "settings",
+    "speak-scenarios",
+    "speak-sessions",
+    "speak-assessments",
+    "review-events",
+];
 
 // ---------------------------------------------------------------------------
 // IPC 可见类型（字段与前端 src/lib/tauriBridge.ts 导出类型一字不差）
@@ -101,6 +112,7 @@ pub async fn sync_pull(
     collection: String,
     since: i64,
     limit: i64,
+    expected_namespace: Option<String>,
 ) -> Result<SyncHttpText, AuthError> {
     if validate_collection(&collection).is_err() {
         return Err(local_collection_error(&collection));
@@ -108,7 +120,15 @@ pub async fn sync_pull(
     let since = since.max(0);
     let limit = limit.clamp(1, 500);
     let path = format!("/v1/sync/{collection}/pull?since={since}&limit={limit}");
-    match manager.with_auth(reqwest::Method::GET, &path, None).await {
+    match manager
+        .with_auth_for_namespace(
+            reqwest::Method::GET,
+            &path,
+            None,
+            expected_namespace.as_deref(),
+        )
+        .await
+    {
         Ok(resp) => Ok(SyncHttpText {
             status: resp.status,
             body: resp.body,
@@ -129,13 +149,19 @@ pub async fn sync_push(
     manager: tauri::State<'_, std::sync::Arc<TokenManager>>,
     collection: String,
     entities_json: String,
+    expected_namespace: Option<String>,
 ) -> Result<SyncHttpText, AuthError> {
     if validate_collection(&collection).is_err() {
         return Err(local_collection_error(&collection));
     }
     let path = format!("/v1/sync/{collection}/push");
     match manager
-        .with_auth(reqwest::Method::POST, &path, Some(entities_json))
+        .with_auth_for_namespace(
+            reqwest::Method::POST,
+            &path,
+            Some(entities_json),
+            expected_namespace.as_deref(),
+        )
         .await
     {
         Ok(resp) => Ok(SyncHttpText {
@@ -264,13 +290,10 @@ fn write_cursors_to_path(path: &std::path::Path, file: &SyncCursorsFile) -> Resu
 pub fn sync_store_list(
     app: AppHandle,
     collection: String,
+    expected_namespace: Option<String>,
 ) -> Result<Vec<StoredSyncEntity>, String> {
-    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
-    let path = collection_path(&app, &collection)?;
-    let mut file = load_collection_from_path(&path)?;
-    file.entities
-        .sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    Ok(file.entities)
+    validate_collection(&collection)?;
+    crate::learning_store::list(&app, &collection, expected_namespace.as_deref())
 }
 
 /// 按 id 整体替换（存在即覆盖、不存在即追加）。不做新旧比较——
@@ -280,30 +303,28 @@ pub fn sync_store_put(
     app: AppHandle,
     collection: String,
     entities: Vec<StoredSyncEntity>,
+    expected_namespace: Option<String>,
 ) -> Result<(), String> {
-    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
-    let path = collection_path(&app, &collection)?;
-    let mut file = load_collection_from_path(&path)?;
-    file.schema_version = SYNC_STORE_SCHEMA_VERSION;
-    for entity in entities {
-        match file.entities.iter().position(|e| e.id == entity.id) {
-            Some(idx) => file.entities[idx] = entity,
-            None => file.entities.push(entity),
-        }
-    }
-    write_collection_to_path(&path, &file)
+    validate_collection(&collection)?;
+    crate::learning_store::put(
+        &app,
+        &collection,
+        entities,
+        false,
+        None,
+        expected_namespace.as_deref(),
+    )
 }
 
 /// 读取集合游标（版本号；无记录默认 0 = 首次全量拉取）。
 #[tauri::command]
-pub fn sync_store_cursor_get(app: AppHandle, collection: String) -> Result<i64, String> {
-    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
-    if !LOCAL_COLLECTIONS.contains(&collection.as_str()) {
-        return Err(format!("未知同步集合 {collection}（本地白名单外）"));
-    }
-    let path = cursors_path(&app)?;
-    let file = load_cursors_from_path(&path)?;
-    Ok(file.cursors.get(&collection).copied().unwrap_or(0))
+pub fn sync_store_cursor_get(
+    app: AppHandle,
+    collection: String,
+    expected_namespace: Option<String>,
+) -> Result<i64, String> {
+    validate_collection(&collection)?;
+    crate::learning_store::cursor(&app, &collection, expected_namespace.as_deref())
 }
 
 /// 写入集合游标。每个集合必须各存各的（版本号空间跨集合共享，
@@ -313,18 +334,38 @@ pub fn sync_store_cursor_set(
     app: AppHandle,
     collection: String,
     cursor: i64,
+    expected_namespace: Option<String>,
 ) -> Result<(), String> {
-    let _guard = STORE_LOCK.lock().map_err(|_| "存储锁不可用".to_string())?;
-    if !LOCAL_COLLECTIONS.contains(&collection.as_str()) {
-        return Err(format!("未知同步集合 {collection}（本地白名单外）"));
-    }
-    let path = cursors_path(&app)?;
-    let mut file = load_cursors_from_path(&path)?;
-    file.schema_version = SYNC_STORE_SCHEMA_VERSION;
-    file.cursors.insert(collection, cursor.max(0));
-    write_cursors_to_path(&path, &file)
+    validate_collection(&collection)?;
+    crate::learning_store::put(
+        &app,
+        &collection,
+        vec![],
+        false,
+        Some(cursor.max(0)),
+        expected_namespace.as_deref(),
+    )
 }
 
+/// Atomically swap a completely downloaded full snapshot while retaining pending edits.
+#[tauri::command]
+pub fn sync_store_replace(
+    app: AppHandle,
+    collection: String,
+    entities: Vec<StoredSyncEntity>,
+    cursor: i64,
+    expected_namespace: Option<String>,
+) -> Result<(), String> {
+    validate_collection(&collection)?;
+    crate::learning_store::put(
+        &app,
+        &collection,
+        entities,
+        true,
+        Some(cursor.max(0)),
+        expected_namespace.as_deref(),
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,7 +492,10 @@ mod tests {
         assert!(validate_collection("speak-scenarios").is_ok());
         assert!(validate_collection("speak-sessions").is_ok());
         assert!(validate_collection("speak-assessments").is_ok());
-        for bad in ["../../etc/passwd", "history", "settings", ""] {
+        for collection in LOCAL_COLLECTIONS {
+            assert!(validate_collection(collection).is_ok());
+        }
+        for bad in ["../../etc/passwd", "unknown", "a/b", ""] {
             assert!(validate_collection(bad).is_err(), "{bad}");
         }
     }

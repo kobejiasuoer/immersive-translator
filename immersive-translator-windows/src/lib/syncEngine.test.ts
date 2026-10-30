@@ -12,10 +12,13 @@ import {
   syncStoreCursorSet,
   syncStoreList,
   syncStorePut,
+  syncStoreReplace,
+  learningNamespace,
   type StoredSyncEntity,
   type SyncHttpText,
 } from "./tauriBridge";
 import { entityPayloadBytes, syncNow, type WireEntity } from "./syncEngine";
+import { mergePracticePayload } from "../../../packages/learning-core/src/practiceMerge";
 
 vi.mock("./tauriBridge", () => ({
   syncPull: vi.fn(),
@@ -24,6 +27,8 @@ vi.mock("./tauriBridge", () => ({
   syncStoreCursorSet: vi.fn(),
   syncStoreList: vi.fn(),
   syncStorePut: vi.fn(),
+  syncStoreReplace: vi.fn(),
+  learningNamespace:vi.fn(),
 }));
 
 const ok = (body: unknown): SyncHttpText => ({
@@ -87,6 +92,19 @@ beforeEach(() => {
   pullQueue = [];
   pushQueue = [];
   pushCalls = [];
+  vi.mocked(learningNamespace).mockResolvedValue("account-test");
+  vi.mocked(syncStoreReplace).mockImplementation(async(collection,list,value)=>{
+    const pending=[...entities.values()].filter(e=>e.dirty);entities=new Map(list.map(e=>[e.id,e]));
+    for(const local of pending){const server=entities.get(local.id);
+      if(collection==="speak-sessions"&&server){
+        const payload=mergePracticePayload(local.payload,server.payload);
+        if(server.deleted){entities.set(local.id,server);continue;}
+        if(local.deleted){entities.set(local.id,{...local,baseVersion:server.baseVersion});continue;}
+        if(payload){entities.set(local.id,{...server,payload,dirty:server.dirty||JSON.stringify(payload)!==JSON.stringify(server.payload)});continue;}
+      }
+      entities.set(local.id,{...local,baseVersion:server?.baseVersion??0});
+    }cursor=value;
+  });
 
   vi.mocked(syncStoreCursorGet).mockImplementation(async () => cursor);
   vi.mocked(syncStoreCursorSet).mockImplementation(async (_c, value) => {
@@ -118,7 +136,7 @@ describe("拉取", () => {
     const summary = await syncNow("speak-scenarios");
     expect(summary.ok).toBe(true);
     expect(summary.pulled).toBe(0);
-    expect(syncStoreCursorSet).toHaveBeenCalledWith("speak-scenarios", 7);
+    expect(cursor).toBe(7);
   });
 
   it("首次全量：实体落库 dirty=false、baseVersion=服务端版本", async () => {
@@ -168,6 +186,7 @@ describe("拉取", () => {
   });
 
   it("LWW：本地 dirty 且较新 → 拉取不覆盖本地内容，随后的推送带本地 payload", async () => {
+    cursor = 1;
     entities.set("a", stored("a", 9000, { dirty: true, baseVersion: 2, payload: { title: "本地新稿" } }));
     pullQueue = [
       ok({
@@ -187,6 +206,7 @@ describe("拉取", () => {
   });
 
   it("LWW：本地 dirty 但服务端较新 → 采纳服务端（相等也取服务端防乒乓）", async () => {
+    cursor = 1;
     entities.set("a", stored("a", 1000, { dirty: true, baseVersion: 2 }));
     pullQueue = [
       ok({
@@ -386,5 +406,65 @@ describe("entityPayloadBytes", () => {
     const cn = stored("c", 1, { payload: { title: "四字标题" } });
     // {"title":"四字标题"} = 12 个 ASCII（含引号与括号）+ 4×3 字节
     expect(entityPayloadBytes(cn)).toBe(12 + 12);
+  });
+});
+
+describe("学习接力持久性",()=>{
+  const taskPayload=(id:string,at:number)=>({v:2,id:"task",kind:"practice-task",updatedAt:at,task:{id:"task",title:"Practice",mode:"word",reference:"Hello",step:0,draft:"",status:"active",createdAt:1,updatedAt:at,attempts:[{id,step:0,text:id,deviceId:id,status:"draft",createdAt:at}]}});
+  const attemptIds=()=>((entities.get("task")?.payload as ReturnType<typeof taskPayload>).task.attempts.map(a=>a.id));
+  it.each([0,10])("同task双端离线回答在游标 %i 拉取后都保留并重推",async(initial)=>{
+    cursor=initial;entities.set("task",stored("task",20,{schemaVersion:2,payload:taskPayload("windows",20)}));
+    pullQueue=[ok({collection:"speak-sessions",cursor:30,hasMore:false,entities:[wire("task",30,30,{schemaVersion:2,payload:taskPayload("phone",30)})]})];
+    const summary=await syncNow("speak-sessions");
+    expect(summary.ok).toBe(true);expect(attemptIds()).toEqual(["windows","phone"]);
+    expect(pushCalls[0]?.entities[0]).toMatchObject({baseVersion:30,payload:{task:{attempts:[expect.objectContaining({id:"windows"}),expect.objectContaining({id:"phone"})]}}});
+    expect(entities.get("task")?.dirty).toBe(false);
+  });
+  it("409携合并后的双端回答与服务端版本重推",async()=>{
+    cursor=10;entities.set("task",stored("task",20,{schemaVersion:2,payload:taskPayload("windows",20)}));
+    pushQueue=[()=>http(409,{error:{code:"sync_conflict",details:{conflicts:[{id:"task",serverVersion:30,server:wire("task",30,30,{schemaVersion:2,payload:taskPayload("phone",30)})}]}}}),defaultPush];
+    const summary=await syncNow("speak-sessions");expect(summary.ok).toBe(true);expect(pushCalls).toHaveLength(2);expect(attemptIds()).toEqual(["windows","phone"]);expect(pushCalls[1].entities[0].baseVersion).toBe(30);
+  });
+  it("远端已删除任务不会被更新的本地dirty回答复活",async()=>{
+    entities.set("task",stored("task",100,{schemaVersion:2,payload:taskPayload("windows",100)}));
+    pullQueue=[ok({collection:"speak-sessions",cursor:30,hasMore:false,entities:[wire("task",30,30,{schemaVersion:2,deleted:true,payload:null})]})];
+    await syncNow("speak-sessions");expect(entities.get("task")).toMatchObject({deleted:true,dirty:false});expect(pushCalls).toHaveLength(0);
+  });
+  it("本地已删除任务不会被更新的远端练习复活",async()=>{
+    cursor=10;entities.set("task",stored("task",20,{schemaVersion:2,deleted:true,payload:undefined}));
+    pullQueue=[ok({collection:"speak-sessions",cursor:30,hasMore:false,entities:[wire("task",30,30,{schemaVersion:2,payload:taskPayload("phone",30)})]})];
+    await syncNow("speak-sessions");expect(entities.get("task")?.deleted).toBe(true);expect(pushCalls[0].entities[0]).toMatchObject({deleted:true,baseVersion:30});
+  });
+  it("首次全量第二页失败不替换已有快照和游标",async()=>{
+    entities.set("old",stored("old",10,{dirty:false,baseVersion:2}));
+    pullQueue=[ok({collection:"reading-articles",cursor:5,hasMore:true,entities:[wire("new",5,50)]}),http(500,{error:{code:"temporary"}})];
+    const result=await syncNow("reading-articles");
+    expect(result.ok).toBe(false);expect(cursor).toBe(0);expect(entities.has("old")).toBe(true);expect(entities.has("new")).toBe(false);expect(syncStoreReplace).not.toHaveBeenCalled();
+  });
+  it("staleCursor全量成功只移除clean旧记录并保留pending",async()=>{
+    cursor=20;entities.set("old",stored("old",10,{dirty:false}));entities.set("pending",stored("pending",200));
+    pullQueue=[http(409,{error:{code:"staleCursor"}}),ok({collection:"reading-vocab",cursor:30,hasMore:false,entities:[wire("remote",30,300)]})];
+    const result=await syncNow("reading-vocab");
+    expect(result.ok).toBe(true);expect(entities.has("old")).toBe(false);expect(entities.has("pending")).toBe(true);expect(entities.has("remote")).toBe(true);expect(cursor).toBe(30);
+  });
+  it("推送在途新编辑保留dirty并吸收ack版本",async()=>{
+    entities.set("a",stored("a",10));pushQueue=[batch=>{entities.set("a",stored("a",20,{payload:{text:"new"}}));return defaultPush(batch);}];
+    await syncNow("speak-scenarios");expect(entities.get("a")).toMatchObject({dirty:true,updatedAt:20,baseVersion:50,payload:{text:"new"}});
+  });
+  it("不可变事件冲突明确失败不覆盖本地",async()=>{
+    entities.set("event",stored("event",10));pushQueue=[()=>http(409,{error:{code:"sync_conflict",details:{conflicts:[{id:"event",reason:"immutable_entity",serverVersion:8,server:wire("event",8,80)}]}}})];
+    const result=await syncNow("review-events");expect(result.ok).toBe(false);expect(result.error).toContain("不可变");expect(entities.get("event")?.dirty).toBe(true);
+  });
+  it("口语超过64KB保留本地且不发送不截断",async()=>{
+    const payload={task:{attempts:[{text:"x".repeat(70000)}]}};entities.set("large",stored("large",10,{payload}));
+    const result=await syncNow("speak-sessions");expect(result.skipped[0]?.id).toBe("large");expect(syncPush).not.toHaveBeenCalled();expect(entities.get("large")?.payload).toEqual(payload);
+  });
+  it("按服务端实际数量和body限额拆批",async()=>{
+    for(let i=0;i<5;i++)entities.set(String(i),stored(String(i),i,{payload:{text:"x".repeat(500)}}));
+    await syncNow("speak-scenarios",{maxPushEntities:2,maxBodyBytes:1800});
+    expect(pushCalls).toHaveLength(3);expect(pushCalls.every(batch=>batch.entities.length<=2&&new TextEncoder().encode(JSON.stringify(batch)).length<=1800)).toBe(true);
+  });
+  it("排队期间切账号则取消原账号同步",async()=>{
+    vi.mocked(learningNamespace).mockResolvedValue("account-b");const result=await syncNow("reading-vocab",{namespace:"account-a"});expect(result.ok).toBe(false);expect(syncPull).not.toHaveBeenCalled();
   });
 });

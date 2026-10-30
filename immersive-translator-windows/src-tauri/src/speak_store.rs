@@ -190,7 +190,7 @@ fn empty_sessions_file() -> SpeakSessionsFile {
 /// 只豁免 NotFound：杀软/备份锁文件、双开实例等读错误必须报出来，
 /// 否则下一次整存会话（每轮对话后自动保存）会把全部口语陪练记录静默清空。
 fn load_sessions_from_path(path: &std::path::Path) -> Result<SpeakSessionsFile, String> {
-    let text = match std::fs::read_to_string(path) {
+    let text = match crate::learning_store::read_path(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(empty_sessions_file()),
         Err(e) => return Err(format!("读取口语陪练会话数据 {path:?} 失败: {e}")),
@@ -211,10 +211,8 @@ fn load_sessions_from_path(path: &std::path::Path) -> Result<SpeakSessionsFile, 
 
 fn write_sessions(app: &AppHandle, file: &SpeakSessionsFile) -> Result<(), String> {
     let path = sessions_path(app)?;
-    let tmp = path.with_extension("json.tmp");
     let body = serde_json::to_string(file).map_err(|e| format!("序列化会话失败: {e}"))?;
-    std::fs::write(&tmp, body).map_err(|e| format!("写入 {path:?} 失败: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("替换 {path:?} 失败: {e}"))
+    crate::learning_store::commit(app, &path, Some(&body))
 }
 
 /// 列出会话（updatedAt 倒序，最近在前）。
@@ -224,7 +222,23 @@ pub fn speak_list_sessions(app: AppHandle) -> Result<Vec<SpeakSession>, String> 
     let mut file = load_sessions(&app)?;
     file.sessions
         .sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    Ok(file.sessions)
+    let ns = crate::learning_store::namespace();
+    let tasks = crate::learning_store::list(&app, "speak-sessions", Some(&ns))?
+        .into_iter()
+        .filter(|e| {
+            e.payload
+                .as_ref()
+                .and_then(|p| p.get("kind"))
+                .and_then(serde_json::Value::as_str)
+                == Some("practice-task")
+        })
+        .map(|e| e.id)
+        .collect::<std::collections::HashSet<_>>();
+    Ok(file
+        .sessions
+        .into_iter()
+        .filter(|s| !tasks.contains(&s.id))
+        .collect())
 }
 
 /// 新建或整体更新一个会话（前端每轮对话后自动保存）。

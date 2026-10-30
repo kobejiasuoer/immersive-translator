@@ -3,18 +3,16 @@
  *
  * 两个新同步集合，复用既有 syncEngine/tauriBridge 管线（协议零新增，Rust
  * sync.rs 的 LOCAL_COLLECTIONS 白名单需含集合名）：
- * - speak-sessions：口语对话记录。本地富会话 SpeakSession（含跟读报告/发音
- *   详情/中文提示）的**精简投影**入云——id/scenario/difficulty/startedAt/
- *   endedAt/turns[{role,text,at}]；hintZh、shadowAttempts、pron、coachDiff、
- *   context 不上云（体积与隐私护栏），**音频一律不上云**（本就不落盘）。
+ * - speak-sessions：保留完整文字、提示、上下文、表达建议和发音报告，
+ *   供另一设备按保存步骤续练；仅剥离音频字节和源设备私有路径。
  * - speak-assessments：跟读/发音评测记录。{id, source, lang, refText,
  *   total/accuracy/fluency/standard, words[{w,s}], sessionId?, at}；source：
  *   reader=阅读室跟读、review=复习、coach=口语陪练（含只练差词）；words 是
  *   逐词精简结果（可截断），**录音/base64 音频字段禁止出现在任何 push 载荷**。
  *
  * 体量护栏（与服务端 SYNC_COLLECTION_MAX_BYTES 对齐，见 docs/api.md M4）：
- * - 单条 ≤64KB：构建时截断（会话丢最旧轮次、逐词截 64 个、文本截 1000 字），
- *   服务端同上限 413 兜底。
+ * - 单条同步 ≤64KB：超限完整会话仍保留本机并明确提示，不裁真实尝试。
+ *   旧独立评测列表继续采用64词/1000字摘要；练习attempt保留完整评测。
  * - 每用户每集合滚动保留最近 500 条：入队时超出部分本地转 tombstone（删除
  *   随同步传播到其他端；tombstone 计 0 字节并释放配额，服务端不拒收）。
  *
@@ -26,6 +24,7 @@ import type { PronunciationResult } from "../core/pronunciation";
 import type { SpeakDifficulty, SpeakSession } from "../core/speakLogic";
 import { syncNow, type SyncSummary } from "./syncEngine";
 import { authGetStatus, syncStoreList, syncStorePut, type StoredSyncEntity } from "./tauriBridge";
+import { withoutAudio, mergeRelayPayload } from "../../../packages/learning-core/src/relay";
 
 /** 口语对话记录集合名（服务端 SYNC_COLLECTIONS / Rust LOCAL_COLLECTIONS 同名）。 */
 export const SPEAK_SESSIONS_COLLECTION = "speak-sessions";
@@ -38,14 +37,14 @@ export const SPEAK_RECORD_MAX_BYTES = 64 * 1024;
 export const SPEAK_RECORD_MAX_LIVE = 500;
 /** 评测记录逐词精简结果的最大词数（超出丢尾）。 */
 export const ASSESS_MAX_WORDS = 64;
-/** 文本字段长度上限（字符）：会话单轮与评测参考文本共用。 */
+/** 旧独立评测摘要参考文本上限；完整会话文字不适用。 */
 export const TEXT_MAX_CHARS = 1000;
 
 // ---------------------------------------------------------------------------
 // speak-sessions：会话精简记录
 // ---------------------------------------------------------------------------
 
-/** 云端对话轮次：只保留 role/text/at（hintZh/跟读报告等不上云）。 */
+/** 对话轮次的最小公共字段；实际载荷保留完整反馈和未知业务字段。 */
 export interface SpeakSessionTurnRecord {
   role: "user" | "assistant";
   text: string;
@@ -54,6 +53,7 @@ export interface SpeakSessionTurnRecord {
 
 /** 口语对话记录（SpeakSession 的同步投影）。startedAt=createdAt、endedAt=updatedAt。 */
 export interface SpeakSessionRecord {
+  [key:string]:unknown;
   id: string;
   scenario: string;
   difficulty: SpeakDifficulty;
@@ -68,34 +68,30 @@ function jsonBytes(v: unknown): number {
   return encoder.encode(JSON.stringify(v)).length;
 }
 
-/** 富会话 → 精简记录：丢掉 hintZh/pron/shadowAttempts/coachDiff/context，
- *  超过 64KB 时从最旧轮次开始丢弃（至少留 1 轮；正常会话远达不到上限）。 */
+/** Preserve feedback and source snapshots. Oversize records stay local; never discard attempts. */
 export function sessionRecordFrom(s: SpeakSession): SpeakSessionRecord {
-  const base = {
+  const record = {
+    ...(withoutAudio(s) as object),
+    v:2,
     id: s.id,
     scenario: s.scenario,
     difficulty: s.difficulty,
     startedAt: s.createdAt,
     endedAt: s.updatedAt,
+    turns:s.turns.map(t=>withoutAudio(t)),
   };
-  let turns: SpeakSessionTurnRecord[] = s.turns.map((t) => ({
-    role: t.role,
-    text: t.text.slice(0, TEXT_MAX_CHARS),
-    at: t.at,
-  }));
-  while (turns.length > 1 && jsonBytes({ ...base, turns }) > SPEAK_RECORD_MAX_BYTES) {
-    turns = turns.slice(1);
-  }
-  return { ...base, turns };
+  if(jsonBytes(record)>SPEAK_RECORD_MAX_BYTES) throw new Error("口语记录超过 64KB 同步上限，完整记录仍保留在本机，请分段练习后再同步");
+  return record as SpeakSessionRecord;
 }
 
-/** 云端记录 → 富会话（B 端首拉后的展示/resume 形态；无提示与报告，续聊后补全）。 */
+/** 云端记录恢复完整会话，兼容旧最小投影。 */
 export function sessionFromRecord(r: SpeakSessionRecord): SpeakSession {
   return {
+    ...r,
     id: r.id,
     scenario: r.scenario,
     difficulty: r.difficulty,
-    turns: r.turns.map((t) => ({ role: t.role, text: t.text, at: t.at })),
+    turns: r.turns.map((t) => ({ ...t })),
     createdAt: r.startedAt,
     updatedAt: Math.max(r.startedAt, r.endedAt),
   };
@@ -251,9 +247,9 @@ async function enqueueRecord(
     baseVersion: existing?.baseVersion ?? 0, // 已同步过则沿用，避免无谓 409
     updatedAt: item.updatedAt,
     deleted: false,
-    schemaVersion: 1,
+    schemaVersion: Math.max(2,existing?.schemaVersion??0),
     originDevice: "windows",
-    payload: item.payload,
+    payload: withoutAudio(mergeRelayPayload(existing?.payload,item.payload as Record<string,unknown>)),
     dirty: true,
   };
   // 滚动裁剪：入队后活实体数 ≤ 500（新实体自身不参与裁剪候选）
@@ -354,8 +350,9 @@ export function mergeSessionsWithRecords(
   records: SpeakSessionRecord[],
 ): SpeakSession[] {
   const byId = new Map<string, SpeakSession>();
-  for (const r of records) byId.set(r.id, sessionFromRecord(r));
+  for (const r of records) if(r.kind!=="practice-task") byId.set(r.id, sessionFromRecord(r));
   for (const s of local) {
+    if((s as SpeakSession & {kind?:string}).kind==="practice-task")continue;
     const cloud = byId.get(s.id);
     if (!cloud || s.updatedAt >= cloud.updatedAt) byId.set(s.id, s);
   }

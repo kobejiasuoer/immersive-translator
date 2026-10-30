@@ -73,7 +73,6 @@ import { loadSpeakListenMode, saveSpeakListenMode } from "./readerSettingsStore"
 import { track } from "../lib/analytics";
 import { speakListSessions, speakSaveSession } from "../lib/speakStore";
 import {
-  enqueueSessionRecordSilently,
   listSessionRecords,
   mergeSessionsWithRecords,
   recordAssessmentSilently,
@@ -118,6 +117,7 @@ import { ShadowReport, type DrillEntry } from "./ShadowReport";
 import { ShadowDrill } from "./ShadowDrill";
 import { SpeakReviewDialog } from "./SpeakReviewDialog";
 import { SpeakScenarioEditor } from "./SpeakScenarioEditor";
+import { PracticeRelayList, PracticeRelayView } from "./PracticeRelayView";
 import {
   IconBookOpen,
   IconCheck,
@@ -445,18 +445,17 @@ export function SpeakView({
   );
 
   const persist = useCallback((next: SpeakSession) => {
-    // 本地富会话照旧落盘（Rust speak_store，重开对话的完整数据源）
-    void speakSaveSession(next).catch(() => undefined);
-    // 云端精简投影入队（本地写 + dirty，游客零网络；音频/跟读报告/提示不上云）
-    enqueueSessionRecordSilently(next);
     void (async () => {
+      // Rust commits the local session and its sync outbox in one transaction.
+      await speakSaveSession(next);
       const [list, records] = await Promise.all([
         speakListSessions().catch(() => [] as SpeakSession[]),
         listSessionRecords(),
       ]);
       setRecent(mergeSessionsWithRecords(list, records).slice(0, 5));
-    })();
-  }, []);
+      if(new TextEncoder().encode(JSON.stringify(next)).length>65536)onToast("完整练习已保存在本机，已超过单条云同步上限；请另开一组继续练习");
+    })().catch(error=>onToast(`练习保存失败：${error instanceof Error?error.message:String(error)}`));
+  }, [onToast]);
 
   /** 给最后一个 user 轮补字段（pron / coachDiff 异步落盘共用；读最新会话态再写）。 */
   const patchLastUserTurn = useCallback(
@@ -1413,7 +1412,7 @@ export function SpeakView({
               可以围绕你刚读完的章节和生词开口练习，也可以任选日常或职场话题模拟对话
             </p>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <span style={{ fontSize: 12, color: "var(--ink-3)" }}>对话难度：</span>
             <div className="lens-mode-switch" role="group" aria-label="对话难度">
               <button
@@ -1630,6 +1629,8 @@ export function SpeakView({
             })}
           </>
         )}
+        <PracticeRelayList onToast={onToast}/>
+        <PracticeRelayView requestTranslate={requestTranslate} speakEn={speakEn} micDeviceId={micDeviceId} onToast={onToast}/>
 
         {/* 场景编辑器（A2）：入口全在入口页，挂载钉死在入口页早退 return 内。
             modal-overlay 是 fixed 定位，挂在滚动容器内视觉仍全屏覆盖。 */}

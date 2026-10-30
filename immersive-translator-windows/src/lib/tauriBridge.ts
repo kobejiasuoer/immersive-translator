@@ -556,35 +556,40 @@ export interface StoredSyncEntity {
 }
 
 /** GET /v1/sync/{collection}/pull?since=&limit=。since 是版本号游标（非时间戳）。 */
-export function syncPull(collection: string, since: number, limit: number): Promise<SyncHttpText> {
-  return invoke("sync_pull", { collection, since, limit });
+export function syncPull(collection: string, since: number, limit: number,expectedNamespace?:string): Promise<SyncHttpText> {
+  return invoke("sync_pull", { collection, since, limit,expectedNamespace });
 }
 
 /** POST /v1/sync/{collection}/push。entitiesJson 是完整请求体 `{ entities: [...] }`
  *  的序列化串（服务端 zod 校验为准）。 */
-export function syncPush(collection: string, entitiesJson: string): Promise<SyncHttpText> {
-  return invoke("sync_push", { collection, entitiesJson });
+export function syncPush(collection: string, entitiesJson: string,expectedNamespace?:string): Promise<SyncHttpText> {
+  return invoke("sync_push", { collection, entitiesJson,expectedNamespace });
 }
 
 /** 列出集合的全部本地实体（含 tombstone 与 dirty；updatedAt 倒序）。 */
-export function syncStoreList(collection: string): Promise<StoredSyncEntity[]> {
-  return invoke("sync_store_list", { collection });
+export function syncStoreList(collection: string,expectedNamespace?:string): Promise<StoredSyncEntity[]> {
+  return invoke("sync_store_list", { collection,expectedNamespace });
 }
 
 /** 按 id 整体替换（存在即覆盖、不存在即追加）。合并/过滤决策在 syncEngine。 */
-export function syncStorePut(collection: string, entities: StoredSyncEntity[]): Promise<void> {
-  return invoke("sync_store_put", { collection, entities });
+export function syncStorePut(collection: string, entities: StoredSyncEntity[],expectedNamespace?:string): Promise<void> {
+  return invoke("sync_store_put", { collection, entities,expectedNamespace });
+}
+/** A complete full-pull snapshot and cursor replace atomically; dirty edits survive. */
+export function syncStoreReplace(collection: string, entities: StoredSyncEntity[], cursor: number,expectedNamespace?:string): Promise<void> {
+  return invoke("sync_store_replace", { collection, entities, cursor,expectedNamespace });
 }
 
 /** 读取集合游标（版本号；无记录默认 0 = 首次全量拉取）。 */
-export function syncStoreCursorGet(collection: string): Promise<number> {
-  return invoke("sync_store_cursor_get", { collection });
+export function syncStoreCursorGet(collection: string,expectedNamespace?:string): Promise<number> {
+  return invoke("sync_store_cursor_get", { collection,expectedNamespace });
 }
 
 /** 写入集合游标（每集合必须各存各的——版本号空间跨集合共享）。 */
-export function syncStoreCursorSet(collection: string, cursor: number): Promise<void> {
-  return invoke("sync_store_cursor_set", { collection, cursor });
+export function syncStoreCursorSet(collection: string, cursor: number,expectedNamespace?:string): Promise<void> {
+  return invoke("sync_store_cursor_set", { collection, cursor,expectedNamespace });
 }
+export function learningNamespace():Promise<string>{return invoke("learning_namespace");}
 
 // ---------------------------------------------------------------------------
 // 场景目录（升级计划 A1）：官方目录拉取 + 本地缓存桥。

@@ -10,16 +10,26 @@ import {
   authLoginPassword,
   authSendOtp,
   authVerifyOtp,
+  listenAuthStateChanged,
   settingsOpenTab,
 } from "../lib/tauriBridge";
 import type { AuthError, AuthStatus, AuthUser } from "../lib/tauriBridge";
 
 // 关窗 mock：close() 必须返回 Promise（closeSelf 会 .catch 兜底）。
 // getCurrentWindow 用普通函数（不是 vi.fn）：vi.resetAllMocks 不会清掉它的实现。
+// onFocusChanged 捕获焦点回调，用例里手动派发模拟窗口重新聚焦（show_window 只
+// show+focus，登录窗常驻不重挂载，焦点重查是僵尸快照的兜底刷新路径）。
 const closeMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+const focusHandlers = vi.hoisted(() => [] as Array<(evt: { payload: boolean }) => void>);
 
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ close: closeMock }),
+  getCurrentWindow: () => ({
+    close: closeMock,
+    onFocusChanged: (cb: (evt: { payload: boolean }) => void) => {
+      focusHandlers.push(cb);
+      return Promise.resolve(() => undefined);
+    },
+  }),
 }));
 
 vi.mock("../lib/tauriBridge", () => ({
@@ -42,6 +52,10 @@ const mockedGetStatus = vi.mocked(authGetStatus);
 const mockedSendOtp = vi.mocked(authSendOtp);
 const mockedVerifyOtp = vi.mocked(authVerifyOtp);
 const mockedLoginPassword = vi.mocked(authLoginPassword);
+const mockedListenAuth = vi.mocked(listenAuthStateChanged);
+
+/** 捕获 auth-state-changed 监听器，用例里手动派发模拟 Rust 广播。 */
+let authListener: ((status: AuthStatus) => void) | null = null;
 
 const ANON: AuthStatus = { loggedIn: false, user: null, notice: null };
 
@@ -85,6 +99,11 @@ beforeEach(() => {
   localStorage.removeItem(OTP_LAST_SENT_KEY);
   // resetAllMocks 会清掉 hoisted closeMock 的实现，这里补回。
   closeMock.mockImplementation(() => Promise.resolve());
+  focusHandlers.length = 0;
+  mockedListenAuth.mockImplementation((cb) => {
+    authListener = cb;
+    return Promise.resolve(() => undefined);
+  });
   mockedGetStatus.mockResolvedValue(ANON);
   mockedSendOtp.mockResolvedValue(undefined);
   mockedVerifyOtp.mockResolvedValue({ user: makeUser() });
@@ -308,6 +327,59 @@ describe("LoginView 状态机", () => {
     // 「使用其他账号登录」dismiss 兜底卡片后进入正常流程
     act(() => findButton(h.container, "使用其他账号登录").click());
     expect(h.container.querySelector(".login-tabs")).toBeTruthy();
+    h.unmount();
+  });
+
+  it("会话失效广播（loggedIn=false）→ 兜底卡片消失进入表单（不残留僵尸「已登录」）", async () => {
+    const h = createHarness();
+    mockedGetStatus.mockResolvedValue({ loggedIn: true, user: makeUser(), notice: null });
+    h.render(<LoginView />);
+    await actAsync(() => undefined);
+    expect(h.container.querySelector(".login-existing")).toBeTruthy();
+
+    // 窗口存活期间会话被 Rust 侧清除（token_invalid → clear_credentials 广播）
+    act(() =>
+      authListener?.({ loggedIn: false, user: null, notice: "session_expired" }),
+    );
+    expect(h.container.querySelector(".login-existing")).toBeNull();
+    expect(h.container.querySelector(".login-tabs")).toBeTruthy();
+    h.unmount();
+  });
+
+  it("错过广播时重获焦点重查兜底：已失效 → 卡片刷掉；仍已登录 → 卡片保持", async () => {
+    const h = createHarness();
+    mockedGetStatus.mockResolvedValue({ loggedIn: true, user: makeUser(), notice: null });
+    h.render(<LoginView />);
+    await actAsync(() => undefined);
+    expect(h.container.querySelector(".login-existing")).toBeTruthy();
+    const queriedOnMount = mockedGetStatus.mock.calls.length;
+
+    // 失焦不重查（只在重获焦点时刷）
+    act(() => focusHandlers.forEach((cb) => cb({ payload: false })));
+    await actAsync(() => undefined);
+    expect(mockedGetStatus.mock.calls.length).toBe(queriedOnMount);
+    expect(h.container.querySelector(".login-existing")).toBeTruthy();
+
+    // 会话在隐藏期间失效且广播被错过（如设置窗登出前窗口已销毁重建）：
+    // show_window 重现只 show+focus，焦点重查是唯一的刷新路径。
+    mockedGetStatus.mockResolvedValue(ANON);
+    act(() => focusHandlers.forEach((cb) => cb({ payload: true })));
+    await actAsync(() => undefined);
+    expect(h.container.querySelector(".login-existing")).toBeNull();
+    expect(h.container.querySelector(".login-tabs")).toBeTruthy();
+    h.unmount();
+  });
+
+  it("未登录打开后收到登录成功广播 → 兜底卡片出现", async () => {
+    const h = createHarness();
+    h.render(<LoginView />);
+    await actAsync(() => undefined);
+    expect(h.container.querySelector(".login-existing")).toBeNull();
+
+    act(() =>
+      authListener?.({ loggedIn: true, user: makeUser({ nickname: "1448950074" }), notice: null }),
+    );
+    expect(h.container.querySelector(".login-existing")?.textContent).toContain("1448950074");
     h.unmount();
   });
 });
