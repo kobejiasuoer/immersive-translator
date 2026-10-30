@@ -17,8 +17,10 @@ import {
   takePendingOpenBook,
   takePendingReaderImport,
   translateStream,
+  listenAuthStateChanged,
+  authGetStatus,
 } from "../lib/tauriBridge";
-import { syncSpeakRecordsSilently } from "../lib/speakRecords";
+import { syncLearningRecordsSilently } from "../lib/learningRelay";
 import { loadSettingsAsync, hasValidSettings, loadSettings } from "../lib/settingsStore";
 import { classifyTtsError } from "../lib/ttsError";
 import {
@@ -33,8 +35,7 @@ import {
   readerListArticles,
   readerListBooks,
   readerRecordReading,
-  readerRecordRecall,
-  readerRecordReview,
+  readerGradeVocab,
   readerReadSecondsToday,
   readerSaveArticle,
   readerSaveBook,
@@ -88,7 +89,7 @@ import {
   planTranslateRetry,
 } from "../core/paragraphTranslate";
 import { readerParagraphErrorText } from "../core/errorMessageFormatter";
-import { dueVocab, gradeSrs, isDue, recordReview, reviewStats, type ReviewGrade } from "../core/readerSrs";
+import { dueVocab, isDue, recordReview, reviewStats, type ReviewGrade } from "../core/readerSrs";
 import {
   buildReaderDictPrompt,
   entryToVocab,
@@ -336,7 +337,7 @@ export function ReaderApp() {
   // 登录后挂载即拉推一轮（SpeakView 挂载与设置页手动按钮另有入口）；未登录直接
   // 跳过——零网络请求，记录仅本地，无登录墙。失败静默（汇总不展示）。
   useEffect(() => {
-    void syncSpeakRecordsSilently();
+    void syncLearningRecordsSilently();
   }, []);
 
   const showToast = useCallback((message: string, action: ToastAction | null = null) => {
@@ -1748,12 +1749,13 @@ export function ReaderApp() {
   );
 
   // ---- 复习（屏 D） ----
+  const pendingRecallRef = useRef(new Map<string, { mode: RecallMode; bucket: "pass" | "wrong" | "trap" }>());
   const gradeVocab = useCallback(
     (word: VocabWord, g: ReviewGrade) => {
-      const graded = { ...word, srs: gradeSrs(word.srs, g) };
-      const day = localDayKey();
-      void readerSaveVocabWord(graded)
-        .then(() => readerRecordReview(day, Date.now()))
+      void Promise.resolve().then(() => {
+        const recall = pendingRecallRef.current.get(word.id); pendingRecallRef.current.delete(word.id);
+        return readerGradeVocab(word, g, recall?.mode ?? "recognition", recall ? { bucket: recall.bucket } : undefined);
+      })
         .then(() => {
           setReviewLog((log) => recordReview(log));
           return refreshVocab();
@@ -1770,9 +1772,7 @@ export function ReaderApp() {
   const handleRecall = useCallback(
     (wordId: string, mode: RecallMode, judged: RecallVerdict | null, g: ReviewGrade) => {
       const bucket = recallBucket(mode, judged, g);
-      void readerRecordRecall(wordId, mode, bucket, Date.now()).catch((error) => {
-        console.error("[reader] record recall failed", error);
-      });
+      pendingRecallRef.current.set(wordId, { mode, bucket });
     },
     [],
   );
@@ -1889,6 +1889,17 @@ export function ReaderApp() {
       return [];
     }
   }, []);
+  useEffect(()=>{
+    let disposed=false;let loadGeneration=0;
+    const warning=listen<{message:string}>("learning-export-warning",event=>showToast(event.payload.message));
+    const refresh=async()=>{const generation=++loadGeneration;try{const [articles,books,vocab,noteRows,sessions]=await Promise.all([readerListArticles(),readerListBooks(),readerGetVocab(),noteList(),speakListSessions()]);if(disposed||generation!==loadGeneration)return;setArticleList(articles);setBookList(books);booksRef.current=books;setVocabWords(vocab.words);setReviewLog(vocab.reviewLog);setNotes(noteRows);setSpeakSessions(sessions.slice(0,20));}catch(error){console.error("[reader] relay refresh failed",error);}};
+    const completed=()=>{void refresh();};window.addEventListener("learning-sync-complete",completed);
+    let account:string|undefined;let authEventReceived=false;
+    void authGetStatus().then(status=>{if(!authEventReceived)account=status.user?.id??"guest";});
+    const unlisten=listenAuthStateChanged(status=>{authEventReceived=true;const next=status.user?.id??"guest";if(next===account)return;const adoptingGuest=(account===undefined||account==="guest")&&status.loggedIn;account=next;loadGeneration++;setArticle(null);setArticleList([]);setBookList([]);booksRef.current=[];setVocabWords([]);setReviewLog({schemaVersion:1,days:[]});setNotes([]);setActiveNote(null);setSpeakSessions([]);setSourceCache(new Map());setPendingSpeak(null);setView(previous=>adoptingGuest&&previous==="speak"?previous:"shelf");void refresh();if(status.loggedIn)void syncLearningRecordsSilently();});
+    return()=>{disposed=true;loadGeneration++;window.removeEventListener("learning-sync-complete",completed);void unlisten.then(fn=>fn());void warning.then(fn=>fn());};
+  },[]);
+  useEffect(()=>{const open=(event:Event)=>{const source=(event as CustomEvent<{articleId:string;sentenceIdx:number}>).detail;if(!source?.articleId)return;void readerGetArticle(source.articleId).then(found=>{if(!found){showToast("原文已删除，练习仍保留完整参考句和反馈");return;}setArticle({...found,progress:{...found.progress,sentenceIdx:source.sentenceIdx}});setView("reading");}).catch(error=>showToast(String(error)));};window.addEventListener("reader-relay-source",open);return()=>window.removeEventListener("reader-relay-source",open);},[showToast]);
 
   const openNote = useCallback(async (file: string) => {
     try {

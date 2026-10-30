@@ -24,9 +24,13 @@ import {
   syncStoreCursorSet,
   syncStoreList,
   syncStorePut,
+  syncStoreReplace,
+  learningNamespace,
   type StoredSyncEntity,
   type SyncHttpText,
 } from "./tauriBridge";
+import { canonicalJson } from "../../../packages/learning-core/src/reviewEvents";
+import { mergePracticePayload } from "../../../packages/learning-core/src/practiceMerge";
 
 // ---------------------------------------------------------------------------
 // 线路类型（服务端 sync-protocol.ts 的 TS 镜像）
@@ -59,6 +63,7 @@ export interface PushOk {
 }
 
 export interface SyncConflictEntry {
+  reason?:string;
   id: string;
   serverVersion: number;
   server: WireEntity | null;
@@ -82,6 +87,9 @@ const MAX_CONFLICT_ROUNDS = 3;
 /** 429 退避等待的最大次数（超过则本次同步失败，下次再试）。 */
 const MAX_RATE_LIMIT_WAITS = 3;
 const ORIGIN_DEVICE = "windows";
+export interface SyncOptions { namespace?:string; maxEntityBytes?:number; maxPushEntities?:number; maxPullLimit?:number; maxBodyBytes?:number; schemaVersions?:number[] }
+let activeOptions:SyncOptions={};
+const positiveLimit=(value:number|undefined,fallback:number)=>Number.isSafeInteger(value)&&Number(value)>0?Number(value):fallback;
 
 // ---------------------------------------------------------------------------
 // 汇总
@@ -169,6 +177,19 @@ function wireToStored(wire: WireEntity): StoredSyncEntity {
   };
 }
 
+function practiceEntity(local: StoredSyncEntity | undefined, incoming: StoredSyncEntity): StoredSyncEntity | null {
+  if (!local) return null;
+  const task = (value: unknown) => Boolean(value && typeof value === "object" && (value as Record<string, unknown>).kind === "practice-task");
+  if (!task(local.payload) && !task(incoming.payload)) return null;
+  // A task removal is terminal for its ID; creating a new task uses a new ID.
+  if (incoming.deleted) return incoming;
+  if (local.deleted) return { ...local, baseVersion: incoming.baseVersion, dirty: true };
+  const payload = mergePracticePayload(local.payload, incoming.payload);
+  if (!payload) return null;
+  return { ...incoming, payload, updatedAt: Math.max(local.updatedAt, incoming.updatedAt),
+    dirty: incoming.dirty || canonicalJson(payload) !== canonicalJson(incoming.payload) };
+}
+
 function storedToWire(entity: StoredSyncEntity): unknown {
   return {
     id: entity.id,
@@ -203,21 +224,39 @@ function waitMsFor(res: SyncHttpText): number {
 // ---------------------------------------------------------------------------
 
 async function pullAll(collection: string, summary: SyncSummary): Promise<void> {
-  let cursor = await syncStoreCursorGet(collection);
+  let cursor = await syncStoreCursorGet(collection,activeNamespace);
+  let fullSnapshot: StoredSyncEntity[] | null = cursor===0 ? [] : null;
   let rateLimitWaits = 0;
   for (let page = 0; page < MAX_PULL_PAGES; page += 1) {
-    const res = await syncPull(collection, cursor, PULL_PAGE_LIMIT);
+    const res = await syncPull(collection, cursor, Math.min(PULL_PAGE_LIMIT,positiveLimit(activeOptions.maxPullLimit,PULL_PAGE_LIMIT)),activeNamespace);
     if (res.status === 200) {
       const data = parseBody(res.body) as unknown as PullPage;
+      if (!Array.isArray(data.entities) || !Number.isSafeInteger(data.cursor) || data.cursor < cursor || typeof data.hasMore !== "boolean") throw new Error("同步拉取响应无效");
+      if (data.hasMore && data.cursor === cursor) throw new Error("同步游标未推进");
+      if (fullSnapshot) {
+        fullSnapshot.push(...data.entities.map(wireToStored));
+        summary.pulled += data.entities.length;
+        cursor = data.cursor;
+        if (!data.hasMore) {
+          const latest = new Map((await syncStoreList(collection, activeNamespace)).map(e => [e.id, e]));
+          const snapshot = fullSnapshot.map(e => collection === "speak-sessions" ? practiceEntity(latest.get(e.id), e) ?? e : e);
+          await syncStoreReplace(collection, snapshot, cursor,activeNamespace); summary.appliedRemote += snapshot.length; return;
+        }
+        continue;
+      }
       const local = new Map(
-        (await syncStoreList(collection)).map((e) => [e.id, e] as const),
+        (await syncStoreList(collection,activeNamespace)).map((e) => [e.id, e] as const),
       );
       const updates: StoredSyncEntity[] = [];
       for (const wire of data.entities) {
         summary.pulled += 1;
         const existing = local.get(wire.id);
         const wireMs = Date.parse(wire.updatedAt);
-        if (existing && existing.dirty && existing.updatedAt > wireMs) {
+        const merged = collection === "speak-sessions" ? practiceEntity(existing, wireToStored(wire)) : null;
+        if (merged) {
+          local.set(wire.id, merged);
+          if (merged.dirty) summary.keptLocal += 1; else summary.appliedRemote += 1;
+        } else if (existing && existing.dirty && existing.updatedAt > wireMs) {
           // 本地有未推送的更新且更新：保留本地内容，只吸收服务端版本号
           local.set(wire.id, { ...existing, baseVersion: wire.version });
           summary.keptLocal += 1;
@@ -228,10 +267,10 @@ async function pullAll(collection: string, summary: SyncSummary): Promise<void> 
         updates.push(local.get(wire.id) as StoredSyncEntity);
       }
       if (updates.length > 0) {
-        await syncStorePut(collection, updates);
+        await syncStorePut(collection, updates,activeNamespace);
       }
       cursor = data.cursor;
-      await syncStoreCursorSet(collection, cursor);
+      await syncStoreCursorSet(collection, cursor,activeNamespace);
       if (!data.hasMore) return;
       continue;
     }
@@ -245,6 +284,10 @@ async function pullAll(collection: string, summary: SyncSummary): Promise<void> 
       continue;
     }
     const err = errorOf(res);
+    if (err.code === "stale_cursor" || err.code === "staleCursor") {
+      if (fullSnapshot && cursor===0) throw new Error("全量同步期间游标再次失效");
+      fullSnapshot = []; cursor = 0; continue;
+    }
     throw new Error(`同步拉取失败（HTTP ${res.status} ${err.code}）：${err.message}`);
   }
   throw new Error(`同步拉取页数超过 ${MAX_PULL_PAGES}，中止（服务端数据异常）`);
@@ -255,7 +298,7 @@ async function pullAll(collection: string, summary: SyncSummary): Promise<void> 
 // ---------------------------------------------------------------------------
 
 async function pushDirty(collection: string, summary: SyncSummary): Promise<void> {
-  const all = await syncStoreList(collection);
+  const all = await syncStoreList(collection,activeNamespace);
   const pushable: StoredSyncEntity[] = [];
   for (const entity of all) {
     if (!entity.dirty) continue;
@@ -263,10 +306,12 @@ async function pushDirty(collection: string, summary: SyncSummary): Promise<void
       summary.skipped.push({ id: entity.id, reason: "活实体缺少 payload，无法推送" });
       continue;
     }
-    if (entityPayloadBytes(entity) > MAX_ENTITY_BYTES) {
+    if(activeOptions.schemaVersions&&!activeOptions.schemaVersions.includes(entity.schemaVersion)){summary.skipped.push({id:entity.id,reason:`服务端不支持 schemaVersion ${entity.schemaVersion}，完整记录保留在本机`});continue;}
+    const maxBytes=positiveLimit(activeOptions.maxEntityBytes,collection==="speak-sessions"||collection==="speak-assessments"?65536:MAX_ENTITY_BYTES);
+    if (entityPayloadBytes(entity) > maxBytes) {
       summary.skipped.push({
         id: entity.id,
-        reason: `payload 超过 512KB 上限（${entityPayloadBytes(entity)} 字节）`,
+        reason: `payload 超过 ${maxBytes} 字节上限（${entityPayloadBytes(entity)} 字节），完整记录保留在本机`,
       });
       continue;
     }
@@ -274,9 +319,15 @@ async function pushDirty(collection: string, summary: SyncSummary): Promise<void
   }
   if (pushable.length === 0) return;
 
-  for (let start = 0; start < pushable.length; start += PUSH_BATCH) {
-    await pushBatch(collection, pushable.slice(start, start + PUSH_BATCH), summary);
+  const batchLimit=Math.min(PUSH_BATCH,positiveLimit(activeOptions.maxPushEntities,PUSH_BATCH));
+  const bodyLimit=positiveLimit(activeOptions.maxBodyBytes,2*1024*1024);let batch:StoredSyncEntity[]=[];
+  for(const entity of pushable){
+    const candidate=[...batch,entity];
+    if(batch.length&&(candidate.length>batchLimit||encoder.encode(JSON.stringify({entities:candidate.map(storedToWire)})).length>bodyLimit)){await pushBatch(collection,batch,summary);batch=[];}
+    if(encoder.encode(JSON.stringify({entities:[storedToWire(entity)]})).length>bodyLimit){summary.skipped.push({id:entity.id,reason:"实体连同同步信封超过请求容量，完整记录保留在本机"});continue;}
+    batch.push(entity);
   }
+  if(batch.length)await pushBatch(collection,batch,summary);
 }
 
 async function pushBatch(
@@ -289,17 +340,19 @@ async function pushBatch(
   for (let round = 0; round < MAX_CONFLICT_ROUNDS; round += 1) {
     const res = await syncPush(
       collection,
-      JSON.stringify({ entities: pending.map(storedToWire) }),
+      JSON.stringify({ entities: pending.map(storedToWire) }),activeNamespace,
     );
     if (res.status === 200) {
       const data = parseBody(res.body) as unknown as PushOk;
       const byVersion = new Map(data.results.map((r) => [r.id, r.version] as const));
-      const cleared = pending.map((e) => ({
-        ...e,
-        baseVersion: byVersion.get(e.id) ?? e.baseVersion,
-        dirty: false,
-      }));
-      await syncStorePut(collection, cleared);
+      const current = new Map((await syncStoreList(collection,activeNamespace)).map(e=>[e.id,e]));
+      const cleared = pending.map((e) => {
+        const latest = current.get(e.id);
+        // A response to an older push must never erase a concurrent local edit.
+        const changed = latest && (latest.updatedAt !== e.updatedAt || JSON.stringify(latest.payload) !== JSON.stringify(e.payload) || latest.deleted !== e.deleted);
+        return { ...(changed ? latest : e), baseVersion: byVersion.get(e.id) ?? e.baseVersion, dirty: !!changed };
+      });
+      await syncStorePut(collection, cleared,activeNamespace);
       summary.pushed += cleared.length;
       return;
     }
@@ -307,22 +360,31 @@ async function pushBatch(
       summary.conflicts += 1;
       const details = errorOf(res).details;
       const conflicts = (details["conflicts"] as SyncConflictEntry[] | undefined) ?? [];
+      if(conflicts.some(c=>c.reason==="immutable_entity"))throw new Error("不可变学习记录冲突，已保留本地待同步数据");
       const byId = new Map<string, StoredSyncEntity>(
         pending.map((e): [string, StoredSyncEntity] => [e.id, { ...e }]),
       );
+      const latest = new Map((await syncStoreList(collection, activeNamespace)).map(e => [e.id, e]));
       const adopted: StoredSyncEntity[] = [];
       for (const conflict of conflicts) {
-        const local = byId.get(conflict.id);
+        const queued = byId.get(conflict.id);
+        const local = latest.get(conflict.id) ?? queued;
         if (!local) continue;
+        byId.set(conflict.id, { ...local });
         if (!conflict.server) {
           // 幽灵实体：服务端从未见过（本地 baseVersion 记忆错误）→ 0 重推
-          local.baseVersion = 0;
+          byId.set(conflict.id, { ...local, baseVersion: 0 });
           continue;
+        }
+        const merged = collection === "speak-sessions" ? practiceEntity(local, wireToStored(conflict.server)) : null;
+        if (merged) {
+          merged.baseVersion = conflict.serverVersion;
+          byId.set(conflict.id, merged); adopted.push(merged); continue;
         }
         const serverMs = Date.parse(conflict.server.updatedAt);
         if (local.updatedAt > serverMs) {
           // 本地较新：携新 baseVersion 重推
-          local.baseVersion = conflict.serverVersion;
+          byId.set(conflict.id, { ...local, baseVersion: conflict.serverVersion });
         } else {
           // 服务端较新或相等（相等取服务端，防乒乓）：采纳服务端快照
           const adoptedEntity = wireToStored(conflict.server);
@@ -331,7 +393,7 @@ async function pushBatch(
         }
       }
       if (adopted.length > 0) {
-        await syncStorePut(collection, adopted);
+        await syncStorePut(collection, adopted,activeNamespace);
         summary.appliedRemote += adopted.length;
       }
       pending = [...byId.values()].filter((e) => e.dirty);
@@ -377,7 +439,13 @@ async function pushBatch(
 /** 对一个集合做一次完整的双向同步：先拉取（应用服务端变更 + 推进游标），
  *  再推送本地 dirty 实体（含新建/修改/软删除）。失败不抛——汇总带回错误，
  *  调用方（UI）据此展示；已落地的部分保留，下次同步续传。 */
-export async function syncNow(collection: string): Promise<SyncSummary> {
+let activeNamespace:string|undefined;
+let queue:Promise<unknown>=Promise.resolve();
+export function syncNow(collection:string,options:SyncOptions={}):Promise<SyncSummary>{
+  const run=queue.then(async()=>{activeNamespace=options.namespace??await learningNamespace();activeOptions=options;try{if(activeNamespace!==await learningNamespace())throw new Error("账号已切换，本次同步已取消");return await runSync(collection);}finally{activeNamespace=undefined;activeOptions={};}});
+  queue=run.catch(()=>undefined);return run.catch(error=>({...emptySummary(),ok:false,error:error instanceof Error?error.message:String(error)}));
+}
+async function runSync(collection: string): Promise<SyncSummary> {
   const summary = emptySummary();
   try {
     await pullAll(collection, summary);

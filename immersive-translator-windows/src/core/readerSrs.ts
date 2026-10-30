@@ -7,51 +7,10 @@
  * 四档评分间隔为文档定值；ease / reps / lapses 同步演进，供后续算法升级用。
  */
 
-import type { VocabSrsState, VocabWord } from "./readerTypes";
+import type { VocabWord } from "./readerTypes";
 
-export type ReviewGrade = "forgot" | "hard" | "good" | "easy";
-
-/** 四档评分的固定间隔（毫秒）与文案（屏 D 评分带）。 */
-export const GRADE_INTERVALS: Record<ReviewGrade, { ms: number; label: string }> = {
-  forgot: { ms: 10 * 60 * 1000, label: "10 分钟" },
-  hard: { ms: 24 * 60 * 60 * 1000, label: "1 天" },
-  good: { ms: 3 * 24 * 60 * 60 * 1000, label: "3 天" },
-  easy: { ms: 7 * 24 * 60 * 60 * 1000, label: "7 天" },
-};
-
-const EASE_DELTA: Record<ReviewGrade, number> = {
-  forgot: -0.2,
-  hard: -0.15,
-  good: 0,
-  easy: 0.15,
-};
-
-const EASE_MIN = 1.3;
-const EASE_MAX = 2.8;
-
-export function initialSrs(now: number): VocabSrsState {
-  // 新词当天即可复习：dueAt = now。
-  return { ease: 2.5, intervalDays: 0, reps: 0, dueAt: now, lapses: 0 };
-}
-
-/** 应用一档评分，返回新的 SRS 状态（不修改入参）。 */
-export function gradeSrs(srs: VocabSrsState, grade: ReviewGrade, now = Date.now()): VocabSrsState {
-  const ease = Math.min(EASE_MAX, Math.max(EASE_MIN, srs.ease + EASE_DELTA[grade]));
-  const forgot = grade === "forgot";
-  return {
-    ease,
-    // 忘记重置为 10 分钟（不足 1 天按 0 记）；其余按定值升档
-    intervalDays: forgot ? 0 : Math.max(srs.intervalDays, gradeIntervalDays(grade)),
-    reps: srs.reps + 1,
-    dueAt: now + GRADE_INTERVALS[grade].ms,
-    lapses: srs.lapses + (forgot ? 1 : 0),
-  };
-}
-
-function gradeIntervalDays(grade: ReviewGrade): number {
-  return { hard: 1, good: 3, easy: 7, forgot: 0 }[grade];
-}
-
+export { GRADE_INTERVALS, initialSrs, gradeSrs } from "../../../packages/learning-core/src/srs";
+export type { ReviewGrade } from "../../../packages/learning-core/src/srs";
 export function isDue(word: VocabWord, now = Date.now()): boolean {
   return word.srs.dueAt <= now;
 }

@@ -9,14 +9,16 @@ import {
   syncPull,
   syncPush,
   syncStoreList,
+  syncStoreCursorGet,
   syncStorePut,
+  syncStoreReplace,
+  learningNamespace,
   type StoredSyncEntity,
   type SyncHttpText,
 } from "./tauriBridge";
 import {
   ASSESS_MAX_WORDS,
   SPEAK_ASSESSMENTS_COLLECTION,
-  SPEAK_RECORD_MAX_BYTES,
   SPEAK_RECORD_MAX_LIVE,
   SPEAK_SESSIONS_COLLECTION,
   TEXT_MAX_CHARS,
@@ -45,6 +47,8 @@ vi.mock("./tauriBridge", () => ({
   syncStoreCursorSet: vi.fn(),
   syncStoreList: vi.fn(),
   syncStorePut: vi.fn(),
+  syncStoreReplace:vi.fn(),
+  learningNamespace:vi.fn(),
 }));
 
 const ok = (body: unknown): SyncHttpText => ({
@@ -91,6 +95,9 @@ beforeEach(() => {
   pullQueue = [];
   pushQueue = [];
   pushCalls = [];
+  vi.mocked(learningNamespace).mockResolvedValue("account-test");
+  vi.mocked(syncStoreCursorGet).mockResolvedValue(0);
+  vi.mocked(syncStoreReplace).mockImplementation(async(collection,entities)=>{const pending=[...bucket(collection).values()].filter(e=>e.dirty);const replacement=new Map(entities.map(e=>[e.id,e]));for(const local of pending)replacement.set(local.id,{...local,baseVersion:replacement.get(local.id)?.baseVersion??0});store.set(collection,replacement);});
 
   vi.mocked(syncStoreList).mockImplementation(async (collection) =>
     [...bucket(collection).values()].sort((a, b) => b.updatedAt - a.updatedAt),
@@ -185,24 +192,11 @@ function liveEntity(collection: string, id: string, updatedAt: number): StoredSy
 // ---------------------------------------------------------------------------
 
 describe("speak-sessions schema", () => {
-  it("富会话 → 精简投影：只留 role/text/at，hintZh/pron/shadowAttempts/coachDiff/context 不上云", () => {
+  it("保留跨设备续练所需的提示、发音报告和上下文，不携带音频", () => {
     const record = sessionRecordFrom(makeSession({ context: { kind: "vocab", wordIds: ["w1"] } }));
-    expect(record).toEqual({
-      id: "s1",
-      scenario: "ordering",
-      difficulty: "easy",
-      startedAt: 1000,
-      endedAt: 2000,
-      turns: [
-        { role: "assistant", text: "Hi there!", at: 1000 },
-        { role: "user", text: "I'd like a coffee.", at: 1100 },
-        { role: "assistant", text: "Great choice!", at: 1200 },
-      ],
-    });
-    expect(JSON.stringify(record)).not.toContain("pron");
-    expect(JSON.stringify(record)).not.toContain("shadowAttempts");
-    expect(JSON.stringify(record)).not.toContain("coachDiff");
-    expect(JSON.stringify(record)).not.toContain("wordIds");
+    expect(record).toMatchObject({v:2,id:"s1",startedAt:1000,endedAt:2000,context:{kind:"vocab",wordIds:["w1"]}});
+    expect(record.turns).toEqual(makeSession().turns);
+    expect(JSON.stringify(record)).not.toMatch(/audioB64|pcmB64|wavB64/);
   });
 
   it("云端记录 → 富会话往返（resume 形态），updatedAt 取 started/ended 较大者", () => {
@@ -216,25 +210,23 @@ describe("speak-sessions schema", () => {
     expect(session.updatedAt).toBe(2000);
   });
 
-  it("64KB 护栏：超大会话从最旧轮次开始丢弃，至少留 1 轮，结果 ≤64KB", () => {
+  it("64KB 护栏明确报错，绝不裁剪真实练习轮次", () => {
     // 200 轮 × 每轮 ~800B 文本 ≈ 160KB，必超
     const turns = Array.from({ length: 200 }, (_, i) => ({
       role: "user" as const,
       text: `${i}: ${"w".repeat(700)}`,
       at: 1000 + i,
     }));
-    const record = sessionRecordFrom(makeSession({ turns, updatedAt: 9999 }));
-    const bytes = new TextEncoder().encode(JSON.stringify(record)).length;
-    expect(bytes).toBeLessThanOrEqual(SPEAK_RECORD_MAX_BYTES);
-    expect(record.turns.length).toBeGreaterThan(0);
-    expect(record.turns.length).toBeLessThan(200);
-    // 丢的是最旧轮次：保留的都靠后
-    expect(record.turns[record.turns.length - 1].at).toBe(1199);
+    const session = makeSession({turns,updatedAt:9999});
+    expect(()=>sessionRecordFrom(session)).toThrow(/64KB/);
+    expect(session.turns).toHaveLength(200);
+    expect(session.turns[0].at).toBe(1000);
+    expect(session.turns[199].at).toBe(1199);
   });
 
-  it("单轮文本截断到 1000 字符", () => {
+  it("单轮完整文字在容量范围内原样保留", () => {
     const record = sessionRecordFrom(makeSession({ turns: [{ role: "user", text: "a".repeat(3000), at: 1 }] }));
-    expect(record.turns[0].text).toHaveLength(TEXT_MAX_CHARS);
+    expect(record.turns[0].text).toHaveLength(3000);
   });
 
   it("形状守卫：合法记录通过；缺字段/坏轮次/非对象拒绝", () => {
@@ -445,7 +437,7 @@ describe("读取与展示合并", () => {
     const merged2 = mergeSessionsWithRecords([localRich], [newerCloud]);
     expect(merged2[0].updatedAt).toBe(3000);
     expect(merged2[0].turns[merged2[0].turns.length - 1].text).toBe("See you!");
-    expect(merged2[0].turns[2].shadowAttempts).toBeUndefined(); // 精简版无报告
+    expect(merged2[0].turns[2].shadowAttempts).toEqual(localRich.turns[2].shadowAttempts);
 
     // 相等 → 本地（超集）；不相交 id → 并集；倒序
     const other = makeSession({ id: "cloudonly", createdAt: 500, updatedAt: 500 });

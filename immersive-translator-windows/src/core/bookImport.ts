@@ -18,7 +18,7 @@
 
 import JSZip from "jszip";
 import { countWords } from "./articleBuilder";
-import { FileImportError } from "./fileImport";
+import { FileImportError } from "./fileImportError";
 
 /** 单章（纯文本 + 词数；Article 由导入方按章调 buildArticleFromText 构建）。 */
 export interface EpubChapter {

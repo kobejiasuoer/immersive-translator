@@ -8844,7 +8844,7 @@ button.notes-word:hover { color: var(--accent); }
   cursor: not-allowed;
 }
 
-/* ---- 发现书库（B2）：目录筛选 + 单列书目卡 + 下载态（对齐 intake-*/epub-* 命名族） ---- */
+/* ---- 发现书库（B2）：目录筛选 + 单列书目卡 + 下载态（对齐 intake- 与 epub- 命名族） ---- */
 .discover-toolbar {
   display: flex;
   gap: 10px;

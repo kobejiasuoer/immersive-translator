@@ -11,16 +11,10 @@
  */
 
 import type { ArticleSourceType } from "./readerTypes";
+import { FileImportError } from "./fileImportError";
+export { FileImportError } from "./fileImportError";
 
 export type ImportFileKind = "txt" | "docx" | "pdf";
-
-/** 带中文提示的导入失败；message 直接进 ImportDialog 的失败态。 */
-export class FileImportError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "FileImportError";
-  }
-}
 
 export function detectImportFileKind(fileName: string): ImportFileKind | null {
   const lower = fileName.toLowerCase();

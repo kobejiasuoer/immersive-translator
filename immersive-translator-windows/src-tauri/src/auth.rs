@@ -611,14 +611,43 @@ impl TokenManager {
         path: &str,
         body: Option<String>,
     ) -> Result<AuthHttpResponse, AuthError> {
+        self.with_auth_for_namespace(method, path, body, None).await
+    }
+    pub async fn with_auth_for_namespace(
+        self: &Arc<Self>,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<String>,
+        expected: Option<&str>,
+    ) -> Result<AuthHttpResponse, AuthError> {
         let token = self.get_access_token().await?;
         let send = |token: String| {
-            self.transport.send(AuthHttpRequest {
-                method: method.clone(),
-                path: path.to_string(),
-                body: body.clone(),
-                bearer: Some(token),
-            })
+            let method = method.clone();
+            let body = body.clone();
+            async move {
+                if let Some(expected) = expected {
+                    crate::learning_store::verify_namespace(Some(expected))
+                        .map_err(|message| AuthError::local("account_changed", message))?;
+                    let state = self.state.lock().await;
+                    if !state.as_ref().is_some_and(|s| {
+                        crate::learning_store::account_namespace(&s.user.id) == expected
+                            && s.access_token == token
+                    }) {
+                        return Err(AuthError::local(
+                            "account_changed",
+                            "账号已切换，本次同步已取消",
+                        ));
+                    }
+                }
+                self.transport
+                    .send(AuthHttpRequest {
+                        method: method.clone(),
+                        path: path.to_string(),
+                        body: body.clone(),
+                        bearer: Some(token),
+                    })
+                    .await
+            }
         };
         let first = send(token.clone()).await?;
         if first.status != 401 {
@@ -629,6 +658,10 @@ impl TokenManager {
             // 仅 token_expired 触发刷新（红线 4）；带旧票进单飞，迟到 401
             // 若逢并发刷新已完成则直接复用新凭据（红线 2 单飞无窗口）。
             "token_expired" => {
+                if let Some(expected) = expected {
+                    crate::learning_store::verify_namespace(Some(expected))
+                        .map_err(|message| AuthError::local("account_changed", message))?;
+                }
                 let stored = self
                     .refresh_after_401(&token)
                     .await
@@ -916,6 +949,10 @@ pub(crate) fn emit_fatal_if_needed(app: &AppHandle, err: &AuthError) {
 /// 登录成功命令的公共收尾：广播登录态 + fire-and-forget 拉取 me/config
 /// （D7：失败仅 log，账号区可手动重拉）。
 fn after_login_success(app: &AppHandle, manager: &Arc<TokenManager>, user: &AuthUser) {
+    if let Err(error) = crate::learning_store::adopt_guest(app, &user.id) {
+        eprintln!("[learning] guest adoption failed; guest data retained: {error}");
+    }
+    crate::learning_store::set_account(Some(&user.id));
     emit_auth_state(
         app,
         &AuthStatus {
@@ -994,6 +1031,7 @@ pub async fn auth_logout(
     manager: tauri::State<'_, Arc<TokenManager>>,
 ) -> Result<LogoutOutcome, AuthError> {
     let outcome = manager.logout().await?;
+    crate::learning_store::set_account(None);
     // 走到这里 clear 必已成功（§5.3：失败路径直接 Err，不广播）。
     emit_auth_state(
         &app,
@@ -1012,7 +1050,9 @@ pub async fn auth_logout(
 pub async fn auth_get_status(
     manager: tauri::State<'_, Arc<TokenManager>>,
 ) -> Result<AuthStatus, AuthError> {
-    Ok(manager.get_status().await)
+    let status = manager.get_status().await;
+    crate::learning_store::set_account(status.user.as_ref().map(|u| u.id.as_str()));
+    Ok(status)
 }
 
 #[tauri::command]

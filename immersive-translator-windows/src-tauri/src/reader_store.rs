@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 pub const READER_SCHEMA_VERSION: u32 = 1;
 
@@ -471,38 +471,25 @@ pub struct MasteryDistribution {
 // ---------- 存取 ----------
 
 fn articles_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("无法获取应用数据目录: {e}"))?;
+    let dir = crate::learning_store::data_dir(app)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建数据目录: {e}"))?;
     Ok(dir.join("reader_articles.json"))
 }
 
 fn vocab_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("无法获取应用数据目录: {e}"))?;
+    let dir = crate::learning_store::data_dir(app)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建数据目录: {e}"))?;
     Ok(dir.join("reader_vocab.json"))
 }
 
 fn books_index_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("无法获取应用数据目录: {e}"))?;
+    let dir = crate::learning_store::data_dir(app)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建数据目录: {e}"))?;
     Ok(dir.join("reader_books.json"))
 }
 
 fn books_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("无法获取应用数据目录: {e}"))?
-        .join("books");
+    let dir = crate::learning_store::data_dir(app)?.join("books");
     std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建书籍目录: {e}"))?;
     Ok(dir)
 }
@@ -519,9 +506,7 @@ fn book_file_path(app: &AppHandle, book_id: &str) -> Result<PathBuf, String> {
 static STORE_LOCK: Mutex<()> = Mutex::new(());
 
 fn write_atomic(path: &PathBuf, content: &str) -> Result<(), String> {
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, content).map_err(|e| format!("写入 {path:?} 失败: {e}"))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("替换 {path:?} 失败: {e}"))
+    crate::learning_store::write_path(path, content)
 }
 
 fn load_articles(app: &AppHandle) -> Result<ArticlesFile, String> {
@@ -531,7 +516,7 @@ fn load_articles(app: &AppHandle) -> Result<ArticlesFile, String> {
 /// 只豁免 NotFound：杀软/备份短暂锁文件、双开实例等读错误必须报出来，
 /// 否则调用方拿到空库，下一次保存（复习打卡就会触发）会整体覆盖清空数据。
 fn load_articles_from_path(path: &std::path::Path) -> Result<ArticlesFile, String> {
-    let text = match std::fs::read_to_string(path) {
+    let text = match crate::learning_store::read_path(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(empty_articles_file()),
         Err(e) => return Err(format!("读取文章数据 {path:?} 失败: {e}")),
@@ -551,7 +536,7 @@ fn load_vocab(app: &AppHandle) -> Result<VocabFile, String> {
 
 /// 只豁免 NotFound（理由同 load_articles_from_path）。与 secret_store 的读法一致。
 fn load_vocab_from_path(path: &std::path::Path) -> Result<VocabFile, String> {
-    let text = match std::fs::read_to_string(path) {
+    let text = match crate::learning_store::read_path(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(empty_vocab_file()),
         Err(e) => return Err(format!("读取生词数据 {path:?} 失败: {e}")),
@@ -565,7 +550,7 @@ fn load_vocab_from_path(path: &std::path::Path) -> Result<VocabFile, String> {
 }
 
 fn load_books_from_path(path: &std::path::Path) -> Result<BooksFile, String> {
-    let text = match std::fs::read_to_string(path) {
+    let text = match crate::learning_store::read_path(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(empty_books_file()),
         Err(e) => return Err(format!("读取书籍索引 {path:?} 失败: {e}")),
@@ -579,7 +564,7 @@ fn load_books_from_path(path: &std::path::Path) -> Result<BooksFile, String> {
 }
 
 fn load_book_file_from_path(path: &std::path::Path) -> Result<BookFile, String> {
-    let text = match std::fs::read_to_string(path) {
+    let text = match crate::learning_store::read_path(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(empty_book_file()),
         Err(e) => return Err(format!("读取书籍 {path:?} 失败: {e}")),
@@ -771,15 +756,20 @@ pub fn reader_save_book(
     let mut file = load_book_file_from_path(&path)?;
     file.schema_version = READER_SCHEMA_VERSION;
     file.articles = articles;
-    write_atomic(
-        &path,
-        &serde_json::to_string(&file).map_err(|e| format!("序列化书籍失败: {e}"))?,
-    )?;
     let mut index = load_books_from_path(&books_index_path(&app)?)?;
     upsert_book_index(&mut index, meta);
-    write_atomic(
-        &books_index_path(&app)?,
-        &serde_json::to_string(&index).map_err(|e| format!("序列化书籍索引失败: {e}"))?,
+    crate::learning_store::commit_many(
+        &app,
+        &[
+            (
+                path,
+                Some(serde_json::to_string(&file).map_err(|e| e.to_string())?),
+            ),
+            (
+                books_index_path(&app)?,
+                Some(serde_json::to_string(&index).map_err(|e| e.to_string())?),
+            ),
+        ],
     )?;
     let mut books = index.books;
     books.sort_by(|a, b| b.last_read_at.cmp(&a.last_read_at));
@@ -812,14 +802,17 @@ pub fn reader_delete_book(app: AppHandle, book_id: String) -> Result<bool, Strin
     index.books.retain(|b| b.id != book_id);
     let removed = index.books.len() != before;
     if removed {
-        write_atomic(
-            &books_index_path(&app)?,
-            &serde_json::to_string(&index).map_err(|e| format!("序列化书籍索引失败: {e}"))?,
-        )?;
         let path = book_file_path(&app, &book_id)?;
-        if path.exists() {
-            std::fs::remove_file(&path).map_err(|e| format!("删除书籍文件失败: {e}"))?;
-        }
+        crate::learning_store::commit_many(
+            &app,
+            &[
+                (
+                    books_index_path(&app)?,
+                    Some(serde_json::to_string(&index).map_err(|e| e.to_string())?),
+                ),
+                (path, None),
+            ],
+        )?;
     }
     Ok(removed)
 }
@@ -1815,11 +1808,7 @@ pub struct NoteContent {
 }
 
 fn notes_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("无法获取应用数据目录: {e}"))?
-        .join("notes");
+    let dir = crate::learning_store::data_dir(app)?.join("notes");
     std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建笔记目录: {e}"))?;
     Ok(dir)
 }
@@ -1862,7 +1851,7 @@ fn dedup_note_path(dir: &std::path::Path, base: &str) -> PathBuf {
         }
     };
     let mut n = 1;
-    while candidate(n).exists() {
+    while crate::learning_store::read_path(&candidate(n)).is_ok() {
         n += 1;
     }
     candidate(n)
@@ -1906,7 +1895,7 @@ pub fn note_save(
     } else {
         meta.created_at
     };
-    std::fs::write(&path, note_with_frontmatter(&meta, &content))
+    crate::learning_store::write_path(&path, &note_with_frontmatter(&meta, &content))
         .map_err(|e| format!("写入笔记失败: {e}"))?;
     Ok(meta)
 }
@@ -1916,13 +1905,12 @@ pub fn note_save(
 pub fn note_list(app: AppHandle) -> Result<Vec<NoteFileMeta>, String> {
     let dir = notes_dir(&app)?;
     let mut metas = Vec::new();
-    let entries = std::fs::read_dir(&dir).map_err(|e| format!("读取笔记目录失败: {e}"))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
+    let entries = crate::learning_store::list_paths(&app, &dir)?;
+    for path in entries {
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(text) = crate::learning_store::read_path(&path) else {
             continue;
         };
         let (meta, _) = split_note_frontmatter(&text);
@@ -1946,7 +1934,7 @@ pub fn note_read(app: AppHandle, file: String) -> Result<Option<NoteContent>, St
     if path.file_name().and_then(|n| n.to_str()) != Some(file.as_str()) {
         return Err("无效的笔记文件名".into());
     }
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    let Ok(text) = crate::learning_store::read_path(&path) else {
         return Ok(None);
     };
     let (meta, body) = split_note_frontmatter(&text);
@@ -1975,7 +1963,7 @@ pub fn note_write_replay(
     if path.file_name().and_then(|n| n.to_str()) != Some(file.as_str()) {
         return Err("无效的笔记文件名".into());
     }
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("读取笔记失败: {e}"))?;
+    let text = crate::learning_store::read_path(&path).map_err(|e| format!("读取笔记失败: {e}"))?;
     let (meta, body) = split_note_frontmatter(&text);
     let mut meta = meta.ok_or("笔记缺少元数据")?;
     meta.replay = Some(replay);
@@ -1984,7 +1972,7 @@ pub fn note_write_replay(
         r.as_object_mut()
             .map(|o| o.insert("rounds".into(), serde_json::Value::from(rounds)))
     });
-    std::fs::write(&path, note_with_frontmatter(&meta, &body))
+    crate::learning_store::write_path(&path, &note_with_frontmatter(&meta, &body))
         .map_err(|e| format!("写入笔记失败: {e}"))?;
     Ok(meta)
 }
@@ -1998,7 +1986,11 @@ pub fn note_delete(app: AppHandle, file: String) -> Result<bool, String> {
     if path.file_name().and_then(|n| n.to_str()) != Some(file.as_str()) {
         return Err("无效的笔记文件名".into());
     }
-    Ok(std::fs::remove_file(&path).is_ok())
+    if !path.exists() {
+        return Ok(false);
+    }
+    crate::learning_store::commit(&app, &path, None)?;
+    Ok(true)
 }
 
 #[cfg(test)]

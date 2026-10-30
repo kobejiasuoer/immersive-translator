@@ -15,13 +15,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { readerGetArticle, readerGetVocab, readerRecordReview, readerSaveVocabWord } from "../lib/readerStore";
+import { readerGetArticle, readerGetVocab, readerGradeVocab, readerStats } from "../lib/readerStore";
 import { ttsSpeakAdvanced } from "../lib/tauriBridge";
 import { trayRefreshBadge } from "../lib/reminder";
 import { classifyTtsError, type TtsErrorInfo } from "../lib/ttsError";
 import { loadGlobalReaderSettings } from "../reader/readerSettingsStore";
 import { judgeCloze, routeRecallMode, verdictToSuggestedGrade, type RecallVerdict } from "../core/recallJudge";
-import { dayKey, gradeSrs, GRADE_INTERVALS, type ReviewGrade } from "../core/readerSrs";
+import { GRADE_INTERVALS, type ReviewGrade } from "../core/readerSrs";
 import type { Article, VocabWord } from "../core/readerTypes";
 import "./quickreview.css";
 
@@ -49,9 +49,12 @@ export function QuickReviewApp() {
   const [uis, setUis] = useState<UICardState[]>([]);
   /** 本次会话各卡已评的档；null = 还没评过。 */
   const [grades, setGrades] = useState<(ReviewGrade | null)[]>([]);
-  const [streak, setStreak] = useState<number | null>(null);
+  const [streak,setStreak] = useState<number | null>(null);
+  const [saveError,setSaveError]=useState("");
+  const grading=useRef(false);
   const [appearance, setAppearance] = useState<Appearance>({ theme: "light", fontPair: "serif" });
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const gradeEventIds = useRef(new Map<string,string>());
 
   useEffect(() => {
     setAppearance(loadGlobalReaderSettings());
@@ -75,6 +78,7 @@ export function QuickReviewApp() {
   const reload = useCallback(() => {
     let active = true;
     setStatus("loading");
+    gradeEventIds.current.clear();setSaveError("");
     (async () => {
       try {
         const file = await readerGetVocab();
@@ -144,18 +148,14 @@ export function QuickReviewApp() {
 
   const applyGrade = useCallback(
     (g: ReviewGrade) => {
-      if (!card) return;
+      if (!card || grading.current) return;
+      grading.current=true;setSaveError("");
       const first = grades[pos] == null;
-      setGrades((arr) => arr.map((x, i) => (i === pos ? g : x)));
       // 一律按进窗时的原 SRS 重算：改评不会把间隔叠加上一轮的结果
-      const graded = { ...card.word, srs: gradeSrs(card.word.srs, g) };
-      void readerSaveVocabWord(graded)
-        .then(() => (first ? readerRecordReview(dayKey(), Date.now()) : null))
-        .then((stats) => {
-          if (stats) setStreak(stats.streak);
-          trayRefreshBadge();
-        })
-        .catch((error) => console.error("[quick-review] save grade failed", error));
+      void readerGradeVocab(card.word, g, card.mode, undefined, gradeEventIds.current.get(card.word.id))
+        .then(async(id) => { gradeEventIds.current.set(card.word.id,id);trayRefreshBadge();setGrades((arr)=>arr.map((x,i)=>i===pos?g:x));
+          const date=new Date(),day=`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
+          void readerStats(day,date.getTime()).then(stats=>setStreak(stats.streak));
       // 首评才前进（尾卡评完即收工）；回看改评留在原地
       if (first) {
         if (pos + 1 >= total) {
@@ -164,6 +164,7 @@ export function QuickReviewApp() {
           setPos(pos + 1);
         }
       }
+        }).catch(error=>setSaveError(`评分尚未保存：${String(error)}`)).finally(()=>{grading.current=false;});
     },
     [card, pos, total, grades],
   );
@@ -244,6 +245,7 @@ export function QuickReviewApp() {
         <div className="qr-center">
           <div className="qr-done-ring">✓</div>
           <h3>今天收工</h3>
+          {saveError&&<p role="alert">{saveError}</p>}
           {streak !== null && (
             <p className="qr-streak">
               连续打卡 <b>{streak}</b> 天
@@ -274,6 +276,7 @@ export function QuickReviewApp() {
   return (
     <div className="qr-root" data-theme={appearance.theme}>
       <TitleBar label="快速复习" progress={`${pos + 1} / ${total}`} />
+      {saveError&&<p role="alert" className="qr-sub">{saveError}</p>}
       <div className="qr-navrow">
         <button
           className="qr-nav"

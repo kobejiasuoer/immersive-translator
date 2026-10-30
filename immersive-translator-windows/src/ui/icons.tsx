@@ -87,6 +87,14 @@ export const IconRetry = (p: IconProps) => (
   </svg>
 );
 
+/** 手机设备（跨设备练习入口） */
+export const IconSmartphone = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="5" y="2" width="14" height="20" rx="2" />
+    <line x1="11" y1="18" x2="13" y2="18" />
+  </svg>
+);
+
 /** 取消（停止方框） */
 export const IconStop = (p: IconProps) => (
   <svg {...base(p)}>

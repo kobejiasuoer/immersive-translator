@@ -16,6 +16,8 @@ import type {
   VocabWord,
 } from "../core/readerTypes";
 import type { ReviewLogFile, ReviewStats } from "../core/readerSrs";
+import { reduceReviewEvents, isReviewEvent, type ReviewGrade, type ReviewEvent, type SrsState } from "../../../packages/learning-core/src/index";
+import { syncStoreList,learningNamespace } from "./tauriBridge";
 
 export type {
   Article,
@@ -53,6 +55,27 @@ export function readerGetVocab(): Promise<{ words: VocabWord[]; reviewLog: Revie
 
 export function readerSaveVocabWord(word: VocabWord): Promise<void> {
   return invoke<void>("reader_save_vocab_word", { word });
+}
+/** One immutable grade event and its derived vocabulary snapshot commit atomically. */
+export async function readerGradeVocab(word: VocabWord, grade: ReviewGrade, mode = "recognition", recall?: ReviewEvent["recall"], supersedesEventId?: string): Promise<string> {
+  const expectedNamespace=await learningNamespace();
+  const [stored, events, deviceId] = await Promise.all([syncStoreList("reading-vocab",expectedNamespace), syncStoreList("review-events",expectedNamespace), invoke<string>("learning_device_id")]);
+  const payload = stored.find(e=>e.id===word.id)?.payload as {baseline?:SrsState;baselineRecall?:RecallStat;generation?:string}|undefined;
+  const baseline = payload?.baseline ?? word.srs, generation = payload?.generation ?? `legacy-${word.addedAt}`;
+  const date=new Date(),day=`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
+  const event:ReviewEvent={v:2,id:crypto.randomUUID(),wordId:word.id,deviceId,reviewedAt:date.getTime(),day,kind:"grade",grade,mode,generation,...(recall?{recall}:{}),...(supersedesEventId?{supersedesEventId}:{})};
+  const existing=events.filter(e=>!e.deleted&&isReviewEvent(e.payload)).map(e=>e.payload as ReviewEvent);
+  const baselineRecall=payload?.baselineRecall??word.recall;
+  const reduced=reduceReviewEvents(baseline,[...existing,event],word.id,generation,baselineRecall);
+  await invoke("learning_commit_review",{word:{...word,baseline,baselineRecall,generation,srs:reduced.srs,recall:reduced.recall},event,expectedNamespace}); return event.id;
+}
+export async function readerUndoReview(word:VocabWord,eventId:string):Promise<void>{
+  const expectedNamespace=await learningNamespace();
+  const [stored, events, deviceId]=await Promise.all([syncStoreList("reading-vocab",expectedNamespace),syncStoreList("review-events",expectedNamespace),invoke<string>("learning_device_id")]);
+  const p=stored.find(e=>e.id===word.id)?.payload as {baseline?:SrsState;baselineRecall?:RecallStat;generation?:string}|undefined;if(!p?.baseline)throw new Error("No review baseline");
+  const event:ReviewEvent={v:2,id:crypto.randomUUID(),wordId:word.id,deviceId,reviewedAt:Date.now(),kind:"undo",mode:"recognition",generation:p.generation,reversesEventId:eventId};
+  const reduced=reduceReviewEvents(p.baseline,[...events.filter(e=>isReviewEvent(e.payload)).map(e=>e.payload as ReviewEvent),event],word.id,p.generation,p.baselineRecall);
+  await invoke("learning_commit_review",{word:{...word,baseline:p.baseline,baselineRecall:p.baselineRecall,generation:p.generation,srs:reduced.srs,recall:reduced.recall},event,expectedNamespace});
 }
 
 /** 批量合并生词（口语复盘用）：新词追加，已有词保留 SRS 进度仅补例句。 */

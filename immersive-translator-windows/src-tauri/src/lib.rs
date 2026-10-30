@@ -5,6 +5,7 @@ mod discover;
 mod feed;
 mod file_export;
 mod history;
+mod learning_store;
 mod ocr;
 mod reader_store;
 mod redeem;
@@ -1469,6 +1470,12 @@ pub fn run() {
             sync::sync_push,
             sync::sync_store_list,
             sync::sync_store_put,
+            sync::sync_store_replace,
+            learning_store::learning_device_id,
+            learning_store::learning_namespace,
+            learning_store::learning_audio,
+            learning_store::learning_commit_review,
+            learning_store::learning_migrate,
             sync::sync_store_cursor_get,
             sync::sync_store_cursor_set,
             redeem::redeem_code,
@@ -1483,6 +1490,7 @@ pub fn run() {
             settings_take_pending_tab,
         ])
         .setup(|app| {
+            learning_store::init(app.handle());
             // 首次启动把安装包里的 OCR 模型释放到 app_data_dir/models/，
             // 用户无需联网下载（企业内网/代理环境下下载常常失败）。
             if let Err(e) = ocr::ensure_models_from_bundle(app.handle()) {
