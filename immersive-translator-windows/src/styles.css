@@ -4,14 +4,35 @@
    ============================================================ */
 
 /* ---------- 设计令牌 ---------- */
+/* 显式主题在自己的根节点重新派生品牌色，避免继承系统主题的已计算值。 */
+:root,
+[data-theme],
+.reader-root {
+  --accent: var(--brand-accent);
+  --accent-hover: var(--brand-hover);
+  --accent-active: var(--brand-active);
+  --accent-rgb: var(--brand-rgb);
+  --accent-foreground: var(--brand-foreground);
+  --accent-soft: var(--brand-soft);
+  --accent-softer: var(--brand-softer);
+  --accent-line: var(--brand-line);
+  --accent-hl: var(--brand-line);
+  --accent-glow: rgba(var(--brand-rgb), 0.22);
+  /* 保留旧 background / background-image 调用契约，渐变两端统一为实色。 */
+  --accent-grad: linear-gradient(135deg, var(--brand-accent), var(--brand-accent));
+  --shadow-ring: 0 0 0 3px rgba(var(--brand-rgb), 0.28);
+}
+
 :root {
-  /* 品牌色（靛蓝，符合"翻译/沉浸阅读"的冷静气质） */
-  --accent: #4c5ff0;
-  --accent-hover: #3f52e0;
-  --accent-active: #3445cc;
-  --accent-soft: #eef0fe;
-  --accent-softer: #f6f7ff;
-  --accent-grad: linear-gradient(135deg, #4c5ff0 0%, #7a5cf0 100%);
+  /* 品牌色（墨绿）；错误、警告与内容标注继续使用自己的语义颜色。 */
+  --brand-accent: #1f6b57;
+  --brand-hover: #185646;
+  --brand-active: #134836;
+  --brand-rgb: 31, 107, 87;
+  --brand-foreground: #ffffff;
+  --brand-soft: #e3f0ea;
+  --brand-softer: #f1f6f2;
+  --brand-line: #b9d8cc;
 
   /* 语义色 */
   --ok: #15803d;
@@ -20,18 +41,19 @@
   --warn-soft: #fdf3e1;
   --err: #dc2626;
   --err-soft: #fdeaea;
+  --err-foreground: #ffffff;
 
   /* 中性灰阶 */
-  --bg: #f4f5f9;          /* 窗口/页面底色 */
+  --bg: #f4f5f2;          /* 窗口/页面底色 */
   --surface: #ffffff;     /* 卡片/面板 */
-  --surface-2: #f9fafc;   /* 次级底色 */
-  --border: #e4e7ee;      /* 分隔线 */
-  --border-strong: #d6dae4;
+  --surface-2: #fafbf8;   /* 次级底色 */
+  --border: #dde2dd;      /* 分隔线 */
+  --border-strong: #ced6cf;
 
   /* 文字 */
-  --text-1: #1c2029;
-  --text-2: #4b5261;
-  --text-3: #7c8494;
+  --text-1: #202923;
+  --text-2: #49574f;
+  --text-3: #5f6f65;
   --text-4: #a6adbb;
 
   /* 圆角 / 阴影 */
@@ -42,7 +64,6 @@
   --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
   --shadow-float: 0 6px 16px rgba(16, 24, 40, 0.08), 0 2px 6px rgba(16, 24, 40, 0.06);
   --shadow-pop: 0 12px 32px rgba(16, 24, 40, 0.16), 0 3px 10px rgba(16, 24, 40, 0.1);
-  --shadow-ring: 0 0 0 3px rgba(76, 95, 240, 0.18);
 
   /* 字体：Windows 优先 Segoe UI + 微软雅黑（中文可读性） */
   --font-ui: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC",
@@ -52,12 +73,14 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --accent: #7d8cff;
-    --accent-hover: #93a0ff;
-    --accent-active: #a5b0ff;
-    --accent-soft: rgba(125, 140, 255, 0.16);
-    --accent-softer: rgba(125, 140, 255, 0.09);
-    --accent-grad: linear-gradient(135deg, #6b7bff 0%, #9a6bff 100%);
+    --brand-accent: #73c6aa;
+    --brand-hover: #86d3ba;
+    --brand-active: #9cdfc6;
+    --brand-rgb: 115, 198, 170;
+    --brand-foreground: #112a20;
+    --brand-soft: #263d34;
+    --brand-softer: #21332c;
+    --brand-line: #436c5b;
 
     --ok: #5cc48a;
     --ok-soft: rgba(60, 190, 120, 0.16);
@@ -65,6 +88,7 @@
     --warn-soft: rgba(226, 167, 90, 0.16);
     --err: #f17474;
     --err-soft: rgba(240, 90, 90, 0.16);
+    --err-foreground: #281312;
 
     --bg: #1d1f26;
     --surface: #262933;
@@ -80,7 +104,6 @@
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-float: 0 8px 20px rgba(0, 0, 0, 0.4);
     --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
-    --shadow-ring: 0 0 0 3px rgba(125, 140, 255, 0.3);
   }
 }
 
@@ -109,7 +132,8 @@ body {
 }
 
 ::selection {
-  background: rgba(76, 95, 240, 0.2);
+  background: var(--accent-soft);
+  color: var(--text-1);
 }
 
 /* ---------- 滚动条 ---------- */
@@ -134,7 +158,8 @@ body {
 
 /* ---------- 可访问性：键盘焦点 ---------- */
 :focus-visible {
-  outline: none;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
   box-shadow: var(--shadow-ring);
   border-radius: var(--radius-sm);
 }
@@ -145,10 +170,7 @@ textarea:focus-visible {
   box-shadow: var(--shadow-ring);
 }
 
-/* 阅读室焦点环加固。
-   全局 :focus-visible 用的是 3px / 0.18alpha 软影（--shadow-ring），叠在白底上
-   对比度仅 1.28:1（低于 3:1 即视为不可见），且常被祖先 overflow 裁掉。这里在
-   阅读室作用域内改用实色 outline：
+/* 阅读室焦点环加固：保留实色 outline，避免软影被其他按钮样式或 overflow 裁掉。
      - 用 outline 而非 box-shadow：reader.css 里 button.on 等高优先级规则会吃掉
        box-shadow（特异性 0,2,1 > 此处 0,2,0），outline 抢不走；
      - outline 在 Windows 高对比度（forced-colors）下不会被系统抹掉。
@@ -162,6 +184,9 @@ textarea:focus-visible {
 }
 
 @media (forced-colors: active) {
+  :focus-visible {
+    outline: 3px solid Highlight;
+  }
   .reader-root :where(button, [role="tab"], a, input, select, textarea):focus-visible {
     outline: 3px solid Highlight;
   }
@@ -203,8 +228,8 @@ textarea:focus-visible {
 
 .btn-primary {
   background: var(--accent);
-  color: #fff;
-  box-shadow: 0 1px 2px rgba(76, 95, 240, 0.3);
+  color: var(--accent-foreground);
+  box-shadow: 0 1px 2px rgba(var(--accent-rgb), 0.3);
 }
 .btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
@@ -556,19 +581,19 @@ textarea:focus-visible {
   height: 8px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 0 rgba(76, 95, 240, 0.5);
+  box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0.5);
   animation: pulse 1.6s ease-out infinite;
   flex-shrink: 0;
 }
 @keyframes pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(76, 95, 240, 0.45);
+    box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0.45);
   }
   70% {
-    box-shadow: 0 0 0 7px rgba(76, 95, 240, 0);
+    box-shadow: 0 0 0 7px rgba(var(--accent-rgb), 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(76, 95, 240, 0);
+    box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0);
   }
 }
 
@@ -659,7 +684,7 @@ textarea:focus-visible {
   height: 24px;
   border-radius: 7px;
   background: var(--accent-grad);
-  color: #fff;
+  color: var(--accent-foreground);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -794,7 +819,7 @@ textarea:focus-visible {
 /* 首次引导卡 */
 .welcome-box {
   background: var(--accent-soft);
-  border: 1px solid rgba(76, 95, 240, 0.25);
+  border: 1px solid rgba(var(--accent-rgb), 0.25);
   border-radius: var(--radius-md);
   padding: 13px 15px;
   margin-bottom: 16px;
@@ -905,7 +930,7 @@ textarea:focus-visible {
   height: 19px;
   border-radius: 50%;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-foreground);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1129,6 +1154,7 @@ textarea:focus-visible {
   background: var(--accent);
 }
 .switch.on::after {
+  background: var(--accent-foreground);
   transform: translateX(14px);
 }
 
@@ -1410,7 +1436,7 @@ input[type="radio"] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--accent-foreground);
   flex-shrink: 0;
 }
 
@@ -1979,13 +2005,13 @@ input[type="radio"] {
 /* ============================================================
    沉浸阅读室 · 设计令牌（docs/reading-room-handoff.md §3）
    令牌 1:1 对齐设计稿；组件版式在 src/reader/reader.css。
-   data-theme 作用于阅读室根节点，不影响其他窗口
-   （其余窗口继续走 prefers-color-scheme）。
+   data-theme 作用于阅读室及沿用阅读偏好的快速复习根节点。
+   设置、登录、历史等窗口继续走 prefers-color-scheme。
    ============================================================ */
 
 :root {
   /* §3 新增令牌 */
-  --accent-hl: #dde2fd;            /* 高亮描边 / 朗读中词底 */
+  --accent-hl: var(--brand-line);  /* 高亮描边 / 朗读中词底 */
   --mask-block: #3a3e42;           /* 遮罩墨块底色（近墨中性，各主题统一"涂黑"语义） */
   --mask-block-ink: #c9ccc7;       /* 墨块上的文字 */
 
@@ -2003,13 +2029,46 @@ input[type="radio"] {
   --font-read-sans-cn: "Noto Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
 }
 
-/* §3 [data-theme="dark"]（阅读室根节点作用域） */
+/* 显式浅色主题覆盖系统深色，快速复习也复用本组令牌。 */
+[data-theme="light"] {
+  --brand-accent: #1f6b57;
+  --brand-hover: #185646;
+  --brand-active: #134836;
+  --brand-rgb: 31, 107, 87;
+  --brand-foreground: #ffffff;
+  --brand-soft: #e3f0ea;
+  --brand-softer: #f1f6f2;
+  --brand-line: #b9d8cc;
+  --bg: #f4f5f2;
+  --surface: #ffffff;
+  --surface-2: #fafbf8;
+  --border: #dde2dd;
+  --border-strong: #ced6cf;
+  --text-1: #202923;
+  --text-2: #49574f;
+  --text-3: #5f6f65;
+  --text-4: #a6adbb;
+  --mask-block: #3a3e42;
+  --mask-block-ink: #c9ccc7;
+  --ok: #15803d;
+  --ok-soft: #e8f7ee;
+  --warn: #b45309;
+  --warn-soft: #fdf3e1;
+  --err: #dc2626;
+  --err-soft: #fdeaea;
+  --err-foreground: #ffffff;
+}
+
+/* §3 显式深色主题 */
 [data-theme="dark"] {
-  --accent: #7d8cff;
-  --accent-hover: #93a0ff;
-  --accent-soft: rgba(125, 140, 255, 0.16);
-  --accent-softer: rgba(125, 140, 255, 0.09);
-  --accent-hl: rgba(125, 140, 255, 0.3);
+  --brand-accent: #73c6aa;
+  --brand-hover: #86d3ba;
+  --brand-active: #9cdfc6;
+  --brand-rgb: 115, 198, 170;
+  --brand-foreground: #112a20;
+  --brand-soft: #263d34;
+  --brand-softer: #21332c;
+  --brand-line: #436c5b;
   --bg: #1d1f26;
   --surface: #262933;
   --surface-2: #2e313c;
@@ -2028,24 +2087,28 @@ input[type="radio"] {
   --warn-soft: rgba(226, 167, 90, 0.16);
   --err: #f17474;
   --err-soft: rgba(240, 90, 90, 0.16);
+  --err-foreground: #281312;
 }
 
-/* §3 护眼主题（文档仅给定底色 #f5efdf，其余按浅色板明度关系推导，见 decisions #7） */
+/* §3 护眼主题：灰绿纸面与共同品牌色 */
 [data-theme="sepia"] {
-  --accent: #4c5ff0;
-  --accent-hover: #3f52e0;
-  --accent-soft: rgba(76, 95, 240, 0.12);
-  --accent-softer: rgba(76, 95, 240, 0.07);
-  --accent-hl: #e2e0f5;
-  --bg: #f5efdf;
-  --surface: #fbf7ec;
-  --surface-2: #f1ead7;
-  --border: #e4dac0;
-  --border-strong: #d2c6a6;
-  --text-1: #37301f;
-  --text-2: #5a5138;
-  --text-3: #857a5c;
-  --text-4: #a89d80;
+  --brand-accent: #1f6b57;
+  --brand-hover: #185646;
+  --brand-active: #134836;
+  --brand-rgb: 31, 107, 87;
+  --brand-foreground: #ffffff;
+  --brand-soft: #e3f0ea;
+  --brand-softer: #f1f6f2;
+  --brand-line: #b9d8cc;
+  --bg: #eef1ef;
+  --surface: #f7f9f8;
+  --surface-2: #e8eeea;
+  --border: #dce4de;
+  --border-strong: #c5d2c9;
+  --text-1: #131b18;
+  --text-2: #3d4a45;
+  --text-3: #5f6f65;
+  --text-4: #9ca9a3;
   --mask-block: #4a4536;
   --mask-block-ink: #cfc9b8;
   /* 语义状态色（暖纸底上按同明度关系收敛） */
@@ -2055,15 +2118,19 @@ input[type="radio"] {
   --warn-soft: rgba(154, 98, 18, 0.12);
   --err: #b03a32;
   --err-soft: rgba(176, 58, 50, 0.12);
+  --err-foreground: #ffffff;
 }
 
 /* §3 纯黑（OLED）主题（文档仅给定底色 #0a0a0b，推导见 decisions #7） */
 [data-theme="oled"] {
-  --accent: #7d8cff;
-  --accent-hover: #93a0ff;
-  --accent-soft: rgba(125, 140, 255, 0.18);
-  --accent-softer: rgba(125, 140, 255, 0.1);
-  --accent-hl: rgba(125, 140, 255, 0.32);
+  --brand-accent: #73c6aa;
+  --brand-hover: #86d3ba;
+  --brand-active: #9cdfc6;
+  --brand-rgb: 115, 198, 170;
+  --brand-foreground: #112a20;
+  --brand-soft: #263d34;
+  --brand-softer: #21332c;
+  --brand-line: #436c5b;
   --bg: #0a0a0b;
   --surface: #131315;
   --surface-2: #1a1a1d;
@@ -2082,6 +2149,7 @@ input[type="radio"] {
   --warn-soft: rgba(224, 164, 88, 0.14);
   --err: #e57070;
   --err-soft: rgba(229, 112, 112, 0.14);
+  --err-foreground: #281312;
 }
 
 /* ============================================================
@@ -2195,7 +2263,7 @@ input[type="radio"] {
 }
 .ocr-select {
   position: absolute;
-  border: 1.5px solid #6b7dff;
+  border: 1.5px solid var(--accent);
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
   box-sizing: border-box;
 }
@@ -2203,8 +2271,8 @@ input[type="radio"] {
   position: absolute;
   top: -24px;
   left: -1px;
-  background: #6b7dff;
-  color: #fff;
+  background: var(--accent);
+  color: var(--accent-foreground);
   font-size: 11px;
   padding: 2px 7px;
   border-radius: 5px;
@@ -2212,7 +2280,7 @@ input[type="radio"] {
   white-space: nowrap;
 }
 .ocr-center-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: var(--radius-lg);
   padding: 22px 26px;
   max-width: 420px;
@@ -2306,13 +2374,13 @@ input[type="radio"] {
   flex: none;
   border-radius: 11px;
   background: var(--accent-grad);
-  color: #fff;
+  color: var(--accent-foreground);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 21px;
   font-weight: 700;
-  box-shadow: 0 2px 8px rgba(76, 95, 240, 0.35);
+  box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.35);
 }
 .login-band-title {
   font-size: 19px;
@@ -2336,14 +2404,14 @@ input[type="radio"] {
   font-size: 88px;
   font-weight: 700;
   line-height: 1;
-  color: rgba(76, 95, 240, 0.1);
+  color: rgba(var(--accent-rgb), 0.1);
   letter-spacing: 0.02em;
   user-select: none;
   pointer-events: none;
 }
 .login-band-glyph em {
   font-style: normal;
-  color: rgba(76, 95, 240, 0.05);
+  color: rgba(var(--accent-rgb), 0.05);
 }
 
 .login-body {
@@ -2468,7 +2536,7 @@ input[type="radio"] {
 }
 .login-body .btn-primary {
   background: var(--accent-grad);
-  box-shadow: 0 2px 8px rgba(76, 95, 240, 0.3);
+  box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.3);
 }
 .login-body .btn-primary:hover:not(:disabled) {
   background: var(--accent-grad);
@@ -2665,16 +2733,16 @@ input[type="radio"] {
 /* 登录窗深色模式：条带淡靛蓝换暗色同调，水印/徽标阴影随之调整 */
 @media (prefers-color-scheme: dark) {
   .login-band {
-    background: linear-gradient(180deg, rgba(125, 140, 255, 0.14) 0%, rgba(255, 255, 255, 0) 100%);
+    background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.14) 0%, rgba(255, 255, 255, 0) 100%);
   }
   .login-band-logo {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   }
   .login-band-glyph {
-    color: rgba(125, 140, 255, 0.12);
+    color: rgba(var(--accent-rgb), 0.12);
   }
   .login-band-glyph em {
-    color: rgba(125, 140, 255, 0.06);
+    color: rgba(var(--accent-rgb), 0.06);
   }
 }
 
@@ -2746,7 +2814,7 @@ input[type="radio"] {
   border-radius: 50%;
   flex: none;
   background: var(--accent-grad);
-  color: #fff;
+  color: var(--accent-foreground);
   font-size: 18px;
   font-weight: 600;
   display: flex;
@@ -2824,16 +2892,14 @@ input[type="radio"] {
    令牌 1:1 对齐 prototypes/windows-workbench-v08-2026-10-15.html
    （warm-archival / obsidian-sonic / nordic-mist）。
 
-   【作用域铁律】全部令牌只挂在 .reader-root（阅读室窗口根节点）上，
-   绝不改动上方全局 :root / [data-theme=…] / prefers-color-scheme 块——
-   settings / history / login / panel / quick-review 等非 reader 窗口
-   共用同一 bundle，视觉零回归。
+   阅读纸面与内容令牌继续只挂在 .reader-root；公共品牌令牌与其他窗口统一。
+   设置、登录、历史仍跟系统，阅读室及快速复习保持各自既有主题来源。
 
    主题映射（ReaderTheme 枚举不删值，老数据 theme 继续生效）：
      data-theme="light" ↔ warm-archival（纸书）
      data-theme="dark"  ↔ obsidian-sonic（深色）
      data-theme="sepia" ↔ nordic-mist（护眼）
-     data-theme="oled"  ↔ obsidian-sonic 同值（纯黑增强留给后续微调）
+     data-theme="oled"  ↔ obsidian-sonic 的纯黑背景变体
    旧派生令牌（--bg/--surface/--border/--text-*…）在同块由新值派生，
    阅读室既有组件（词典栏/复习卡/笔记纸…）无需改样式即可换上新皮肤。
    与 reader.css 笔记令牌块（.reader-root[data-theme] 仅定义 --notes-*）
@@ -2843,8 +2909,8 @@ input[type="radio"] {
 .reader-root {
   /* —— warm-archival（纸书）—— */
   --canvas-bg: #F6F3EC;
-  --canvas-aura-1: rgba(208, 90, 63, 0.07);
-  --canvas-aura-2: rgba(31, 110, 92, 0.06);
+  --canvas-aura-1: rgba(31, 107, 87, 0.04);
+  --canvas-aura-2: rgba(31, 107, 87, 0.03);
 
   --glass-surface: rgba(252, 250, 245, 0.78);
   --glass-elevated: rgba(255, 255, 255, 0.90);
@@ -2855,14 +2921,17 @@ input[type="radio"] {
 
   --ink-1: #171614;
   --ink-2: #4A4740;
-  --ink-3: #7A756C;
+  --ink-3: #6B665F;
   --ink-4: #ACA69B;
 
-  --accent: #C84B31;
-  --accent-hover: #B03E26;
-  --accent-soft: rgba(200, 75, 49, 0.11);
-  --accent-softer: rgba(200, 75, 49, 0.06);
-  --accent-glow: rgba(200, 75, 49, 0.22);
+  --brand-accent: #1f6b57;
+  --brand-hover: #185646;
+  --brand-active: #134836;
+  --brand-rgb: 31, 107, 87;
+  --brand-foreground: #ffffff;
+  --brand-soft: #e3f0ea;
+  --brand-softer: #f1f6f2;
+  --brand-line: #b9d8cc;
 
   --sonic-teal: #1B6B58;
   --sonic-teal-soft: rgba(27, 107, 88, 0.11);
@@ -2875,13 +2944,19 @@ input[type="radio"] {
   --tape-ink: #6E5D43;
 
   /* 语义状态色钉在阅读室作用域：系统深色 + 阅读室浅色时不串进全局深色值 */
+  --ok: #15803d;
+  --ok-soft: #e8f7ee;
   --warn: #B45309;
   --warn-soft: rgba(180, 83, 9, 0.11);
   --err: #B91C1C;
   --err-soft: rgba(185, 28, 28, 0.10);
+  --err-foreground: #ffffff;
 
   --shadow-spatial: 0 20px 50px -12px rgba(23, 22, 20, 0.09), 0 4px 14px -2px rgba(23, 22, 20, 0.04);
   --shadow-pill: 0 12px 32px -6px rgba(23, 22, 20, 0.11), 0 2px 8px -1px rgba(23, 22, 20, 0.05);
+  --shadow-card: 0 1px 3px rgba(23, 22, 20, 0.06);
+  --shadow-float: 0 6px 16px rgba(23, 22, 20, 0.08);
+  --shadow-pop: 0 12px 32px rgba(23, 22, 20, 0.16);
 
   --font-display: "Instrument Serif", "Source Serif 4", "Noto Serif SC", Georgia, serif;
   --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
@@ -2898,12 +2973,12 @@ input[type="radio"] {
   --text-4: var(--ink-4);
 }
 
-/* —— obsidian-sonic（深色 / 纯黑同值）—— */
+/* —— obsidian-sonic（深色 / 纯黑共用前景与控件令牌）—— */
 .reader-root[data-theme="dark"],
 .reader-root[data-theme="oled"] {
   --canvas-bg: #0E1014;
-  --canvas-aura-1: rgba(224, 109, 83, 0.11);
-  --canvas-aura-2: rgba(52, 168, 142, 0.09);
+  --canvas-aura-1: rgba(115, 198, 170, 0.04);
+  --canvas-aura-2: rgba(115, 198, 170, 0.03);
 
   --glass-surface: rgba(22, 24, 30, 0.76);
   --glass-elevated: rgba(29, 32, 40, 0.88);
@@ -2914,14 +2989,17 @@ input[type="radio"] {
 
   --ink-1: #F4F2ED;
   --ink-2: #B9B5AC;
-  --ink-3: #7E7B73;
+  --ink-3: #98A69C;
   --ink-4: #4D4B45;
 
-  --accent: #E26D52;
-  --accent-hover: #EC8268;
-  --accent-soft: rgba(226, 109, 82, 0.16);
-  --accent-softer: rgba(226, 109, 82, 0.09);
-  --accent-glow: rgba(226, 109, 82, 0.30);
+  --brand-accent: #73c6aa;
+  --brand-hover: #86d3ba;
+  --brand-active: #9cdfc6;
+  --brand-rgb: 115, 198, 170;
+  --brand-foreground: #112a20;
+  --brand-soft: #263d34;
+  --brand-softer: #21332c;
+  --brand-line: #436c5b;
 
   --sonic-teal: #38B296;
   --sonic-teal-soft: rgba(56, 178, 150, 0.16);
@@ -2937,9 +3015,13 @@ input[type="radio"] {
   --warn-soft: rgba(229, 154, 60, 0.16);
   --err: #F06868;
   --err-soft: rgba(240, 104, 104, 0.16);
+  --err-foreground: #281312;
 
   --shadow-spatial: 0 24px 60px -12px rgba(0, 0, 0, 0.55), 0 4px 16px rgba(0, 0, 0, 0.35);
   --shadow-pill: 0 14px 36px -4px rgba(0, 0, 0, 0.6);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-float: 0 8px 20px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
 
   --bg: var(--canvas-bg);
   --surface: #171A20;
@@ -2952,11 +3034,19 @@ input[type="radio"] {
   --text-4: var(--ink-4);
 }
 
+.reader-root[data-theme="oled"] {
+  --canvas-bg: #0a0a0b;
+  --surface: #111514;
+  --glass-surface: rgba(17, 21, 20, 0.9);
+  --glass-elevated: rgba(23, 28, 26, 0.94);
+  --glass-pill: rgba(17, 21, 20, 0.92);
+}
+
 /* —— nordic-mist（护眼）—— */
 .reader-root[data-theme="sepia"] {
   --canvas-bg: #EEF1EF;
-  --canvas-aura-1: rgba(31, 110, 92, 0.08);
-  --canvas-aura-2: rgba(54, 73, 196, 0.06);
+  --canvas-aura-1: rgba(31, 107, 87, 0.04);
+  --canvas-aura-2: rgba(31, 107, 87, 0.03);
 
   --glass-surface: rgba(247, 249, 248, 0.80);
   --glass-elevated: rgba(255, 255, 255, 0.92);
@@ -2967,14 +3057,17 @@ input[type="radio"] {
 
   --ink-1: #131B18;
   --ink-2: #3D4A45;
-  --ink-3: #6C7A74;
+  --ink-3: #5F6F65;
   --ink-4: #9CA9A3;
 
-  --accent: #1B6B58;
-  --accent-hover: #14574A;
-  --accent-soft: rgba(27, 107, 88, 0.12);
-  --accent-softer: rgba(27, 107, 88, 0.07);
-  --accent-glow: rgba(27, 107, 88, 0.24);
+  --brand-accent: #1f6b57;
+  --brand-hover: #185646;
+  --brand-active: #134836;
+  --brand-rgb: 31, 107, 87;
+  --brand-foreground: #ffffff;
+  --brand-soft: #e3f0ea;
+  --brand-softer: #f1f6f2;
+  --brand-line: #b9d8cc;
 
   --sonic-teal: #C84B31;
   --sonic-teal-soft: rgba(200, 75, 49, 0.11);
@@ -3042,7 +3135,7 @@ input[type="radio"] {
   height: 24px;
   border-radius: 8px;
   background: var(--accent);
-  box-shadow: 0 3px 9px rgba(76, 95, 240, 0.22);
+  box-shadow: 0 3px 9px rgba(var(--accent-rgb), 0.22);
 }
 
 .panel-title .app-name {
@@ -3298,7 +3391,7 @@ input[type="radio"] {
   flex: none;
   color: var(--accent);
   background: var(--accent-soft);
-  border: 1px solid rgba(76, 95, 240, 0.16);
+  border: 1px solid rgba(var(--accent-rgb), 0.16);
   border-radius: 10px;
 }
 
@@ -3436,7 +3529,7 @@ input[type="radio"] {
 .history-selection-bar {
   justify-content: space-between;
   background: var(--accent-softer);
-  border-bottom-color: rgba(76, 95, 240, 0.15);
+  border-bottom-color: rgba(var(--accent-rgb), 0.15);
 }
 
 .history-selection-count {
@@ -3485,10 +3578,10 @@ input[type="radio"] {
 }
 
 .history-card.selected {
-  border-color: rgba(76, 95, 240, 0.42);
+  border-color: rgba(var(--accent-rgb), 0.42);
   border-left-color: var(--accent);
   background: var(--accent-softer);
-  box-shadow: inset 0 0 0 1px rgba(76, 95, 240, 0.16), 0 4px 12px rgba(76, 95, 240, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.16), 0 4px 12px rgba(var(--accent-rgb), 0.08);
 }
 
 .history-card .meta {

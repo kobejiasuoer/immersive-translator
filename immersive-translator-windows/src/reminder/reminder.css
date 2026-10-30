@@ -26,8 +26,8 @@ body {
   width: 24px;
   height: 24px;
   border-radius: 7px;
-  background: linear-gradient(135deg, #4c5ff0, #7a5cf0);
-  color: #fff;
+  background: var(--accent);
+  color: var(--accent-foreground);
   font-size: 12px;
   font-weight: 700;
   display: flex;

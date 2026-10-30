@@ -2098,6 +2098,7 @@ export function ReaderApp() {
       return (
         el instanceof HTMLInputElement ||
         el instanceof HTMLTextAreaElement ||
+        el instanceof HTMLSelectElement ||
         (el instanceof HTMLElement && el.isContentEditable)
       );
     }
