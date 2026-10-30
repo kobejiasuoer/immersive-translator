@@ -613,6 +613,13 @@ fn hydrate_reviews(db: &Connection, ns: &str, app: &AppHandle) -> Result<(), Str
     file["reviewLog"] = json!({"schemaVersion":1,"days":counts.into_iter().map(|(day,count)|json!({"day":day,"count":count})).collect::<Vec<_>>()});
     snapshot(db, ns, &path, &file)
 }
+/// 裸文章负载判定（hydrate 重建 reader_articles.json 用）：无 kind 字段但确实
+/// 是整篇文章（有 id 与 sentences）。content-chunk（articleId 键控、无 id）与
+/// progress 等投影实体必须排除，见 hydrate reading-articles 分支注释。
+fn is_bare_article_payload(p: &Value) -> bool {
+    p.get("sentences").is_some() && p.get("id").is_some() && p.get("articleId").is_none()
+}
+
 fn hydrate(db: &Connection, ns: &str, app: &AppHandle, collection: &str) -> Result<(), String> {
     let dir = data_dir_for(app, ns)?;
     let all = list_db(db, ns, collection)?;
@@ -645,7 +652,12 @@ fn hydrate(db: &Connection, ns: &str, app: &AppHandle, collection: &str) -> Resu
                 continue;
             }
             if p.get("kind").and_then(Value::as_str) != Some("article") {
-                if p.get("sentences").is_some() {
+                // 宽容分支只收「裸整篇文章」（无 kind 但确有 id 与 sentences，
+                // 兼容老版本/外部写入）；content-chunk 同步分块（键为 articleId、
+                // 无 id）绝不能进文章数组——否则 reader_articles.json 混入缺 id
+                // 的对象，serde 反序列化整库报「文章数据损坏」，书架与打开文章
+                // 全部失效（2026-10-30 长书导入后打不开的根因）。
+                if is_bare_article_payload(p) {
                     articles.push(p.clone());
                 }
                 continue;
@@ -1743,6 +1755,30 @@ pub fn learning_migrate(app: AppHandle, expected_namespace: Option<String>) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bare_article_payload_excludes_sync_chunks() {
+        // content-chunk 投影（真实事故形状，2026-10-30）：articleId 键控、无 id，
+        // 绝不能被 hydrate 当成文章写进 reader_articles.json。
+        let chunk = json!({
+            "v": 2, "kind": "content-chunk", "articleId": "a1",
+            "contentRevision": "125pf3a",
+            "sentences": [{ "en": "Hi.", "id": "a1:s0", "idx": 0, "paragraphIdx": 0 }]
+        });
+        assert!(!is_bare_article_payload(&chunk));
+        // progress 投影同样排除。
+        let progress = json!({"v":2,"kind":"progress","articleId":"a1","lastReadAt":1});
+        assert!(!is_bare_article_payload(&progress));
+        // 裸整篇文章（无 kind，但 id + sentences 齐全）放行。
+        let bare = json!({
+            "id": "a1", "title": "T", "sentences": [{ "en": "Hi." }]
+        });
+        assert!(is_bare_article_payload(&bare));
+        // 有 id 但没有 sentences 的负载不放行。
+        let meta_only = json!({"id": "a1", "title": "T"});
+        assert!(!is_bare_article_payload(&meta_only));
+    }
+
     fn practice_fixture(at: i64, attempts: Value) -> Value {
         json!({"kind":"practice-task","id":"task","updatedAt":at,"task":{"id":"task","updatedAt":at,"draft":"","attempts":attempts}})
     }

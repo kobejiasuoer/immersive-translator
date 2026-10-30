@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 pub const SPEAK_SCHEMA_VERSION: u32 = 1;
 const MAX_SESSIONS: usize = 50;
@@ -165,11 +165,9 @@ pub struct SpeakSessionsFile {
 }
 
 fn sessions_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("无法获取应用数据目录: {e}"))?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建数据目录: {e}"))?;
+    // 走命名空间感知的 data_dir：read_path/write_path 会按当前账号命名空间
+    // 校验路径，登录态下根目录路径会被误判为「账号已切换」而全部读写失败。
+    let dir = crate::learning_store::data_dir(app)?;
     Ok(dir.join("reader_speak_sessions.json"))
 }
 
