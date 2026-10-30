@@ -78,11 +78,11 @@ const FONT_OPTIONS: { value: ReaderFontPair; label: string }[] = [
   { value: "sans", label: "无衬线（黑体 + Inter）" },
 ];
 
-const THEMES: { value: ReaderTheme; label: string; swatch: string; text: string }[] = [
-  { value: "light", label: "浅色", swatch: "#f4f5f9", text: "#1c2029" },
-  { value: "dark", label: "深色", swatch: "#1d1f26", text: "#edeef4" },
-  { value: "sepia", label: "护眼", swatch: "#f5efdf", text: "#5a5138" },
-  { value: "oled", label: "纯黑", swatch: "#0a0a0b", text: "#b9bdc9" },
+const THEMES: { value: ReaderTheme; label: string; swatch: string }[] = [
+  { value: "light", label: "纸书", swatch: "#F6F3EC" },
+  { value: "dark", label: "深色", swatch: "#0E1014" },
+  { value: "sepia", label: "护眼", swatch: "#EEF1EF" },
+  { value: "oled", label: "纯黑", swatch: "#0a0a0b" },
 ];
 
 export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState, onReannotate, onPatchReview, micDeviceId, onMicDevice }: Props) {
@@ -782,9 +782,11 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
             {THEMES.map((t) => (
               <button
                 key={t.value}
+                type="button"
                 className={`theme-swatch${settings.theme === t.value ? " active" : ""}`}
                 onClick={() => onPatch({ theme: t.value })}
                 aria-label={`主题：${t.label}`}
+                aria-pressed={settings.theme === t.value}
               >
                 <i style={{ background: t.swatch }} aria-hidden />
                 <span>{t.label}</span>

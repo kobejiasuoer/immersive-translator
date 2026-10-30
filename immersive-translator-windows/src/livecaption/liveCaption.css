@@ -38,7 +38,7 @@
 }
 .lc-dir-btn.on {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-foreground);
   font-weight: 600;
 }
 .lc-dir-btn:disabled {

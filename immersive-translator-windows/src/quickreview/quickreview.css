@@ -34,8 +34,8 @@ body {
   width: 20px;
   height: 20px;
   border-radius: 6px;
-  background: linear-gradient(135deg, #4c5ff0, #7a5cf0);
-  color: #fff;
+  background: var(--accent);
+  color: var(--accent-foreground);
   font-size: 10.5px;
   font-weight: 700;
   display: flex;
@@ -443,12 +443,12 @@ body {
 .qr-btn.primary {
   border: none;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-foreground);
   font-weight: 600;
 }
 .qr-btn.primary:hover {
   background: var(--accent-hover);
-  color: #fff;
+  color: var(--accent-foreground);
 }
 
 @media (prefers-reduced-motion: reduce) {

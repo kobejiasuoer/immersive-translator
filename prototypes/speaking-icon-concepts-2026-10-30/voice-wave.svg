@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>沉浸口语 · 说出来候选</title>
+  <rect width="512" height="512" rx="116" fill="#1f6b57"/>
+  <path d="M184 132H326C361 132 390 160 390 194V286C390 321 361 350 326 350H216L151 390L167 344C139 335 120 312 120 286V194C120 160 149 132 184 132Z" fill="none" stroke="#ffffff" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M164 246H178C191 246 191 219 204 219C217 219 217 280 230 280C243 280 243 204 256 204C269 204 269 280 282 280C295 280 295 229 308 229C321 229 321 246 334 246H346" fill="none" stroke="#c9e4d8" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

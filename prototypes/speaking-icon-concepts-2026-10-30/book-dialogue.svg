@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="book-dialogue-title">
+  <title id="book-dialogue-title">从阅读进入表达：书页与对话尾角</title>
+  <rect width="512" height="512" rx="116" fill="#1f6b57"/>
+  <path d="M112 165 Q112 153 123 150 C164 140 207 144 246 164 L246 344 C207 322 166 319 127 330 Q112 335 112 320 Z" fill="#c9e4d8"/>
+  <path d="M266 164 C307 142 350 139 389 149 Q400 152 400 165 L400 313 Q400 327 386 327 C374 326 362 325 350 326 L310 373 L310 333 C294 335 280 339 266 344 Z" fill="#ffffff"/>
+</svg>

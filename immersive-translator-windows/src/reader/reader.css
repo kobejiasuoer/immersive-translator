@@ -43,7 +43,7 @@
   background: var(--accent-grad);
   display: inline-grid;
   place-items: center;
-  color: #fff;
+  color: var(--accent-foreground);
   font-family: var(--font-read-serif-cn);
   font-size: 12px;
   font-weight: 600;
@@ -319,7 +319,7 @@ button.reader-appname:hover {
   padding: 0 6px;
   border-radius: 10px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-foreground);
   font-size: 11px;
   font-weight: 600;
   display: inline-flex;
@@ -771,13 +771,13 @@ button.reader-appname:hover {
   border-radius: var(--radius-md);
   border: none;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-foreground);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   flex: none;
-  box-shadow: 0 2px 8px rgba(76, 95, 240, 0.35);
+  box-shadow: 0 2px 8px var(--accent-glow);
   transition: background 0.15s ease, transform 0.12s ease;
 }
 .reader-play-btn:hover {
@@ -1189,6 +1189,7 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
   background: var(--accent);
 }
 .reader-switch.on::after {
+  background: var(--accent-foreground);
   transform: translateX(14px);
 }
 /* 主题四圆点：色点 + 下方名字 */
@@ -2159,12 +2160,12 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
 .recall-btn.primary {
   border: none;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-foreground);
   font-weight: 600;
 }
 .recall-btn.primary:hover:not(:disabled) {
   background: var(--accent-hover);
-  color: #fff;
+  color: var(--accent-foreground);
 }
 .recall-btn:disabled {
   opacity: 0.5;
@@ -2185,7 +2186,7 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
   top: -9px;
   right: 8px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-foreground);
   font-size: 10px;
   font-weight: 700;
   padding: 0 7px;
@@ -3677,7 +3678,7 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
   flex:1;
   height:46px;
   border:1.5px solid var(--accent-soft);
-  border-radius:12px;
+  border-radius:var(--radius-md);
   background:var(--accent-softer);
   color:var(--accent);
   font-family:inherit;
@@ -3694,10 +3695,13 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
 }
 
 .speak-hold-btn.rec {
-  background:var(--accent);
-  color:#fff;
-  border-color:var(--accent);
+  background:var(--err);
+  color:var(--err-foreground);
+  border-color:var(--err);
   animation:speak-pulse 1.2s ease-in-out infinite;
+}
+.speak-hold-btn.rec:not(.disabled):hover {
+  background:var(--err);
 }
 
 .speak-hold-btn.disabled {
@@ -3707,13 +3711,13 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
 
 @keyframes speak-pulse {
   50% {
-  box-shadow:0 0 0 6px var(--accent-hl);
+  box-shadow:0 0 0 6px var(--err-soft);
   }
 }
 
 .speak-replay {
   border:1px solid var(--border);
-  border-radius:10px;
+  border-radius:var(--radius-md);
   background:var(--bg);
   padding:8px 12px;
   font-family:inherit;
@@ -4024,7 +4028,7 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
 
 .rc-btn.primary {
   background:var(--accent);
-  color:#fff;
+  color:var(--accent-foreground);
   border-color:var(--accent);
 }
 
@@ -4142,7 +4146,7 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
 
 .speak-popover .ph.err,
 .drill-card .ph.err {
-  color:#fff;
+  color:var(--err-foreground);
   background:var(--err);
   border-color:var(--err);
 }
@@ -4365,7 +4369,7 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
 .drill-hold {
   flex:1;
   height:40px;
-  border-radius:11px;
+  border-radius:var(--radius-md);
   border:1.5px solid var(--accent-soft);
   background:var(--accent-softer);
   color:var(--accent);
@@ -4376,9 +4380,9 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
 }
 
 .drill-hold.rec {
-  background:var(--accent);
-  color:#fff;
-  border-color:var(--accent);
+  background:var(--err);
+  color:var(--err-foreground);
+  border-color:var(--err);
   animation:speak-pulse 1.2s ease-in-out infinite;
 }
 
@@ -4485,7 +4489,7 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
 .notes-gen-btn {
   display: flex; align-items: center; justify-content: center; gap: 6px;
   height: 34px; border: none; border-radius: var(--radius-md);
-  background: var(--accent); color: #fff; font-family: inherit;
+  background: var(--accent); color: var(--accent-foreground); font-family: inherit;
   font-size: 13px; font-weight: 600; cursor: pointer;
   transition: background 0.15s ease;
 }
@@ -5295,7 +5299,7 @@ button.notes-word:hover { color: var(--accent); }
 .reader-book-cover span {
   font-size: 16px;
   font-weight: 600;
-  color: #fff;
+  color: var(--accent-foreground);
   font-family: var(--font-serif, serif);
 }
 
@@ -5369,7 +5373,7 @@ button.notes-word:hover { color: var(--accent); }
 .epub-pv-cover span {
   font-size: 30px;
   font-weight: 600;
-  color: #fff;
+  color: var(--accent-foreground);
 }
 .epub-pv-head {
   flex: 1;
@@ -5526,7 +5530,7 @@ button.notes-word:hover { color: var(--accent); }
 .book-toc-cover span {
   font-size: 24px;
   font-weight: 600;
-  color: #fff;
+  color: var(--accent-foreground);
 }
 .book-toc-list {
   overflow-y: auto;
@@ -5848,7 +5852,7 @@ button.notes-word:hover { color: var(--accent); }
   flex-direction: column;
   justify-content: space-between;
   padding: 12px 12px 10px;
-  color: #fff;
+  color: var(--accent-foreground);
   position: relative;
   overflow: hidden;
   background: var(--accent-grad);
@@ -6383,7 +6387,7 @@ button.notes-word:hover { color: var(--accent); }
 }
 .island-tab.active .island-counter {
   background: var(--accent);
-  color: #ffffff;
+  color: var(--accent-foreground);
 }
 
 /* 右上：控制胶囊 */
@@ -7104,7 +7108,7 @@ button.notes-word:hover { color: var(--accent); }
   font-size: 12px;
   font-weight: 600;
   line-height: 1.7;
-  color: #fff;
+  color: var(--accent-foreground);
   background: var(--accent);
   border-radius: 5px;
   padding: 0 7px;
@@ -7841,7 +7845,7 @@ button.notes-word:hover { color: var(--accent); }
   width: 3px;
   height: calc(4px + 14px * var(--lv, 0));
   border-radius: 2px;
-  background: var(--accent);
+  background: var(--err);
   transition: height 90ms linear;
 }
 .reader-root .speak-wave i:nth-child(2n) { height: calc(4px + 10px * var(--lv, 0)); }
@@ -7873,7 +7877,7 @@ button.notes-word:hover { color: var(--accent); }
   border-radius: 8px;
   cursor: pointer;
 }
-.reader-root .speak-notice-actions button.primary { background: var(--ink-1); color: var(--canvas-bg); border-color: transparent; }
+.reader-root .speak-notice-actions button.primary { background: var(--accent); color: var(--accent-foreground); border-color: transparent; }
 .reader-root .speak-notice-actions button.dismiss { border: none; background: none; color: inherit; padding: 3px; display: inline-flex; }
 
 /* 输入区：一个主按钮（麦克风）+ 两个次要动作 + 一个收尾动作 */
@@ -7893,7 +7897,7 @@ button.notes-word:hover { color: var(--accent); }
   align-items: center;
   gap: 5px;
   padding: 7px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--glass-border-strong);
   background: var(--glass-elevated);
   color: var(--ink-2);
@@ -7926,10 +7930,9 @@ button.notes-word:hover { color: var(--accent); }
   height: 64px;
   border: none;
   border-radius: 50%;
-  /* 待机用墨色（沿用原 .sonic-play-orb 的语言），录音才换 accent：阅读室 accent 本身是朱红，
-     待机也用红的话和「正在录音」只差一个图标，状态不够醒目 */
-  background: var(--ink-1);
-  color: var(--canvas-bg);
+  /* 待机使用品牌色，录音使用语义红色，使真实录音状态清楚可见。 */
+  background: var(--accent);
+  color: var(--accent-foreground);
   display: grid;
   place-items: center;
   cursor: pointer;
@@ -7937,16 +7940,16 @@ button.notes-word:hover { color: var(--accent); }
   /* 只过渡缩放：录音态的底色要立刻切换，状态指示不该有 150ms 的滞后 */
   transition: transform 150ms;
 }
-.reader-root .speak-mic:hover:not(:disabled) { background: var(--ink-2); transform: scale(1.04); }
+.reader-root .speak-mic:hover:not(:disabled) { background: var(--accent-hover); transform: scale(1.04); }
 .reader-root .speak-mic:disabled { opacity: 0.55; cursor: default; transform: none; }
-/* 录音中：换成 accent，光圈随真实电平扩张，说话越响圈越大 */
+/* 录音中：语义红色，光圈随真实电平扩张，说话越响圈越大 */
 .reader-root .speak-mic.rec {
-  background: var(--accent);
-  color: #fff;
-  box-shadow: 0 0 0 calc(4px + 14px * var(--lv)) var(--accent-soft), 0 6px 18px var(--accent-glow);
+  background: var(--err);
+  color: var(--err-foreground);
+  box-shadow: 0 0 0 calc(4px + 14px * var(--lv)) var(--err-soft), 0 6px 18px var(--err-soft);
   transition: box-shadow 90ms linear;
 }
-.reader-root .speak-mic.rec:hover:not(:disabled) { background: var(--accent-hover); }
+.reader-root .speak-mic.rec:hover:not(:disabled) { background: var(--err); }
 @media (prefers-reduced-motion: reduce) {
   .reader-root .speak-mic,
   .reader-root .speak-wave i,
@@ -8190,6 +8193,8 @@ button.notes-word:hover { color: var(--accent); }
   gap: 7px;
 }
 .reader-root .speak-challenge-mic.rec {
+  background: var(--err);
+  color: var(--err-foreground);
   animation: speak-pulse 1.2s ease-in-out infinite;
 }
 .reader-root .scs-hint {
@@ -9220,18 +9225,16 @@ button.notes-word:hover { color: var(--accent); }
 /* ==========================================================================
    ===== 外壳重构 2026-10-26 =====
    原型：prototypes/reader-room-redesign-2026-10-26.html（灰绿护眼 · 三段胶囊顶栏）。
-   作用域铁律（blueprint tokenPlan / shellScoping）：
-   1) .reader-root 不新增任何令牌定义（styles.css:2823-2834 红线，styles.css 零改动）。
+   作用域约定（2026-10-30 品牌统一后）：
+   1) 品牌色和四主题配色由 styles.css 的共同令牌及 .reader-root 主题层提供。
    2) 非颜色令牌挂 .reader-root[data-skin='folio']——ReaderApp 根 div 仅在
       shelf/reading 视图挂 data-skin='folio'；speak/vault 不挂，零影响。
-   3) 颜色令牌只挂 .reader-root[data-skin='folio'][data-theme='light']（0-3-0）：
-      品牌绿仅 folio+light 生效；sepia/dark/oled 不命中本块，
-      .reader-root[data-theme=dark/oled] 的 --accent:#E26D52 等主题原值不被覆盖。
+   3) folio 只保留专属内容标注和语义色，不覆写共同品牌色。
    4) .shell-* 布局规则全局生效（.reader-root .shell-*，无 [data-skin] 前缀）：
-      四视图四主题均得新骨架；颜色只引用主题令牌，folio 专属视觉才进 [data-skin]。
+      四视图四主题共用平面材质和品牌选中态；folio 专属几何才进 [data-skin]。
    5) 共享基元新版（.btn/.pill/.seg/.chip/.tag/.switch）只在
       .reader-root[data-skin='folio'] 作用域；speak/vault 及其内 SettingsDrawer
-      维持 styles.css 全局基元（175-236 / 594-624）。EOF 禁裸类名覆盖。
+      维持 styles.css 全局基元。操作按钮统一 8px，导航与切换保留胶囊；禁裸类名覆盖。
    6) 原型 demoOnly 一律不落地：.demo 条 / .pin 标注 / .legend / fit() 整体缩放 /
       深链 hash / .titlebar / 硬编码演示数据；--bad/--bad-soft 不落地（失败态沿用
       --warn 系）。本段所有取色只引用令牌名，不写死主题色值。
@@ -9243,7 +9246,7 @@ button.notes-word:hover { color: var(--accent); }
   --r-sm: 8px;     /* veil / 行内按钮 */
   --r-md: 12px;    /* 译文浮层 / 设置浮层 / 主干框 */
   --r-lg: 18px;    /* 主栏 / 右栏 / 卡片 / 列表 */
-  --r-pill: 999px; /* 按钮 / 开关 / 标签 / 分段 */
+  --r-pill: 999px; /* 导航 / 开关 / 标签 / 分段 */
   /* 英文衬线（标题 / 正文 / 关键词 / 树节点英文）；回落系统衬线即可 */
   --font-en: "Source Serif 4", Georgia, "Times New Roman", serif;
   /* 右栏实际占位契约（360px 右栏 + 28px 边距）：播放条 dock 居中
@@ -9252,24 +9255,12 @@ button.notes-word:hover { color: var(--accent); }
      阅读页规则负责同步：≤1199 置 328px（300px 栏 + 28px 边距）；
      ≤1019 与专注模式经 .reader-root[data-side-hidden] 置 0px（默认 388px）。 */
   --reading-side-w: 388px;
-  /* 新增颜色令牌的非 light 回落（var() 引主题令牌派生，不写死色值；真值在下方
-     light 块）。--accent-line=绿描边（胶囊边 / 短语虚线默认色）；
-     --mod=修饰语角色标签（状语 / 方式状语 / 后置定语，四主题均有 --clause-indigo）。 */
-  --accent-line: var(--border-strong);
+  /* 修饰语角色标签（状语 / 方式状语 / 后置定语，四主题均有 --clause-indigo）。 */
   --mod: var(--clause-indigo);
 }
 
-/* ---------- 令牌矩阵 · 颜色系（仅 folio + light，0-3-0） ---------- */
-/* 品牌绿（原型 L9/L13）：主按钮 / CTA / 开关开态 / 进度条 / 当前句底 / 角色标签 /
-   进度百分比。只覆盖本作用域；sepia(#1B6B58)/dark/oled(#E26D52) 各主题原值生效。 */
+/* ---------- folio 内容标注与语义色（light） ---------- */
 .reader-root[data-skin='folio'][data-theme='light'] {
-  --accent: #1f6b57;
-  --accent-hover: #185646;
-  /* 按压态回落悬停绿（不新增色值；否则全局靛蓝 --accent-active 会在
-     .btn-primary:active 时闪一拍旧品牌色） */
-  --accent-active: var(--accent-hover);
-  --accent-soft: #e3f0ea;
-  --accent-line: #b9d8cc;
   --mod: #4b5a9a;
   --warn: #a1620f;
   --warn-soft: #fbf1e1;
@@ -9294,11 +9285,11 @@ button.notes-word:hover { color: var(--accent); }
   align-items: center;
   min-width: 0;
   border-radius: 999px;
-  background: var(--glass-pill);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--shadow-pill), inset 0 1px 0 var(--glass-highlight);
+  background: var(--surface);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border: 1px solid var(--border);
+  box-shadow: none;
 }
 .reader-root .shell-brand {
   justify-self: start;
@@ -9317,6 +9308,93 @@ button.notes-word:hover { color: var(--accent); }
   gap: 6px;
   padding: 4px 6px;
 }
+.reader-root .reader-theme-picker {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+/* 窄窗解析透镜与顶栏原本同为 30 层；菜单展开时压过透镜，仍低于书架等 45+ 浮层。 */
+.reader-root .floating-top-stage:has(.reader-theme-menu) { z-index: 31; }
+.reader-root .reader-theme-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-1);
+  font-family: inherit;
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 150ms, border-color 150ms;
+}
+.reader-root .reader-theme-trigger:hover,
+.reader-root .reader-theme-trigger[aria-expanded='true'] {
+  background: var(--accent-softer);
+  border-color: var(--border);
+}
+.reader-root .reader-theme-trigger-label { color: var(--ink-3); }
+.reader-root .reader-theme-dot {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  flex: none;
+}
+.reader-root .reader-theme-trigger svg { flex: none; color: var(--ink-3); }
+.reader-root .reader-theme-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 1;
+  width: 224px;
+  max-width: calc(100vw - 32px);
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-float);
+}
+.reader-root .reader-theme-menu-title {
+  padding: 5px 8px 8px;
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+.reader-root .reader-theme-option {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-1);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 150ms;
+}
+.reader-root .reader-theme-option:hover { background: var(--surface-2); }
+.reader-root .reader-theme-option[aria-checked='true'] { background: var(--accent-soft); }
+.reader-root .reader-theme-swatch {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 34px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  font-family: var(--font-read-serif-en);
+  font-size: 13px;
+}
+.reader-root .reader-theme-option-text { display: grid; gap: 3px; font-size: 12.5px; }
+.reader-root .reader-theme-option-text small { font-size: 11px; color: var(--ink-3); }
+.reader-root .reader-theme-check { display: inline-flex; color: var(--accent); }
+.reader-root .reader-theme-option[aria-checked='true'] .reader-theme-option-text > span { font-weight: 600; }
 /* 检索输入框：原作用域 .right-controls-island 已废弃，随三段外壳迁到 .shell-tools
    （取值 1:1 沿用 6383-6402 原规则）。 */
 .reader-root .shell-tools .island-search-input {
@@ -9340,26 +9418,19 @@ button.notes-word:hover { color: var(--accent); }
   background: var(--glass-elevated);
 }
 
-/* ---------- 外壳 · folio 顶栏皮肤（shelf/reading；原型 L44-54 平面白胶囊） ---------- */
-.reader-root[data-skin='folio'] .shell-brand,
-.reader-root[data-skin='folio'] .shell-tabs,
-.reader-root[data-skin='folio'] .shell-tools {
-  background: var(--surface);
-  border-color: var(--border);
-  box-shadow: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
+/* ---------- 公共顶栏：四视图统一品牌选中态 ---------- */
+.reader-root .shell-brand .monogram-seal {
+  background: var(--accent);
+  color: var(--accent-foreground);
 }
-.reader-root[data-skin='folio'] .shell-brand .monogram-seal {
-  background: var(--text-1);
-  color: var(--surface);
-}
-/* 激活 tab：--text-1 深底（原型 .tab.on L52）。badge（.island-counter）本就
-   --accent-soft/--accent 随主题，folio light 下经令牌块自然转绿，无需重写。 */
-.reader-root[data-skin='folio'] .shell-tabs .island-tab.active {
-  background: var(--text-1);
-  color: var(--surface);
+.reader-root .shell-tabs .island-tab.active {
+  background: var(--accent);
+  color: var(--accent-foreground);
   box-shadow: none;
+}
+.reader-root .shell-tabs .island-tab.active .island-counter {
+  background: color-mix(in srgb, var(--accent-foreground) 18%, transparent);
+  color: var(--accent-foreground);
 }
 
 /* ---------- folio 共享基元（原型 L22-33/66-72/117-119；仅 shelf/reading 视图） ----------
@@ -9377,7 +9448,7 @@ button.notes-word:hover { color: var(--accent); }
   line-height: 1;
   font-weight: 600;
   padding: 8px 18px;
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--text-1);
@@ -9406,14 +9477,14 @@ button.notes-word:hover { color: var(--accent); }
 .reader-root[data-skin='folio'] .btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-foreground);
   box-shadow: none;
 }
 .reader-root[data-skin='folio'] .btn.primary:hover:not(:disabled),
 .reader-root[data-skin='folio'] .btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  color: #fff;
+  color: var(--accent-foreground);
 }
 /* 幽灵按钮：收平无描边（对应全局 .btn-ghost） */
 .reader-root[data-skin='folio'] .btn.ghost,
@@ -9558,6 +9629,7 @@ button.notes-word:hover { color: var(--accent); }
 }
 .reader-root[data-skin='folio'] .switch.on::after,
 .reader-root[data-skin='folio'] .switch[aria-checked='true']::after {
+  background: var(--accent-foreground);
   transform: translateX(14px);
 }
 /* 键盘焦点环（原型 L23）：folio 视图内统一品牌色焦点 */
@@ -9745,14 +9817,14 @@ button.notes-word:hover { color: var(--accent); }
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
-/* ---------- 胶囊按钮（原型 .btn 体系，段内专用） ---------- */
+/* ---------- 操作按钮（段内专用，与公共按钮共用圆角） ---------- */
 .reader-root .vault-page .vault-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   padding: 8px 18px;
-  border-radius: 99px;
+  border-radius: var(--radius-md);
   font-weight: 600;
   font-size: 13.5px;
   border: 1px solid var(--glass-border-strong);
@@ -9765,7 +9837,7 @@ button.notes-word:hover { color: var(--accent); }
 .reader-root .vault-page .vault-btn.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-foreground);
 }
 .reader-root .vault-page .vault-btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
 .reader-root .vault-page .vault-btn.lg { padding: 12px 30px; font-size: 15.5px; }
@@ -9820,7 +9892,7 @@ button.notes-word:hover { color: var(--accent); }
 .reader-root .vault-hero .mode.on {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-foreground);
 }
 .reader-root .vault-hero .hero-cta { text-align: center; flex: none; }
 .reader-root .vault-hero .hero-cta .muted { font-size: 12px; margin-top: 6px; color: var(--ink-3); }
@@ -10378,9 +10450,9 @@ button.notes-word:hover { color: var(--accent); }
   height: 176px;
   flex: none;
   border-radius: 6px 10px 10px 6px;
-  /* 品牌绿渐变仅 folio+light（经 --accent 令牌）；余主题用各主题令牌渐变 */
+  /* 四主题共用品牌令牌，深色主题使用较亮底色和深色前景。 */
   background: linear-gradient(150deg, var(--accent), var(--accent-hover));
-  color: #fff;
+  color: var(--accent-foreground);
   padding: 16px 14px;
   display: flex;
   flex-direction: column;
@@ -10414,8 +10486,8 @@ button.notes-word:hover { color: var(--accent); }
   position: absolute;
   right: 8px;
   top: 8px;
-  background: rgba(255, 255, 255, 0.92);
-  color: var(--text-1);
+  background: var(--surface);
+  color: var(--accent);
   border-radius: var(--r-pill);
   font-size: 10px;
   font-weight: 700;
@@ -10557,7 +10629,7 @@ button.notes-word:hover { color: var(--accent); }
   overflow: hidden;
   display: grid;
   place-items: center;
-  color: #fff;
+  color: var(--accent-foreground);
   font-size: 13px;
   font-weight: 700;
 }
@@ -10893,7 +10965,7 @@ button.notes-word:hover { color: var(--accent); }
 }
 .reader-root[data-skin='folio'] .shelf-probring.done {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-foreground);
 }
 .reader-root[data-skin='folio'] .shelf-probring.done::after {
   display: none;
@@ -11071,9 +11143,8 @@ button.notes-word:hover { color: var(--accent); }
    默认 388 / ≤1199 328 / ≤1019 与专注（data-side-hidden）0。
    ========================================================================== */
 
-/* 根定位锚：dock（.floating-sonic-dock）与 ≤1019 的右栏覆盖层都以
-   .reader-root 为定位祖先（根在 0,0 占满窗口，加 relative 不改变任何
-   既有 fixed/absolute 后代的几何）。 */
+/* 根定位锚：dock（.floating-sonic-dock）以 .reader-root 为定位祖先。
+   ≤1019 的右栏覆盖层另由内容区 .reader-body 定位，避开顶部导航。 */
 .reader-root[data-skin='folio'] {
   position: relative;
 }
@@ -11315,9 +11386,9 @@ button.notes-word:hover { color: var(--accent); }
 .reader-root[data-skin='folio'] .resume-capsule .go {
   margin-left: auto;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-foreground);
   padding: 3px 14px;
-  border-radius: var(--r-pill, 999px);
+  border-radius: var(--r-sm, 8px);
   font-weight: 600;
   border: none;
   cursor: pointer;
@@ -11476,13 +11547,13 @@ button.notes-word:hover { color: var(--accent); }
   border-color: var(--accent);
   color: var(--accent);
 }
-/* CTA：品牌绿（light 主题经令牌块；其余主题自动回落各自 accent） */
+/* CTA：四主题共用品牌色与对应前景。 */
 .reader-root[data-skin='folio'] .lens-cta {
   width: 100%;
   padding: 11px 16px;
-  border-radius: var(--r-md, 12px);
+  border-radius: var(--r-sm, 8px);
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-foreground);
   font-weight: 600;
   font-size: 13.5px;
   border: none;
@@ -11499,7 +11570,7 @@ button.notes-word:hover { color: var(--accent); }
 .reader-root[data-skin='folio'] .lens-cta kbd {
   font-family: var(--font-mono);
   font-size: 11px;
-  border: 1px solid rgba(255, 255, 255, 0.5);
+  border: 1px solid currentColor;
   border-radius: 5px;
   padding: 0 5px;
   opacity: 0.85;
@@ -11521,7 +11592,7 @@ button.notes-word:hover { color: var(--accent); }
   width: 100%;
   justify-content: center;
   padding: 9px 16px;
-  border-radius: var(--r-md, 12px);
+  border-radius: var(--r-sm, 8px);
   background: var(--accent-soft);
   border: 1px solid var(--accent-line, transparent);
   color: var(--accent);
@@ -11535,7 +11606,7 @@ button.notes-word:hover { color: var(--accent); }
 }
 .reader-root[data-skin='folio'] .lens-practice-btn:hover {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-foreground);
 }
 .reader-root[data-skin='folio'] .lens-redo {
   align-self: center;
@@ -11603,7 +11674,7 @@ button.notes-word:hover { color: var(--accent); }
 /* ---------- 窄窗同步（--reading-side-w 必须与右栏实际占位一致，dock 才居中） ----------
    ≤1199：右栏 360→300（总占位 14+300+14=328，同步 --reading-side-w:328px）。
    ≤1019：右栏改绝对定位覆盖层（复用专注态 data-side-hidden 的语义；不隐藏时
-   浮在右侧），总占位 0 → --reading-side-w:0px；主卡边距清零后主栏即整窗宽，
+   浮在右侧，定位于顶栏下方的内容区），总占位 0 → --reading-side-w:0px；主卡边距清零后主栏即整窗宽，
    dock left:50% 与主栏中轴重合；正文 640→100%，进度轨让位隐藏。 */
 @media (max-width: 1199px) {
   .reader-root[data-skin='folio'] {
@@ -11617,11 +11688,16 @@ button.notes-word:hover { color: var(--accent); }
   .reader-root[data-skin='folio'] {
     --reading-side-w: 0px;
   }
+  /* 以实际内容区高度定位，自动包含顶栏、进度线和矮窗 chrome 的高度差。 */
+  .reader-root[data-skin='folio'] .reader-body:has(> .spatial-lens-card) {
+    position: relative;
+  }
   .reader-root[data-skin='folio'] .spatial-lens-card {
     position: absolute;
     top: 12px;
     right: 12px;
     bottom: 18px;
+    max-height: calc(100% - 30px);
     width: min(320px, calc(100vw - 48px));
     margin: 0;
     z-index: 30;

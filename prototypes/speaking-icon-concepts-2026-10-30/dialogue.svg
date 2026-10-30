@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>沉浸口语 · 双向对话候选</title>
+  <rect width="512" height="512" rx="116" fill="#1f6b57"/>
+  <path d="M158 116H278C307 116 330 139 330 168V226C330 255 307 278 278 278H208L134 316L150 277C125 273 106 251 106 226V168C106 139 129 116 158 116Z" fill="#c9e4d8"/>
+  <path d="M230 216H350C379 216 402 239 402 268V322C402 348 383 369 358 373L374 400L319 374H230C201 374 178 351 178 322V268C178 239 201 216 230 216Z" fill="#ffffff" stroke="#1f6b57" stroke-width="16" stroke-linejoin="round"/>
+  <path d="M148 171H234M148 205H202" fill="none" stroke="#1f6b57" stroke-width="16" stroke-linecap="round"/>
+  <path d="M234 269H340M234 306H306" fill="none" stroke="#1f6b57" stroke-width="16" stroke-linecap="round"/>
+</svg>

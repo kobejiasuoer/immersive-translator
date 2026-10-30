@@ -3,17 +3,18 @@
  * 左 .shell-brand（monogram「I」→ onHome + 书架抽屉触发器：书架 · 当前书名）
  * 中 .shell-tabs（阅读 / 口语 / 笔记与复习 三档，vault 档角标 =
  *   待复习词 + 未整理进笔记的生词）
- * 右 .shell-tools（全文检索 · 主题循环 · 阅读设置抽屉）
+ * 右 .shell-tools（全文检索 · 主题选择 · 阅读设置抽屉）
  * 布局与皮肤规则见 reader.css「外壳重构 2026-10-26」横幅（.shell-* 全局骨架，
- * folio 视图平面白胶囊）；根类 .floating-top-stage 保留（矮窗规则续命）。
+ * 四视图共用平面胶囊）；根类 .floating-top-stage 保留（矮窗规则续命）。
  * 视图菜单（§7）仍由本文件导出——ReaderApp 在 viewMenuAnchor 处挂载，
  * PlayBar 只通过 onOpenViewMenu 回调触发。
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   IconBookOpen,
   IconCheck,
+  IconChevronDown,
   IconClose,
   IconMic,
   IconNotebook,
@@ -46,7 +47,144 @@ interface Props {
   focusMode?: boolean;
 }
 
-const THEME_CYCLE: ReaderTheme[] = ["light", "dark", "sepia", "oled"];
+const THEME_OPTIONS: { value: ReaderTheme; label: string; description: string; surface: string; ink: string }[] = [
+  { value: "light", label: "纸书", description: "温暖纸面", surface: "#F6F3EC", ink: "#171614" },
+  { value: "dark", label: "深色", description: "柔和深灰", surface: "#0E1014", ink: "#F4F2ED" },
+  { value: "sepia", label: "护眼", description: "灰绿底色", surface: "#EEF1EF", ink: "#131B18" },
+  { value: "oled", label: "纯黑", description: "更低亮度", surface: "#0a0a0b", ink: "#F4F2ED" },
+];
+
+function ReaderThemePicker({ theme, onSelect }: { theme: ReaderTheme; onSelect: (theme: ReaderTheme) => void }) {
+  const [open, setOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const initialFocusRef = useRef<number | null>(null);
+  const closeOnBlurRef = useRef(false);
+  const menuId = useId();
+  const selectedIndex = Math.max(0, THEME_OPTIONS.findIndex((option) => option.value === theme));
+  const selected = THEME_OPTIONS[selectedIndex];
+
+  useEffect(() => {
+    if (!open) return;
+    optionRefs.current[initialFocusRef.current ?? selectedIndex]?.focus();
+    initialFocusRef.current = null;
+    function onPointerDown(event: PointerEvent) {
+      if (!pickerRef.current?.contains(event.target as Node)) {
+        closeOnBlurRef.current = false;
+        setOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [open, selectedIndex]);
+
+  function openMenu(index = selectedIndex) {
+    initialFocusRef.current = index;
+    closeOnBlurRef.current = false;
+    setOpen(true);
+  }
+
+  function closeMenu(returnFocus = false) {
+    closeOnBlurRef.current = false;
+    setOpen(false);
+    if (returnFocus) triggerRef.current?.focus();
+  }
+
+  function selectTheme(value: ReaderTheme) {
+    onSelect(value);
+    closeMenu(true);
+  }
+
+  function onKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    // ReaderApp 的播放快捷键只排除输入控件；主题按钮和选项自行隔离键盘事件。
+    event.stopPropagation();
+    if (event.key === "Tab") {
+      // 等默认焦点移动产生 blur 后关闭，避免提前移除选项导致 Tab 丢失落点。
+      closeOnBlurRef.current = open;
+      return;
+    }
+    if (event.key === "Escape") {
+      if (open) {
+        event.preventDefault();
+        closeMenu(true);
+      }
+      return;
+    }
+    const focusedIndex = optionRefs.current.findIndex((option) => option === event.target);
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      if (focusedIndex >= 0 && open) selectTheme(THEME_OPTIONS[focusedIndex].value);
+      else if (open) closeMenu();
+      else openMenu();
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    let nextIndex = focusedIndex >= 0 ? focusedIndex : selectedIndex;
+    if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = THEME_OPTIONS.length - 1;
+    else if (open) {
+      nextIndex = (nextIndex + (event.key === "ArrowDown" ? 1 : -1) + THEME_OPTIONS.length) % THEME_OPTIONS.length;
+    }
+    if (open) optionRefs.current[nextIndex]?.focus();
+    else openMenu(nextIndex);
+  }
+
+  return (
+    <div
+      ref={pickerRef}
+      className="reader-theme-picker"
+      onKeyDown={onKeyDown}
+      onKeyUp={(event) => {
+        // H 可能在正文按下；放行释放事件，让 ReaderApp 清理临时揭示状态。
+        if (event.key !== "h" && event.key !== "H") event.stopPropagation();
+      }}
+      onBlur={(event) => {
+        if (closeOnBlurRef.current || !event.currentTarget.contains(event.relatedTarget as Node)) closeMenu();
+      }}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        className="reader-theme-trigger"
+        data-theme-trigger
+        aria-label={`阅读主题：${selected.label}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        onClick={() => (open ? closeMenu() : openMenu())}
+      >
+        <span className="reader-theme-trigger-label">主题</span>
+        <span className="reader-theme-dot" style={{ background: selected.surface }} aria-hidden />
+        <span>{selected.label}</span>
+        <IconChevronDown size={12} />
+      </button>
+      {open && (
+        <div className="reader-theme-menu" role="menu" id={menuId} aria-labelledby={`${menuId}-title`}>
+          <div className="reader-theme-menu-title" id={`${menuId}-title`}>阅读主题</div>
+          {THEME_OPTIONS.map((option, index) => (
+            <button
+              key={option.value}
+              ref={(element) => { optionRefs.current[index] = element; }}
+              type="button"
+              role="menuitemradio"
+              tabIndex={-1}
+              className="reader-theme-option"
+              data-theme-option={option.value}
+              aria-checked={theme === option.value}
+              onClick={() => selectTheme(option.value)}
+            >
+              <span className="reader-theme-swatch" style={{ background: option.surface, color: option.ink }} aria-hidden>Aa</span>
+              <span className="reader-theme-option-text"><span>{option.label}</span><small>{option.description}</small></span>
+              <span className="reader-theme-check" aria-hidden>{theme === option.value ? <IconCheck size={15} /> : null}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function ReaderTopBar({
   articleName,
@@ -69,18 +207,6 @@ export function ReaderTopBar({
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus();
   }, [searchOpen]);
-
-  const themeLabel: Record<ReaderTheme, string> = {
-    light: "纸书",
-    dark: "深色",
-    sepia: "护眼",
-    oled: "纯黑",
-  };
-
-  function cycleTheme() {
-    const next = THEME_CYCLE[(THEME_CYCLE.indexOf(settings.theme) + 1) % THEME_CYCLE.length];
-    onPatchSettings({ theme: next });
-  }
 
   function submitSearch() {
     const q = query.trim();
@@ -180,15 +306,7 @@ export function ReaderTopBar({
         >
           <IconSearch size={14} />
         </button>
-        <button
-          type="button"
-          className="pill-Ghost-btn"
-          onClick={cycleTheme}
-          title={`主题：${themeLabel[settings.theme]}（点击切换）`}
-          aria-label={`切换主题，当前${themeLabel[settings.theme]}（点击切换）`}
-        >
-          <span>主题：{themeLabel[settings.theme]}</span>
-        </button>
+        <ReaderThemePicker theme={settings.theme} onSelect={(theme) => onPatchSettings({ theme })} />
         <button
           type="button"
           className="pill-Ghost-btn"
