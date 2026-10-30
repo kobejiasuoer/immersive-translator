@@ -1,906 +1,1586 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="theme-color" content="#F8F5EC" />
-<title>沉浸口语 — 外文长文读不下去？不是你不行，是工具不对</title>
-<meta name="description" content="沉浸阅读室让原文译文对照、点词查义、朗读跟读、生词复习都在同一间房。阅读记录保存在本机，支持 Windows 与 macOS。AGPL-3.0 开源，免费下载。" />
-<link rel="icon" type="image/png" href="assets/brand-icon.png" />
-<meta property="og:type" content="website" />
-<meta property="og:site_name" content="沉浸口语" />
-<meta property="og:title" content="沉浸口语 — 外文长文，总是读不下去？" />
-<meta property="og:description" content="不是你不行，是工具不对。原文译文对照、点词查义、朗读跟读——让你真正读完一篇外文长文。" />
-<meta property="og:image" content="assets/og-cover.png" />
-<meta property="og:image:width" content="1200" />
-<meta property="og:image:height" content="630" />
-<meta name="twitter:card" content="summary_large_image" />
-
-<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-sc/400.css" />
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-sc/600.css" />
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-sc/700.css" />
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc/400.css" />
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc/500.css" />
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono/400.css" />
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono/500.css" />
-
-<style>
-  :root{
-    --paper:#F8F5EC;
-    --paper-2:#F1EDE1;
-    --card:#FFFDF8;
-    --ink:#191813;
-    --ink-2:#4A463D;
-    --ink-3:#6B6557;
-    --ink-4:#6F6A5C;
-    --ink-5:#A8A192;
-    --rule:#DCD5C7;
-    --rule-2:#C9C0AD;
-    --accent:#4C5FF0;
-    --accent-ink:#2C3272;
-    --accent-ghost:#E7EAFD;
-    --rust:#B0432C;
-    --dark:#191813;
-
-    --serif:"Noto Serif SC","Source Han Serif SC","Songti SC",STSong,"SimSun",serif;
-    --sans:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
-    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
-
-    --ease:cubic-bezier(.22,1,.36,1);
-    --ease-soft:cubic-bezier(.4,0,.2,1);
-  }
-
-  *{box-sizing:border-box}
-  html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
-  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-  img{display:block;max-width:100%}
-  a{color:inherit;text-decoration:none}
-  ::selection{background:var(--accent-ghost);color:var(--accent-ink)}
-
-  :where(#features,#reader,#practice,#download,#faq,#top){scroll-margin-top:96px}
-
-  .wrap{width:100%;max-width:1240px;margin:0 auto;padding-inline:56px}
-
-  /* ---------- 顶部进度 ---------- */
-  .progress{position:fixed;inset:0 0 auto 0;height:2px;z-index:80;pointer-events:none}
-  .progress i{display:block;height:100%;width:0;background:var(--rust);transition:width .12s linear}
-
-  /* ---------- 页头 ---------- */
-  .site-head{
-    position:fixed;top:0;left:0;right:0;z-index:70;border-bottom:1px solid transparent;
-    transition:background .5s var(--ease-soft),border-color .5s var(--ease-soft),backdrop-filter .5s var(--ease-soft);
-  }
-  .site-head.scrolled{
-    background:rgba(248,245,236,.82);
-    -webkit-backdrop-filter:blur(14px) saturate(120%);
-    backdrop-filter:blur(14px) saturate(120%);
-    border-bottom-color:var(--rule);
-  }
-  .head-in{max-width:1240px;margin:0 auto;padding-inline:56px;height:76px;display:flex;align-items:center;justify-content:space-between;gap:24px}
-  .brand{display:flex;align-items:center;gap:11px}
-  .brand img{width:26px;height:26px;border-radius:5px}
-  .brand .name{font:600 17px/1 var(--serif);letter-spacing:.01em}
-  .brand .divider{width:1px;height:14px;background:var(--rule-2)}
-  .brand .latin{font:400 10px/1 var(--mono);letter-spacing:.12em;color:var(--ink-3)}
-
-  nav.main{display:flex;align-items:center;gap:34px}
-  nav.main a{position:relative;padding:6px 0;font:400 14px/1 var(--sans);color:var(--ink-2)}
-  nav.main a::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:var(--ink);transform:scaleX(0);transform-origin:left;transition:transform .45s var(--ease)}
-  nav.main a:hover::after{transform:none}
-
-  .head-actions{display:flex;align-items:center;gap:20px}
-  .github-link{font:400 12px/1 var(--mono);color:var(--ink-3);transition:color .3s}
-  .github-link:hover{color:var(--ink)}
-  .menu-toggle{display:none}
-
-  .btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;border-radius:8px;border:1px solid transparent;cursor:pointer;font:500 14px/1 var(--sans);padding:15px 24px;transition:transform .4s var(--ease),background .3s,color .3s,border-color .3s,box-shadow .4s}
-  .btn svg{transition:transform .4s var(--ease)}
-  .btn:hover svg{transform:translateX(4px)}
-  .btn-ink{background:var(--ink);color:var(--paper)}
-  .btn-ink:hover{background:#26231C;transform:translateY(-1px);box-shadow:0 10px 24px -12px rgba(25,24,19,.55)}
-  .btn-line{background:transparent;color:#3B3730;border-color:var(--rule-2)}
-  .btn-line:hover{border-color:var(--ink);transform:translateY(-1px)}
-  .btn-sm{padding:10px 20px;font-size:13px;border-radius:999px;min-height:36px}
-  .btn:active,.dl-btn:active{transform:translateY(0) scale(.985)}
-
-  /* ---------- 首屏 ---------- */
-  .hero{
-    position:relative;padding:148px 0 76px;overflow:hidden;
-    background:radial-gradient(900px 520px at 76% -8%,#FFFCF3 0%,rgba(255,252,243,0) 62%),var(--paper);
-  }
-  .hero-grid{display:grid;grid-template-columns:minmax(0,1.02fr) minmax(0,1.18fr);gap:56px;align-items:center}
-
-  /* ---------- 价值主张 ---------- */
-  .value-props{padding:64px 0 96px;background:var(--paper)}
-  .props-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
-  .prop-card{background:var(--card);border:1px solid var(--rule);border-radius:12px;padding:32px 28px;transition:border-color .4s var(--ease),transform .4s var(--ease)}
-  .prop-card:hover{border-color:var(--rust);transform:translateY(-2px)}
-  .prop-icon{width:40px;height:40px;border-radius:8px;background:var(--accent-ghost);display:flex;align-items:center;justify-content:center;margin-bottom:20px}
-  .prop-icon svg{width:22px;height:22px;color:var(--accent)}
-  .prop-title{margin:0 0 12px;font:600 19px/1.3 var(--serif);color:var(--ink)}
-  .prop-desc{margin:0;font:400 13.5px/24px var(--sans);color:var(--ink-2)}
-
-  /* ---------- 社会证明 ---------- */
-  .social-proof{margin-top:32px;display:flex;flex-wrap:wrap;align-items:center;gap:28px;padding-top:28px;border-top:1px solid var(--rule)}
-  .proof-item{display:flex;align-items:center;gap:10px}
-  .proof-item .num{font:600 22px/1 var(--serif);color:var(--ink)}
-  .proof-item .label{font:400 11px/1.4 var(--sans);color:var(--ink-3)}
-
-  .eyebrow{display:flex;align-items:center;gap:10px;margin:0 0 26px}
-  .eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--rust);display:block}
-  .eyebrow span{font:500 10.5px/1 var(--mono);letter-spacing:.14em;color:var(--ink-4)}
-
-  .hero-title{margin:0;font-family:var(--serif);font-weight:700;font-size:clamp(36px,3.9vw,52px);line-height:1.24;letter-spacing:-.012em}
-  .line{display:block;overflow:hidden;padding-bottom:.14em;margin-bottom:-.14em}
-  .line > span{display:block;transform:translateY(112%);transition:transform 1.05s var(--ease)}
-  body.loaded .line:nth-child(1) > span{transform:none;transition-delay:.05s}
-  body.loaded .line:nth-child(2) > span{transform:none;transition-delay:.14s}
-
-  .lede{margin:24px 0 0;max-width:470px;font:400 16px/30px var(--sans);color:var(--ink-2)}
-  .cta-row{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:30px}
-  .hero-meta{margin-top:26px;display:flex;flex-direction:column;gap:7px}
-  .hero-meta span{font:400 10.5px/1.4 var(--mono);letter-spacing:.06em;color:var(--ink-3)}
-
-  .hero-visual{position:relative}
-  .float{will-change:transform;transform:translate3d(0,var(--py,0px),0)}
-
-  .fade-up{opacity:0;transform:translateY(16px);transition:opacity .9s var(--ease),transform .9s var(--ease)}
-  body.loaded .fade-up{opacity:1;transform:none}
-  body.loaded .eyebrow{transition-delay:.02s}
-  body.loaded .lede{transition-delay:.24s}
-  body.loaded .cta-row{transition-delay:.34s}
-  body.loaded .hero-meta{transition-delay:.44s}
-  body.loaded .hero-figure{opacity:1;transform:none;transition-delay:.22s}
-
-  /* ---------- 截图相框 ---------- */
-  .shot{
-    margin:0;background:var(--card);border:1px solid #E5DDCD;border-radius:14px;padding:10px;
-    box-shadow:0 30px 64px -20px rgba(26,23,16,.16),0 2px 6px rgba(26,23,16,.04);
-  }
-  .shot img{width:100%;height:auto;border-radius:8px;background:#fff}
-  .shot figcaption{padding:11px 6px 3px;font:400 10px/1.6 var(--mono);letter-spacing:.02em;color:var(--ink-3)}
-  .hero-figure{opacity:0;transform:translateY(18px) scale(.985);transition:opacity 1s var(--ease),transform 1.1s var(--ease)}
-
-  .note-card{
-    position:absolute;left:-44px;bottom:-18px;width:224px;padding:14px 16px;
-    background:var(--card);border:1px solid var(--rule-2);border-radius:10px;
-    transform:rotate(-1.4deg);box-shadow:0 14px 30px -12px rgba(26,23,16,.22);
-  }
-  .note-card .k{margin:0 0 6px;font:500 9px/1 var(--mono);letter-spacing:.14em;color:var(--rust)}
-  .note-card p{margin:0;font:400 12px/1.9 var(--sans);color:var(--ink-2)}
-
-  /* ---------- 区块通用 ---------- */
-  .sec-head{display:flex;align-items:flex-end;justify-content:space-between;gap:60px;margin-bottom:56px}
-  .kicker{margin:0 0 16px;font:500 10.5px/1 var(--mono);letter-spacing:.14em;color:var(--rust)}
-  h2{margin:0;font-family:var(--serif);font-weight:700;font-size:clamp(26px,2.8vw,40px);line-height:1.26;letter-spacing:-.012em}
-  .note{margin:0;max-width:330px;font:400 13.5px/26px var(--sans);color:var(--ink-4)}
-
-  .reveal{opacity:0;transform:translateY(18px);transition:opacity .7s var(--ease),transform .7s var(--ease);transition-delay:var(--d,0ms)}
-  .reveal.in{opacity:1;transform:none}
-
-  /* ---------- 阅读室 ---------- */
-  .reader-sec{padding:96px 0 104px;border-top:1px solid var(--rule)}
-  .reader-sec .sec-head{margin-bottom:64px}
-
-  .feature{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:80px;align-items:center}
-  .feature + .feature{margin-top:88px}
-  .feature.flip{grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr)}
-  .feature.flip .f-copy{order:2}
-  .feature.flip .f-shot{order:1}
-
-  .f-label{margin:0 0 16px;font:500 10px/1 var(--mono);letter-spacing:.12em;color:var(--ink-3)}
-  .f-title{margin:0 0 16px;font:600 28px/1.32 var(--serif);color:var(--ink);letter-spacing:-.012em}
-  .f-desc{margin:0 0 18px;font:400 14px/27px var(--sans);color:#5B5649}
-  .f-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
-  .f-list li{display:flex;align-items:center;gap:10px;font:400 13px/22px var(--sans);color:var(--ink-2)}
-  .f-list li::before{content:"";flex:0 0 12px;width:12px;height:1px;background:var(--rule-2)}
-
-  /* ---------- 口语练习 ---------- */
-  .practice{padding:96px 0 104px;background:var(--paper-2);border-top:1px solid #D8D0BE}
-  .practice-grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:80px;align-items:end;margin-bottom:52px}
-  .practice-grid .note{margin-top:16px;max-width:420px}
-  .practice-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:14px}
-  .practice-list li{display:flex;gap:12px;align-items:baseline;font:400 14px/1.6 var(--sans);color:var(--ink-2)}
-  .practice-list li span{font:500 10px/1 var(--mono);color:var(--rust);letter-spacing:.08em}
-  .practice-figure{max-width:920px;margin:0 auto}
-
-  /* ---------- 桌面辅助 ---------- */
-  .assist{padding:96px 0 104px;border-top:1px solid var(--rule)}
-  .assist-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:80px;align-items:start}
-  .assist p{font:400 14px/28px var(--sans);color:#5B5649;margin:0 0 18px}
-  .assist .links{display:flex;gap:22px;margin-top:26px}
-  .assist .links a{font:500 13px/1 var(--sans);color:var(--accent);display:inline-flex;align-items:center;gap:6px}
-  .assist .links a::after{content:"";width:14px;height:1px;background:currentColor;transition:width .35s var(--ease)}
-  .assist .links a:hover::after{width:22px}
-
-  .quote-card{background:var(--card);border:1px solid var(--rule-2);border-radius:12px;padding:26px 28px;box-shadow:0 20px 44px -24px rgba(26,23,16,.24)}
-  .quote-card .k{margin:0 0 14px;font:500 9px/1 var(--mono);letter-spacing:.14em;color:var(--ink-4)}
-  .quote-card .en{position:relative;margin:0 0 16px;padding:4px 8px;font:400 15px/27px var(--serif);color:var(--accent-ink);background:var(--accent-ghost);border-radius:3px}
-  .quote-card .zh{margin:0;font:500 15px/27px var(--sans);color:var(--ink)}
-  .quote-card .rule{height:1px;background:#F0EADB;margin:16px 0 12px}
-  .quote-card .meta{display:flex;align-items:center;justify-content:space-between;font:400 10px/1 var(--mono);color:var(--ink-3)}
-  .quote-card .meta b{color:var(--accent);font-weight:500;font-family:var(--sans);font-size:11.5px}
-
-  /* ---------- 下载 ---------- */
-  .download{padding:96px 0 64px;background:var(--dark);color:#F5F1E5;overflow:hidden}
-  .download .sec-head{align-items:flex-start}
-  .download .kicker{color:#C4644A}
-  .download h2{color:#F5F1E5}
-  .download .note{color:#9A9484;max-width:330px}
-  .dl-cards{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  .dl-card{background:#221F18;border:1px solid #3A342A;border-radius:12px;padding:26px;display:flex;flex-direction:column;min-height:228px;transition:border-color .5s var(--ease),transform .5s var(--ease)}
-  .dl-card:hover{border-color:#5A5242;transform:translateY(-2px)}
-  .dl-top{display:flex;align-items:center;justify-content:space-between;gap:12px}
-  .dl-name{display:flex;align-items:center;gap:10px;font:500 15px/1 var(--sans);color:#F5F1E5}
-  .dl-ver{font:400 10px/1 var(--mono);letter-spacing:.06em;color:#9A9484}
-  .dl-meta{margin:10px 0 0;font:400 10.5px/1.6 var(--mono);letter-spacing:.04em;color:#9A9484}
-  .dl-detail{margin:14px 0 0;font:400 12.5px/22px var(--sans);color:#B8B2A2}
-  .dl-btn{margin-top:auto;display:flex;align-items:center;justify-content:center;gap:8px;border-radius:8px;padding:13px 0;min-height:44px;font:500 13.5px/1 var(--sans);cursor:pointer;transition:background .35s,transform .35s var(--ease),border-color .35s}
-  .dl-btn svg{transition:transform .35s var(--ease)}
-  .dl-btn:hover svg{transform:translateY(3px)}
-  .dl-btn.solid{background:#F5F1E5;color:var(--ink)}
-  .dl-btn.solid:hover{background:#fff;transform:translateY(-1px)}
-  .dl-btn.line{border:1px solid #4A4438;color:#F5F1E5}
-  .dl-btn.line:hover{border-color:#8B8577;background:rgba(255,255,255,.04)}
-  .dl-note{margin:12px 0 0;font:400 9.5px/1.6 var(--mono);letter-spacing:.02em;color:#8F8979}
-  .dl-foot{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-top:36px;padding-top:24px;border-top:1px solid #2A261E}
-  .dl-foot span{font:400 10px/1.5 var(--mono);letter-spacing:.03em;color:#9A9484}
-
-  /* ---------- FAQ ---------- */
-  .faq{padding:88px 0 96px;display:grid;grid-template-columns:360px minmax(0,1fr);gap:40px}
-  .faq-left{position:sticky;top:110px;align-self:start}
-  .faq-left p.note{margin-top:16px;max-width:280px}
-  .faq-list{display:flex;flex-direction:column}
-  .faq-item{border-top:1px solid var(--rule)}
-  .faq-item:last-child{border-bottom:1px solid var(--rule)}
-  .faq-item h3{margin:0}
-  .q{width:100%;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:20px 0;background:none;border:0;cursor:pointer;text-align:left;font:500 15.5px/1.5 var(--sans);color:var(--ink)}
-  .q .ico{position:relative;width:14px;height:14px;flex:0 0 14px}
-  .q .ico::before,.q .ico::after{content:"";position:absolute;background:var(--ink-3);border-radius:1px;transition:transform .45s var(--ease),background .3s}
-  .q .ico::before{left:0;right:0;top:6.35px;height:1.3px}
-  .q .ico::after{top:0;bottom:0;left:6.35px;width:1.3px}
-  .faq-item.open .q .ico::after{transform:scaleY(0)}
-  .faq-item.open .q .ico::before{background:var(--rust)}
-  .q:active{background:var(--paper-2)}
-  .a{display:grid;grid-template-rows:0fr;transition:grid-template-rows .5s var(--ease)}
-  .a > div{overflow:hidden;visibility:hidden;transition:visibility 0s linear .5s}
-  .faq-item.open .a{grid-template-rows:1fr}
-  .faq-item.open .a > div{visibility:visible;transition-delay:0s}
-  .a p{margin:0;padding:0 0 22px;max-width:720px;font:400 13px/25px var(--sans);color:var(--ink-3)}
-  .a a{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
-
-  /* ---------- 页脚 ---------- */
-  .site-footer{background:var(--dark);color:#F5F1E5;padding:70px 0 0;overflow:hidden}
-  .f-top{display:flex;align-items:flex-start;justify-content:space-between;gap:80px}
-  .f-brand{max-width:360px}
-  .f-brand .row{display:flex;align-items:center;gap:10px;margin-bottom:14px}
-  .f-brand .row img{width:22px;height:22px;border-radius:4px}
-  .f-brand .row .name{font:600 15px/1 var(--serif)}
-  .f-brand .row .latin{font:400 8.5px/1 var(--mono);letter-spacing:.1em;color:#8A8474}
-  .f-brand p{margin:0;font:400 12.5px/23px var(--sans);color:#9A9484}
-  .f-cols{display:flex;flex-wrap:wrap;gap:32px 64px}
-  .f-col{display:flex;flex-direction:column;gap:11px}
-  .f-col h3{margin:0;font:500 10px/1 var(--sans);color:#8A8474}
-  .f-col a{font:400 12px/1 var(--sans);color:#B8B2A2;transition:color .3s}
-  .f-col a:hover{color:#F5F1E5}
-
-  .statement{margin:46px 0 0;font:700 clamp(56px,8vw,104px)/1.12 var(--serif);color:#2E291F;letter-spacing:.02em;white-space:nowrap}
-  .statement span{display:block;transform:translateY(110%);transition:transform 1s var(--ease) .1s}
-  .statement.in span{transform:none}
-
-  .f-bot{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-top:20px;padding:24px 0 30px;border-top:1px solid #2E2A21}
-  .f-bot span{font:400 9.5px/1 var(--mono);letter-spacing:.04em;color:#8A8474}
-
-  /* ---------- 焦点与交互 ---------- */
-  :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-  .btn-ink:focus-visible,.dl-btn.solid:focus-visible{outline-color:#F5F1E5;outline-offset:-4px}
-  nav.main a:focus-visible::after{transform:none}
-
-  /* ---------- 窄屏 ---------- */
-  @media (max-width:1080px){
-    .wrap{padding-inline:32px}
-    .head-in{padding-inline:32px}
-    .hero{padding:132px 0 76px}
-    .hero-grid{grid-template-columns:1fr;gap:48px}
-    .note-card{position:static;width:auto;max-width:520px;margin-top:16px;transform:none;box-shadow:none}
-    .props-grid{grid-template-columns:1fr;gap:18px}
-    .social-proof{justify-content:center;text-align:center}
-    .feature{grid-template-columns:1fr;gap:32px}
-    .feature.flip{grid-template-columns:1fr}
-    .feature.flip .f-copy{order:0}
-    .feature.flip .f-shot{order:0}
-    .practice-grid{grid-template-columns:1fr;gap:28px}
-    .assist-grid{grid-template-columns:1fr;gap:34px}
-    .dl-cards{grid-template-columns:1fr}
-    .faq{grid-template-columns:1fr;gap:28px}
-    .faq-left{position:static}
-    .sec-head{flex-direction:column;align-items:flex-start;gap:20px;margin-bottom:40px}
-    .f-top{flex-direction:column;gap:44px}
-    .dl-foot{flex-direction:column;align-items:flex-start;gap:12px}
-  }
-
-  @media (max-width:760px){
-    nav.main{display:none}
-    .brand .divider,.brand .latin{display:none}
-    .q{font-size:15px}
-    .note-card{display:none}
-  }
-
-  @supports not ((backdrop-filter:blur(2px)) or (-webkit-backdrop-filter:blur(2px))){
-    .site-head.scrolled{background:rgba(248,245,236,.97)}
-  }
-
-  @media (prefers-reduced-motion: reduce){
-    *{animation:none!important;transition:none!important}
-    .reveal,.fade-up{opacity:1!important;transform:none!important}
-    .hero-figure{opacity:1!important;transform:none!important}
-    .line > span,.statement span{transform:none!important}
-    html{scroll-behavior:auto}
-  }
-</style>
-<noscript><style>
-  .reveal,.fade-up,.hero-figure{opacity:1!important;transform:none!important}
-  .line > span,.statement span{transform:none!important}
-  .a > div{visibility:visible!important}
-</style></noscript>
-</head>
-
-<body>
-<div class="progress"><i id="bar"></i></div>
-
-<header class="site-head" id="head">
-  <div class="head-in">
-    <a class="brand" href="#top" aria-label="沉浸口语首页">
-      <img src="assets/brand-icon.png" width="26" height="26" alt="" />
-      <span class="name">沉浸口语</span>
-      <i class="divider"></i>
-      <span class="latin">IMMERSIVETRANSLATOR</span>
-    </a>
-
-    <nav class="main" aria-label="主导航">
-      <a href="#reader">沉浸阅读室</a>
-      <a href="#practice">口语练习</a>
-      <a href="#faq">常见问题</a>
-    </nav>
-
-    <div class="head-actions">
-      <a class="github-link" href="https://github.com/kobejiasuoer/immersive-translator" target="_blank" rel="noopener">GitHub</a>
-      <a class="btn btn-ink btn-sm" href="#download">下载</a>
-    </div>
-  </div>
-</header>
-
-<main id="top">
-
-  <!-- ============ 首屏 ============ -->
-  <section class="hero">
-    <div class="wrap hero-grid">
-      <div class="hero-copy">
-        <p class="eyebrow fade-up"><i class="dot"></i><span>桌面端 · WINDOWS / macOS</span></p>
-
-        <h1 class="hero-title">
-          <span class="line"><span>外文长文，</span></span>
-          <span class="line"><span>总是读不下去？</span></span>
-        </h1>
-
-        <p class="lede fade-up">不是你不行，是工具不对。沉浸阅读室让原文译文对照、点词查义、朗读跟读都在同一间房——从此，长文真的能读完。</p>
-
-        <div class="cta-row fade-up">
-          <a class="btn btn-ink" href="#download">
-            免费下载，开始读懂长文
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M2 7h10M8 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </a>
-          <a class="btn btn-line" href="#reader">先看阅读室长什么样</a>
-        </div>
-
-        <div class="hero-meta fade-up">
-          <span>WINDOWS 10 / 11 · macOS 13+</span>
-          <span>AGPL-3.0 开源 · 阅读记录保存在本机</span>
-        </div>
-      </div>
-
-      <div class="hero-visual">
-        <div class="float" data-parallax="0.04">
-          <figure class="shot hero-figure">
-            <img src="assets/reader-room-reading.webp" width="1206" height="804" fetchpriority="high"
-                 alt="沉浸阅读室：英文原文逐句排布，当前句下方显示中文译文，右侧为句子结构解析" />
-          </figure>
-          <aside class="note-card">
-            <p class="k">READ FROM HERE</p>
-            <p>点一句，从那里开始朗读；点一个词，释义留在原句旁边。</p>
-          </aside>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============ 价值主张 ============ -->
-  <section class="value-props">
-    <div class="wrap">
-      <div class="props-grid">
-        <article class="prop-card reveal">
-          <div class="prop-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
-          </div>
-          <h3 class="prop-title">读不断</h3>
-          <p class="prop-desc">原文译文逐句对照，点词查义不跳出，朗读从任意句开始——阅读节奏不会被打断。</p>
-        </article>
-
-        <article class="prop-card reveal" style="--d:80ms">
-          <div class="prop-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-          </div>
-          <h3 class="prop-title">记得住</h3>
-          <p class="prop-desc">收藏的词句保留原文来源，间隔复习时还能看到当初读到它的那个句子。</p>
-        </article>
-
-        <article class="prop-card reveal" style="--d:120ms">
-          <div class="prop-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg>
-          </div>
-          <h3 class="prop-title">说得出</h3>
-          <p class="prop-desc">跟读练习、场景对话，把刚读完的新词带进口语——读过的内容练成自己的表达。</p>
-        </article>
-      </div>
-
-      <div class="social-proof fade-up" style="--d:180ms">
-        <div class="proof-item">
-          <span class="num" id="proof-version">v0.9.0</span>
-          <span class="label">当前版本<br/>持续更新</span>
-        </div>
-        <div class="proof-item">
-          <span class="num">开源</span>
-          <span class="label">AGPL-3.0 License<br/>可自行编译</span>
-        </div>
-        <div class="proof-item">
-          <span class="num">本地</span>
-          <span class="label">阅读记录<br/>保存在本机</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============ 01 阅读室 ============ -->
-  <section class="reader-sec" id="reader">
-    <div class="wrap">
-      <div class="sec-head reveal">
-        <div>
-          <p class="kicker">01 — 沉浸阅读室</p>
-          <h2>一篇外文，<br />从头读到尾。</h2>
-        </div>
-        <p class="note">原文与译文逐句对照。点一句就从那里朗读，点一个词就查看释义、例句并收藏——文章、词条和阅读进度留在同一处。</p>
-      </div>
-
-      <article class="feature reveal">
-        <div class="f-copy">
-          <p class="f-label">A — 选文章</p>
-          <h3 class="f-title">先选文章，接着读下去。</h3>
-          <p class="f-desc">从内置文库开始，也可以导入 EPUB、TXT、DOCX、PDF，粘贴文本或添加公开网页文章。长书按章节整理，读到哪里都能接着往下。</p>
-          <ul class="f-list">
-            <li>内置文库按 B2 / B1 / A2 分级</li>
-            <li>支持长书与章节</li>
-            <li>保留阅读进度</li>
-          </ul>
-        </div>
-        <figure class="shot f-shot">
-          <img src="assets/reader-room-library.webp" width="1206" height="804" loading="lazy" decoding="async"
-               alt="添加阅读内容：内置文库按 B2、B1、A2 分级列出读物，顶部可切换 EPUB 长书、本地文件、网页链接与粘贴文本" />
-          <figcaption>内置分级文库，也可以导入自己的文件。</figcaption>
-        </figure>
-      </article>
-
-      <article class="feature flip reveal">
-        <div class="f-copy">
-          <p class="f-label">B — 点词查义</p>
-          <h3 class="f-title">点词查义，留在原句里。</h3>
-          <p class="f-desc">点选句子里的词，查看释义、发音和例句；需要记住的表达可以直接收藏。查完回到原句，继续阅读。</p>
-          <ul class="f-list">
-            <li>词义、发音与例句</li>
-            <li>原句一并保存</li>
-            <li>阅读节奏不断开</li>
-          </ul>
-        </div>
-        <figure class="shot f-shot">
-          <img src="assets/reader-room-dictionary.webp" width="1206" height="804" loading="lazy" decoding="async"
-               alt="点选 garden 后，右侧查词面板显示音标、释义、原句与常用搭配" />
-          <figcaption>查词面板保留这个词在文章中的原句。</figcaption>
-        </figure>
-      </article>
-
-      <article class="feature reveal">
-        <div class="f-copy">
-          <p class="f-label">C — 收词复习</p>
-          <h3 class="f-title">收藏的词，回到复习里。</h3>
-          <p class="f-desc">从阅读室收藏的词句会保留来源，回到复习时仍看得到原句，也能把新表达带进口语练习。</p>
-          <ul class="f-list">
-            <li>按间隔安排复习</li>
-            <li>从原句回忆词义</li>
-            <li>把新表达放进对话</li>
-          </ul>
-        </div>
-        <figure class="shot f-shot">
-          <img src="assets/reader-room-vocabulary.webp" width="1206" height="804" loading="lazy" decoding="async"
-               alt="笔记与复习：左侧生词本，中间按原句复习词块，右侧显示词块内化进度" />
-          <figcaption>复习按原句展开，右侧显示词块内化进度。</figcaption>
-        </figure>
-      </article>
-    </div>
-  </section>
-
-  <!-- ============ 02 口语练习 ============ -->
-  <section class="practice" id="practice">
-    <div class="wrap">
-      <div class="practice-grid">
-        <div class="reveal">
-          <p class="kicker">02 — 口语练习</p>
-          <h2>读过的内容，<br />练成自己的表达。</h2>
-          <p class="note">读完一篇关于气候变化的文章，然后在对话中自然用上 carbon footprint、renewable energy？口语练习让新词不再是背了就忘的单词表——读什么，就练什么。</p>
-        </div>
-        <ul class="practice-list reveal" style="--d:80ms">
-          <li><span>01</span>听一句，跟读一句</li>
-          <li><span>02</span>复习文章里的词句</li>
-          <li><span>03</span>把新表达带进对话</li>
-        </ul>
-      </div>
-
-      <figure class="shot practice-figure reveal" style="--d:120ms">
-        <img src="assets/reader-room-speaking.webp" width="1206" height="804" loading="lazy" decoding="async"
-             alt="口语练习场景：围绕正在读的章节开场，或选择英文面试、餐厅点餐、旅行问路等日常场景" />
-        <figcaption>口语练习可以围绕刚读完的章节开口，也可以选日常场景。</figcaption>
-      </figure>
-      <p class="note" style="margin:22px auto 0;max-width:920px">朗读、跟读与口语练习的可用方式会随 Windows 和 macOS 版本更新。</p>
-    </div>
-  </section>
-
-  <!-- ============ 03 桌面辅助 ============ -->
-  <section class="assist">
-    <div class="wrap">
-      <div class="sec-head reveal">
-        <div>
-          <p class="kicker">03 — 桌面划词</p>
-          <h2>读完接着看，<br />遇到就处理。</h2>
-        </div>
-        <p class="note">这些能力是阅读路上的辅助入口：遇到一句难懂的话，选中它；遇到图片里的文字，框选它，再回到文章继续读。</p>
-      </div>
-
-      <div class="assist-grid">
-        <div class="reveal">
-          <p>阅读室之外，桌面划词翻译和截图 OCR 可以帮你处理浏览器、文档、字幕等屏幕文字。截图先在本机识别，再按你的模型设置完成翻译。</p>
-          <p>翻译引擎可以自己选，Key 存在本机；历史与生词也在本机，只有翻译的那一刻，文本才会发给你配置的服务商。</p>
-          <div class="links">
-            <a href="#download">查看桌面版本</a>
-            <a href="#faq">了解数据处理</a>
-          </div>
-        </div>
-
-        <div class="reveal" style="--d:80ms">
-          <div class="quote-card">
-            <p class="k">SELECTED · 32 CHARS</p>
-            <p class="en">the willingness to keep moving when a word slips past you</p>
-            <p class="zh">遇到生词，也愿意继续往下读的那份从容。</p>
-            <div class="rule"></div>
-            <div class="meta"><span>EN → 中文 · GLM-4-FLASH</span><b>送入阅读室</b></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============ 04 下载 ============ -->
-  <section class="download" id="download">
-    <div class="wrap">
-      <div class="sec-head reveal">
-        <div>
-          <p class="kicker">04 — 下载</p>
-          <h2>装好之后，<br />读外文这件事就顺了。</h2>
-        </div>
-        <p class="note">Windows 与 macOS 分别更新，请以 Release 页面的版本说明为准。</p>
-      </div>
-
-      <div class="dl-cards">
-        <article class="dl-card reveal">
-          <div class="dl-top">
-            <span class="dl-name">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 5.6l7.4-1v6.9H3V5.6zM11.6 4.4L21 3.1v8.4h-9.4V4.4zM3 12.5h7.4v6.9L3 18.4v-5.9zM11.6 12.5H21v8.4l-9.4-1.3v-7.1z" fill="#F5F1E5"/></svg>
-              Windows
-            </span>
-            <span class="dl-ver" id="dl-ver-win">x64</span>
-          </div>
-          <p class="dl-meta" id="dl-meta-win">WINDOWS 10 / 11 · 安装包约 24 MB</p>
-          <p class="dl-detail">双击安装即可使用，覆盖安装即可升级。你的阅读历史和生词本不会丢失。</p>
-          <a class="dl-btn solid" data-dl="win" href="https://github.com/kobejiasuoer/immersive-translator/releases/latest" target="_blank" rel="noopener">
-            下载 Windows 版
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true"><path d="M6.5 1.5v9M2.8 7l3.7 3.7L10.2 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </a>
-          <p class="dl-note">AGPL-3.0 · 可自行编译</p>
-        </article>
-
-        <article class="dl-card reveal" style="--d:90ms">
-          <div class="dl-top">
-            <span class="dl-name">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15.6 12.7c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.7.8-3.4.8-.7 0-1.8-.8-3-.8-1.5 0-2.9.9-3.7 2.3-1.6 2.7-.4 6.8 1.1 9 .7 1.1 1.6 2.3 2.8 2.2 1.1 0 1.5-.7 2.9-.7s1.7.7 2.9.7c1.2 0 2-1.1 2.7-2.2.8-1.2 1.2-2.4 1.2-2.5 0 0-2.3-.9-2.3-3.5z" fill="#F5F1E5"/><path d="M13.4 5.5c.6-.8 1.1-1.9 1-3-1 0-2.2.7-2.9 1.5-.6.7-1.1 1.8-1 2.9 1.1.1 2.2-.6 2.9-1.4z" fill="#F5F1E5"/></svg>
-              macOS
-            </span>
-            <span class="dl-ver" id="dl-ver-mac">Apple 芯片 / Intel</span>
-          </div>
-          <p class="dl-meta" id="dl-meta-mac">macOS 13.0 或更高版本</p>
-          <p class="dl-detail">下载 .zip 后解压，把应用拖进「应用程序」。正在申请 Apple 官方认证，首次打开请在「系统设置 → 隐私与安全性」中点击「仍要打开」。</p>
-          <a class="dl-btn line" data-dl="mac" href="https://github.com/kobejiasuoer/immersive-translator/releases/latest" target="_blank" rel="noopener">
-            下载 macOS 版
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true"><path d="M6.5 1.5v9M2.8 7l3.7 3.7L10.2 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </a>
-          <p class="dl-note">支持 Apple 芯片与 Intel 芯片</p>
-        </article>
-      </div>
-
-      <div class="dl-foot">
-        <span id="dl-latest">全部版本与更新日志 → github.com/kobejiasuoer/immersive-translator/releases</span>
-        <span>AGPL-3.0 · 可自行编译</span>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============ 05 FAQ ============ -->
-  <section class="faq wrap" id="faq">
-    <div class="faq-left reveal">
-      <p class="kicker">05 — 常见问题</p>
-      <h2>你可能想问的。</h2>
-      <p class="note">关于阅读室、模型配置、平台版本与数据处理。</p>
-    </div>
-
-    <div class="faq-list reveal" style="--d:80ms">
-      <div class="faq-item open">
-        <h3><button class="q" id="faq-q1" aria-controls="faq-a1" aria-expanded="true">这个工具适合我吗？<span class="ico" aria-hidden="true"></span></button></h3>
-        <div class="a" id="faq-a1" role="region" aria-labelledby="faq-q1"><div><p>如果你想读英文原版书、文章或技术文档，但总是读不下去——遇到生词就卡住，查词跳来跳去，读到一半就忘了前面讲什么——沉浸阅读室就是为你做的。它把「读-查-记-练」放在一起，让你真正读完一篇长文。</p></div></div>
-      </div>
-      <div class="faq-item">
-        <h3><button class="q" id="faq-q2" aria-controls="faq-a2" aria-expanded="false">和 Kindle、欧路词典、浏览器插件有什么不同？<span class="ico" aria-hidden="true"></span></button></h3>
-        <div class="a" id="faq-a2" role="region" aria-labelledby="faq-q2"><div><p>Kindle 查词慢、词典离文章远；欧路词典查完词要回到原文重新找；浏览器插件只翻译不记录。沉浸阅读室把原文译文、查词、生词本、阅读进度、口语练习放在同一个桌面应用里——读到哪里，词在哪里，进度在哪里，全都留在一处。</p></div></div>
-      </div>
-      <div class="faq-item">
-        <h3><button class="q" id="faq-q3" aria-controls="faq-a3" aria-expanded="false">应用和模型使用会收费吗？<span class="ico" aria-hidden="true"></span></button></h3>
-        <div class="a" id="faq-a3" role="region" aria-labelledby="faq-q3"><div><p>应用本身完全免费，使用 AGPL-3.0 开源；基于它的修改版对外分发时需同样以 AGPL-3.0 开源。翻译和语音服务需要你自己配置 API Key，费用由你选择的服务商（如 OpenAI、DeepL、GLM 等）收取；你也可以配置本地模型，完全免费。</p></div></div>
-      </div>
-      <div class="faq-item">
-        <h3><button class="q" id="faq-q4" aria-controls="faq-a4" aria-expanded="false">阅读记录和原文会上传吗？<span class="ico" aria-hidden="true"></span></button></h3>
-        <div class="a" id="faq-a4" role="region" aria-labelledby="faq-q4"><div><p>阅读历史和生词本完全保存在本机，不会上传。只有在调用翻译或语音服务的那一刻，相关文本才会发送给你配置的服务商；截图 OCR 在本机识别。详情见 <a href="https://github.com/kobejiasuoer/immersive-translator" target="_blank" rel="noopener">项目说明</a>。</p></div></div>
-      </div>
-      <div class="faq-item">
-        <h3><button class="q" id="faq-q5" aria-controls="faq-a5" aria-expanded="false">macOS 提示无法验证开发者怎么办？<span class="ico" aria-hidden="true"></span></button></h3>
-        <div class="a" id="faq-a5" role="region" aria-labelledby="faq-q5"><div><p>应用正在申请 Apple Developer ID 公证。下载后，右键点击应用图标选择「打开」，在弹窗中点击「仍要打开」即可。或者前往「系统设置 → 隐私与安全性」，在底部找到被拦截的应用，点击「仍要打开」。</p></div></div>
-      </div>
-      <div class="faq-item">
-        <h3><button class="q" id="faq-q6" aria-controls="faq-a6" aria-expanded="false">沉浸阅读室支持哪些内容？<span class="ico" aria-hidden="true"></span></button></h3>
-        <div class="a" id="faq-a6" role="region" aria-labelledby="faq-q6"><div><p>内置分级文库（A2 / B1 / B2），也可以导入 EPUB、TXT、DOCX、PDF，添加公开网页文章或直接粘贴文本。长书按章节整理，读到哪里自动保存进度。扫描版 PDF 的文字识别能力因平台和文件而异。</p></div></div>
-      </div>
-      <div class="faq-item">
-        <h3><button class="q" id="faq-q7" aria-controls="faq-a7" aria-expanded="false">Windows 和 macOS 的功能一样吗？<span class="ico" aria-hidden="true"></span></button></h3>
-        <div class="a" id="faq-a7" role="region" aria-labelledby="faq-q7"><div><p>核心功能（阅读室、划词翻译、截图 OCR）两端都有。但因为系统权限和底层实现不同，个别能力和发布节奏会有差异，请以各平台 Release 说明为准。</p></div></div>
-      </div>
-    </div>
-  </section>
-</main>
-
-<footer class="site-footer">
-  <div class="wrap">
-    <div class="f-top">
-      <div class="f-brand">
-        <div class="row">
-          <img src="assets/brand-icon.png" width="22" height="22" alt="" />
-          <span class="name">沉浸口语</span>
-          <span class="latin">IMMERSIVETRANSLATOR</span>
-        </div>
-        <p>为外文阅读与口语练习而做的桌面应用。<br>Windows 与 macOS，免费且开源。</p>
-      </div>
-
-      <div class="f-cols">
-        <div class="f-col">
-          <h3>产品</h3>
-          <a href="#reader">沉浸阅读室</a>
-          <a href="#practice">口语练习</a>
-          <a href="#download">Windows 与 macOS</a>
-          <a href="#faq">常见问题</a>
-        </div>
-        <div class="f-col">
-          <h3>资源</h3>
-          <a href="https://github.com/kobejiasuoer/immersive-translator" target="_blank" rel="noopener">GitHub</a>
-          <a href="https://github.com/kobejiasuoer/immersive-translator/releases/latest" target="_blank" rel="noopener">更新与下载</a>
-          <a href="https://github.com/kobejiasuoer/immersive-translator#readme" target="_blank" rel="noopener">使用文档</a>
-          <a href="https://github.com/kobejiasuoer/immersive-translator/issues" target="_blank" rel="noopener">反馈问题</a>
-        </div>
-        <div class="f-col">
-          <h3>协议</h3>
-          <a href="https://github.com/kobejiasuoer/immersive-translator/blob/main/LICENSE" target="_blank" rel="noopener">AGPL-3.0</a>
-          <a href="https://github.com/kobejiasuoer/immersive-translator" target="_blank" rel="noopener">隐私说明</a>
-        </div>
-      </div>
-    </div>
-
-    <p class="statement reveal"><span>读下去。</span></p>
-
-    <div class="f-bot">
-      <span>2026 沉浸口语 · ImmersiveTranslator</span>
-      <span>WINDOWS · macOS · AGPL-3.0</span>
-    </div>
-  </div>
-</footer>
-
-<script>
-(function () {
-  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-  requestAnimationFrame(function () {
-    requestAnimationFrame(function () {
-      document.body.classList.add('loaded');
-    });
-  });
-
-  var items = document.querySelectorAll('.reveal');
-  if (reduce || !('IntersectionObserver' in window)) {
-    Array.prototype.forEach.call(items, function (el) { el.classList.add('in'); });
-  } else {
-    var io = new IntersectionObserver(function (entries) {
-      entries.forEach(function (e) {
-        if (e.isIntersecting) {
-          e.target.classList.add('in');
-          io.unobserve(e.target);
-        }
-      });
-    }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
-    Array.prototype.forEach.call(items, function (el) { io.observe(el); });
-  }
-
-  var head = document.getElementById('head');
-  var bar = document.getElementById('bar');
-  var floats = Array.prototype.slice.call(document.querySelectorAll('[data-parallax]'));
-  var ticking = false;
-
-  function onFrame() {
-    var y = window.pageYOffset || document.documentElement.scrollTop;
-    var h = document.documentElement.scrollHeight - window.innerHeight;
-    if (bar) bar.style.width = (h > 0 ? (y / h) * 100 : 0) + '%';
-    if (head) head.classList.toggle('scrolled', y > 12);
-
-    if (!reduce && window.innerWidth > 1080) {
-      var vh = window.innerHeight;
-      floats.forEach(function (el) {
-        var r = el.getBoundingClientRect();
-        var center = (r.top + r.height / 2 - vh / 2) / vh;
-        var speed = parseFloat(el.getAttribute('data-parallax')) || 0.04;
-        el.style.setProperty('--py', (center * speed * 100).toFixed(2) + 'px');
-      });
-    }
-    ticking = false;
-  }
-
-  function onScroll() {
-    if (!ticking) {
-      ticking = true;
-      requestAnimationFrame(onFrame);
-    }
-  }
-
-  window.addEventListener('scroll', onScroll, { passive: true });
-  window.addEventListener('resize', onScroll);
-  onFrame();
-
-  /* FAQ 手风琴：同步 aria-expanded，收起态由 CSS visibility 移出无障碍树 */
-  var faqItems = document.querySelectorAll('.faq-item');
-  Array.prototype.forEach.call(faqItems, function (item) {
-    var btn = item.querySelector('.q');
-    btn.addEventListener('click', function () {
-      var wasOpen = item.classList.contains('open');
-      Array.prototype.forEach.call(faqItems, function (i) {
-        i.classList.remove('open');
-        i.querySelector('.q').setAttribute('aria-expanded', 'false');
-      });
-      if (!wasOpen) {
-        item.classList.add('open');
-        btn.setAttribute('aria-expanded', 'true');
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#102c27" />
+    <title>沉浸口语 — 读进去，说出来</title>
+    <meta
+      name="description"
+      content="沉浸口语，让阅读、口语与复习接在一起。导入自己的书与文章，双语精读，把原句带入口语练习。Windows 客户端开源，支持沉浸云与自备 API Key。"
+    />
+    <link rel="canonical" href="https://prismspace.online/" />
+    <link rel="icon" type="image/png" href="assets/brand-icon.png" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:site_name" content="沉浸口语" />
+    <meta property="og:title" content="沉浸口语 — 读进去，说出来" />
+    <meta
+      property="og:description"
+      content="从一篇文章开始，把读懂的英语，变成说得出的英语。阅读、口语、复习，在同一个学习空间。"
+    />
+    <meta property="og:url" content="https://prismspace.online/" />
+    <meta property="og:image" content="https://prismspace.online/assets/site-share-2026.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://prismspace.online/assets/site-share-2026.png" />
+    <style>
+      :root {
+        --dark: #102c27;
+        --dark-soft: #1b3933;
+        --mint: #d6eadd;
+        --paper: #f2f4ef;
+        --white: #fff;
+        --ink: #162d27;
+        --green: #216653;
+        --soft: #e3eae1;
+        --muted: #50645a;
+        --font: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+        --display: clamp(64px, 8.5vw, 132px);
+        --heading: clamp(36px, 4.8vw, 68px);
+        --lead: clamp(20px, 2vw, 28px);
+        --body: 18px;
+        --small: 14px;
+        --gutter: clamp(22px, 4vw, 64px);
+        --ease: cubic-bezier(0.22, 1, 0.36, 1);
       }
-    });
-  });
-
-  /* 下载直链：解析最新 Release 资产，点击即下载；解析失败回退 Release 页面 */
-  var RELEASES_PAGE = 'https://github.com/kobejiasuoer/immersive-translator/releases/latest';
-  var RELEASE_API = [
-    'https://api.github.com/repos/kobejiasuoer/immersive-translator/releases/latest',
-    'https://gh-proxy.com/https://api.github.com/repos/kobejiasuoer/immersive-translator/releases/latest'
-  ];
-  var dlCache = null, dlPending = null, dlDead = false;
-
-  function fetchRelease(url) {
-    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 6000);
-    return fetch(url, {
-      headers: { Accept: 'application/vnd.github+json' },
-      signal: ctrl ? ctrl.signal : undefined
-    }).then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    }).finally(function () { clearTimeout(timer); });
-  }
-
-  function resolveRelease() {
-    if (dlCache) return Promise.resolve(dlCache);
-    if (dlPending) return dlPending;
-    var chain = Promise.reject();
-    RELEASE_API.forEach(function (url) {
-      chain = chain.catch(function () { return fetchRelease(url); });
-    });
-    dlPending = chain.then(function (rel) {
-      var out = { version: ((rel && rel.tag_name) || '').replace(/^v/, '') };
-      Array.prototype.forEach.call((rel && rel.assets) || [], function (a) {
-        var n = a.name || '';
-        if (/_x64-setup\.exe$/.test(n)) out.win = a;
-        if (/\.dmg$/.test(n)) out.mac = a;
-        else if (/-macOS\.zip$/.test(n) && !out.mac) out.mac = a;
-      });
-      dlCache = out;
-      return out;
-    }, function () {
-      dlPending = null;
-      dlDead = true;
-      throw new Error('release lookup failed');
-    });
-    return dlPending;
-  }
-
-  function applyRelease(rel) {
-    var btns = document.querySelectorAll('.dl-btn[data-dl]');
-    Array.prototype.forEach.call(btns, function (btn) {
-      var asset = rel[btn.getAttribute('data-dl')];
-      if (!asset) return;
-      btn.setAttribute('data-resolved', '1');
-      btn.setAttribute('href', asset.browser_download_url);
-    });
-    var v = rel.version ? 'v' + rel.version : '';
-    var mb = function (bytes) { return (bytes / 1048576).toFixed(1) + ' MB'; };
-    var proof = document.getElementById('proof-version');
-    var elWin = document.getElementById('dl-ver-win');
-    var elMac = document.getElementById('dl-ver-mac');
-    var mWin = document.getElementById('dl-meta-win');
-    var mMac = document.getElementById('dl-meta-mac');
-    var latest = document.getElementById('dl-latest');
-    if (proof && v) proof.textContent = v;
-    if (elWin) elWin.textContent = (v ? v + ' · ' : '') + 'x64';
-    if (elMac) elMac.textContent = (v ? v + ' · ' : '') + 'Apple 芯片 / Intel';
-    if (mWin && rel.win) mWin.textContent = 'WINDOWS 10 / 11 · 安装包 ' + mb(rel.win.size);
-    if (mMac && rel.mac) mMac.textContent = 'macOS 13.0 或更高版本 · 应用包 ' + mb(rel.mac.size);
-    if (latest && v) latest.textContent = '最新版本 ' + v + ' · 全部版本与更新日志 → github.com/kobejiasuoer/immersive-translator/releases';
-  }
-
-  Array.prototype.forEach.call(document.querySelectorAll('.dl-btn[data-dl]'), function (btn) {
-    btn.addEventListener('click', function (ev) {
-      if (btn.getAttribute('data-resolved') === '1' || dlDead) return;
-      ev.preventDefault();
-      resolveRelease().then(function (rel) {
-        var asset = rel[btn.getAttribute('data-dl')];
-        if (!asset) throw new Error('asset missing');
-        applyRelease(rel);
-        window.location.href = asset.browser_download_url;
-      }).catch(function () {
-        window.open(RELEASES_PAGE, '_blank', 'noopener');
-      });
-    });
-  });
-
-  var dlTargets = document.querySelectorAll('.social-proof, #download');
-  if (dlTargets.length && 'IntersectionObserver' in window) {
-    var dlIo = new IntersectionObserver(function (entries) {
-      entries.forEach(function (e) {
-        if (e.isIntersecting) {
-          dlIo.disconnect();
-          resolveRelease().then(applyRelease).catch(function () {});
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        scroll-behavior: smooth;
+        scroll-padding-top: 88px;
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font: var(--body) / 1.65 var(--font);
+        -webkit-font-smoothing: antialiased;
+      }
+      button,
+      input {
+        font: inherit;
+      }
+      button,
+      a {
+        -webkit-tap-highlight-color: transparent;
+      }
+      button {
+        cursor: pointer;
+      }
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+      img {
+        display: block;
+        max-width: 100%;
+        height: auto;
+      }
+      figure,
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+      h1,
+      h2,
+      h3 {
+        font-weight: 700;
+        text-wrap: balance;
+      }
+      p {
+        text-wrap: pretty;
+        max-width: 34em;
+      }
+      ::selection {
+        color: var(--dark);
+        background: var(--mint);
+      }
+      :focus-visible {
+        outline: 3px solid currentColor;
+        outline-offset: 6px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      .container {
+        width: min(100%, 1536px);
+        margin-inline: auto;
+        padding-inline: var(--gutter);
+      }
+      .chapter {
+        position: relative;
+      }
+      .skip {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        z-index: 100;
+        padding: 12px 20px;
+        background: var(--white);
+        color: var(--ink);
+        transform: translateY(-160%);
+      }
+      .skip:focus {
+        transform: none;
+      }
+      .site-header {
+        position: fixed;
+        inset: 0 0 auto;
+        z-index: 30;
+        color: var(--mint);
+        background: var(--dark);
+      }
+      .site-header.light {
+        color: var(--ink);
+        background: var(--paper);
+      }
+      .header-inner {
+        height: 80px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        white-space: nowrap;
+        font-weight: 700;
+      }
+      .brand img {
+        width: 30px;
+        height: 30px;
+      }
+      .desktop-nav {
+        display: flex;
+        align-items: center;
+        gap: clamp(20px, 3vw, 44px);
+        font-size: var(--small);
+      }
+      .nav-link {
+        padding: 12px 0;
+        transition: opacity 0.18s;
+      }
+      .nav-link:hover {
+        opacity: 0.65;
+      }
+      .mobile-menu {
+        display: none;
+        position: relative;
+      }
+      .mobile-menu summary {
+        cursor: pointer;
+        padding: 12px;
+        list-style: none;
+        font-size: var(--small);
+      }
+      .mobile-menu summary::-webkit-details-marker {
+        display: none;
+      }
+      .mobile-menu nav {
+        position: absolute;
+        right: 0;
+        top: 54px;
+        min-width: 180px;
+        padding: 12px;
+        background: var(--paper);
+        color: var(--ink);
+      }
+      .mobile-menu nav a {
+        display: block;
+        padding: 12px 16px;
+      }
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        min-height: 54px;
+        padding: 14px 24px;
+        border: 0;
+        border-radius: 0;
+        background: var(--mint);
+        color: var(--dark);
+        font-size: var(--body);
+        font-weight: 700;
+        transition: transform 0.2s var(--ease);
+      }
+      .button:hover {
+        transform: translateY(-3px);
+      }
+      .button:active {
+        transform: scale(0.97);
+      }
+      .button svg {
+        width: 20px;
+        height: 20px;
+        transition: transform 0.25s var(--ease);
+      }
+      .button:hover svg {
+        transform: translateX(4px);
+      }
+      .text-link {
+        display: inline-block;
+        padding-block: 10px;
+        text-decoration: underline;
+        text-underline-offset: 6px;
+        font-size: var(--small);
+      }
+      .text-link:hover {
+        opacity: 0.7;
+      }
+      .hero {
+        min-height: min(920px, 100svh);
+        padding: 154px 0 70px;
+        background: var(--dark);
+        color: var(--mint);
+      }
+      .hero-grid {
+        display: grid;
+        grid-template-columns: 1.05fr 1fr;
+        align-items: center;
+        gap: 16px;
+      }
+      .hero h1 {
+        font-size: var(--display);
+        line-height: 1.14;
+        letter-spacing: -0.055em;
+      }
+      .hero h1 span {
+        display: block;
+      }
+      .hero-copy > p {
+        margin-top: 32px;
+        font-size: var(--body);
+        max-width: 25em;
+      }
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px 24px;
+        margin-top: 32px;
+      }
+      .hero-copy > .hero-note {
+        margin-top: 18px;
+        font-size: var(--small);
+      }
+      .hero-visual {
+        perspective: 1200px;
+        padding-block: 24px;
+        min-width: 0;
+      }
+      .hero-product {
+        transform: rotateY(var(--rotate-y, -12deg)) rotateX(var(--rotate-x, 6deg)) rotateZ(2deg);
+        transform-origin: center;
+        transition: transform 0.75s var(--ease);
+      }
+      .hero-product img {
+        width: 100%;
+        aspect-ratio: 1440/900;
+        object-fit: cover;
+        object-position: left top;
+      }
+      .hero-product figcaption {
+        margin-top: 20px;
+        font-size: var(--small);
+      }
+      .hero-bottom {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 24px;
+        margin-top: 70px;
+        font-size: var(--small);
+      }
+      .hero-bottom a {
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
+      }
+      .hero-bottom svg {
+        width: 18px;
+        height: 18px;
+      }
+      .reader-story {
+        background: var(--paper);
+      }
+      .story-sticky {
+        padding-block: 100px;
+      }
+      .section-heading {
+        font-size: var(--heading);
+        line-height: 1.18;
+        letter-spacing: -0.04em;
+      }
+      .section-lead {
+        font-size: var(--body);
+        margin-top: 22px;
+      }
+      .story-grid {
+        display: grid;
+        grid-template-columns: 0.7fr 1.7fr;
+        gap: 44px;
+        align-items: center;
+        margin-top: 52px;
+      }
+      .screen-switch {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 16px;
+      }
+      .screen-switch button {
+        border: 0;
+        background: none;
+        color: var(--muted);
+        font-size: clamp(28px, 3vw, 44px);
+        font-weight: 700;
+        letter-spacing: -0.04em;
+        padding: 6px 0;
+        text-align: left;
+        transition:
+          transform 0.35s var(--ease),
+          color 0.2s;
+      }
+      .screen-switch button[aria-pressed="true"] {
+        color: var(--ink);
+        transform: translateX(16px);
+      }
+      .screen-switch button[aria-pressed="true"]::before {
+        content: "";
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        margin: 0 14px 7px -22px;
+        background: var(--green);
+      }
+      .stage-description {
+        margin-top: 24px;
+        min-height: 4.95em;
+        font-size: var(--body);
+      }
+      .story-screen {
+        position: relative;
+        min-width: 0;
+        background: var(--soft);
+        overflow: hidden;
+      }
+      .story-screen img {
+        width: 100%;
+        aspect-ratio: 1440/900;
+        object-fit: cover;
+        object-position: top left;
+      }
+      .story-caption {
+        margin-top: 20px;
+        font-size: var(--small);
+      }
+      .js .story-screen img {
+        transition:
+          opacity 0.35s,
+          transform 0.7s var(--ease);
+      }
+      .js .story-screen img.is-changing {
+        opacity: 0.3;
+        transform: translateY(18px) scale(0.985);
+      }
+      .import-section {
+        background: var(--mint);
+        padding-block: 110px;
+      }
+      .import-top {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 48px;
+        align-items: start;
+      }
+      .source-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 34px;
+      }
+      .source-list span {
+        padding: 10px 18px;
+        background: var(--paper);
+        font-size: var(--body);
+      }
+      .library-shot {
+        margin-top: 56px;
+        overflow: hidden;
+        max-height: 540px;
+      }
+      .library-shot img {
+        width: 100%;
+        object-fit: cover;
+        object-position: top;
+      }
+      .practice-section {
+        background: var(--dark);
+        color: var(--mint);
+        padding-block: 110px;
+      }
+      .practice-board {
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        gap: 8px;
+        margin-top: 52px;
+      }
+      .practice-main {
+        grid-row: span 2;
+        background: var(--paper);
+        overflow: hidden;
+      }
+      .practice-main img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: center top;
+      }
+      .quote-panel {
+        padding: clamp(24px, 4vw, 56px);
+        background: var(--mint);
+        color: var(--ink);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+      }
+      .quote-panel blockquote {
+        font-size: var(--lead);
+        line-height: 1.5;
+        margin: 0;
+      }
+      .quote-panel p {
+        margin-top: 22px;
+        font-size: var(--body);
+      }
+      .review-panel {
+        background: var(--dark-soft);
+        padding: clamp(24px, 4vw, 48px);
+      }
+      .review-panel h3 {
+        font-size: var(--lead);
+        line-height: 1.3;
+      }
+      .review-panel p {
+        margin-top: 18px;
+        font-size: var(--body);
+      }
+      .review-preview {
+        margin-top: 40px;
+        overflow: hidden;
+      }
+      .review-preview img {
+        width: 100%;
+        max-height: 570px;
+        object-fit: cover;
+        object-position: center top;
+      }
+      .mobile-section {
+        background: var(--soft);
+        padding-block: 110px 90px;
+        overflow: clip;
+      }
+      .mobile-intro {
+        display: flex;
+        justify-content: space-between;
+        gap: 44px;
+        align-items: start;
+      }
+      .mobile-intro > div:last-child {
+        max-width: 24em;
+      }
+      .preview-note {
+        font-size: var(--small);
+        margin-top: 16px;
+        color: var(--muted);
+      }
+      .phones {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: clamp(16px, 3vw, 44px);
+        padding-block: 80px 60px;
+        perspective: 1600px;
+      }
+      .phone {
+        width: clamp(190px, 22vw, 282px);
+        flex: 0 0 auto;
+      }
+      .phone-frame {
+        border: 7px solid var(--dark);
+        border-radius: 38px;
+        background: var(--dark);
+        overflow: hidden;
+      }
+      .phone img {
+        width: 100%;
+        aspect-ratio: 390/844;
+        object-fit: cover;
+        object-position: top;
+      }
+      .phone figcaption {
+        font-size: var(--body);
+        text-align: center;
+        margin-top: 24px;
+      }
+      .phone:nth-child(1) {
+        transform: translateY(36px) rotate(-7deg);
+      }
+      .phone:nth-child(2) {
+        transform: translateY(-16px);
+      }
+      .phone:nth-child(3) {
+        transform: translateY(36px) rotate(7deg);
+      }
+      .mobile-foot {
+        font-size: var(--small);
+        text-align: center;
+        margin-inline: auto;
+      }
+      .faq-section {
+        padding-block: 110px;
+        background: var(--paper);
+      }
+      .faq-grid {
+        display: grid;
+        grid-template-columns: 0.8fr 1.4fr;
+        gap: 56px;
+        align-items: start;
+      }
+      .faq-title {
+        position: sticky;
+        top: 130px;
+      }
+      .faq-list {
+        display: grid;
+        gap: 8px;
+      }
+      .faq-list details {
+        background: var(--soft);
+        padding: 24px 28px;
+      }
+      .faq-list details[open] {
+        background: var(--mint);
+      }
+      .faq-list summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        cursor: pointer;
+        list-style: none;
+        font-size: var(--body);
+        font-weight: 700;
+      }
+      .faq-list summary::-webkit-details-marker {
+        display: none;
+      }
+      .faq-list summary::after {
+        content: "+";
+        font-size: var(--lead);
+        font-weight: 400;
+      }
+      .faq-list details[open] summary::after {
+        content: "−";
+      }
+      .faq-list details p {
+        margin-top: 20px;
+        font-size: var(--body);
+      }
+      .faq-list details:not([open]) > p {
+        display: none;
+      }
+      .faq-list details a {
+        text-decoration: underline;
+        text-underline-offset: 4px;
+      }
+      .download-section {
+        background: var(--green);
+        color: var(--white);
+        padding-block: 110px;
+      }
+      .download-grid {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 48px;
+        align-items: center;
+      }
+      .download-section .section-heading {
+        font-size: clamp(48px, 6.5vw, 92px);
+      }
+      .download-actions {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 18px;
+      }
+      .download-actions .button {
+        padding: 18px 32px;
+      }
+      .download-meta {
+        font-size: var(--small);
+      }
+      .download-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px 24px;
+        font-size: var(--small);
+      }
+      .site-footer {
+        background: var(--dark);
+        color: var(--mint);
+        padding-block: 80px 32px;
+      }
+      .footer-wordmark {
+        font-size: clamp(56px, 12vw, 172px);
+        line-height: 1.2;
+        font-weight: 700;
+        letter-spacing: -0.06em;
+      }
+      .footer-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: start;
+        gap: 24px;
+        margin-top: 56px;
+      }
+      .footer-row p,
+      .footer-links {
+        font-size: var(--small);
+      }
+      .footer-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+      }
+      .footer-bottom {
+        display: flex;
+        justify-content: space-between;
+        gap: 24px;
+        margin-top: 56px;
+        font-size: var(--small);
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        .hero h1 span {
+          animation: title-enter 1.15s var(--ease) both;
         }
-      });
-    }, { rootMargin: '0px 0px -10% 0px' });
-    Array.prototype.forEach.call(dlTargets, function (el) { dlIo.observe(el); });
-  } else {
-    resolveRelease().then(applyRelease).catch(function () {});
-  }
-})();
-</script>
-</body>
+        .hero h1 span:nth-child(2) {
+          animation-delay: 0.12s;
+        }
+        .hero-copy > p {
+          animation: settle 0.9s 0.28s var(--ease) both;
+        }
+        .hero-actions {
+          animation: settle 0.9s 0.38s var(--ease);
+        }
+        .hero-product {
+          animation: product-enter 1.4s 0.15s var(--ease) backwards;
+        }
+        .reveal.is-in {
+          animation: settle 0.85s var(--ease) backwards;
+        }
+        .reveal.media.is-in {
+          animation: media-enter 1.15s var(--ease) backwards;
+        }
+        .reveal:nth-child(2).is-in {
+          animation-delay: 0.08s;
+        }
+        .reveal:nth-child(3).is-in {
+          animation-delay: 0.16s;
+        }
+        @keyframes title-enter {
+          from {
+            opacity: 0;
+            transform: translateY(50px);
+          }
+          to {
+            opacity: 1;
+            transform: none;
+          }
+        }
+        @keyframes settle {
+          from {
+            opacity: 0.25;
+            transform: translateY(24px);
+          }
+          to {
+            opacity: 1;
+            transform: none;
+          }
+        }
+        @keyframes media-enter {
+          from {
+            opacity: 0.35;
+            transform: translateY(32px) scale(0.96);
+          }
+          to {
+            opacity: 1;
+            transform: none;
+          }
+        }
+        @keyframes product-enter {
+          from {
+            opacity: 0;
+            transform: rotateY(-25deg) rotateX(12deg) translateX(60px);
+          }
+        }
+      }
+      @media (min-width: 1100px) and (min-height: 850px) and (prefers-reduced-motion: no-preference) {
+        .js .story-track {
+          height: 245svh;
+        }
+        .js .story-sticky {
+          position: sticky;
+          top: 80px;
+          height: calc(100svh - 80px);
+          padding-block: 40px;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+        }
+        .js .story-grid {
+          margin-top: 36px;
+        }
+        .js .story-screen img {
+          max-height: calc(100svh - 330px);
+          object-fit: contain;
+        }
+      }
+      @media (max-width: 1050px) {
+        .hero {
+          padding-top: 138px;
+          min-height: auto;
+        }
+        .hero-grid {
+          grid-template-columns: 1fr 1fr;
+        }
+        .hero h1 {
+          font-size: clamp(60px, 8.2vw, 96px);
+        }
+        .story-grid {
+          gap: 30px;
+          grid-template-columns: 1fr;
+        }
+        .screen-switch {
+          flex-direction: row;
+          flex-wrap: wrap;
+          gap: 24px;
+        }
+        .screen-switch button {
+          font-size: var(--lead);
+        }
+        .stage-description {
+          min-height: 0;
+        }
+        .desktop-nav {
+          gap: 20px;
+        }
+        .phones {
+          gap: 22px;
+        }
+        .phone {
+          width: 25vw;
+        }
+      }
+      @media (max-width: 760px) {
+        :root {
+          --body: 16px;
+          --gutter: 22px;
+        }
+        html {
+          scroll-padding-top: 72px;
+        }
+        .header-inner {
+          height: 68px;
+        }
+        .desktop-nav {
+          display: none;
+        }
+        .mobile-menu {
+          display: block;
+        }
+        .hero {
+          min-height: auto;
+          padding-block: 120px 48px;
+        }
+        .hero-grid {
+          grid-template-columns: 1fr;
+          gap: 42px;
+        }
+        .hero h1 {
+          font-size: clamp(60px, 16.5vw, 100px);
+          line-height: 1.12;
+        }
+        .hero-copy > p {
+          margin-top: 24px;
+          max-width: 21em;
+        }
+        .hero-actions {
+          gap: 10px 22px;
+          margin-top: 24px;
+        }
+        .hero-visual {
+          padding-block: 8px 0;
+        }
+        .hero-product {
+          transform: none;
+        }
+        .hero-product img {
+          aspect-ratio: 1.35;
+          object-position: left top;
+        }
+        .hero-product figcaption {
+          margin-top: 14px;
+        }
+        .hero-bottom {
+          margin-top: 40px;
+        }
+        .hero-bottom p {
+          max-width: 15em;
+        }
+        .story-sticky,
+        .js .story-sticky {
+          position: static;
+          min-height: 0;
+          padding-block: 72px;
+        }
+        .js .story-track {
+          height: auto;
+        }
+        .story-grid {
+          grid-template-columns: 1fr;
+          gap: 28px;
+          margin-top: 30px;
+        }
+        .screen-switch {
+          flex-direction: row;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+        .screen-switch button {
+          font-size: var(--body);
+          padding: 12px 14px;
+          background: var(--soft);
+        }
+        .screen-switch button[aria-pressed="true"] {
+          transform: none;
+          background: var(--green);
+          color: var(--white);
+        }
+        .screen-switch button[aria-pressed="true"]::before {
+          display: none;
+        }
+        .stage-description {
+          min-height: 3.3em;
+          margin-top: 20px;
+        }
+        .story-screen {
+          margin-inline: calc(-1 * var(--gutter));
+        }
+        .story-screen img {
+          aspect-ratio: 1.16;
+          object-position: left top;
+        }
+        .story-caption {
+          margin-top: 16px;
+        }
+        .import-section,
+        .practice-section,
+        .mobile-section,
+        .faq-section,
+        .download-section {
+          padding-block: 72px;
+        }
+        .import-top,
+        .practice-board,
+        .faq-grid,
+        .download-grid {
+          grid-template-columns: 1fr;
+          gap: 30px;
+        }
+        .source-list {
+          margin-top: 24px;
+          gap: 6px;
+        }
+        .source-list span {
+          padding: 8px 12px;
+        }
+        .library-shot {
+          margin-top: 32px;
+        }
+        .library-shot img {
+          min-height: 260px;
+          object-fit: cover;
+          object-position: left top;
+        }
+        .practice-board {
+          gap: 8px;
+          margin-top: 32px;
+        }
+        .practice-main {
+          grid-row: auto;
+        }
+        .practice-main img {
+          height: auto;
+          aspect-ratio: 1.15;
+          object-fit: cover;
+          object-position: left top;
+        }
+        .quote-panel,
+        .review-panel {
+          padding: 28px;
+        }
+        .review-preview {
+          margin-top: 32px;
+          margin-inline: calc(-1 * var(--gutter));
+        }
+        .review-preview img {
+          aspect-ratio: 1.18;
+          object-position: center top;
+        }
+        .mobile-intro {
+          display: block;
+        }
+        .mobile-intro > div:last-child {
+          margin-top: 24px;
+        }
+        .phones {
+          flex-wrap: wrap;
+          gap: 24px 14px;
+          padding-block: 36px 28px;
+        }
+        .phone {
+          width: calc(50% - 7px);
+        }
+        .phone:first-child {
+          width: min(74%, 280px);
+          margin-inline: 14%;
+        }
+        .phone:nth-child(n) {
+          transform: none;
+        }
+        .phone-frame {
+          border-width: 5px;
+          border-radius: 28px;
+        }
+        .phone figcaption {
+          margin-top: 16px;
+        }
+        .mobile-foot {
+          text-align: left;
+        }
+        .faq-title {
+          position: static;
+        }
+        .faq-list details {
+          padding: 20px;
+        }
+        .download-section .section-heading {
+          font-size: clamp(44px, 11vw, 64px);
+        }
+        .download-actions {
+          gap: 16px;
+        }
+        .download-actions .button {
+          width: 100%;
+        }
+        .site-footer {
+          padding-block: 56px 28px;
+        }
+        .footer-row {
+          display: block;
+          margin-top: 32px;
+        }
+        .footer-links {
+          margin-top: 24px;
+          gap: 12px 20px;
+        }
+        .footer-bottom {
+          margin-top: 32px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+        *,
+        *::before,
+        *::after {
+          animation: none !important;
+          transition: none !important;
+        }
+        .js .story-track {
+          height: auto;
+        }
+        .js .story-sticky {
+          position: static;
+        }
+        .hero-product,
+        .phone:nth-child(n) {
+          transform: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip" href="#main">跳到内容</a>
+    <header class="site-header" id="site-header">
+      <div class="container header-inner">
+        <a class="brand" href="#top" aria-label="沉浸口语首页"
+          ><img src="assets/brand-icon.png" width="30" height="30" alt="" />沉浸口语</a
+        >
+        <nav class="desktop-nav" aria-label="主导航">
+          <a class="nav-link" href="#reader">Windows</a><a class="nav-link" href="#mobile">手机端预览</a
+          ><a class="nav-link" href="#faq">常见问题</a
+          ><a
+            class="nav-link"
+            href="https://github.com/kobejiasuoer/immersive-translator"
+            target="_blank"
+            rel="noopener noreferrer"
+            >GitHub</a
+          ><a class="nav-link" href="#download">下载</a>
+        </nav>
+        <details class="mobile-menu">
+          <summary aria-label="打开导航菜单">菜单</summary>
+          <nav aria-label="手机导航">
+            <a href="#reader">Windows</a><a href="#mobile">手机端预览</a><a href="#faq">常见问题</a
+            ><a href="#download">下载</a
+            ><a
+              href="https://github.com/kobejiasuoer/immersive-translator"
+              target="_blank"
+              rel="noopener noreferrer"
+              >GitHub</a
+            >
+          </nav>
+        </details>
+      </div>
+    </header>
+    <main id="main">
+      <section class="hero chapter" id="top" data-tone="dark">
+        <div class="container">
+          <div class="hero-grid">
+            <div class="hero-copy">
+              <h1><span>读进去。</span><span>说出来。</span></h1>
+              <p>把读懂的英语，变成说得出的英语。<br />你的 Windows 阅读与口语学习空间。</p>
+              <div class="hero-actions">
+                <a
+                  class="button"
+                  data-download
+                  href="https://github.com/kobejiasuoer/immersive-translator/releases/latest"
+                  >下载 Windows 版<svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    aria-hidden="true"
+                  >
+                    <path d="M4 12h15M13 5l7 7-7 7" /></svg></a
+                ><a class="text-link" href="#reader">看看怎么学</a>
+              </div>
+              <p class="hero-note">开源客户端，云服务按额度使用</p>
+            </div>
+            <div class="hero-visual">
+              <figure class="hero-product" data-ui>
+                <a href="#reader" aria-label="查看阅读室演示"
+                  ><img
+                    src="assets/product-reading.webp"
+                    width="1440"
+                    height="900"
+                    fetchpriority="high"
+                    alt="Windows 阅读室：英文原文、句子译文与语境解析"
+                /></a>
+                <figcaption>Windows 阅读室界面演示</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="hero-bottom">
+            <p>从自己的书和文章开始。</p>
+            <a href="#reader"
+              >往下看看<svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                aria-hidden="true"
+              >
+                <path d="M12 3v17M5 13l7 7 7-7" /></svg
+            ></a>
+          </div>
+        </div>
+      </section>
+      <section class="reader-story chapter" id="reader" data-tone="light" aria-labelledby="reader-title">
+        <div class="story-track" id="story-track">
+          <div class="container story-sticky">
+            <h2 class="section-heading reveal" id="reader-title">读过的，接着练。</h2>
+            <div class="story-grid">
+              <div class="story-copy reveal">
+                <div
+                  class="screen-switch"
+                  id="screen-switch"
+                  role="group"
+                  aria-label="查看 Windows 学习场景"
+                  hidden
+                >
+                  <button type="button" data-scene="0" aria-pressed="true">阅读室</button
+                  ><button type="button" data-scene="1" aria-pressed="false">口语练习</button
+                  ><button type="button" data-scene="2" aria-pressed="false">笔记与复习</button>
+                </div>
+                <p class="stage-description" id="stage-description">
+                  原文、译文、查词和句子解析，都留在阅读的语境里。
+                </p>
+                <a class="text-link" href="#practice">看口语与复习</a>
+              </div>
+              <div class="reveal media">
+                <figure class="story-screen" data-ui>
+                  <img
+                    id="story-image"
+                    src="assets/product-reading.webp"
+                    width="1440"
+                    height="900"
+                    loading="lazy"
+                    decoding="async"
+                    alt="阅读室双语精读界面演示"
+                  />
+                </figure>
+                <p class="story-caption" id="story-caption" aria-live="polite">阅读室 / 双语精读与语境查词</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="import-section chapter" id="content" data-tone="light" aria-labelledby="content-title">
+        <div class="container">
+          <div class="import-top">
+            <h2 class="section-heading reveal" id="content-title">读什么，你来选。</h2>
+            <div class="reveal">
+              <p>一本书、一篇网页，或刚复制的一段文字。</p>
+              <div class="source-list" aria-label="支持的内容来源">
+                <span>EPUB</span><span>PDF¹</span><span>DOCX</span><span>TXT</span><span>网页 / RSS</span>
+              </div>
+            </div>
+          </div>
+          <figure class="library-shot reveal media" data-ui>
+            <img
+              src="assets/product-library.webp"
+              width="1440"
+              height="900"
+              loading="lazy"
+              decoding="async"
+              alt="Windows 书架与内容导入界面演示"
+            />
+          </figure>
+          <p class="story-caption">¹ PDF 需要可提取的文本层。扫描件请先识别文字。</p>
+        </div>
+      </section>
+      <section
+        class="practice-section chapter"
+        id="practice"
+        data-tone="dark"
+        aria-labelledby="practice-title"
+      >
+        <div class="container">
+          <h2 class="section-heading reveal" id="practice-title">把这句，变成你的话。</h2>
+          <p class="section-lead reveal">带着原句开口，在对话里改进表达与发音。</p>
+          <div class="practice-board">
+            <figure class="practice-main reveal media" data-ui>
+              <img
+                src="assets/product-speaking.webp"
+                width="1440"
+                height="900"
+                loading="lazy"
+                decoding="async"
+                alt="口语练习：场景对话、表达改进与发音反馈演示"
+              />
+            </figure>
+            <div class="quote-panel reveal">
+              <blockquote lang="en">“Could you tell me<br />a little more about it?”</blockquote>
+              <p>从原句出发，练到自然说出口。</p>
+            </div>
+            <div class="review-panel reveal">
+              <h3>今天遇见，明天记住。</h3>
+              <p>原句完形、听写、造句。<br />到期复习，笔记可导出 Markdown。</p>
+            </div>
+          </div>
+          <figure class="review-preview reveal media" data-ui>
+            <img
+              src="assets/product-review.webp"
+              width="1440"
+              height="864"
+              loading="lazy"
+              decoding="async"
+              alt="笔记与复习：保留原句的生词练习和学习记录演示"
+            />
+          </figure>
+          <p class="story-caption">Windows 界面演示，学习内容与分数为示例。</p>
+        </div>
+      </section>
+      <section class="mobile-section chapter" id="mobile" data-tone="light" aria-labelledby="mobile-title">
+        <div class="container">
+          <div class="mobile-intro">
+            <h2 class="section-heading reveal" id="mobile-title">学习，随身带走。</h2>
+            <div class="reveal">
+              <p>读一段，练一句，复习几个词。</p>
+              <p class="preview-note">移动端原型预览，暂未提供公开下载。</p>
+            </div>
+          </div>
+          <div class="phones" id="phones" aria-label="已确认的手机端设计原型">
+            <figure class="phone reveal" data-ui>
+              <div class="phone-frame">
+                <img
+                  src="assets/mobile-reader.webp"
+                  width="780"
+                  height="1688"
+                  loading="lazy"
+                  decoding="async"
+                  alt="手机端原型：阅读与原句译文"
+                />
+              </div>
+              <figcaption>随身阅读</figcaption>
+            </figure>
+            <figure class="phone reveal" data-ui>
+              <div class="phone-frame">
+                <img
+                  src="assets/mobile-practice.webp"
+                  width="780"
+                  height="1688"
+                  loading="lazy"
+                  decoding="async"
+                  alt="手机端原型：口语与学习练习"
+                />
+              </div>
+              <figcaption>接着练习</figcaption>
+            </figure>
+            <figure class="phone reveal" data-ui>
+              <div class="phone-frame">
+                <img
+                  src="assets/mobile-review.webp"
+                  width="780"
+                  height="1688"
+                  loading="lazy"
+                  decoding="async"
+                  alt="手机端原型：生词与语境复习"
+                />
+              </div>
+              <figcaption>碎片复习</figcaption>
+            </figure>
+          </div>
+          <p class="mobile-foot">界面来自已确认原型，功能以实际发布版本为准。</p>
+        </div>
+      </section>
+      <section class="faq-section chapter" id="faq" data-tone="light" aria-labelledby="faq-title">
+        <div class="container faq-grid">
+          <div class="faq-title"><h2 class="section-heading reveal" id="faq-title">开始前的小问题。</h2></div>
+          <div class="faq-list">
+            <details class="reveal" name="faq">
+              <summary>免费吗？需要 API Key 吗？</summary>
+              <p>
+                Windows 客户端免费下载，采用 AGPL-3.0 开源协议。AI
+                和语音服务需要联网，可登录沉浸云按账号额度使用，也可配置自己的 API Key，费用由服务商收取。
+              </p>
+            </details>
+            <details class="reveal" name="faq">
+              <summary>支持哪些系统与文件？</summary>
+              <p>
+                官网主要展示 Windows 10 / 11 x64 版。支持 EPUB、TXT、DOCX、带文本层的
+                PDF，以及网页链接与粘贴文本。扫描 PDF、DRM 电子书不支持直接导入。
+              </p>
+            </details>
+            <details class="reveal" name="faq">
+              <summary>学习资料会上传吗？</summary>
+              <p>
+                资料默认保存在设备本地。明确开启同步或备份后，相关记录才按你的指示上传；使用 AI
+                与语音时，提交内容会发往相应服务。详情见<a
+                  href="https://github.com/kobejiasuoer/immersive-translator/blob/main/docs/privacy-policy.md"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  >隐私政策</a
+                >。
+              </p>
+            </details>
+            <details class="reveal" name="faq">
+              <summary>手机端和 Mac 现在能用吗？</summary>
+              <p>
+                手机端这里展示的是设计原型，暂未提供公开下载。Mac 有独立版本，功能与 Windows 分别演进，请以
+                <a
+                  href="https://github.com/kobejiasuoer/immersive-translator/releases"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  >Release 说明</a
+                >为准。
+              </p>
+            </details>
+          </div>
+        </div>
+      </section>
+      <section
+        class="download-section chapter"
+        id="download"
+        data-tone="dark"
+        aria-labelledby="download-title"
+      >
+        <div class="container download-grid">
+          <div>
+            <h2 class="section-heading reveal" id="download-title">从一篇文章<br />开始吧。</h2>
+            <p class="section-lead reveal">留一点时间，给真正想学会的英语。</p>
+          </div>
+          <div class="download-actions reveal">
+            <a
+              class="button"
+              data-download
+              href="https://github.com/kobejiasuoer/immersive-translator/releases/latest"
+              >下载 Windows 版</a
+            >
+            <p class="download-meta" id="download-meta">Windows 10 / 11 · x64</p>
+            <div class="download-links">
+              <a
+                class="text-link"
+                href="https://github.com/kobejiasuoer/immersive-translator/releases"
+                target="_blank"
+                rel="noopener noreferrer"
+                >全部版本与更新说明</a
+              ><a
+                class="text-link"
+                href="https://github.com/kobejiasuoer/immersive-translator/releases/latest"
+                target="_blank"
+                rel="noopener noreferrer"
+                >Mac 独立版本</a
+              >
+            </div>
+            <p class="download-meta">安装包由 GitHub Release 提供。</p>
+          </div>
+        </div>
+      </section>
+    </main>
+    <footer class="site-footer chapter" data-tone="dark">
+      <div class="container">
+        <div class="footer-wordmark reveal">沉浸口语</div>
+        <div class="footer-row">
+          <p>读进去，说出来。<br />Immersive Speaking</p>
+          <nav class="footer-links" aria-label="页脚导航">
+            <a
+              class="text-link"
+              href="https://github.com/kobejiasuoer/immersive-translator"
+              target="_blank"
+              rel="noopener noreferrer"
+              >源码</a
+            ><a
+              class="text-link"
+              href="https://github.com/kobejiasuoer/immersive-translator/issues"
+              target="_blank"
+              rel="noopener noreferrer"
+              >反馈</a
+            ><a
+              class="text-link"
+              href="https://github.com/kobejiasuoer/immersive-translator/blob/main/docs/privacy-policy.md"
+              target="_blank"
+              rel="noopener noreferrer"
+              >隐私政策</a
+            ><a
+              class="text-link"
+              href="https://github.com/kobejiasuoer/immersive-translator/blob/main/LICENSE"
+              target="_blank"
+              rel="noopener noreferrer"
+              >AGPL-3.0</a
+            >
+          </nav>
+        </div>
+        <div class="footer-bottom">
+          <span>© 2026 沉浸口语</span><a class="text-link" href="#top">回到顶部</a>
+        </div>
+      </div>
+    </footer>
+    <script>
+      (() => {
+        "use strict";
+        const reduced = window.matchMedia("(prefers-reduced-motion: reduce)"),
+          pin = window.matchMedia("(min-width: 1100px) and (min-height: 850px)");
+        const header = document.getElementById("site-header"),
+          chapters = [...document.querySelectorAll("[data-tone]")];
+        const track = document.getElementById("story-track"),
+          image = document.getElementById("story-image"),
+          screen = document.querySelector(".story-screen");
+        const description = document.getElementById("stage-description"),
+          caption = document.getElementById("story-caption");
+        const controls = [...document.querySelectorAll("[data-scene]")],
+          phones = [...document.querySelectorAll(".phone")],
+          phoneStage = document.getElementById("phones");
+        const scenes = [
+          {
+            image: "assets/product-reading.webp",
+            alt: "阅读室双语精读界面演示",
+            description: "原文、译文、查词和句子解析，都留在阅读的语境里。",
+            caption: "阅读室 / 双语精读与语境查词",
+          },
+          {
+            image: "assets/product-speaking.webp",
+            alt: "口语场景对话与表达改进界面演示",
+            description: "把这句、这一章和收集的生词，带进下一次口语练习。",
+            caption: "口语练习 / 场景对话与表达改进",
+          },
+          {
+            image: "assets/product-review.webp",
+            alt: "生词原句复习与学习笔记界面演示",
+            description: "用原句完形、听写和造句，把今天的收获留到明天。",
+            caption: "笔记与复习 / 原句练习与学习记录",
+          },
+        ];
+        let active = 0,
+          frame = 0,
+          changeTimer = 0,
+          manualY = null;
+        const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
+        const heroVisual = document.querySelector(".hero-visual"),
+          heroProduct = document.querySelector(".hero-product");
+        heroVisual.addEventListener("pointermove", (event) => {
+          if (reduced.matches || !window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+          const box = heroVisual.getBoundingClientRect();
+          heroProduct.style.setProperty(
+            "--rotate-y",
+            `${-8 + ((event.clientX - box.left) / box.width) * 12}deg`,
+          );
+          heroProduct.style.setProperty(
+            "--rotate-x",
+            `${6 - ((event.clientY - box.top) / box.height) * 10}deg`,
+          );
+        });
+        heroVisual.addEventListener("pointerleave", () => {
+          heroProduct.style.removeProperty("--rotate-y");
+          heroProduct.style.removeProperty("--rotate-x");
+        });
+        function selectScene(index) {
+          if (active === index) return;
+          active = index;
+          clearTimeout(changeTimer);
+          const scene = scenes[index];
+          image.classList.remove("is-changing");
+          if (!reduced.matches) image.classList.add("is-changing");
+          image.src = scene.image;
+          image.alt = scene.alt;
+          description.textContent = scene.description;
+          caption.textContent = scene.caption;
+          controls.forEach((button, i) => button.setAttribute("aria-pressed", String(i === index)));
+          changeTimer = window.setTimeout(() => image.classList.remove("is-changing"), 100);
+        }
+        controls.forEach((button, index) =>
+          button.addEventListener("click", () => {
+            manualY = window.scrollY;
+            selectScene(index);
+          }),
+        );
+        document.getElementById("screen-switch").hidden = false;
+        function update() {
+          frame = 0;
+          let current = chapters[0];
+          for (const chapter of chapters) {
+            if (chapter.getBoundingClientRect().top <= 88) current = chapter;
+            else break;
+          }
+          header.classList.toggle("light", current.dataset.tone === "light");
+          if (pin.matches && !reduced.matches) {
+            const box = track.getBoundingClientRect(),
+              travel = box.height - (window.innerHeight - 80),
+              progress = clamp((80 - box.top) / Math.max(travel, 1), 0, 1);
+            if (manualY !== null && Math.abs(window.scrollY - manualY) > 120) manualY = null;
+            if (manualY === null && box.top < 100 && box.bottom > 100)
+              selectScene(Math.min(2, Math.floor(progress * 3)));
+            if (box.top < window.innerHeight && box.bottom > 0)
+              screen.style.transform = `scale(${0.92 + Math.sin(progress * Math.PI) * 0.08})`;
+          } else screen.style.removeProperty("transform");
+          if (window.innerWidth >= 900 && !reduced.matches) {
+            const box = phoneStage.getBoundingClientRect();
+            if (box.top < window.innerHeight && box.bottom > 0) {
+              const p = clamp((window.innerHeight - box.top) / (window.innerHeight + box.height), 0, 1),
+                tilt = (1 - p) * 13;
+              phones[0].style.transform = `translateY(${(1 - p) * 70}px) rotate(${-tilt}deg) rotateY(${tilt}deg)`;
+              phones[1].style.transform = `translateY(${-20 + p * 20}px)`;
+              phones[2].style.transform = `translateY(${(1 - p) * 70}px) rotate(${tilt}deg) rotateY(${-tilt}deg)`;
+            }
+          } else phones.forEach((phone) => phone.style.removeProperty("transform"));
+        }
+        function queueUpdate() {
+          if (!frame) frame = requestAnimationFrame(update);
+        }
+        window.addEventListener("scroll", queueUpdate, { passive: true });
+        window.addEventListener("resize", queueUpdate, { passive: true });
+        reduced.addEventListener("change", queueUpdate);
+        if ("IntersectionObserver" in window) {
+          const observer = new IntersectionObserver(
+            (entries) =>
+              entries.forEach((entry) => {
+                if (entry.isIntersecting) {
+                  entry.target.classList.add("is-in");
+                  observer.unobserve(entry.target);
+                }
+              }),
+            { threshold: 0.08 },
+          );
+          document.querySelectorAll(".reveal").forEach((element) => observer.observe(element));
+        }
+        const menu = document.querySelector(".mobile-menu");
+        menu.querySelectorAll("a").forEach((link) =>
+          link.addEventListener("click", () => {
+            menu.open = false;
+          }),
+        );
+        document.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") menu.open = false;
+        });
+        document.documentElement.classList.add("js");
+        update();
+        // Release links remain usable without JavaScript or when the GitHub API is unavailable.
+        async function resolveDownload() {
+          const controller = new AbortController(),
+            timeout = window.setTimeout(() => controller.abort(), 7000);
+          try {
+            const response = await fetch(
+              "https://api.github.com/repos/kobejiasuoer/immersive-translator/releases/latest",
+              { signal: controller.signal, credentials: "omit" },
+            );
+            if (!response.ok) return;
+            const release = await response.json(),
+              asset = (release.assets || []).find((item) => /_x64-setup\.exe$/i.test(item.name || ""));
+            if (!asset) return;
+            const url = new URL(asset.browser_download_url);
+            if (
+              url.origin !== "https://github.com" ||
+              !url.pathname.startsWith("/kobejiasuoer/immersive-translator/releases/download/")
+            )
+              return;
+            document.querySelectorAll("[data-download]").forEach((link) => {
+              link.href = url.href;
+            });
+            const version = /^v?\d+\.\d+\.\d+$/.test(release.tag_name || "")
+              ? release.tag_name.replace(/^v/, "")
+              : "";
+            document.getElementById("download-meta").textContent =
+              `Windows 10 / 11 · x64${version ? " · v" + version : ""}`;
+          } catch {
+            /* Keep original Release links. */
+          } finally {
+            clearTimeout(timeout);
+          }
+        }
+        if ("IntersectionObserver" in window) {
+          const observer = new IntersectionObserver(
+            (entries) => {
+              if (entries.some((entry) => entry.isIntersecting)) {
+                observer.disconnect();
+                resolveDownload();
+              }
+            },
+            { rootMargin: "300px" },
+          );
+          observer.observe(document.getElementById("download"));
+        } else resolveDownload();
+      })();
+    </script>
+  </body>
 </html>
