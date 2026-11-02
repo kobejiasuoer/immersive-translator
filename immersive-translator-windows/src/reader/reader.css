@@ -8085,15 +8085,15 @@ button.notes-word:hover { color: var(--accent); }
 .reader-root .memory-tape::after {
   content: "点击揭开 · " attr(data-hint);
   position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  inset: 50% 0 auto;
+  display: block;
+  transform: translateY(-50%);
   font-family: var(--font-sans);
   font-size: 11.5px;
   font-weight: 600;
   color: var(--tape-ink);
   letter-spacing: 0.02em;
+  text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
