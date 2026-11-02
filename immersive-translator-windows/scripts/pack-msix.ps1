@@ -47,11 +47,21 @@ if (Test-Path $modelsSrc) {
 } else {
     throw "缺少资源目录 $modelsSrc（bundle.resources models/*.onnx）"
 }
-# 只 staging NSIS 安装布局中的内容：exe + models/ + DirectML.dll.payload。
+# 只 staging NSIS 安装布局中的内容：exe + models/ + DirectML.dll.payload + VC 运行时 DLL。
 # release 目录里的杂散 DLL（cdylib 产物、DirectML.dll 运行时解包产物）不属于
 # 安装布局，不带入 MSIX。
 $dml = Join-Path $ReleaseDir "DirectML.dll.payload"
 if (Test-Path $dml) { Copy-Item $dml $dist }
+
+# VC++ 运行时（app-local deployment，微软官方允许的再分发方式）：
+# 2026-10-29 提交的 0.11.1 因干净机器缺 MSVCP140/VCRUNTIME140_1 启动即挂
+# （认证条款 10.1.2.10 + 10.2.4.1 被拒）。exe 与 DirectML/onnxruntime 都依赖它们，
+# 必须与 exe 同目录进包，三个缺一不可。
+foreach ($vcDll in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+    $src = Join-Path $ReleaseDir $vcDll
+    if (-not (Test-Path $src)) { throw "缺少 $src——tauri.conf.json bundle.resources 必须包含三个 VC 运行时 DLL（商店 10.1.2.10 认证硬要求）" }
+    Copy-Item $src $dist
+}
 
 # 清单（替换版本后）+ 商店图标（tauri icon 已生成的同名的 Square/Store 资产）。
 # 注意：makeappx 要求包内清单文件名为 AppxManifest.xml（Package.appxmanifest 只是
