@@ -19,6 +19,7 @@
 
 ## 硬性约束（违反会出事故）
 
+- **三个 VC 运行时 DLL（msvcp140/vcruntime140/vcruntime140_1）是包必备资产**：必须在 `bundle.resources` 且与 exe 同目录进包；删除会导致商店认证 10.1.2.10 被拒（干净机器启动即挂，2026-10-30 实测被拒过一次）。
 - **商店版禁用应用内自更新**：`is_store_packaged()` 命令 + updater 短路是刻意的（商店政策 10.2.5 + 签名体系不同），不许移除或绕过。
 - **runFullTrust 受限功能说明 ≤500 字**：超限 Partner Center 会静默卡住「提交选项」为未完成。
 - **pack-msix.ps1 / 任何 PS 5.1 脚本读 UTF-8 文件必须显式 `-Encoding UTF8`**：否则中文按 GBK 误读，`tauri.conf.json` 直接解析失败。
