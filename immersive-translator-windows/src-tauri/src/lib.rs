@@ -22,6 +22,7 @@ mod tts;
 mod uia;
 mod voice;
 mod web_extract;
+mod window_icons;
 
 // 暴露给 main.rs（独立 bin crate）在 main() 第一行安装崩溃钩子；
 // 模块本身保持私有，只重导出这一个入口。
@@ -32,7 +33,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
-    tray::TrayIconBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
@@ -213,7 +214,7 @@ async fn open_history(app: tauri::AppHandle) -> Result<(), String> {
 /// 打开沉浸阅读室窗口（前端可调用）。对齐托盘「沉浸阅读室」菜单的行为。
 #[tauri::command]
 fn open_reader(app: tauri::AppHandle) {
-    show_window(&app, "reader");
+    show_reader_window(&app);
 }
 
 /// 进入截图 OCR 模式：显示全屏框选覆盖层。对齐 Mac 的 begin()。
@@ -495,6 +496,7 @@ fn show_live_caption_window(app: &AppHandle) {
 
 fn show_reader_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("reader") {
+        let _ = win.unminimize();
         let _ = win.show();
         let _ = win.set_focus();
         return;
@@ -1354,15 +1356,13 @@ pub fn run() {
     tauri::Builder::default()
         // 单实例防护（auth 红线 2 的进程维度设防）：双开的两个实例会各持同一
         // 旧 refreshToken 同时刷新，服务端判 token_reused → 该账号全部设备
-        // 强制下线。第二实例启动即退出，仅把已有实例的设置窗提前。
+        // 强制下线。第二实例启动即退出，把已有实例的阅读室提前。
         // 官方要求 single-instance 最先注册（先于任何窗口创建）。
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(win) = app.get_webview_window("settings") {
-                let _ = win.show();
-                let _ = win.set_focus();
-            }
+            show_reader_window(app);
         }))
         .plugin(tauri_plugin_opener::init())
+        .plugin(window_icons::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -1517,12 +1517,21 @@ pub fn run() {
 
             let tray = TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("沉浸口语")
+                .tooltip("沉浸口语 · 单击打开阅读室，右键打开菜单")
                 .menu(&menu)
-                // 左键单击同样弹出菜单（此前为 false：左键点击托盘毫无反应，
-                // 新用户找不到入口；Windows 下左/右键都弹菜单是托盘常驻类
-                // 应用的常见形态，动作与窗口入口在菜单里一目了然）。
-                .show_menu_on_left_click(true)
+                // 左键单击直达阅读室，右键保留完整菜单。只响应松开事件，
+                // 避免同一次点击的按下和松开重复打开窗口。
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_reader_window(tray.app_handle());
+                    }
+                })
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => app.exit(0),
                     "settings" => show_window(app, "settings"),
