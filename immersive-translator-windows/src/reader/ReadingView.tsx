@@ -6,8 +6,9 @@
  * 进度轨 + 居中 640px .reading-col：续读胶囊、32px 标题刊头、按段落分组的英文流）。
  *
  * 译文浮层 .translation-pop 绝对定位在当前句末行下方（getClientRects 直测，
- * 脱离文档流不拆段落）：veil「点击显示译文」/译文（点按回遮）/失败行/编辑输入
- * 与操作条（朗读/练口语/编辑译文）都在浮层里；句子解析入口唯一在右侧面板。
+ * 脱离文档流不拆段落）：译文（点按回遮）/失败行/编辑输入与操作条（朗读/练口语/
+ * 编辑译文）都在浮层里；遮住时不渲染浮层，通过工具栏「本句译文」或按住 H 揭示。
+ * 句子解析入口唯一在右侧面板。
  *
  * 词块/生词着色、跟读着色、遮罩（parallel 分支 cn-frost/cn-slot）、手改译文、
  * 单段重试、随读抽查挖空、滚动跟随（pairRefs/onViewportIdx）全部保留复用。
@@ -21,6 +22,7 @@ import {
   IconBookOpen,
   IconClose,
   IconEdit,
+  IconEye,
   IconEyeOff,
   IconList,
   IconMic,
@@ -740,13 +742,14 @@ export function ReadingView(props: Props) {
 
   /**
    * 译文浮层（prose 模式当前句，脱离文档流）：
-   * veil → 译文（点按回遮）→ 操作行；失败行与编辑输入也迁入浮层。
+   * 遮住时不渲染占位卡；揭开后显示译文（点按回遮）与操作行，失败行与编辑输入保留。
    * 句子解析入口唯一化：只在右侧解析面板（CTA / 快捷键 E），浮层不再重复。
    */
   const renderTranslationPop = (s: SentencePair) => {
     const isActive = s.idx === activeIdx;
     const masked =
-      maskOn && !!s.zh && s.zhState !== "failed" && editingIdx !== s.idx && !(!!s.revealed || peekAll);
+      maskOn && s.zhState !== "failed" && editingIdx !== s.idx && !(!!s.revealed || peekAll);
+    if (masked) return null;
     return (
       <div className="translation-pop" ref={popRef} onClick={(e) => e.stopPropagation()}>
         {editingIdx === s.idx ? (
@@ -759,16 +762,6 @@ export function ReadingView(props: Props) {
             ) : null}
             <button onClick={() => props.onRetryParagraph(s.paragraphIdx)}>重试本段</button>
           </span>
-        ) : masked ? (
-          <button
-            type="button"
-            className="pop-veil"
-            onClick={() => props.onReveal(s.idx)}
-            title="点按显示这一句的译文"
-          >
-            <IconEyeOff size={14} />
-            点击显示译文
-          </button>
         ) : (
           <>
             <div
@@ -863,6 +856,27 @@ export function ReadingView(props: Props) {
           <span className="reading-mask-count">
             {maskOn ? `已揭开 ${revealedCount} / ${maskableCount} 句` : "译文常显"}
           </span>
+          {maskOn && currentSentence && settings.contrastMode === "dual" && (
+            <button
+              type="button"
+              className={`reading-translation-toggle${currentSentence.revealed ? " on" : ""}`}
+              aria-label={currentSentence.revealed ? "遮住本句译文" : "显示本句译文"}
+              aria-pressed={!!currentSentence.revealed}
+              disabled={!currentSentence.zh || currentSentence.zhState !== "done" || editingIdx === currentSentence.idx}
+              title={currentSentence.revealed ? "遮住本句译文；按住 H 临时查看" : "显示本句译文；按住 H 临时查看"}
+              onClick={() => {
+                if (currentSentence.revealed) props.onMask(currentSentence.idx);
+                else props.onReveal(currentSentence.idx);
+              }}
+              onKeyDown={(e) => {
+                // 原生按钮接管 Enter / Space，避免 Space 同时触发全局朗读快捷键。
+                if (e.key === "Enter" || e.key === " ") e.stopPropagation();
+              }}
+            >
+              <IconEye size={14} />
+              本句译文
+            </button>
+          )}
           {maskOn && revealedCount < maskableCount && (
             <button type="button" className="btn sm" onClick={props.onRevealAll}>
               全部揭开
