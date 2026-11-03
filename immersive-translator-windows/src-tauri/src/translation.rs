@@ -940,7 +940,10 @@ pub async fn probe_https(url: String) -> Result<ConnectivityResult, String> {
 
 fn voice_probe_status(status: u16) -> (bool, &'static str) {
     match status {
-        200..=299 | 400 | 426 => (true, "已收到服务器响应；仍需实际朗读、识别或评分验证服务是否可用"),
+        200..=299 | 400 | 426 => (
+            true,
+            "已收到服务器响应；仍需实际朗读、识别或评分验证服务是否可用",
+        ),
         401 => (false, "签名验证失败，请检查 API Key、API Secret 和系统时间"),
         403 => (false, "服务器拒绝连接，请检查访问权限、IP 白名单和系统时间"),
         404 => (false, "服务地址不存在，请稍后重试"),
@@ -1011,7 +1014,10 @@ mod tests {
     #[test]
     fn voice_probe_rejects_failed_http_responses() {
         for status in [401, 403, 404, 429, 500, 502, 503, 504] {
-            assert!(!voice_probe_status(status).0, "{status} cannot pass a connection check");
+            assert!(
+                !voice_probe_status(status).0,
+                "{status} cannot pass a connection check"
+            );
         }
     }
 
