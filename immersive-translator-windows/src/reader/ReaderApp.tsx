@@ -486,8 +486,15 @@ export function ReaderApp() {
   gatewayCfgRef.current = { voice: loadSettings().voiceGatewayVoice, rate: effectiveSettings.rate };
   /** 首片播放后的异步失败（启动失败仍走 speak reject）。 */
   const gatewayAsyncErrorRef = useRef<(error: unknown) => void>(() => {});
-  /** 运行时配额耗尽：本句转 Edge，后续句直接走 Edge（守卫缓存可能尚未感知）。 */
-  const gatewayQuotaErrorRef = useRef<unknown | null>(null);
+  /** 配额失败短暂回落，30秒后重新查能力；兑换额度后无需重启阅读室。 */
+  const gatewayQuotaErrorRef = useRef<{ error: unknown; expiresAt: number } | null>(null);
+  useEffect(() => {
+    const settingsChanged = (event: StorageEvent) => {
+      if (event.key === "immersive-translator-settings") gatewayQuotaErrorRef.current = null;
+    };
+    window.addEventListener("storage", settingsChanged);
+    return () => window.removeEventListener("storage", settingsChanged);
+  }, []);
 
   const sapiEngine = useMemo(() => createSapiEngine(), []);
   const xfyunEngine = useMemo(() => createXfyunEngine(() => ttsCfgRef.current), []);
@@ -509,8 +516,11 @@ export function ReaderApp() {
             engines: { edge: edgeEngine, xfyun: xfyunEngine, gateway: gatewayEngine, sapi: sapiEngine },
           });
           if (routed.engine === gatewayEngine && gatewayQuotaErrorRef.current !== null) {
-            showEdgeFallbackRef.current(quotaFallbackDecision(gatewayQuotaErrorRef.current));
-            return edgeEngine;
+            if (Date.now() < gatewayQuotaErrorRef.current.expiresAt) {
+              showEdgeFallbackRef.current(quotaFallbackDecision(gatewayQuotaErrorRef.current.error));
+              return edgeEngine;
+            }
+            gatewayQuotaErrorRef.current = null;
           }
           if (routed.fallback) {
             showEdgeFallbackRef.current(routed.fallback);
@@ -523,7 +533,7 @@ export function ReaderApp() {
           onSpeakError: (error, engine) => {
             if (engine !== gatewayEngine) return null;
             if (voiceErrorCodeOf(error) === "quota_exceeded") {
-              gatewayQuotaErrorRef.current = error;
+              gatewayQuotaErrorRef.current = { error, expiresAt: Date.now() + 30_000 };
               showEdgeFallbackRef.current(quotaFallbackDecision(error));
               return edgeEngine;
             }
@@ -544,7 +554,7 @@ export function ReaderApp() {
     onError: handleSpeechError,
   });
   gatewayAsyncErrorRef.current = (error) => {
-    if (voiceErrorCodeOf(error) === "quota_exceeded") gatewayQuotaErrorRef.current = error;
+    if (voiceErrorCodeOf(error) === "quota_exceeded") gatewayQuotaErrorRef.current = { error, expiresAt: Date.now() + 30_000 };
     playback.stop();
     handleSpeechError(error);
   };
@@ -1896,7 +1906,7 @@ export function ReaderApp() {
     const completed=()=>{void refresh();};window.addEventListener("learning-sync-complete",completed);
     let account:string|undefined;let authEventReceived=false;
     void authGetStatus().then(status=>{if(!authEventReceived)account=status.user?.id??"guest";});
-    const unlisten=listenAuthStateChanged(status=>{authEventReceived=true;const next=status.user?.id??"guest";if(next===account)return;const adoptingGuest=(account===undefined||account==="guest")&&status.loggedIn;account=next;loadGeneration++;setArticle(null);setArticleList([]);setBookList([]);booksRef.current=[];setVocabWords([]);setReviewLog({schemaVersion:1,days:[]});setNotes([]);setActiveNote(null);setSpeakSessions([]);setSourceCache(new Map());setPendingSpeak(null);setView(previous=>adoptingGuest&&previous==="speak"?previous:"shelf");void refresh();if(status.loggedIn)void syncLearningRecordsSilently();});
+    const unlisten=listenAuthStateChanged(status=>{authEventReceived=true;const next=status.user?.id??"guest";if(next===account)return;gatewayQuotaErrorRef.current=null;const adoptingGuest=(account===undefined||account==="guest")&&status.loggedIn;account=next;loadGeneration++;setArticle(null);setArticleList([]);setBookList([]);booksRef.current=[];setVocabWords([]);setReviewLog({schemaVersion:1,days:[]});setNotes([]);setActiveNote(null);setSpeakSessions([]);setSourceCache(new Map());setPendingSpeak(null);setView(previous=>adoptingGuest&&previous==="speak"?previous:"shelf");void refresh();if(status.loggedIn)void syncLearningRecordsSilently();});
     return()=>{disposed=true;loadGeneration++;window.removeEventListener("learning-sync-complete",completed);void unlisten.then(fn=>fn());void warning.then(fn=>fn());};
   },[]);
   useEffect(()=>{const open=(event:Event)=>{const source=(event as CustomEvent<{articleId:string;sentenceIdx:number}>).detail;if(!source?.articleId)return;void readerGetArticle(source.articleId).then(found=>{if(!found){showToast("原文已删除，练习仍保留完整参考句和反馈");return;}setArticle({...found,progress:{...found.progress,sentenceIdx:source.sentenceIdx}});setView("reading");}).catch(error=>showToast(String(error)));};window.addEventListener("reader-relay-source",open);return()=>window.removeEventListener("reader-relay-source",open);},[showToast]);

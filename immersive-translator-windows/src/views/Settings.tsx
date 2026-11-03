@@ -166,29 +166,7 @@ export function Settings() {
   const platformEp = platformBase ? platformEndpoint(platformBase) : undefined;
   const loggedIn = accountStatus?.loggedIn ?? false;
 
-  // ---- 登录自动切云（语音云决策 1）----
-  // 登录成功的瞬间（loggedIn false→true）自动把 voiceProvider 写为 gateway：
-  // 即时落盘 + 语音页卡片选中态随之切换 + 一条轻提示；讯飞凭据原样保留、随时可切回。
-  // 已是 gateway 无感；启动静默续登录（null→true）不算登录瞬间，不代切。
-  const prevLoggedInRef = useRef<boolean | null>(null);
-  const [switchedNotice, setSwitchedNotice] = useState(false);
-  const switchNoticeTimer = useRef<number | null>(null);
-  useEffect(() => {
-    const prev = prevLoggedInRef.current;
-    prevLoggedInRef.current = loggedIn;
-    if (prev !== false || !loggedIn) return;
-    if (settings.voiceProvider === "gateway") return;
-    applyVoicePrefs({ voiceProvider: "gateway" });
-    setSwitchedNotice(true);
-    if (switchNoticeTimer.current !== null) window.clearTimeout(switchNoticeTimer.current);
-    switchNoticeTimer.current = window.setTimeout(() => setSwitchedNotice(false), 4000);
-  }, [loggedIn]);
-  // 卸载时清掉未触发的提示定时器
-  useEffect(() => {
-    return () => {
-      if (switchNoticeTimer.current !== null) window.clearTimeout(switchNoticeTimer.current);
-    };
-  }, []);
+  // 登录仅更新账号状态，语音服务由用户选择；云能力未开放时不能覆盖已可用的讯飞配置。
   useEffect(() => {
     if (!loggedIn) {
       setPlatformModels([]);
@@ -564,12 +542,6 @@ export function Settings() {
           <strong>{currentTabLabel}</strong>
         </div>
         <div className="set-content" ref={contentRef}>
-        {switchedNotice && (
-          <div className="msg-bar ok" role="status" style={{ marginBottom: 14 }}>
-            <IconCheck size={14} />
-            已切换为沉浸云语音——讯飞凭据已保留，可在「语音」页随时切回
-          </div>
-        )}
         {activeTab === "provider" && (
           <>
             <header className="set-pagehead">

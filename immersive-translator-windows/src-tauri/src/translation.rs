@@ -882,7 +882,7 @@ fn truncate(s: &str, max: usize) -> String {
 /// 浏览器把 WebSocket 握手层错误一律报成 close code 1006，讯飞拒掉签名时
 /// 返回的 401 根本到不了前端。前端用与真实调用同一套签名算法构造 wss 地址，
 /// 这里降级成对同一路径的 https GET：401/403 = 鉴权被拒（凭据抄错/时钟偏差），
-/// 其余任何 HTTP 状态 = 已连上服务器且签名通过，连接错误 = 网络不通。
+/// 普通 GET 只能检查连接，不能证明 APPID 匹配或语音业务可用。
 /// GET 不带 Upgrade 头，不会触发真正的合成/听写调用，不耗额度。
 #[tauri::command]
 pub async fn probe_https(url: String) -> Result<ConnectivityResult, String> {
@@ -926,26 +926,28 @@ pub async fn probe_https(url: String) -> Result<ConnectivityResult, String> {
     };
 
     let status = resp.status().as_u16();
-    let body = truncate(&resp.text().await.unwrap_or_default(), 150);
     let elapsed = start.elapsed().as_millis();
 
-    let ok = !matches!(status, 401 | 403);
-    let message = match status {
-        401 => format!(
-            "鉴权被拒（HTTP 401）。两种可能：① 三段凭据抄错、或 APPID 与 Key 不属于同一个应用；② 凭据没问题，但该应用未开通此服务——到讯飞控制台 → 我的应用 → 服务列表，领取/开通后重测。{body}"
-        ),
-        403 => format!("被拒（HTTP 403）：IP 白名单限制，或系统时间偏差超 5 分钟。{body}"),
-        // 非 401/403 的任意状态（400/426/…）说明请求到达了服务端且签名通过——
-        // 拒签发生在业务校验之前，一定先报 401。
-        _ => format!("已连上服务器且签名通过（HTTP {status}，非 WebSocket 升级请求被正常回绝）。若语音仍失败，请确认应用已开通对应服务"),
-    };
+    let (ok, message) = voice_probe_status(status);
 
     Ok(ConnectivityResult {
         ok,
         status: Some(status),
-        message,
+        message: message.into(),
         elapsed_ms: elapsed,
     })
+}
+
+fn voice_probe_status(status: u16) -> (bool, &'static str) {
+    match status {
+        200..=299 | 400 | 426 => (true, "已收到服务器响应；仍需实际朗读、识别或评分验证服务是否可用"),
+        401 => (false, "签名验证失败，请检查 API Key、API Secret 和系统时间"),
+        403 => (false, "服务器拒绝连接，请检查访问权限、IP 白名单和系统时间"),
+        404 => (false, "服务地址不存在，请稍后重试"),
+        429 => (false, "请求过于频繁，请稍后重试"),
+        500..=599 => (false, "语音服务器暂时不可用，请稍后重试"),
+        _ => (false, "连接检查未通过，请稍后重试"),
+    }
 }
 
 /// 剥离 <think>…</think>（含未闭合的情况）思考噪声。
@@ -1005,6 +1007,22 @@ pub fn cancel_translation(cancel: State<'_, CancelFlag>, tag: Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn voice_probe_rejects_failed_http_responses() {
+        for status in [401, 403, 404, 429, 500, 502, 503, 504] {
+            assert!(!voice_probe_status(status).0, "{status} cannot pass a connection check");
+        }
+    }
+
+    #[test]
+    fn voice_probe_never_claims_business_success() {
+        for status in [200, 400, 426] {
+            let (ok, message) = voice_probe_status(status);
+            assert!(ok);
+            assert!(message.contains("仍需实际"));
+        }
+    }
 
     #[test]
     fn strip_think_removes_closed_block() {

@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { startMicRecorder, type MicRecorderHandle } from "../core/micRecorder";
+import { transcribeSpeech } from "../core/xfyunAsr";
+import { evaluateSentence } from "../core/pronunciation";
+import { loadAsrCredentials, loadIseCredentials } from "../lib/iseCredentials";
 import { authGetStatus, learningNamespace, listenAuthStateChanged, openLoginWindow, syncStoreList, syncStorePut, type StoredSyncEntity } from "../lib/tauriBridge";
-import { evaluatePronunciation, pcm16kToBase64, transcribeBatch } from "../lib/voice";
+import { evaluatePronunciation, pcm16kToBase64, resolveVoiceRoute, transcribeBatch, voiceErrorDisplayText, type VoiceRouteAbility } from "../lib/voice";
 import { syncLearningRecordsSilently } from "../lib/learningRelay";
 import type { NoteTranslateFn } from "./VocabNoteDialog";
 import { withoutAudio } from "../../../packages/learning-core/src/relay";
@@ -13,6 +16,19 @@ interface Attempt {id:string;step:number;text:string;clipId?:string;deviceId:str
 interface Task {id:string;mode:"word"|"scenario"|"follow";title:string;reference:string;word?:string;source?:{articleId:string;sentenceIdx:number};steps?:string[];step:number;attempts:Attempt[];draft:string;status:"active"|"paused"|"completed";updatedAt:number;createdAt:number;[key:string]:unknown}
 function isTask(value:unknown):value is Task {if(!value||typeof value!=="object")return false;const t=value as Task;return typeof t.id==="string"&&typeof t.title==="string"&&typeof t.reference==="string"&&typeof t.step==="number"&&typeof t.draft==="string"&&Array.isArray(t.attempts)&&["word","scenario","follow"].includes(t.mode);}
 const errorText=(error:unknown)=>error instanceof Error?error.message:String(error);
+function voiceActionErrorText(error:unknown):string {
+  const code=(error as {code?:unknown}|null)?.code;
+  return typeof code==="string"?voiceErrorDisplayText(error as {code:string;details?:unknown})||errorText(error):errorText(error);
+}
+
+/** 本机录音按 16k / 16bit little-endian PCM 保存；讯飞直连消费 Float32。 */
+function recordedPcm(pcmBase64: string): Float32Array {
+  const binary = atob(pcmBase64);
+  if (binary.length === 0 || binary.length % 2 !== 0) throw new Error("录音数据不完整，请重新录制");
+  const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+  const view = new DataView(bytes.buffer);
+  return Float32Array.from({ length: bytes.length / 2 }, (_, i) => view.getInt16(i * 2, true) / 32768);
+}
 
 /** Synced practice appears alongside recent sessions only when there is something to resume. */
 export function PracticeRelayList({onToast}:{onToast:(message:string)=>void}){
@@ -37,7 +53,7 @@ export function PracticeRelayView({requestTranslate,speakEn,micDeviceId,onToast}
   const namespace=useRef(""),device=useRef(""),recorder=useRef<MicRecorderHandle|null>(null),chunks=useRef(Promise.resolve()),writeError=useRef<unknown>(null),clip=useRef(""),sequence=useRef(0),timer=useRef<ReturnType<typeof setTimeout>|null>(null),pending=useRef<(()=>Promise<void>)|null>(null),epoch=useRef(0),playback=useRef<(()=>void)|null>(null),saveQueue=useRef(Promise.resolve());
   const reference=(t:Task)=>t.steps?.[t.step]??t.reference;
   async function refresh(){const token=epoch.current,ns=await learningNamespace();const rows=await syncStoreList("speak-sessions",ns);if(!mounted.current||epoch.current!==token)return;namespace.current=ns;const next=rows.filter(e=>!e.deleted&&e.payload&&typeof e.payload==="object"&&(e.payload as Record<string,unknown>).kind==="practice-task").map(e=>(e.payload as Record<string,unknown>).task).filter(isTask).sort((a,b)=>b.updatedAt-a.updatedAt);const active=current.current,remote=next.find(t=>t.id===active?.id);if(active&&remote&&remote.updatedAt>active.updatedAt&&!active.draft.trim()&&!recorder.current){current.current=remote;setTask(remote);}}
-  useEffect(()=>{mounted.current=true;void invoke<string>("learning_device_id").then(id=>{device.current=id});void refresh().catch(error=>mounted.current&&setNotice(errorText(error)));const update=()=>{void refresh().catch(error=>setNotice(errorText(error)));};const select=(event:Event)=>{const selected=(event as CustomEvent<unknown>).detail;if(!isTask(selected))return;current.current=selected;setTask(selected);setNotice("");};window.addEventListener("learning-sync-complete",update);window.addEventListener("practice-relay-select",select);const unsub=listenAuthStateChanged(status=>{void(async()=>{const before=namespace.current,ns=await learningNamespace();if(!mounted.current||before===ns)return;epoch.current++;recorder.current?.cancel();recorder.current=null;captureContext.current=null;if(timer.current)clearTimeout(timer.current);setRecording(false);setBusy(false);playback.current?.();const active=current.current,action=pending.current;pending.current=null;current.current=null;setTask(null);await refresh();if(!mounted.current||ns!==namespace.current)return;if(status.loggedIn&&(before==="guest"||before===ns)&&active){const rows=await syncStoreList("speak-sessions",ns),row=rows.find(e=>e.id===active.id),restored=(row?.payload as Record<string,unknown>|undefined)?.task;if(isTask(restored)){current.current=restored;setTask(restored);if(action)await action();}else if(action)setNotice("登录成功；练习仍在原本机空间，请返回原账号后继续。");}})().catch(error=>setNotice(errorText(error)));});return()=>{mounted.current=false;epoch.current++;recorder.current?.cancel();if(timer.current)clearTimeout(timer.current);playback.current?.();window.removeEventListener("learning-sync-complete",update);window.removeEventListener("practice-relay-select",select);void unsub.then(fn=>fn());};},[]);
+  useEffect(()=>{mounted.current=true;void invoke<string>("learning_device_id").then(id=>{device.current=id});void refresh().catch(error=>mounted.current&&setNotice(errorText(error)));const update=()=>{void refresh().catch(error=>setNotice(errorText(error)));};const select=(event:Event)=>{const selected=(event as CustomEvent<unknown>).detail;if(!isTask(selected))return;current.current=selected;setTask(selected);setNotice("");};window.addEventListener("learning-sync-complete",update);window.addEventListener("practice-relay-select",select);const unsub=listenAuthStateChanged(status=>{void(async()=>{const before=namespace.current,ns=await learningNamespace();if(!mounted.current)return;if(before===ns){const action=status.loggedIn?pending.current:null;if(action){pending.current=null;await action();}return;}epoch.current++;recorder.current?.cancel();recorder.current=null;captureContext.current=null;if(timer.current)clearTimeout(timer.current);setRecording(false);setBusy(false);playback.current?.();const active=current.current,action=pending.current;pending.current=null;current.current=null;setTask(null);await refresh();if(!mounted.current||ns!==namespace.current)return;if(status.loggedIn&&(before==="guest"||before===ns)&&active){const rows=await syncStoreList("speak-sessions",ns),row=rows.find(e=>e.id===active.id),restored=(row?.payload as Record<string,unknown>|undefined)?.task;if(isTask(restored)){current.current=restored;setTask(restored);if(action)await action();}else if(action)setNotice("登录成功；练习仍在原本机空间，请返回原账号后继续。");}})().catch(error=>setNotice(errorText(error)));});return()=>{mounted.current=false;epoch.current++;recorder.current?.cancel();if(timer.current)clearTimeout(timer.current);playback.current?.();window.removeEventListener("learning-sync-complete",update);window.removeEventListener("practice-relay-select",select);void unsub.then(fn=>fn());};},[]);
   function save(next:Task,ns=namespace.current):Promise<void>{
     // Compare against the UI version that produced this edit, not a newer remote snapshot.
     const previous=current.current?.id===next.id?current.current:undefined;
@@ -62,8 +78,67 @@ export function PracticeRelayView({requestTranslate,speakEn,micDeviceId,onToast}
   const audio=(action:string,id:string,args:Record<string,unknown>={})=>invoke<Record<string,unknown>>("learning_audio",{action,clipId:id,expectedNamespace:namespace.current,...args});
   async function beginRecording(){const t=current.current;if(!t||busy||recording||submitting.current)return;submitting.current=true;setBusy(true);writeError.current=null;chunks.current=Promise.resolve();sequence.current=0;const id=`clip-${crypto.randomUUID()}`,ns=namespace.current,token=epoch.current;clip.current=id;try{await audio("begin",id,{metadata:{taskId:t.id,step:t.step,reference:reference(t),deviceId:device.current},expectedNamespace:ns});const attempt:Attempt={id:crypto.randomUUID(),step:t.step,text:"",clipId:id,deviceId:device.current,status:"recording",createdAt:Date.now(),reference:reference(t)};await update({...t,attempts:[...t.attempts,attempt],updatedAt:Date.now()},ns);const capture=await startMicRecorder({deviceId:micDeviceId,onChunk:(pcm,event)=>{const seq=sequence.current++,data=pcm16kToBase64(pcm,event.sampleRate).base64;chunks.current=chunks.current.then(async()=>{if(writeError.current)return;try{await audio("append",id,{sequence:seq,data,expectedNamespace:ns});}catch(error){writeError.current=error;}});}});if(!mounted.current||epoch.current!==token){capture.cancel();return;}recorder.current=capture;captureContext.current={namespace:ns,epoch:token,clipId:id};setRecording(true);timer.current=setTimeout(()=>{void finishRecording();},45_000);}catch(error){setNotice(errorText(error));}finally{submitting.current=false;setBusy(false);}}
   async function finishRecording(){const capture=recorder.current,context=captureContext.current;if(!capture||!context)return;recorder.current=null;captureContext.current=null;if(timer.current)clearTimeout(timer.current);setRecording(false);setBusy(true);try{await capture.stop();await chunks.current;if(writeError.current)throw writeError.current;if(!mounted.current||epoch.current!==context.epoch)return;await audio("finalize",context.clipId,{expectedNamespace:context.namespace});const latest=current.current;if(!latest||epoch.current!==context.epoch)return;await update({...latest,attempts:latest.attempts.map(a=>a.clipId===context.clipId?{...a,status:"recorded"}:a),updatedAt:Date.now()},context.namespace);setNotice("原录音已保存在这台 Windows，可回听、转文字或评测发音。");}catch(error){setNotice(`录音片段仍保留：${errorText(error)}`);}finally{setBusy(false);}}
-  async function recognize(t:Task,a:Attempt){setBusy(true);try{await cloud(async()=>{const token=epoch.current,ns=namespace.current;const local=await audio("read",a.clipId!,{expectedNamespace:ns});const result=await transcribeBatch("en_us",String(local.pcmB64));if(epoch.current!==token||ns!==await learningNamespace())return;if(!result.text.trim())throw new Error("没有识别出文字，录音已保留");const latest=current.current?.id===t.id?current.current:t;await update({...latest,draft:result.text,attempts:latest.attempts.map(item=>item.id===a.id?{...item,text:result.text,status:"draft"}:item),updatedAt:Date.now()},ns);setNotice("转写已保存，确认文字后再提交表达建议。");});}catch(error){setNotice(errorText(error));}finally{setBusy(false);}}
-  async function assess(t:Task,a:Attempt){setBusy(true);try{await cloud(async()=>{const token=epoch.current,ns=namespace.current;if(!a.reference?.trim())throw new Error("这次录音缺少冻结原句，不能评测发音");const local=await audio("read",a.clipId!,{expectedNamespace:ns});const result=await evaluatePronunciation(a.reference,"en",String(local.pcmB64));if(epoch.current!==token||ns!==await learningNamespace())return;const latest=current.current?.id===t.id?current.current:t;await update({...latest,attempts:latest.attempts.map(item=>item.id===a.id?{...item,pronunciation:result}:item),updatedAt:Date.now()},ns);setNotice(result.isRejected?`评测未通过：${result.exceptInfo??"声音不足"}`:"真实发音评测结果已保存");void syncLearningRecordsSilently();});}catch(error){setNotice(errorText(error));}finally{setBusy(false);}}
+  async function voiceAction(ability:VoiceRouteAbility,action:(engine:"gateway"|"xfyun",token:number,ns:string)=>Promise<void>,resume:()=>Promise<void>){
+    const token=epoch.current,ns=namespace.current;
+    const route=await resolveVoiceRoute(ability,ability==="asr"?{asrLang:"en_us"}:undefined);
+    if(!mounted.current||epoch.current!==token||ns!==await learningNamespace())return;
+    if(route.engine==="off"){
+      if(route.reason==="not_logged_in"){
+        // 能力接口的鉴权结果优先于Rust缓存的loggedIn，不能据后者立即递归重试。
+        pending.current=resume;
+        setNotice(`${route.hint??"请登录沉浸云"}；登录后将继续刚才的操作，原录音已保存在本机。`);
+        await openLoginWindow();
+        return;
+      }
+      throw new Error(`${route.hint??"语音功能暂不可用"}；原录音已保留`);
+    }
+    await action(route.engine,token,ns);
+  }
+  async function recognize(t:Task,a:Attempt){
+    const startedEpoch=epoch.current;
+    setBusy(true);
+    try{
+      await voiceAction("asr",async(engine,token,ns)=>{
+        const creds=engine==="xfyun"?await loadAsrCredentials():null;
+        if(engine==="xfyun"&&!creds)throw new Error("未配置讯飞听写凭据，请到「设置 → 语音」保存凭据；原录音已保留");
+        if(!mounted.current||epoch.current!==token||ns!==await learningNamespace())return;
+        const local=await audio("read",a.clipId!,{expectedNamespace:ns});
+        if(!mounted.current||epoch.current!==token||ns!==await learningNamespace())return;
+        if(typeof local.pcmB64!=="string"||!local.pcmB64)throw new Error("录音数据不完整，请重新录制");
+        const text=engine==="gateway"
+          ?(await transcribeBatch("en_us",local.pcmB64)).text
+          :await transcribeSpeech(recordedPcm(local.pcmB64),"en_us",creds!);
+        if(!mounted.current||epoch.current!==token||ns!==await learningNamespace())return;
+        if(!text.trim())throw new Error("没有识别出文字，录音已保留");
+        const latest=current.current?.id===t.id?current.current:t;
+        await update({...latest,draft:text,attempts:latest.attempts.map(item=>item.id===a.id?{...item,text,status:"draft"}:item),updatedAt:Date.now()},ns);
+        setNotice("转写已保存，确认文字后再提交表达建议。");
+      },()=>recognize(t,a));
+    }catch(error){if(mounted.current&&epoch.current===startedEpoch)setNotice(voiceActionErrorText(error));}finally{if(mounted.current&&epoch.current===startedEpoch)setBusy(false);}
+  }
+  async function assess(t:Task,a:Attempt){
+    const startedEpoch=epoch.current;
+    setBusy(true);
+    try{
+      if(!a.reference?.trim())throw new Error("这次录音缺少冻结原句，不能评测发音");
+      await voiceAction("ise",async(engine,token,ns)=>{
+        const creds=engine==="xfyun"?await loadIseCredentials():null;
+        if(engine==="xfyun"&&!creds)throw new Error("未配置讯飞评测凭据，请到「设置 → 语音」保存凭据；原录音已保留");
+        if(!mounted.current||epoch.current!==token||ns!==await learningNamespace())return;
+        const local=await audio("read",a.clipId!,{expectedNamespace:ns});
+        if(!mounted.current||epoch.current!==token||ns!==await learningNamespace())return;
+        if(typeof local.pcmB64!=="string"||!local.pcmB64)throw new Error("录音数据不完整，请重新录制");
+        const result=engine==="gateway"
+          ?await evaluatePronunciation(a.reference!,"en",local.pcmB64)
+          :await evaluateSentence(recordedPcm(local.pcmB64),a.reference!,creds!);
+        if(!mounted.current||epoch.current!==token||ns!==await learningNamespace())return;
+        const latest=current.current?.id===t.id?current.current:t;
+        await update({...latest,attempts:latest.attempts.map(item=>item.id===a.id?{...item,pronunciation:result}:item),updatedAt:Date.now()},ns);
+        setNotice(result.isRejected?`评测未通过：${result.exceptInfo??"声音不足"}`:"真实发音评测结果已保存");
+        void syncLearningRecordsSilently();
+      },()=>assess(t,a));
+    }catch(error){if(mounted.current&&epoch.current===startedEpoch)setNotice(voiceActionErrorText(error));}finally{if(mounted.current&&epoch.current===startedEpoch)setBusy(false);}
+  }
   async function play(a:Attempt){try{const local=await audio("read",a.clipId!);const binary=atob(String(local.wavB64)),bytes=Uint8Array.from(binary,c=>c.charCodeAt(0)),url=URL.createObjectURL(new Blob([bytes],{type:"audio/wav"})),player=new Audio(url);playback.current?.();const stop=()=>{player.pause();URL.revokeObjectURL(url);};playback.current=stop;player.onended=stop;await player.play();}catch(error){onToast(errorText(error));}}
   const buttonStyle={padding:"8px 12px",marginRight:8,marginTop:8};
   if(!task)return null;

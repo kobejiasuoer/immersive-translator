@@ -1,16 +1,4 @@
-/**
- * 设置页「语音」tab（契约 §三.1/§三.6/§三.7）：复刻「模型服务」双栏单选同构。
- *
- * - 左列：「沉浸云语音」官方大卡（platform-card）+「自带凭据 · 高级」下的讯飞行；
- *   右列随选中切换（云能力卡 / 现有 XfyunVoiceSection 三件套原样保留）。
- * - 选中即即时保存（voiceProvider，§三.2，写盘在 Settings 的回调里）；
- *   与 LLM providerId 解耦。
- * - 迁移推断（§三.3）：未存过 voiceProvider 时按讯飞凭据存在性取默认，只展示不落盘。
- * - 沉浸云未开放（platformBase===null）：官方分组不渲染、选中强制讯飞语义、页头保留
- *   现网讯飞文案（§三.6 最后一态）。
- * - 能力下发：登录后拉一次 getVoiceCapabilities()，视图状态经 gatewayViewState 归约；
- *   失败码只有 banned 单列（封禁整卡），其余并入「网络失败」。
- */
+/** 语音设置：先选择服务，再展示真实可用性和各功能配置；偏好即时保存。 */
 
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -24,10 +12,11 @@ import {
   voiceGatewayStatusLine,
 } from "../lib/voice/gatewayViewState";
 import type { VoiceProvider } from "../lib/settingsStore";
+import { isLocalhostEndpoint } from "../core/providerPresets";
 import { hasAnyXfyunCredential } from "../lib/iseCredentials";
 import { GatewayVoiceSection } from "./GatewayVoiceSection";
 import { XfyunVoiceSection } from "./XfyunVoiceSection";
-import { IconAlert, IconCheck, IconClose, IconInfo, IconRetry } from "../ui/icons";
+import { IconCheck, IconClose, IconInfo } from "../ui/icons";
 
 export interface VoiceSettingsTabProps {
   /** 沉浸云网关 base；null = 未开放（官方层整体不渲染）。 */
@@ -113,8 +102,9 @@ export function VoiceSettingsTab({
     refresh();
     let unlisten: (() => void) | null = null;
     void listen("xfyun:creds-updated", () => refresh()).then((fn) => {
-      unlisten = fn;
-    });
+      if (active) unlisten = fn;
+      else fn();
+    }).catch(() => undefined);
     return () => {
       active = false;
       unlisten?.();
@@ -126,11 +116,15 @@ export function VoiceSettingsTab({
     if (!cloudOpen || !loggedIn) {
       setCaps(null);
       setCapsError(null);
+      setCapsLoading(false);
+      setQuotaEvents([]);
       return;
     }
     let active = true;
     setCapsLoading(true);
     setCapsError(null);
+    setCaps(null);
+    setQuotaEvents([]);
     void getVoiceCapabilities()
       .then((c) => {
         if (active) setCaps(c);
@@ -144,7 +138,7 @@ export function VoiceSettingsTab({
     return () => {
       active = false;
     };
-  }, [cloudOpen, loggedIn, reloadNonce]);
+  }, [cloudOpen, platformBase, loggedIn, email, reloadNonce]);
 
   /** 生效服务商：官方云未开放强制讯飞；未存过用推断值；再未就绪先按 gateway 骨架。 */
   const provider: VoiceProvider = !cloudOpen
@@ -173,197 +167,112 @@ export function VoiceSettingsTab({
   }, []);
 
   const handleLogin = useCallback(() => {
-    if (openingLogin || loggedIn) return;
+    if (openingLogin) return;
     setOpeningLogin(true);
     // 登录成功的状态翻转由 Rust auth-state-changed 广播（loggedIn prop 变化即触发能力下发）。
     void openLoginWindow()
       .catch((e) => console.error("[voice] open login failed", e))
       .finally(() => setOpeningLogin(false));
-  }, [openingLogin, loggedIn]);
+  }, [openingLogin]);
 
   // 引导切云条：已登录且三项能力齐备、用户还停在讯飞时提示（可关闭）。
   const showSwitchGuide =
     cloudOpen && provider === "xfyun" && loggedIn && view.caps === "full" && !guideDismissed;
-  // 未开通提示条：带重试（重新拉能力）。
-  const showNotProvisioned = cloudOpen && provider === "gateway" && view.caps === "none";
 
   return (
-    <>
+    <div className="voice-settings">
       <header className="set-pagehead">
         <div className="set-pagehead-text">
           <h2>语音</h2>
-          <p>
-            {cloudOpen
-              ? "云端朗读、口语识别、跟读打分——登录沉浸云即用，无需申请任何密钥；也可使用自己的讯飞凭据。"
-              : "填一组讯飞凭据，跟读打分、云端朗读、口语识别三个服务共用（需在讯飞控制台为应用开通对应服务）。经 DPAPI 加密存储。"}
-          </p>
+          <p>设置朗读、语音转文字和跟读评分，查看状态并测试。</p>
         </div>
+        <span className="voice-save-note">选择后自动保存</span>
       </header>
 
-      {showSwitchGuide && (
-        <div className="msg-bar ok" role="status" style={{ marginBottom: 14 }}>
+      {platformBase !== null && isLocalhostEndpoint(platformBase) && (
+        <div className="msg-bar warn voice-switch-guide" role="status">
           <IconInfo size={14} />
-          <span>沉浸云已为本账号开通语音能力——点击左侧「沉浸云语音」卡片即可切换，讯飞凭据保留、随时切回。</span>
+          <span>当前连接本地测试服务 {platformBase}。线上管理台的设置不会在这里生效，请用正式版验证云语音。</span>
+        </div>
+      )}
+
+      <section className="voice-service-picker" aria-label="语音服务">
+        <div className="voice-section-label">使用哪种语音服务</div>
+        <div className={`voice-service-options${cloudOpen ? "" : " single"}`} role="radiogroup" aria-label="语音服务商">
+          {cloudOpen && (
+            <button
+              type="button"
+              role="radio"
+              aria-checked={provider === "gateway"}
+              className={`voice-service-option${provider === "gateway" ? " selected" : ""}`}
+              onClick={() => selectProvider("gateway")}
+            >
+              <span className="voice-service-mark" aria-hidden>云</span>
+              <span className="voice-service-copy">
+                <strong>沉浸云语音</strong>
+                <small className={`voice-service-status ${status.tone}`}>{status.text}</small>
+              </span>
+              <span className="voice-service-radio" aria-hidden>
+                {provider === "gateway" && <IconCheck size={12} />}
+              </span>
+            </button>
+          )}
           <button
-            className="btn btn-ghost btn-sm"
-            aria-label="关闭提醒"
-            onClick={() => setGuideDismissed(true)}
+            type="button"
+            role="radio"
+            aria-checked={provider === "xfyun"}
+            className={`voice-service-option${provider === "xfyun" ? " selected" : ""}`}
+            onClick={() => selectProvider("xfyun")}
           >
+            <span className="voice-service-mark" aria-hidden>讯</span>
+            <span className="voice-service-copy">
+              <strong>讯飞开放平台</strong>
+              <small className="voice-service-status">
+                {xfyunConfigured === null ? "正在读取配置…" : xfyunConfigured ? "已保存凭据，请检查各项服务连接" : "需要配置应用并开通对应服务"}
+              </small>
+            </span>
+            <span className="voice-service-radio" aria-hidden>
+              {provider === "xfyun" && <IconCheck size={12} />}
+            </span>
+          </button>
+        </div>
+      </section>
+
+      {showSwitchGuide && (
+        <div className="msg-bar ok voice-switch-guide" role="status">
+          <IconInfo size={14} />
+          <span>沉浸云的三项语音能力已开放，可以切换使用。</span>
+          <button className="btn btn-secondary btn-sm" onClick={() => selectProvider("gateway")}>使用沉浸云</button>
+          <button className="btn btn-ghost btn-sm" aria-label="关闭提醒" onClick={() => setGuideDismissed(true)}>
             <IconClose size={12} />
           </button>
         </div>
       )}
-      {showNotProvisioned && (
-        <div className="msg-bar warn" role="status" style={{ marginBottom: 14 }}>
-          <IconAlert size={14} />
-          <span>语音功能暂未开通——账号正常，服务端尚未为本账号开通语音。</span>
-          <button className="btn btn-secondary btn-sm" onClick={() => setReloadNonce((n) => n + 1)}>
-            <IconRetry size={12} />
-            重试
-          </button>
-        </div>
-      )}
 
-      <div className="provider-workspace">
-        {/* ---- 左列：服务商选择 ---- */}
-        <section className="provider-selection">
-          <div role="radiogroup" aria-label="语音服务商">
-            {cloudOpen && (
-              <div className="provider-group">
-                <div className="settings-section-heading">
-                  <div>
-                    <h3>官方云服务</h3>
-                    <p>沉浸云账号登录即用，三个服务零配置</p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={provider === "gateway"}
-                  className={`platform-card${provider === "gateway" ? " active" : ""}`}
-                  onClick={() => selectProvider("gateway")}
-                >
-                  <span className="provider-mark" aria-hidden>
-                    云
-                  </span>
-                  <span className="platform-card-body">
-                    <span className="platform-card-title">
-                      沉浸云语音
-                      <span className="chip chip-green">官方</span>
-                      <span className="chip chip-blue">推荐</span>
-                    </span>
-                    <span className="platform-card-desc">登录即用，三服务共用一个账号</span>
-                    <span
-                      className={`platform-card-status${status.tone === "err" ? " err" : status.tone === "off" ? " off" : ""}`}
-                    >
-                      <i aria-hidden />
-                      {status.text}
-                    </span>
-                  </span>
-                  {provider === "gateway" && (
-                    <span className="provider-check">
-                      <IconCheck size={12} />
-                    </span>
-                  )}
-                </button>
-              </div>
-            )}
-
-            <div className="provider-group">
-              <div className="settings-section-heading">
-                <div>
-                  <h3>自带凭据 · 高级</h3>
-                  <p>使用你自己的讯飞开放平台应用与密钥</p>
-                </div>
-              </div>
-              <div className="provider-list">
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={provider === "xfyun"}
-                  className={`provider-item${provider === "xfyun" ? " active" : ""}`}
-                  onClick={() => selectProvider("xfyun")}
-                >
-                  <span
-                    className="provider-mark"
-                    style={{ color: "#2c6dfb", background: "rgba(44, 109, 251, 0.12)" }}
-                    aria-hidden
-                  >
-                    讯
-                  </span>
-                  <span className="provider-name">讯飞开放平台</span>
-                  <span className="provider-meta">
-                    <span
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        overflow: "hidden",
-                        color: "var(--text-3, #888)",
-                        fontSize: 10,
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      跟读打分 / 口语识别 / 云端朗读 · 需自行申请凭据
-                    </span>
-                    {xfyunConfigured && (
-                      <span className="provider-keydot" title="已保存讯飞凭据（DPAPI 加密）" />
-                    )}
-                  </span>
-                  {provider === "xfyun" && (
-                    <span className="provider-check">
-                      <IconCheck size={12} />
-                    </span>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* ---- 右列：随选中切换的配置面板 ---- */}
-        <section className="provider-configuration">
-          <div className="settings-section-heading">
-            <div>
-              <h3>{provider === "gateway" ? "沉浸云账号" : "讯飞开放平台"}</h3>
-              <p>{provider === "gateway" ? "沉浸云语音" : "跟读打分 / 口语识别 / 云端朗读"}</p>
-            </div>
-            {provider === "gateway" ? (
-              <span className={`chip ${loggedIn ? "chip-green" : "chip-amber"}`}>
-                {loggedIn ? "已登录" : "未登录"}
-              </span>
-            ) : (
-              <span className={`chip ${xfyunConfigured ? "chip-green" : "chip-amber"}`}>
-                {xfyunConfigured === null ? "读取中…" : xfyunConfigured ? "凭据已保存" : "未配置"}
-              </span>
-            )}
-          </div>
-          {provider === "gateway" ? (
-            <GatewayVoiceSection
-              email={email}
-              loggedIn={loggedIn}
-              openingLogin={openingLogin}
-              caps={caps}
-              view={view}
-              selectedVoice={voiceGatewayVoice}
-              iseEnabled={voiceGatewayIseEnabled}
-              onLogin={handleLogin}
-              onManageAccount={onOpenAccount}
-              onRetryCaps={() => setReloadNonce((n) => n + 1)}
-              onOpenRedeem={onOpenRedeem}
-              onSelectVoice={onSelectVoice}
-              onToggleIse={onToggleIse}
-              onQuotaEvent={handleQuotaEvent}
-            />
-          ) : (
-            <XfyunVoiceSection />
-          )}
-        </section>
-      </div>
-
-      <p className="provider-caption">
-        之前在阅读室设置抽屉、口语陪练、录音直译里填过的凭据仍然有效（同一套加密存储），无需重复填写。
-      </p>
-    </>
+      <section className="voice-service-panel" aria-label={provider === "gateway" ? "沉浸云语音设置" : "讯飞语音设置"}>
+        {provider === "gateway" ? (
+          <GatewayVoiceSection
+            email={email}
+            loggedIn={loggedIn}
+            openingLogin={openingLogin}
+            caps={caps}
+            view={view}
+            selectedVoice={voiceGatewayVoice}
+            iseEnabled={voiceGatewayIseEnabled}
+            onLogin={handleLogin}
+            onManageAccount={onOpenAccount}
+            onRetryCaps={() => setReloadNonce((n) => n + 1)}
+            onOpenRedeem={onOpenRedeem}
+            onSelectVoice={onSelectVoice}
+            onToggleIse={onToggleIse}
+            onQuotaEvent={handleQuotaEvent}
+            onUseXfyun={() => selectProvider("xfyun")}
+          />
+        ) : (
+          <XfyunVoiceSection />
+        )}
+      </section>
+      <p className="voice-footnote">已保存的讯飞凭据可继续使用，切换服务无需重复填写。朗读方式也可在阅读室中调整。</p>
+    </div>
   );
 }

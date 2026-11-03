@@ -37,11 +37,22 @@ function caps(overrides: Partial<VoiceCapabilities> = {}): VoiceCapabilities {
 }
 
 describe("reduceVoiceRoute(守卫归约,契约 §三.5)", () => {
+  it("录音转写不能借用流式识别能力", () => {
+    const c = caps({ asrLanguages: ["en_us"], asrStreamingLanguages: ["en_us"], asrBatchLanguages: [] });
+    expect(reduceVoiceRoute({ loggedIn: true, caps: c, quotaEvents: [], ability: "asr", asrLang: "en_us" }).engine).toBe("off");
+    expect(reduceVoiceRoute({ loggedIn: true, caps: c, quotaEvents: [], ability: "asr", asrLang: "en_us", asrMode: "stream" }).engine).toBe("gateway");
+  });
+
+  it("能力拉取的鉴权失败不会要求用户检查网络", () => {
+    const d = reduceVoiceRoute({ loggedIn: true, caps: null, capsError: "token_invalid", quotaEvents: [], ability: "asr" });
+    expect(d.reason).toBe("not_logged_in");
+    expect(d.hint).toBe("登录已失效，请重新登录");
+  });
   it("未登录 → off + 「登录沉浸云即用」引导(即使能力已拉到)", () => {
     const d = reduceVoiceRoute({ loggedIn: false, caps: caps(), quotaEvents: [], ability: "asr" });
     expect(d.engine).toBe("off");
     expect(d.reason).toBe("not_logged_in");
-    expect(d.hint).toBe("登录沉浸云即用");
+    expect(d.hint).toContain("请先登录");
   });
 
   it("能力未拉到(null)→ off + caps_unavailable(网络类文案)", () => {
@@ -235,6 +246,34 @@ describe("resolveVoiceRoute(取数侧:xfyun 直不经守卫,gateway 归约)", ()
     vi.mocked(getVoiceCapabilities).mockResolvedValue(caps());
     const ok = await resolveVoiceRoute("tts");
     expect(ok.engine).toBe("gateway");
+  });
+
+  it("切换账号不复用上一账号能力与额度", async () => {
+    vi.mocked(resolveInitialVoiceProvider).mockResolvedValue("gateway");
+    vi.mocked(authGetStatus).mockResolvedValue({ loggedIn: true, user: { id: "a" }, notice: null } as Awaited<ReturnType<typeof authGetStatus>>);
+    vi.mocked(getVoiceCapabilities).mockResolvedValueOnce(caps());
+    expect((await resolveVoiceRoute("asr")).engine).toBe("gateway");
+    vi.mocked(authGetStatus).mockResolvedValue({ loggedIn: true, user: { id: "b" }, notice: null } as Awaited<ReturnType<typeof authGetStatus>>);
+    vi.mocked(getVoiceCapabilities).mockResolvedValueOnce(caps({ asrLanguages: [] }));
+    expect((await resolveVoiceRoute("asr")).engine).toBe("off");
+    expect(getVoiceCapabilities).toHaveBeenCalledTimes(2);
+  });
+
+  it("能力请求在途切换账号时丢弃结果，不能缓存到旧账号", async () => {
+    vi.mocked(resolveInitialVoiceProvider).mockResolvedValue("gateway");
+    const status = (id: string) => ({ loggedIn: true, user: { id }, notice: null } as Awaited<ReturnType<typeof authGetStatus>>);
+    vi.mocked(authGetStatus).mockResolvedValue(status("a"));
+    vi.mocked(getVoiceCapabilities).mockImplementationOnce(async () => {
+      vi.mocked(authGetStatus).mockResolvedValue(status("b"));
+      return caps();
+    });
+    const interrupted = await resolveVoiceRoute("asr");
+    expect(interrupted.engine).toBe("off");
+    expect(interrupted.hint).toBe("账号已切换，请重新操作");
+    vi.mocked(authGetStatus).mockResolvedValue(status("a"));
+    vi.mocked(getVoiceCapabilities).mockResolvedValueOnce(caps({ asrLanguages: [] }));
+    expect((await resolveVoiceRoute("asr")).engine).toBe("off");
+    expect(getVoiceCapabilities).toHaveBeenCalledTimes(2);
   });
 
   it("能力拉取失败(AuthError banned)→ off + banned:封禁与网络失败文案分开", async () => {
