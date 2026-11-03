@@ -65,6 +65,7 @@ export {
 
 export {
   getVoiceCapabilities,
+  asrLanguagesFor,
   parseVoiceCapabilities,
   quotaResourceKey,
   type VoiceCapabilities,

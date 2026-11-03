@@ -34,9 +34,28 @@ describe("reduceVoiceGatewayView（§三.6 状态机归约）", () => {
     expect(view.missing).toEqual([]);
   });
 
-  it("其余失败码归网络失败（含未归类 AuthError）", () => {
-    for (const errorCode of ["network_error", "token_invalid", "upstream_error"]) {
+  it("连接类失败保留错误码", () => {
+    for (const errorCode of ["network_error", "upstream_error"]) {
       expect(reduceVoiceGatewayView(input({ errorCode })).caps).toBe("error");
+      expect(reduceVoiceGatewayView(input({ errorCode })).errorCode).toBe(errorCode);
+    }
+  });
+
+  it("登录失效与网络错误分开处理", () => {
+    for (const errorCode of ["token_invalid", "unauthorized", "token_reused", "token_expired"]) {
+      expect(reduceVoiceGatewayView(input({ errorCode })).caps).toBe("auth_required");
+    }
+  });
+
+  it("voice_not_configured 与三项全关闭均为未开放，不能显示部分可用", () => {
+    for (const override of [
+      { errorCode: "voice_not_configured" },
+      { caps: caps({ ttsVoices: [], asrLanguages: [], iseEnabled: false }) },
+    ]) {
+      const view = reduceVoiceGatewayView(input(override));
+      expect(view.caps).toBe("none");
+      expect(view.missing).toEqual(["tts", "asr", "ise"]);
+      expect(voiceGatewayStatusLine(view, { loggedIn: true, email: EMAIL }).text).toBe("三项云语音功能暂未开放");
     }
   });
 
@@ -48,7 +67,7 @@ describe("reduceVoiceGatewayView（§三.6 状态机归约）", () => {
   it("voice 段缺失（available=false）→ 未开通", () => {
     const view = reduceVoiceGatewayView(input({ caps: caps({ available: false }) }));
     expect(view.caps).toBe("none");
-    expect(view.missing).toEqual([]);
+    expect(view.missing).toEqual(["tts", "asr", "ise"]);
   });
 
   it("三项齐备 → full；quota 原样透传（常驻余量条数据源）", () => {
@@ -98,7 +117,7 @@ describe("reduceVoiceGatewayView（§三.6 状态机归约）", () => {
     const view = reduceVoiceGatewayView(input({ quotaEvents: ["ise_calls", "tts_chars"] }));
     expect(view.exhausted).toBe(true);
     expect(view.exhaustedLabels).toContain(CAPABILITY_LABELS.ise);
-    expect(view.exhaustedLabels).toContain("朗读");
+    expect(view.exhaustedLabels).toContain(CAPABILITY_LABELS.tts);
   });
 
   it("重复事件去重后不再叠加", () => {
@@ -114,7 +133,7 @@ describe("voiceGatewayStatusLine（沉浸云卡状态行文案）", () => {
       loggedIn: false,
       email: EMAIL,
     });
-    expect(line).toEqual({ tone: "off", text: "未登录——选中后到右侧登录即可使用" });
+    expect(line).toEqual({ tone: "off", text: "未登录，登录后检查语音是否开放" });
   });
 
   it("下发中：已登录 + 正在获取", () => {
@@ -122,7 +141,7 @@ describe("voiceGatewayStatusLine（沉浸云卡状态行文案）", () => {
       loggedIn: true,
       email: EMAIL,
     });
-    expect(line).toEqual({ tone: "ok", text: `已登录 ${EMAIL} · 正在获取语音能力…` });
+    expect(line).toEqual({ tone: "off", text: "正在检查语音服务…" });
   });
 
   it("封禁 / 网络失败：红点无重试语义", () => {
@@ -145,7 +164,7 @@ describe("voiceGatewayStatusLine（沉浸云卡状态行文案）", () => {
     );
     expect(line).toEqual({
       tone: "off",
-      text: `已登录 ${EMAIL} · 朗读、识别可用，跟读打分未开放`,
+      text: "朗读、识别已开放，跟读打分未开放",
     });
   });
 
@@ -154,13 +173,13 @@ describe("voiceGatewayStatusLine（沉浸云卡状态行文案）", () => {
       loggedIn: true,
       email: EMAIL,
     });
-    expect(full).toEqual({ tone: "ok", text: `已登录 ${EMAIL} · 朗读、识别、跟读打分全部可用` });
+    expect(full).toEqual({ tone: "ok", text: "朗读、识别、跟读打分均已开放" });
 
     const exhausted = voiceGatewayStatusLine(
       reduceVoiceGatewayView(input({ quotaEvents: ["ise_calls"] })),
       { loggedIn: true, email: EMAIL },
     );
-    expect(exhausted).toEqual({ tone: "off", text: `已登录 ${EMAIL} · 本月额度已用完` });
+    expect(exhausted).toEqual({ tone: "off", text: "本月跟读打分额度已用完" });
   });
 });
 

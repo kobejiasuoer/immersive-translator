@@ -5,7 +5,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { getVoiceCapabilities, parseVoiceCapabilities } from "./voiceCapabilities";
+import { asrLanguagesFor, getVoiceCapabilities, parseVoiceCapabilities } from "./voiceCapabilities";
 
 const invokeMock = invoke as unknown as Mock;
 
@@ -14,6 +14,16 @@ beforeEach(() => {
 });
 
 describe("parseVoiceCapabilities(me/config voice 段容错解析)", () => {
+  it("新服务端分别描述批量和流式识别，显式空数组不能借用另一入口", () => {
+    const caps = parseVoiceCapabilities({ voice: {
+      asrLanguages: ["en_us", "zh_cn"],
+      asrStreamingLanguages: ["en_us"],
+      asrBatchLanguages: [],
+    } });
+    expect(asrLanguagesFor(caps)).toEqual([]);
+    expect(asrLanguagesFor(caps, "stream")).toEqual(["en_us"]);
+    expect(asrLanguagesFor(parseVoiceCapabilities({ voice: { asrLanguages: ["zh_cn"] } }))).toEqual(["zh_cn"]);
+  });
   it("完整 voice 段:ttsVoices/asrLanguages/iseEnabled 原样透传", () => {
     const caps = parseVoiceCapabilities({
       gateway: { llm: "/v1/gw/chat/completions" },

@@ -34,6 +34,9 @@ export interface VoiceCapabilities {
   ttsVoices: VoiceTtsVoice[];
   /** ASR 可用语种(消费点 lang 只能取其中)。 */
   asrLanguages: string[];
+  /** 新服务端按调用方式分别下发；缺省时兼容旧版 asrLanguages。 */
+  asrStreamingLanguages?: string[];
+  asrBatchLanguages?: string[];
   iseEnabled: boolean;
   /** 配额余量(服务端字段上线前为 null)。 */
   quota: VoiceQuotaMap | null;
@@ -119,9 +122,18 @@ export function parseVoiceCapabilities(raw: unknown): VoiceCapabilities {
     available: true,
     ttsVoices: parseVoices(voice["ttsVoices"]),
     asrLanguages: parseLanguages(voice["asrLanguages"]),
+    ...(Array.isArray(voice["asrStreamingLanguages"])
+      ? { asrStreamingLanguages: parseLanguages(voice["asrStreamingLanguages"]) } : {}),
+    ...(Array.isArray(voice["asrBatchLanguages"])
+      ? { asrBatchLanguages: parseLanguages(voice["asrBatchLanguages"]) } : {}),
     iseEnabled: voice["iseEnabled"] === true,
     quota: parseQuota(voice["quota"]),
   };
+}
+
+/** 当前录音消费点均使用批量转写；明确的空数组不能回退到另一种识别能力。 */
+export function asrLanguagesFor(caps: VoiceCapabilities, mode: "batch" | "stream" = "batch"): string[] {
+  return (mode === "batch" ? caps.asrBatchLanguages : caps.asrStreamingLanguages) ?? caps.asrLanguages;
 }
 
 /** 拉取能力(冷启动由 UI 拉一次并缓存展示;本模块不做缓存)。 */
