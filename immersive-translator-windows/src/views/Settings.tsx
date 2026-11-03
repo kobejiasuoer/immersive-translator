@@ -417,8 +417,29 @@ export function Settings() {
 
   // ---- 热键互斥校验（三个热键两两不能相同）----
   const [hotkeyErrMsg, setHotkeyErrMsg] = useState<string | null>(null);
+  const [recordingHotkey, setRecordingHotkey] = useState<string | null>(null);
+  const [hotkeysApplying, setHotkeysApplying] = useState(false);
+  const [hotkeysApplied, setHotkeysApplied] = useState(false);
+  const hotkeyValues = [settings.hotkey, settings.ocrHotkey, settings.readerHotkey];
+
+  useEffect(() => {
+    if (activeTab !== "hotkeys") {
+      setRecordingHotkey(null);
+      return;
+    }
+    const cancelRecording = () => setRecordingHotkey(null);
+    window.addEventListener("blur", cancelRecording);
+    return () => window.removeEventListener("blur", cancelRecording);
+  }, [activeTab]);
+
+  function updateHotkey(key: "hotkey" | "ocrHotkey" | "readerHotkey", value: string) {
+    update(key, value);
+    setHotkeyErrMsg(null);
+    setHotkeysApplied(false);
+  }
 
   async function registerAllHotkeys(): Promise<boolean> {
+    setHotkeysApplied(false);
     const t = normalizeHotkey(settings.hotkey);
     const o = normalizeHotkey(settings.ocrHotkey);
     const r = normalizeHotkey(settings.readerHotkey);
@@ -434,13 +455,17 @@ export function Settings() {
       setHotkeyErrMsg(null);
       return false;
     }
+    setHotkeysApplying(true);
     try {
       await reregisterHotkeys(t, o, r);
       setHotkeyErrMsg(null);
+      setHotkeysApplied(true);
       return true;
     } catch (e) {
       setHotkeyErrMsg(String(e));
       return false;
+    } finally {
+      setHotkeysApplying(false);
     }
   }
 
@@ -475,6 +500,9 @@ export function Settings() {
 
   function doResetDefaults() {
     setConfirmReset(false);
+    setRecordingHotkey(null);
+    setHotkeysApplied(false);
+    setHotkeyErrMsg(null);
     const reset = { ...DEFAULT_SETTINGS };
     const resetVault: KeyVault = { [reset.providerId!]: "" };
     void saveSettingsFullAsync(reset, resetVault);
@@ -1115,47 +1143,63 @@ export function Settings() {
             <header className="set-pagehead">
               <div className="set-pagehead-text">
                 <h2>快捷键</h2>
-                <p>任意界面下全局生效；改完点「立即生效」或保存设置。</p>
+                <p>在任意应用中使用。点击录制组合键，也可以直接输入。</p>
               </div>
             </header>
             <div className="hotkey-list">
               <HotkeyField
+                id="hotkey-translate"
                 label="翻译热键"
                 hint="读取当前选中文字并弹出翻译浮窗"
                 value={settings.hotkey}
-                onChange={(v) => {
-                  update("hotkey", v);
-                  setHotkeyErrMsg(null);
-                }}
-                onApply={() => void registerAllHotkeys()}
+                onChange={(v) => updateHotkey("hotkey", v)}
+                otherHotkeys={[settings.ocrHotkey, settings.readerHotkey]}
+                recording={recordingHotkey === "hotkey-translate"}
+                onRecordingChange={(active) => setRecordingHotkey(active ? "hotkey-translate" : null)}
+                disabled={hotkeysApplying}
               />
               <HotkeyField
+                id="hotkey-ocr"
                 label="截图 OCR 热键"
                 hint="进入截图模式，框选区域后自动识别并翻译"
                 value={settings.ocrHotkey}
-                onChange={(v) => {
-                  update("ocrHotkey", v);
-                  setHotkeyErrMsg(null);
-                }}
-                onApply={() => void registerAllHotkeys()}
+                onChange={(v) => updateHotkey("ocrHotkey", v)}
+                otherHotkeys={[settings.hotkey, settings.readerHotkey]}
+                recording={recordingHotkey === "hotkey-ocr"}
+                onRecordingChange={(active) => setRecordingHotkey(active ? "hotkey-ocr" : null)}
+                disabled={hotkeysApplying}
               />
               <HotkeyField
+                id="hotkey-reader"
                 label="阅读室热键"
                 hint="把选中的内容送进沉浸阅读室精读"
                 value={settings.readerHotkey}
-                onChange={(v) => {
-                  update("readerHotkey", v);
-                  setHotkeyErrMsg(null);
-                }}
-                onApply={() => void registerAllHotkeys()}
+                onChange={(v) => updateHotkey("readerHotkey", v)}
+                otherHotkeys={[settings.hotkey, settings.ocrHotkey]}
+                recording={recordingHotkey === "hotkey-reader"}
+                onRecordingChange={(active) => setRecordingHotkey(active ? "hotkey-reader" : null)}
+                disabled={hotkeysApplying}
               />
             </div>
             {hotkeyErrMsg && (
-              <p className="msg-bar warn">
+              <p className="hotkey-feedback warn" role="alert">
                 <IconAlert size={14} />
                 {hotkeyErrMsg}
               </p>
             )}
+            <div className="hotkey-actions">
+              <p className={hotkeysApplied ? "hotkey-apply-note applied" : "hotkey-apply-note"} role="status">
+                {hotkeysApplied ? <><IconCheck size={14} />快捷键已生效，可保存设置同步当前配置。</> : "三个快捷键统一生效，也可点击底部「保存设置」。"}
+              </p>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => void registerAllHotkeys()}
+                disabled={hotkeysApplying || recordingHotkey !== null || hotkeyValues.some((value) => !validateHotkey(value).ok)}
+              >
+                {hotkeysApplying ? "应用中…" : "立即生效"}
+              </button>
+            </div>
           </>
         )}
 
@@ -1332,7 +1376,7 @@ export function Settings() {
             <IconClose size={14} />
             关闭
           </button>
-          <button className="btn btn-primary" onClick={handleSave}>
+          <button className="btn btn-primary" onClick={handleSave} disabled={hotkeysApplying || recordingHotkey !== null}>
             <IconCheck size={14} />
             保存设置
           </button>
@@ -1454,31 +1498,42 @@ function Switch({
 }
 
 /**
- * 热键录入卡：输入框 + 「录制组合键」 + 「立即生效」 + 推荐组合。
- * 单键格式/系统冲突校验在此内部完成；跨字段（两键互斥）校验由父组件做。
+ * 热键录入行：输入框 + 录制 + 按需展开的推荐组合。
+ * 单键校验在此内部完成；录制互斥与整组应用由父组件管理。
  */
 function HotkeyField({
+  id,
   label,
   hint,
   value,
   onChange,
-  onApply,
+  otherHotkeys,
+  recording,
+  onRecordingChange,
+  disabled,
 }: {
+  id: string;
   label: string;
   hint: string;
   value: string;
   onChange: (v: string) => void;
-  onApply: () => void;
+  otherHotkeys: string[];
+  recording: boolean;
+  onRecordingChange: (active: boolean) => void;
+  disabled: boolean;
 }) {
-  const [recording, setRecording] = useState(false);
-  const recordingRef = useRef(false);
-  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
   const validation = validateHotkey(value);
+  const message = recording ? recordingError ?? "请按下新的组合键，Esc 取消。" : validation.warning;
+
+  useEffect(() => {
+    if (!recording) setRecordingError(null);
+  }, [recording]);
 
   // 录制：监听下一次按键组合
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (!recordingRef.current) return;
+      if (!recording) return;
       e.preventDefault();
       e.stopPropagation();
       if (e.key === "Escape") {
@@ -1501,91 +1556,96 @@ function HotkeyField({
       const combo = [...mods, key].join("+");
       const parsed = parseHotkey(combo);
       if (!parsed) {
-        setMsg({ text: "需要至少一个修饰键 + 一个主键", ok: false });
+        setRecordingError("需要至少一个修饰键 + 一个主键");
         return;
       }
       const norm = normalizeHotkey(combo);
       const v = validateHotkey(norm);
       if (v.blocking) {
-        setMsg({ text: v.warning ?? "该组合不可用", ok: false });
+        setRecordingError(v.warning ?? "该组合不可用");
         return;
       }
       onChange(norm);
-      setMsg(
-        v.warning ? { text: `已设置 ${norm}（${v.warning}）`, ok: true } : { text: `已设置 ${norm}`, ok: true },
-      );
       stopRecording();
     }
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-    // onChange 来自父组件闭包，值变化即重新绑定；录制态由 ref 控制
-  }, [onChange]);
+  }, [recording, onChange, onRecordingChange]);
 
   function startRecording() {
-    recordingRef.current = true;
-    setRecording(true);
-    setMsg({ text: "请按下新的组合键…（Esc 取消）", ok: true });
+    setRecordingError(null);
+    onRecordingChange(true);
   }
 
   function stopRecording() {
-    recordingRef.current = false;
-    setRecording(false);
+    setRecordingError(null);
+    onRecordingChange(false);
   }
 
   return (
-    <div className="group-card hotkey-card">
+    <section className={`hotkey-card${recording ? " recording" : ""}`} aria-labelledby={`${id}-label`}>
       <div className="field-row">
         <div className="field-text">
-          <span className="field-label-v2">{label}</span>
-          <span className="field-hint">{hint}</span>
+          <label id={`${id}-label`} htmlFor={id} className="field-label-v2">{label}</label>
+          <span id={`${id}-hint`} className="field-hint">{hint}</span>
         </div>
         <div className="field-ctrl">
           <input
+            id={id}
             className="input mono hotkey-input"
             value={value}
             onChange={(e) => {
               onChange(e.target.value);
-              setMsg(null);
+              setRecordingError(null);
             }}
-            placeholder="Ctrl+Shift+Q"
+            placeholder="输入组合键"
             spellCheck={false}
+            disabled={disabled || recording}
+            aria-invalid={validation.blocking ? true : undefined}
+            aria-describedby={`${id}-hint${message ? ` ${id}-message` : ""}`}
           />
           <button
+            type="button"
             className={recording ? "btn btn-primary btn-sm" : "btn btn-secondary btn-sm"}
             onClick={recording ? stopRecording : startRecording}
+            disabled={disabled}
+            aria-label={`${recording ? "取消录制" : "录制组合键"}：${label}`}
+            aria-pressed={recording}
           >
-            {recording ? "录制中…（取消）" : "录制组合键"}
-          </button>
-          <button className="btn btn-ghost btn-sm" onClick={onApply} disabled={!validation.ok}>
-            立即生效
+            <IconKeyboard size={14} />
+            {recording ? "取消录制" : "录制组合键"}
           </button>
         </div>
       </div>
-      {msg && (
-        <p className={`msg-bar ${msg.ok ? "ok" : "warn"}`}>{msg.text}</p>
-      )}
-      {!msg && (validation.blocking || validation.warning) && (
-        <p className="msg-bar warn">
-          <IconAlert size={14} />
-          {validation.warning}
+      {message && (
+        <p id={`${id}-message`} className={`hotkey-feedback ${recording && !recordingError ? "recording-note" : "warn"}`} role={validation.blocking || recordingError ? "alert" : "status"}>
+          {recording && !recordingError ? <IconKeyboard size={14} /> : <IconAlert size={14} />}
+          <span>{message}</span>
         </p>
       )}
-      <div className="hotkey-suggest">
-        <span>推荐</span>
-        {RECOMMENDED_HOTKEYS.map((h) => (
-          <button
-            key={h}
-            type="button"
-            className="kbd-chip"
-            onClick={() => {
-              onChange(h);
-              setMsg(null);
-            }}
-          >
-            {h}
-          </button>
-        ))}
-      </div>
-    </div>
+      <details className="hotkey-recommendations">
+        <summary>推荐组合</summary>
+        <div className="hotkey-suggest">
+          {RECOMMENDED_HOTKEYS.map((h) => {
+            const usedElsewhere = otherHotkeys.some((value) => normalizeHotkey(value) === h);
+            return (
+              <button
+                key={h}
+                type="button"
+                className="kbd-chip"
+                disabled={disabled || recording || usedElsewhere}
+                title={usedElsewhere ? "已用于其他功能" : `使用 ${h}`}
+                onClick={() => {
+                  onChange(h);
+                  setRecordingError(null);
+                }}
+              >
+                {h}
+              </button>
+            );
+          })}
+        </div>
+      </details>
+    </section>
   );
 }
