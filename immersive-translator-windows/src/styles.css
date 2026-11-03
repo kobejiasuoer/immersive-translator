@@ -4933,12 +4933,14 @@ input[type="radio"] {
 
 .hotkey-list {
   overflow: hidden;
-  border-top: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
 }
 
 .hotkey-list .hotkey-card {
   margin: 0;
-  padding: 14px 0 10px;
+  padding: 20px;
   border: 0;
   border-bottom: 1px solid var(--border);
   border-radius: 0;
@@ -4951,21 +4953,172 @@ input[type="radio"] {
 }
 
 .hotkey-list .field-row {
-  min-height: 48px;
-  padding: 0 0 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 20px;
+  min-height: 44px;
+  padding: 0;
 }
 
-.hotkey-list .hotkey-input {
-  width: 122px;
+.hotkey-list .field-text {
   min-width: 0;
-}
-
-.hotkey-list .field-ctrl {
   gap: 5px;
 }
 
+.hotkey-list .field-label-v2 {
+  font-size: 14px;
+}
+
+.hotkey-list .field-hint {
+  font-size: 12px;
+}
+
+.hotkey-list .hotkey-input {
+  width: 156px;
+  height: 38px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.hotkey-list .field-ctrl {
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.hotkey-list .field-ctrl .btn {
+  min-height: 38px;
+  white-space: nowrap;
+}
+
+.hotkey-list .recording .hotkey-input {
+  border-color: var(--accent);
+  background: var(--accent-softer);
+}
+
+.hotkey-recommendations {
+  margin-top: 12px;
+}
+
+.hotkey-recommendations summary {
+  width: fit-content;
+  padding: 3px 0;
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.hotkey-recommendations summary:hover {
+  color: var(--accent);
+}
+
+.hotkey-recommendations summary:focus-visible,
+.hotkey-list .kbd-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.hotkey-list .kbd-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  color: var(--text-3);
+  border-color: var(--border);
+}
+
 .hotkey-list .hotkey-suggest {
-  padding: 5px 0 0;
+  gap: 8px;
+  padding: 9px 0 0;
+}
+
+.hotkey-feedback {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.hotkey-feedback svg,
+.hotkey-apply-note svg {
+  flex: none;
+  margin-top: 3px;
+}
+
+.hotkey-feedback.warn {
+  color: var(--warn);
+}
+
+.hotkey-feedback.recording-note {
+  color: var(--accent);
+}
+
+.hotkey-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.hotkey-apply-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.hotkey-apply-note.applied {
+  color: var(--accent);
+}
+
+.hotkey-actions .btn {
+  flex: none;
+  min-height: 36px;
+}
+
+@media (max-width: 900px) {
+  .hotkey-list .hotkey-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+    padding: 14px 16px;
+  }
+
+  .hotkey-list .field-row {
+    display: contents;
+  }
+
+  .hotkey-list .field-text {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    gap: 3px;
+  }
+
+  .hotkey-list .field-ctrl {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .hotkey-list .hotkey-recommendations {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: center;
+    margin-top: 0;
+  }
+
+  .hotkey-list .hotkey-recommendations[open] {
+    grid-column: 1 / -1;
+    grid-row: auto;
+  }
+
+  .hotkey-list .hotkey-feedback {
+    grid-column: 1 / -1;
+    margin-top: 0;
+  }
 }
 
 .about-grid {
@@ -5182,13 +5335,27 @@ input[type="radio"] {
   }
 
   .hotkey-list .field-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
     align-items: flex-start;
-    flex-direction: column;
+  }
+
+  .hotkey-list .hotkey-card {
+    padding: 12px 14px;
   }
 
   .hotkey-list .field-ctrl {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .hotkey-list .hotkey-input {
+    flex: 1;
+    width: 0;
+  }
+
+  .hotkey-actions {
+    align-items: flex-start;
   }
 
   .about-model-status {
