@@ -314,6 +314,10 @@ export function ReaderApp() {
   const saveTimerRef = useRef<number | null>(null);
   /** 书元信息写回（防抖；与章文章保存分开，避免索引重写放大）。 */
   const booksRef = useRef<BookMeta[]>([]);
+  // 启动加载、同步刷新与账号切换共用代数，旧列表响应不能回写新空间。
+  const articleListLoadSeqRef = useRef(0);
+  const bookListLoadSeqRef = useRef(0);
+  const articleOpenSeqRef = useRef(0);
   const bookSaveTimerRef = useRef<number | null>(null);
   /** 未落盘的阅读秒数缓冲（每 15s 批量上报）。 */
   const secondsBufferRef = useRef(0);
@@ -1203,11 +1207,45 @@ export function ReaderApp() {
     else showFinishCard(a);
   }, [showChapterEnd, showFinishCard]);
 
+  const refreshArticleList = useCallback(async (): Promise<ArticleSummary[]> => {
+    const seq = ++articleListLoadSeqRef.current;
+    try {
+      const list = await readerListArticles();
+      if (seq !== articleListLoadSeqRef.current) return [];
+      setArticleList(list);
+      return list;
+    } catch (error) {
+      console.error("[reader] list articles failed", error);
+      return [];
+    }
+  }, []);
+
+  const refreshBooks = useCallback(async (): Promise<BookMeta[]> => {
+    const seq = ++bookListLoadSeqRef.current;
+    try {
+      const books = await readerListBooks();
+      if (seq !== bookListLoadSeqRef.current) return [];
+      setBookList(books);
+      booksRef.current = books;
+      return books;
+    } catch (error) {
+      console.error("[reader] list books failed", error);
+      return [];
+    }
+  }, []);
+
   const openArticle = useCallback(
-    async (id: string) => {
+    async (id: string): Promise<boolean> => {
+      const seq = ++articleOpenSeqRef.current;
       try {
         const full = await readerGetArticle(id);
-        if (!full) return;
+        if (seq !== articleOpenSeqRef.current) return false;
+        if (!full) {
+          await Promise.all([refreshArticleList(), refreshBooks()]);
+          if (seq !== articleOpenSeqRef.current) return false;
+          showToast("当前学习空间找不到这篇内容，请确认账号或重新导入。");
+          return false;
+        }
         setView("reading");
         setDict({ status: "closed" });
         setSearchMatchIdx(null);
@@ -1247,49 +1285,36 @@ export function ReaderApp() {
         }
         void ensureTranslated(migratedArticle);
         void loadSourceArticles([migratedArticle.id]);
+        return true;
       } catch (error) {
+        if (seq !== articleOpenSeqRef.current) return false;
         console.error("[reader] open article failed", error);
         showToast("打开文章失败");
+        return false;
       }
     },
-    [ensureTranslated, scheduleSave, showToast, playback, loadSourceArticles, scheduleBookMetaSave, legacyTtsMigrationAllowed],
+    [ensureTranslated, scheduleSave, showToast, playback, loadSourceArticles, scheduleBookMetaSave, legacyTtsMigrationAllowed, refreshArticleList, refreshBooks],
   );
 
   /** 书卡/提醒卡进书：直达书级断点章。 */
   const openBookAtBreakpoint = useCallback(
     async (bookId: string) => {
       const book = booksRef.current.find((b) => b.id === bookId);
-      if (!book || book.chapters.length === 0) return;
+      if (!book) {
+        showToast("书架内容已更新，请重新选择书籍。");
+        return;
+      }
+      if (book.chapters.length === 0) {
+        showToast("这本书没有可阅读的章节，请重新导入。");
+        return;
+      }
       const target = book.chapters.some((c) => c.id === book.progress.chapterId)
         ? book.progress.chapterId
         : book.chapters[0].id;
       await openArticle(target);
     },
-    [openArticle],
+    [openArticle, showToast],
   );
-
-  const refreshArticleList = useCallback(async (): Promise<ArticleSummary[]> => {
-    try {
-      const list = await readerListArticles();
-      setArticleList(list);
-      return list;
-    } catch (error) {
-      console.error("[reader] list articles failed", error);
-      return [];
-    }
-  }, []);
-
-  const refreshBooks = useCallback(async (): Promise<BookMeta[]> => {
-    try {
-      const books = await readerListBooks();
-      setBookList(books);
-      booksRef.current = books;
-      return books;
-    } catch (error) {
-      console.error("[reader] list books failed", error);
-      return [];
-    }
-  }, []);
 
   const refreshVocab = useCallback(async () => {
     try {
@@ -1902,11 +1927,65 @@ export function ReaderApp() {
   useEffect(()=>{
     let disposed=false;let loadGeneration=0;
     const warning=listen<{message:string}>("learning-export-warning",event=>showToast(event.payload.message));
-    const refresh=async()=>{const generation=++loadGeneration;try{const [articles,books,vocab,noteRows,sessions]=await Promise.all([readerListArticles(),readerListBooks(),readerGetVocab(),noteList(),speakListSessions()]);if(disposed||generation!==loadGeneration)return;setArticleList(articles);setBookList(books);booksRef.current=books;setVocabWords(vocab.words);setReviewLog(vocab.reviewLog);setNotes(noteRows);setSpeakSessions(sessions.slice(0,20));}catch(error){console.error("[reader] relay refresh failed",error);}};
+    const refresh = async () => {
+      const generation = ++loadGeneration;
+      const articleSeq = ++articleListLoadSeqRef.current;
+      const bookSeq = ++bookListLoadSeqRef.current;
+      try {
+        const [articles, books, vocab, noteRows, sessions] = await Promise.allSettled([
+          readerListArticles(), readerListBooks(), readerGetVocab(), noteList(), speakListSessions(),
+        ]);
+        if (disposed || generation !== loadGeneration) return;
+        if (articles.status === "fulfilled" && articleSeq === articleListLoadSeqRef.current) {
+          setArticleList(articles.value);
+        }
+        if (books.status === "fulfilled" && bookSeq === bookListLoadSeqRef.current) {
+          setBookList(books.value);
+          booksRef.current = books.value;
+        }
+        if (vocab.status === "fulfilled") {
+          setVocabWords(vocab.value.words);
+          setReviewLog(vocab.value.reviewLog);
+        }
+        if (noteRows.status === "fulfilled") setNotes(noteRows.value);
+        if (sessions.status === "fulfilled") setSpeakSessions(sessions.value.slice(0, 20));
+        for (const result of [articles, books, vocab, noteRows, sessions]) {
+          if (result.status === "rejected") console.error("[reader] relay refresh failed", result.reason);
+        }
+      } catch (error) {
+        console.error("[reader] relay refresh failed", error);
+      }
+    };
     const completed=()=>{void refresh();};window.addEventListener("learning-sync-complete",completed);
     let account:string|undefined;let authEventReceived=false;
     void authGetStatus().then(status=>{if(!authEventReceived)account=status.user?.id??"guest";});
-    const unlisten=listenAuthStateChanged(status=>{authEventReceived=true;const next=status.user?.id??"guest";if(next===account)return;gatewayQuotaErrorRef.current=null;const adoptingGuest=(account===undefined||account==="guest")&&status.loggedIn;account=next;loadGeneration++;setArticle(null);setArticleList([]);setBookList([]);booksRef.current=[];setVocabWords([]);setReviewLog({schemaVersion:1,days:[]});setNotes([]);setActiveNote(null);setSpeakSessions([]);setSourceCache(new Map());setPendingSpeak(null);setView(previous=>adoptingGuest&&previous==="speak"?previous:"shelf");void refresh();if(status.loggedIn)void syncLearningRecordsSilently();});
+    const unlisten = listenAuthStateChanged((status) => {
+      authEventReceived = true;
+      const next = status.user?.id ?? "guest";
+      if (next === account) return;
+      gatewayQuotaErrorRef.current = null;
+      const adoptingGuest = (account === undefined || account === "guest") && status.loggedIn;
+      account = next;
+      loadGeneration++;
+      articleListLoadSeqRef.current++;
+      bookListLoadSeqRef.current++;
+      articleOpenSeqRef.current++;
+      articleRef.current = null;
+      setArticle(null);
+      setArticleList([]);
+      setBookList([]);
+      booksRef.current = [];
+      setVocabWords([]);
+      setReviewLog({ schemaVersion: 1, days: [] });
+      setNotes([]);
+      setActiveNote(null);
+      setSpeakSessions([]);
+      setSourceCache(new Map());
+      setPendingSpeak(null);
+      setView((previous) => adoptingGuest && previous === "speak" ? previous : "shelf");
+      void refresh();
+      if (status.loggedIn) void syncLearningRecordsSilently();
+    });
     return()=>{disposed=true;loadGeneration++;window.removeEventListener("learning-sync-complete",completed);void unlisten.then(fn=>fn());void warning.then(fn=>fn());};
   },[]);
   useEffect(()=>{const open=(event:Event)=>{const source=(event as CustomEvent<{articleId:string;sentenceIdx:number}>).detail;if(!source?.articleId)return;void readerGetArticle(source.articleId).then(found=>{if(!found){showToast("原文已删除，练习仍保留完整参考句和反馈");return;}setArticle({...found,progress:{...found.progress,sentenceIdx:source.sentenceIdx}});setView("reading");}).catch(error=>showToast(String(error)));};window.addEventListener("reader-relay-source",open);return()=>window.removeEventListener("reader-relay-source",open);},[showToast]);
@@ -2092,7 +2171,9 @@ export function ReaderApp() {
   const jumpToSentence = useCallback(
     (articleId: string, sentenceIdx: number) => {
       if (articleRef.current?.id !== articleId) {
-        void openArticle(articleId).then(() => playback.jumpTo(sentenceIdx));
+        void openArticle(articleId).then((opened) => {
+          if (opened && articleRef.current?.id === articleId) playback.jumpTo(sentenceIdx);
+        });
       } else {
         setView("reading");
         playback.jumpTo(sentenceIdx);
