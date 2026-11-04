@@ -91,9 +91,11 @@ let root: Root | null = null;
 let host: HTMLDivElement | null = null;
 
 function render(props: Partial<ComponentProps<typeof ReadingView>>): HTMLDivElement {
-  host = document.createElement("div");
-  document.body.appendChild(host);
-  root = createRoot(host);
+  if (!host) {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  }
   act(() => {
     root!.render(<ReadingView {...(props as ComponentProps<typeof ReadingView>)} />);
   });
@@ -248,5 +250,165 @@ describe("ReadingView · 段落失败行", () => {
     expect(el.textContent).toContain("本段翻译失败");
     expect(el.textContent).not.toContain(ZH_ERROR_429);
     expect(el.querySelector(".pair-failed-row button")).not.toBeNull();
+  });
+});
+
+describe("ReadingView · 本句译文入口", () => {
+  const maskedSettings = { ...DEFAULT_READER_SETTINGS, maskTranslation: true, spotQuizMode: false };
+  const revealedArticle: Article = {
+    ...ARTICLE,
+    sentences: ARTICLE.sentences.map((s) => ({ ...s, revealed: s.idx === 0 })),
+  };
+
+  it("遮住译文时正文没有占位浮层，点击工具栏只揭开当前句", () => {
+    const onReveal = vi.fn();
+    const props = baseProps({ settings: maskedSettings, activeIdx: 1, onReveal });
+    const el = render(props);
+    expect(el.querySelector(".translation-pop")).toBeNull();
+    expect(el.textContent).not.toContain("点击显示译文");
+    expect(el.querySelector(".reading-mask-count")?.textContent).toBe("已揭开 0 / 3 句");
+    const button = el.querySelector('button[aria-label="显示本句译文"]') as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    act(() => button.click());
+    expect(onReveal).toHaveBeenCalledExactlyOnceWith(1);
+
+    render({ ...props, activeIdx: 2 });
+    expect(el.querySelector(".translation-pop")).toBeNull();
+    act(() => (el.querySelector('button[aria-label="显示本句译文"]') as HTMLButtonElement).click());
+    expect(onReveal).toHaveBeenLastCalledWith(2);
+    expect(onReveal).toHaveBeenCalledTimes(2);
+  });
+
+  it("揭开后显示译文与计数，工具栏和译文点击都可回遮，父层回遮后浮层消失", () => {
+    const onMask = vi.fn();
+    const props = baseProps({ settings: maskedSettings, article: revealedArticle, onMask });
+    const el = render(props);
+    expect(el.querySelector(".pop-zh")?.textContent).toBe("潮水仍在犹豫。");
+    expect(el.querySelector(".reading-mask-count")?.textContent).toBe("已揭开 1 / 3 句");
+    const button = el.querySelector('button[aria-label="遮住本句译文"]') as HTMLButtonElement;
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    act(() => button.click());
+    expect(onMask).toHaveBeenCalledExactlyOnceWith(0);
+    act(() => (el.querySelector(".pop-zh") as HTMLElement).click());
+    expect(onMask).toHaveBeenLastCalledWith(0);
+    expect(onMask).toHaveBeenCalledTimes(2);
+
+    render({ ...props, article: ARTICLE });
+    expect(el.querySelector(".translation-pop")).toBeNull();
+    expect(el.querySelector(".reading-mask-count")?.textContent).toBe("已揭开 0 / 3 句");
+  });
+
+  it("H 临时显示与松开不会持久揭开译文", () => {
+    const onReveal = vi.fn();
+    const onMask = vi.fn();
+    const props = baseProps({ settings: maskedSettings, activeIdx: 1, onReveal, onMask });
+    const el = render(props);
+    render({ ...props, peekAll: true });
+    expect(el.querySelector(".pop-zh")?.textContent).toBe("小镇沉睡。");
+    expect(el.querySelector('button[aria-label="显示本句译文"]')?.getAttribute("aria-pressed")).toBe("false");
+    render({ ...props, peekAll: false });
+    expect(el.querySelector(".translation-pop")).toBeNull();
+    expect(onReveal).not.toHaveBeenCalled();
+    expect(onMask).not.toHaveBeenCalled();
+  });
+
+  it.each([null, "尚未完成的流式译文"])("译文生成中（%s）禁用入口且不遮住正文", (zh) => {
+    const pendingArticle: Article = {
+      ...ARTICLE,
+      sentences: [{ ...ARTICLE.sentences[0]!, zh, zhState: "pending" }],
+    };
+    const onReveal = vi.fn();
+    const el = render(baseProps({ settings: maskedSettings, article: pendingArticle, translating: { done: 0, total: 1 }, onReveal }));
+    const button = el.querySelector('button[aria-label="显示本句译文"]') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(el.querySelector(".translation-pop")).toBeNull();
+    act(() => button.click());
+    expect(onReveal).not.toHaveBeenCalled();
+  });
+
+  it("失败译文保留原因与重试入口，不能通过本句按钮揭开", () => {
+    const failedArticle: Article = {
+      ...ARTICLE,
+      sentences: [{ ...ARTICLE.sentences[0]!, zh: null, zhState: "failed", zhError: "连接失败" }],
+    };
+    const onRetryParagraph = vi.fn();
+    const el = render(baseProps({ settings: maskedSettings, article: failedArticle, onRetryParagraph }));
+    expect(el.querySelector(".pair-failed-row")?.textContent).toContain("连接失败");
+    expect((el.querySelector('button[aria-label="显示本句译文"]') as HTMLButtonElement).disabled).toBe(true);
+    act(() => (el.querySelector(".pair-failed-row button") as HTMLButtonElement).click());
+    expect(onRetryParagraph).toHaveBeenCalledExactlyOnceWith(0);
+  });
+
+  it("编辑中保留输入浮层并禁用回遮入口，保存仍调用原编辑通道", () => {
+    const onEditTranslation = vi.fn();
+    const el = render(baseProps({ settings: maskedSettings, article: revealedArticle, onEditTranslation }));
+    act(() => (el.querySelector('button[title="手改译文"]') as HTMLButtonElement).click());
+    const input = el.querySelector('textarea[aria-label^="编辑译文"]') as HTMLTextAreaElement;
+    expect(input.value).toBe("潮水仍在犹豫。");
+    expect((el.querySelector('button[aria-label="遮住本句译文"]') as HTMLButtonElement).disabled).toBe(true);
+    const save = Array.from(el.querySelectorAll<HTMLButtonElement>(".pair-cn-editor button")).find((b) => b.textContent === "保存")!;
+    act(() => save.click());
+    expect(onEditTranslation).toHaveBeenCalledExactlyOnceWith(0, "潮水仍在犹豫。");
+    expect(el.querySelector("textarea")).toBeNull();
+  });
+
+  it("译文常显时保留译文及朗读/停止/口语操作", () => {
+    const onSpeakSentence = vi.fn();
+    const onStopSpeaking = vi.fn();
+    const onPracticeSentence = vi.fn();
+    const props = baseProps({ settings: { ...maskedSettings, maskTranslation: false }, activeIdx: 1, onSpeakSentence, onStopSpeaking, onPracticeSentence });
+    const el = render(props);
+    expect(el.querySelector(".reading-translation-toggle")).toBeNull();
+    expect(el.querySelector(".pop-zh")?.textContent).toBe("小镇沉睡。");
+    act(() => (el.querySelector(".pop-actions button") as HTMLButtonElement).click());
+    expect(onSpeakSentence).toHaveBeenCalledExactlyOnceWith(1);
+    act(() => (el.querySelector('button[title="带着这句去口语陪练"]') as HTMLButtonElement).click());
+    expect(onPracticeSentence).toHaveBeenCalledExactlyOnceWith(1);
+    render({ ...props, playing: true });
+    act(() => (el.querySelector(".pop-actions button") as HTMLButtonElement).click());
+    expect(onStopSpeaking).toHaveBeenCalledTimes(1);
+    expect(onSpeakSentence).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["en", "zh"] as const)("%s 对照视图不新增本句入口", (contrastMode) => {
+    const el = render(baseProps({ settings: { ...maskedSettings, contrastMode } }));
+    expect(el.querySelector(".reading-translation-toggle")).toBeNull();
+  });
+
+  it("双栏对照保留各句揭开入口，不显示新的工具栏入口", () => {
+    const onReveal = vi.fn();
+    const el = render(baseProps({ settings: { ...maskedSettings, spreadLayout: "parallel" }, onReveal }));
+    expect(el.querySelector(".reading-translation-toggle")).toBeNull();
+    expect(el.querySelector(".translation-pop")).toBeNull();
+    const slots = el.querySelectorAll<HTMLDivElement>('.cn-slot[aria-label="显示译文"]');
+    expect(slots.length).toBe(3);
+    act(() => slots[1]!.click());
+    expect(onReveal).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
+  it("按钮的 Enter/Space 不触发全局快捷键，H 按下与松开继续传递", () => {
+    const onKeyDown = vi.fn();
+    const onKeyUp = vi.fn();
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    try {
+      const el = render(baseProps({ settings: maskedSettings }));
+      const button = el.querySelector('button[aria-label="显示本句译文"]') as HTMLButtonElement;
+      act(() => {
+        button.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        button.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+      });
+      expect(onKeyDown).not.toHaveBeenCalled();
+      act(() => {
+        button.dispatchEvent(new KeyboardEvent("keydown", { key: "H", bubbles: true }));
+        button.dispatchEvent(new KeyboardEvent("keyup", { key: "H", bubbles: true }));
+      });
+      expect(onKeyDown).toHaveBeenCalledTimes(1);
+      expect(onKeyUp).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    }
   });
 });

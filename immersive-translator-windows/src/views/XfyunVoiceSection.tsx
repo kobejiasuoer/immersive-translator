@@ -18,7 +18,7 @@
  * 据此刷新云端合成凭据缓存。
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
 import {
   asrCredSource,
@@ -49,7 +49,7 @@ const SERVICES: Record<ServiceKind, { label: string; name: string; host: string;
   asr: { label: "口语识别", name: "流式听写", host: "iat-api.xfyun.cn", path: "/v2/iat" },
 };
 
-const SERVICE_ORDER: ServiceKind[] = ["ise", "tts", "asr"];
+const SERVICE_ORDER: ServiceKind[] = ["tts", "asr", "ise"];
 
 type LightState = { state: "idle" | "testing" | "ok" | "bad"; message: string };
 const IDLE_LIGHT: LightState = { state: "idle", message: "" };
@@ -63,7 +63,7 @@ async function probeService(kind: ServiceKind): Promise<LightState> {
         ? await loadXfyunTtsCredentials()
         : await loadAsrCredentials();
   if (!creds) {
-    return { state: "bad", message: "还没有可用的凭据——先在上面保存一组主凭据" };
+    return { state: "bad", message: "没有可用的应用凭据，请先填写并保存。" };
   }
   const svc = SERVICES[kind];
   const wssUrl = await buildXfyunAuthUrl(svc.host, svc.path, creds);
@@ -91,6 +91,7 @@ function MaskedInput({
         type={shown ? "text" : "password"}
         placeholder={placeholder}
         value={value}
+        aria-label={label}
         autoComplete="off"
         spellCheck={false}
         onChange={(e) => onChange(e.target.value)}
@@ -98,6 +99,7 @@ function MaskedInput({
       <button
         type="button"
         className="icon-btn input-append"
+        aria-label={shown ? `隐藏 ${label}` : `显示 ${label}`}
         title={shown ? `隐藏 ${label}` : `显示 ${label}`}
         onClick={() => setShown((v) => !v)}
       >
@@ -122,28 +124,37 @@ function CredTripleInputs({
   onChange: (patch: CredPatch) => void;
 }) {
   return (
-    <>
-      <input
-        className="input mono input-full"
-        placeholder={appIdPlaceholder}
-        value={appId}
-        autoComplete="off"
-        spellCheck={false}
-        onChange={(e) => onChange({ appId: e.target.value })}
-      />
-      <MaskedInput
-        value={apiKey}
-        placeholder="API Key"
-        label="API Key"
-        onChange={(v) => onChange({ apiKey: v })}
-      />
-      <MaskedInput
-        value={apiSecret}
-        placeholder="API Secret"
-        label="API Secret"
-        onChange={(v) => onChange({ apiSecret: v })}
-      />
-    </>
+    <div className="voice-credentials-grid">
+      <label className="voice-credential-field">
+        <span>APPID</span>
+        <input
+          className="input mono input-full"
+          placeholder={appIdPlaceholder}
+          value={appId}
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(e) => onChange({ appId: e.target.value })}
+        />
+      </label>
+      <div className="voice-credential-field">
+        <span>API Key</span>
+        <MaskedInput
+          value={apiKey}
+          placeholder="API Key"
+          label="API Key"
+          onChange={(v) => onChange({ apiKey: v })}
+        />
+      </div>
+      <div className="voice-credential-field">
+        <span>API Secret</span>
+        <MaskedInput
+          value={apiSecret}
+          placeholder="API Secret"
+          label="API Secret"
+          onChange={(v) => onChange({ apiSecret: v })}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -164,6 +175,7 @@ export function XfyunVoiceSection() {
     asr: IDLE_LIGHT,
   });
   const [testing, setTesting] = useState(false);
+  const probeGenerationRef = useRef(0);
   const [main, setMain] = useState({ appId: "", apiKey: "", apiSecret: "" });
   const [savingMain, setSavingMain] = useState(false);
   const [mainFeedback, setMainFeedback] = useState<{ ok: boolean; text: string } | null>(null);
@@ -193,27 +205,37 @@ export function XfyunVoiceSection() {
   }, []);
 
   useEffect(() => {
+    let active = true;
     refreshStatus();
     echoMain();
     // 他处保存凭据后广播事件，这里同步徽标与回显
     let unlisten: (() => void) | null = null;
     void listen("xfyun:creds-updated", () => {
+      if (!active) return;
+      probeGenerationRef.current += 1;
       refreshStatus();
       echoMain();
+      setLights({ ise: IDLE_LIGHT, tts: IDLE_LIGHT, asr: IDLE_LIGHT });
     }).then((fn) => {
-      unlisten = fn;
-    });
+      if (active) unlisten = fn;
+      else fn();
+    }).catch(() => undefined);
     return () => {
+      active = false;
+      probeGenerationRef.current += 1;
       unlisten?.();
     };
   }, [refreshStatus, echoMain]);
 
   const testService = useCallback(async (kind: ServiceKind) => {
+    const generation = probeGenerationRef.current;
     setLights((cur) => ({ ...cur, [kind]: { state: "testing", message: "" } }));
     try {
       const result = await probeService(kind);
+      if (generation !== probeGenerationRef.current) return;
       setLights((cur) => ({ ...cur, [kind]: result }));
     } catch (e) {
+      if (generation !== probeGenerationRef.current) return;
       setLights((cur) => ({
         ...cur,
         [kind]: { state: "bad", message: `测试失败：${e instanceof Error ? e.message : String(e)}` },
@@ -240,7 +262,8 @@ export function XfyunVoiceSection() {
     try {
       const ok = await saveIseCredentials(main);
       if (ok) {
-        setMainFeedback({ ok: true, text: "已保存 ✓ 三个服务现在都用这一组；点「一键测试」验证各服务是否已开通" });
+        probeGenerationRef.current += 1;
+        setMainFeedback({ ok: true, text: "凭据已保存。请检查各项服务连接，并在应用中验证实际朗读、录音或评分。" });
         setLights({ ise: IDLE_LIGHT, tts: IDLE_LIGHT, asr: IDLE_LIGHT });
         void emit("xfyun:creds-updated", { kind: "main" }).catch(() => undefined);
       } else {
@@ -259,163 +282,108 @@ export function XfyunVoiceSection() {
   }, [savingMain, mainEmpty, main, refreshStatus, echoMain]);
 
   return (
-    <>
-      {/* ---- 主凭据 ---- */}
-      <div className="group-card">
-        <div className="field-block">
-          <div className="field-block-head">
-            <span className="field-label-v2">讯飞语音凭据</span>
-            <span className={`chip ${mainConfigured ? "chip-green" : "chip-amber"}`}>
-              {mainConfigured === null ? "读取中…" : mainConfigured ? "已配置" : "未配置"}
-            </span>
-          </div>
-          <p className="field-hint">
-            到讯飞开放平台控制台复制你应用的三个值。跟读打分、口语识别、云端朗读默认都用这一组——
-            一个应用可同时开通三个服务（控制台 → 应用 → 服务列表领取免费额度）。
-          </p>
-          <CredTripleInputs
-            appId={main.appId}
-            apiKey={main.apiKey}
-            apiSecret={main.apiSecret}
-            appIdPlaceholder="APPID（讯飞控制台 → 我的应用）"
-            onChange={(patch) => {
-              setMain((cur) => ({ ...cur, ...patch }));
-              setMainFeedback(null);
-            }}
-          />
-          <div className="provider-actions">
-            <button className="btn btn-primary btn-sm" disabled={savingMain || mainEmpty} onClick={() => void saveMain()}>
-              {savingMain ? "保存中…" : "保存（DPAPI 加密）"}
-            </button>
-            <button
-              className="btn btn-secondary btn-sm"
-              disabled={testing}
-              onClick={() => void testAll()}
-              title="用已保存的凭据逐个连一下三个服务的讯飞端点：不耗额度，几秒出结果"
-            >
-              {testing ? "测试中…" : "一键测试三个服务"}
-            </button>
-          </div>
-          <Feedback feedback={mainFeedback} />
+    <div className="voice-xfyun-panel">
+      <div className={`voice-availability ${mainConfigured || sources.tts || sources.asr ? "muted" : "warn"}`}>
+        <div className="voice-availability-main">
+          <strong>{mainConfigured || sources.tts || sources.asr ? "凭据已保存，请验证服务连接" : "先配置你的讯飞应用"}</strong>
+          <p>需要在讯飞应用中分别开通在线语音合成、语音听写和语音评测。保存凭据不代表三项功能已开通。</p>
         </div>
       </div>
-
-      {/* ---- 三个服务灯 ---- */}
-      <div className="group-card">
-        <div className="field-block">
-          <span className="field-label-v2">服务状态</span>
-          <p className="field-hint">
-            绿 = 可用。红色时按提示排查后点「重测」；三个都红且提示网络超时，多为代理/防火墙拦截。
-          </p>
-          {SERVICE_ORDER.map((kind) => {
-            const svc = SERVICES[kind];
-            const light = lights[kind];
-            const source: string | null =
-              kind === "ise"
-                ? mainConfigured
-                  ? "主凭据"
-                  : null
-                : sources[kind] === "own"
-                  ? "单独凭据"
-                  : sources[kind] === "main"
-                    ? "主凭据"
-                    : null;
-            return (
-              <div
-                key={kind}
-                style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "6px 0" }}
-              >
-                <span
-                  aria-hidden
-                  style={{
-                    width: 9,
-                    height: 9,
-                    borderRadius: "50%",
-                    flex: "none",
-                    background:
-                      light.state === "ok"
-                        ? "var(--ok, #2a9d4a)"
-                        : light.state === "bad"
-                          ? "var(--err, #d33)"
-                          : light.state === "testing"
-                            ? "var(--amber, #d99a2a)"
-                            : "var(--border, #999)",
-                  }}
-                />
-                <b style={{ fontSize: 13 }}>{svc.label}</b>
-                <span style={{ fontSize: 12, color: "var(--text-3, #888)" }}>
-                  {svc.name}
-                  {source ? ` · ${source}` : " · 未配置"}
-                </span>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  style={{ marginLeft: "auto" }}
-                  disabled={light.state === "testing"}
-                  onClick={() => void testService(kind)}
-                >
-                  {light.state === "testing" ? "测试中…" : light.state === "idle" ? "测试" : "重测"}
-                </button>
-                {light.message && (
-                  <p
-                    className="field-hint"
-                    style={{
-                      flexBasis: "100%",
-                      margin: 0,
-                      color: light.state === "ok" ? "var(--ok, #2a9d4a)" : "var(--err, #d33)",
-                    }}
-                  >
-                    {light.message}
-                  </p>
-                )}
-              </div>
-            );
-          })}
+      <div className="voice-xfyun-credentials">
+        <div className="voice-diagnostic-head">
+          <div>
+            <h3>应用凭据</h3>
+            <p>从讯飞控制台的同一个应用中复制下列三个值，默认供三项语音功能共用。</p>
+          </div>
+          <span className="voice-feature-status muted">{mainConfigured === null ? "读取中…" : mainConfigured ? "主凭据已保存" : "尚未填齐"}</span>
         </div>
-      </div>
-
-      {/* ---- 高级：按服务单独覆盖 ---- */}
-      <div className="group-card">
-        <div className="field-block">
-          <button
-            className="btn btn-ghost btn-sm"
-            onClick={() => setAdvancedOpen((v) => !v)}
-            aria-expanded={advancedOpen}
-          >
-            {advancedOpen ? "▾" : "▸"} 高级：按服务使用不同凭据
+        <CredTripleInputs
+          appId={main.appId}
+          apiKey={main.apiKey}
+          apiSecret={main.apiSecret}
+          appIdPlaceholder="讯飞应用 APPID"
+          onChange={(patch) => {
+            setMain((cur) => ({ ...cur, ...patch }));
+            setMainFeedback(null);
+          }}
+        />
+        <div className="voice-credential-actions">
+          <button className="btn btn-primary btn-sm" disabled={savingMain || mainEmpty} onClick={() => void saveMain()}>
+            {savingMain ? "保存中…" : "保存凭据"}
           </button>
-          <p className="field-hint">
-            仅当你的不同语音功能用了不同的讯飞应用（例如合成单独买量）才需要；一般用户保持为空，
-            三个服务自动共用上面的主凭据。
-          </p>
-          {advancedOpen && (
-            <>
-              <OverrideCard
-                kind="tts"
-                title="云端朗读（在线合成）单独凭据"
-                source={sources.tts}
-                onSave={saveXfyunTtsCredentials}
-                onClear={clearXfyunTtsCredentials}
-                onChanged={() => {
-                  refreshStatus();
-                  setLights((cur) => ({ ...cur, tts: IDLE_LIGHT }));
-                }}
-              />
-              <OverrideCard
-                kind="asr"
-                title="口语识别（流式听写）单独凭据"
-                source={sources.asr}
-                onSave={saveAsrCredentials}
-                onClear={clearAsrCredentials}
-                onChanged={() => {
-                  refreshStatus();
-                  setLights((cur) => ({ ...cur, asr: IDLE_LIGHT }));
-                }}
-              />
-            </>
-          )}
+          <span>凭据在本机加密保存，保存后立即生效。</span>
         </div>
+        <Feedback feedback={mainFeedback} />
       </div>
-    </>
+
+      <section className="voice-xfyun-checks" aria-label="讯飞服务连接">
+        <div className="voice-diagnostic-head">
+          <div>
+            <h3>检查服务连接</h3>
+            <p>检查网络与签名认证。通过后，还需在应用中实际试听、录音或评分，确认服务权限和额度。</p>
+          </div>
+          <button className="btn btn-secondary btn-sm" disabled={testing || (!mainConfigured && !sources.tts && !sources.asr)} onClick={() => void testAll()}>
+            {testing ? "检查中…" : "检查全部连接"}
+          </button>
+        </div>
+        {SERVICE_ORDER.map((kind) => {
+          const svc = SERVICES[kind];
+          const light = lights[kind];
+          const source = kind === "ise" ? mainConfigured ? "主凭据" : null : sources[kind] === "own" ? "单独凭据" : sources[kind] === "main" ? "主凭据" : null;
+          const state = !source ? "未配置" : light.state === "ok" ? "连接检查通过" : light.state === "bad" ? "连接检查失败" : light.state === "testing" ? "检查中…" : "尚未检查";
+          return (
+            <div className="voice-xfyun-check-row" key={kind}>
+              <div>
+                <strong>{svc.label}</strong>
+                <p>{svc.name} · {source || "需要保存凭据"}</p>
+                {light.message && <p className={`voice-probe-result ${light.state}`}>{light.message}</p>}
+              </div>
+              <span className={`voice-feature-status ${light.state === "ok" ? "ok" : light.state === "bad" ? "bad" : "muted"}`}>{state}</span>
+              <button className="btn btn-ghost btn-sm" disabled={!source || testing || light.state === "testing"} onClick={() => void testService(kind)}>
+                {light.state === "testing" ? "检查中…" : light.state === "idle" ? "检查连接" : "重新检查"}
+              </button>
+            </div>
+          );
+        })}
+      </section>
+
+      <div className="voice-details">
+        <button className="voice-details-toggle" onClick={() => setAdvancedOpen((value) => !value)} aria-expanded={advancedOpen}>
+          <span aria-hidden>{advancedOpen ? "▾" : "▸"}</span>
+          高级：为不同服务配置独立应用
+          {(sources.tts === "own" || sources.asr === "own") && <span className="voice-feature-status muted">已设置独立凭据</span>}
+        </button>
+        {advancedOpen && (
+          <div className="voice-details-content">
+            <p className="voice-footnote">仅在朗读或识别使用不同讯飞应用时填写；清除独立凭据后，会恢复使用上面的应用凭据。</p>
+            <OverrideCard
+              kind="tts"
+              title="云端朗读的独立应用"
+              source={sources.tts}
+              onSave={saveXfyunTtsCredentials}
+              onClear={clearXfyunTtsCredentials}
+              onChanged={() => {
+                probeGenerationRef.current += 1;
+                refreshStatus();
+                setLights((current) => ({ ...current, tts: IDLE_LIGHT }));
+              }}
+            />
+            <OverrideCard
+              kind="asr"
+              title="语音识别的独立应用"
+              source={sources.asr}
+              onSave={saveAsrCredentials}
+              onClear={clearAsrCredentials}
+              onChanged={() => {
+                probeGenerationRef.current += 1;
+                refreshStatus();
+                setLights((current) => ({ ...current, asr: IDLE_LIGHT }));
+              }}
+            />
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

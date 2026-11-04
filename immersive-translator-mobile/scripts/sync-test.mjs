@@ -22,6 +22,7 @@ function load(file) {
 }
 const {MobileSync}=load(root+'/immersive-translator-mobile/src/services/sync.ts');
 const {stampPracticeTask,mergePracticeTask}=load(root+'/packages/learning-core/src/index.ts');
+const {DEMO_VOCAB}=load(root+'/immersive-translator-mobile/src/core/data.ts');
 const clone=v=>structuredClone(v);
 const collections=['reading-articles','reading-vocab','review-events','notes','speak-sessions','history','glossary'];
 function setup(initial={}, options={}) {
@@ -46,6 +47,47 @@ function setup(initial={}, options={}) {
 const note=(body='first')=>({id:'note-1',title:'Title',sub:'',body,insight:'',createdAt:1,updatedAt:1});
 const article=(zh='你好')=>({id:'article-1',title:'Story',titleCn:'',paragraphStarts:[0],createdAt:1,lastReadAt:2,sentences:[{idx:0,paragraphIdx:0,en:'Hello world.',zh,zhState:'machine'}]});
 const tests=[];const test=(name,fn)=>tests.push([name,fn]);
+test('untouched legacy demo vocabulary stays local and never becomes cloud collection data',async()=>{
+  const t=setup({vocab:DEMO_VOCAB});await t.engine.sync();
+  assert.deepEqual(t.state().vocab.map(w=>w.id),DEMO_VOCAB.map(w=>w.id));
+  assert.equal(t.remote.get('reading-vocab').size,0);
+  assert.equal(t.calls.some(c=>c.method==='POST'&&c.url.includes('/reading-vocab/')),false);
+  await t.engine.sync();assert.equal(t.remote.get('reading-vocab').size,0);assert.equal(t.outbox.size,0);
+});
+test('legacy demo pending mutations are cancelled without deleting existing local or cloud rows or shadow entries',async()=>{
+  const word=DEMO_VOCAB[0],payload={...word,v:2,source:{articleId:word.sourceArticleId,sentenceIdx:word.sourceSentenceIdx},addedAt:0};
+  const t=setup({vocab:[word]});const wire=t.setRemote('reading-vocab',word.id,payload);
+  t.records.set('sync.v2.reading-vocab:'+word.id,{collection:'sync.v2.reading-vocab',id:word.id,version:1,deleted:false,payload:{id:word.id,payload,schemaVersion:2,updatedAt:Date.now(),deleted:false,baseVersion:wire.version,dirty:true,mutationId:'legacy-demo'}});
+  t.records.set('sync.v2.meta:reading-vocab',{collection:'sync.v2.meta',id:'reading-vocab',version:1,deleted:false,payload:{cursor:wire.version,shadow:{[word.id]:'old-fingerprint'}}});
+  t.outbox.set('sync:legacy-demo',{id:'sync:legacy-demo',payload:{type:'sync.v2',collection:'reading-vocab',entityId:word.id,mutationId:'legacy-demo'}});
+  await t.engine.sync();
+  assert.equal(t.state().vocab[0].id,word.id);assert.equal(t.remote.get('reading-vocab').get(word.id).deleted,false);
+  assert.deepEqual(t.remote.get('reading-vocab').get(word.id).payload,payload);
+  assert(t.records.get('sync.v2.meta:reading-vocab').payload.shadow[word.id]);
+  assert.equal(t.records.get('sync.v2.reading-vocab:'+word.id).payload.dirty,false);
+  assert.equal(t.calls.some(c=>c.method==='POST'&&c.url.includes('/reading-vocab/')),false);assert.equal(t.outbox.size,0);
+});
+test('explicit collection, edits, examples and learning activity on demo-shaped vocabulary still synchronize',async()=>{
+  const seed=DEMO_VOCAB[0];
+  for(const patch of [{id:seed.id+'-real',createdAt:1,generation:'real'}, {createdAt:1}, {updatedAt:1}, {note:'my note'}, {source:{excerpt:'My example.'}}, {senses:[{pos:'verb',cn:'my definition'}]}, {lastWrongAt:1}, {spokenAt:1}, {recall:{total:{pass:1,wrong:0,trap:0},byMode:{}}}, {srs:{reps:1,intervalDays:0,ease:2.5,dueAt:1,lapses:0}}, {example:{en:'My example.'}}, {collocations:[{en:'take root in',cn:'在……扎根'}]}, {customLearningHint:'my hint'}, {source:{url:'https://example.invalid/my-article'}}]){
+    const word={...seed,...patch},t=setup({vocab:[word]});await t.engine.sync();
+    assert.equal(t.remote.get('reading-vocab').get(word.id).deleted,false,JSON.stringify(patch));
+  }
+  const event={v:2,id:'demo-reviewed',wordId:seed.id,deviceId:'mobile-1',reviewedAt:1,kind:'grade',grade:'forgot',mode:'recognition'};
+  const t=setup({vocab:[seed],reviewEvents:[event]});await t.engine.sync();
+  assert.equal(t.remote.get('reading-vocab').get(seed.id).deleted,false);assert.equal(t.remote.get('review-events').size,1);
+});
+test('a previously isolated demo word adopted by a note becomes syncable even when its payload fingerprint is unchanged',async()=>{
+  const word=DEMO_VOCAB[0],t=setup({vocab:[word]});await t.engine.sync();assert.equal(t.remote.get('reading-vocab').size,0);
+  t.change({notes:[{...note(),meta:{wordIds:[word.id]}}]});await t.engine.sync();
+  assert.equal(t.state().vocab[0].id,word.id);assert.equal(t.remote.get('reading-vocab').get(word.id).deleted,false);
+  assert.deepEqual(t.remote.get('notes').get('note-1.md').payload.meta.wordIds,[word.id]);assert.equal(t.outbox.size,0);
+});
+test('an explicit user deletion of an existing demo row still publishes its tombstone',async()=>{
+  const word=DEMO_VOCAB[0],t=setup();t.setRemote('reading-vocab',word.id,{...word,v:2,addedAt:0,source:{articleId:word.sourceArticleId,sentenceIdx:word.sourceSentenceIdx}});
+  await t.engine.sync();assert.equal(t.state().vocab.length,1);
+  t.change({vocab:[]});await t.engine.sync();assert.equal(t.remote.get('reading-vocab').get(word.id).deleted,true);assert.equal(t.outbox.size,0);
+});
 test('normal push is durable, uses compatible note envelope, and does not re-push unchanged rows',async()=>{const t=setup({notes:[note()]});await t.engine.sync();assert.equal(t.remote.get('notes').get('note-1.md').payload.content,'first');assert.equal(t.outbox.size,0);const pushes=t.calls.filter(c=>c.method==='POST').length;await t.engine.sync();assert.equal(t.calls.filter(c=>c.method==='POST').length,pushes);assert.equal(t.engine.getStatus().phase,'idle');});
 test('editing while old push is in flight keeps newer payload and sends it at acknowledged baseVersion',async()=>{let release,entered;const gate=new Promise(r=>release=r),ready=new Promise(r=>entered=r);let first=true;const t=setup({notes:[note()]},{intercept:async c=>{if(c.method==='POST'&&c.collection==='notes'&&first){first=false;entered();await gate;}}});const flight=t.engine.sync();await ready;t.change({notes:[note('second')]});await t.engine.queueLocal();release();await flight;assert.equal(t.remote.get('notes').get('note-1.md').payload.content,'second');const sent=t.calls.filter(c=>c.method==='POST'&&c.url.includes('/notes/'));assert.equal(sent.length,2);assert.equal(sent[1].body.entities[0].baseVersion,1);assert.equal(t.outbox.size,0);});
 test('staleCursor full snapshot removes compacted remote deletion without resurrecting local clean note',async()=>{let stale=false;const t=setup({notes:[note()]},{intercept:c=>{if(stale&&c.method==='GET'&&c.collection==='notes'&&Number(c.parsed.searchParams.get('since'))>0)return {collection:'notes',cursor:1,hasMore:false,staleCursor:true,entities:[]};}});await t.engine.sync();await t.engine.sync();t.remote.get('notes').clear();stale=true;await t.engine.sync();assert.equal(t.state().notes.length,0);assert.equal(t.remote.get('notes').size,0);assert.equal(t.records.get('sync.v2.meta:notes').payload.cursor,0);});

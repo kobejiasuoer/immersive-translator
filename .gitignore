@@ -49,6 +49,9 @@ skills-lock.json
 prototypes/.taste-skill/
 prototypes/.shots*.png
 
+# Playwright 截图/预览临时产物（本地验证用，不入公开仓库）
+output/
+
 # 官网整包导出（website/ 源码入库，zip 留档不入）
 website.zip
 

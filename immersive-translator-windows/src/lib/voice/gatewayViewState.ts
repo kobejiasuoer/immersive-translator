@@ -15,15 +15,17 @@ import type {
   VoiceQuotaKey,
   VoiceQuotaMap,
 } from "./voiceCapabilities";
+import { asrLanguagesFor, quotaResourceKey } from "./voiceCapabilities";
 
 /** 三项能力（与服务端资源一一对应；展示名见 CAPABILITY_LABELS）。 */
 export type VoiceCapabilityKey = VoiceQuotaKey;
 
 /** 能力卡相位（§三.6：能力下发中/可用/部分可用三种/未开通/网络失败/封禁）。 */
-export type VoiceCapsPhase = "loading" | "full" | "partial" | "none" | "error" | "banned";
+export type VoiceCapsPhase = "loading" | "full" | "partial" | "none" | "error" | "banned" | "auth_required";
 
 export interface VoiceGatewayView {
   caps: VoiceCapsPhase;
+  errorCode: string | null;
   /** partial 时缺失的能力（ttsVoices 空 / asrLanguages 空 / iseEnabled=false）。 */
   missing: VoiceCapabilityKey[];
   /** 常驻配额（me/config quota 字段；未下发为 null → 402 事件式兜底）。 */
@@ -68,39 +70,52 @@ function emptyQuotaView(): Pick<VoiceGatewayView, "quota" | "exhausted" | "exhau
  * 配额耗尽不改动 caps 相位（能力仍可用），只叠在视图上（原型状态 7 同口径）。
  */
 export function reduceVoiceGatewayView(input: VoiceGatewayInput): VoiceGatewayView {
+  const errorCode = input.errorCode;
   if (input.errorCode === "banned") {
-    return { caps: "banned", missing: [], ...emptyQuotaView() };
+    return { caps: "banned", errorCode, missing: [], ...emptyQuotaView() };
+  }
+  if (["token_invalid", "unauthorized", "token_reused", "token_expired"].includes(errorCode ?? "")) {
+    return { caps: "auth_required", errorCode, missing: [], ...emptyQuotaView() };
+  }
+  if (errorCode === "voice_not_configured") {
+    return { caps: "none", errorCode, missing: [...ALL_CAPABILITIES], ...emptyQuotaView() };
   }
   if (input.errorCode !== null) {
-    return { caps: "error", missing: [], ...emptyQuotaView() };
+    return { caps: "error", errorCode, missing: [], ...emptyQuotaView() };
   }
   if (input.loading || input.caps === null) {
-    return { caps: "loading", missing: [], ...emptyQuotaView() };
+    return { caps: "loading", errorCode, missing: [], ...emptyQuotaView() };
   }
   const caps = input.caps;
   if (!caps.available) {
     // 已登录但 me/config 无 voice 段：服务端尚未为本账号开通语音（voice_not_configured）。
-    return { caps: "none", missing: [], ...emptyQuotaView() };
+    return { caps: "none", errorCode, missing: [...ALL_CAPABILITIES], ...emptyQuotaView() };
   }
   const missing = ALL_CAPABILITIES.filter((key) => {
     if (key === "tts") return caps.ttsVoices.length === 0;
-    if (key === "asr") return caps.asrLanguages.length === 0;
+    if (key === "asr") return asrLanguagesFor(caps).length === 0;
     return !caps.iseEnabled;
   });
+  if (missing.length === ALL_CAPABILITIES.length) {
+    return { caps: "none", errorCode, missing, ...emptyQuotaView() };
+  }
 
   // 常驻来源：下发 quota 里 remaining===0 的资源；兜底来源：402/WSS 事件。
   const exhaustedLabels = new Set<string>();
   if (caps.quota !== null) {
     for (const key of ALL_CAPABILITIES) {
       const entry = caps.quota[key];
-      if (entry !== undefined && entry.remaining === 0) exhaustedLabels.add(CAPABILITY_LABELS[key]);
+      if (!missing.includes(key) && entry !== undefined && entry.remaining === 0) exhaustedLabels.add(CAPABILITY_LABELS[key]);
     }
   }
   for (const resource of input.quotaEvents) {
-    exhaustedLabels.add(quotaFeatureLabel(resource));
+    const key = quotaResourceKey(resource);
+    if (key !== null && !missing.includes(key)) exhaustedLabels.add(CAPABILITY_LABELS[key]);
+    else if (key === null) exhaustedLabels.add(quotaFeatureLabel(resource));
   }
   return {
     caps: missing.length > 0 ? "partial" : "full",
+    errorCode,
     missing,
     quota: caps.quota,
     exhausted: exhaustedLabels.size > 0,
@@ -114,31 +129,33 @@ export function voiceGatewayStatusLine(
   opts: { loggedIn: boolean; email: string },
 ): { tone: "ok" | "off" | "err"; text: string } {
   if (!opts.loggedIn) {
-    return { tone: "off", text: "未登录——选中后到右侧登录即可使用" };
+    return { tone: "off", text: "未登录，登录后检查语音是否开放" };
   }
   switch (view.caps) {
     case "banned":
       return { tone: "err", text: "账号已被封禁" };
     case "error":
       return { tone: "err", text: "连接沉浸云失败，请检查网络" };
+    case "auth_required":
+      return { tone: "err", text: voiceErrorMessage(view.errorCode ?? "token_invalid").text || "登录已失效，请重新登录" };
     case "none":
-      return { tone: "off", text: "语音功能暂未开通——账号正常，服务端尚未为本账号开通语音" };
+      return { tone: "off", text: "三项云语音功能暂未开放" };
     case "partial": {
       const present = ALL_CAPABILITIES.filter((k) => !view.missing.includes(k));
       return {
         tone: "off",
-        text: `已登录 ${opts.email} · ${present.map((k) => CAPABILITY_SHORT[k]).join("、")}可用，${view.missing
+        text: `${present.map((k) => CAPABILITY_SHORT[k]).join("、")}已开放，${view.missing
           .map((k) => CAPABILITY_SHORT[k])
           .join("、")}未开放`,
       };
     }
     case "loading":
-      return { tone: "ok", text: `已登录 ${opts.email} · 正在获取语音能力…` };
+      return { tone: "off", text: "正在检查语音服务…" };
     case "full":
       if (view.exhausted) {
-        return { tone: "off", text: `已登录 ${opts.email} · 本月额度已用完` };
+        return { tone: "off", text: `本月${view.exhaustedLabels.join("、")}额度已用完` };
       }
-      return { tone: "ok", text: `已登录 ${opts.email} · 朗读、识别、跟读打分全部可用` };
+      return { tone: "ok", text: "朗读、识别、跟读打分均已开放" };
   }
 }
 

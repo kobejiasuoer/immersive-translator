@@ -82,7 +82,15 @@ export function VaultRail({
       if (!counts.has(id)) order.push(id);
       counts.set(id, (counts.get(id) ?? 0) + 1);
     }
-    return order.map((id) => ({ id, n: counts.get(id) ?? 0, title: articleTitle(id) }));
+    let unavailable = 0;
+    return order.map((id) => {
+      const title = articleTitle(id);
+      return {
+        id,
+        n: counts.get(id) ?? 0,
+        label: title ? `《${title}》` : `原文不可用 · ${++unavailable}`,
+      };
+    });
   }, [due, articleTitle]);
 
   const popupCount = useMemo(() => due.filter((w) => !w.source.articleId).length, [due]);
@@ -128,7 +136,7 @@ export function VaultRail({
       <h4>内容来源 · 待复习</h4>
       {srcBtn("all", "全部", due.length + coachedCount)}
       {articleGroups.map((g) =>
-        srcBtn(`article:${g.id}` as VaultSourceFilter, `《${g.title ?? "未命名文章"}》`, g.n),
+        srcBtn(`article:${g.id}` as VaultSourceFilter, g.label, g.n),
       )}
       {srcBtn("popup", "划词收藏", popupCount)}
       {srcBtn("speak", "口语纠偏", coachedCount)}
@@ -140,7 +148,7 @@ export function VaultRail({
       )}
       {(unnotedCount ?? 0) > 0 && (
         <div className="rail-note">
-          有 {unnotedCount} 条内容未整理，可能不是词汇（如命令行）。
+          有 {unnotedCount} 条词汇尚未整理进笔记。
           <br />
           {requestTranslate && <button onClick={() => setNoteOpen(true)}>去处理</button>}
         </div>

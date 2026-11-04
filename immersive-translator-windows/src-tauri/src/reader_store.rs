@@ -583,9 +583,60 @@ fn load_vocab_from_path(path: &std::path::Path) -> Result<VocabFile, String> {
     if text.trim().is_empty() {
         return Ok(empty_vocab_file());
     }
-    let file: VocabFile = serde_json::from_str(&text).map_err(|e| format!("生词数据损坏: {e}"))?;
-    check_schema(file.schema_version)?;
-    Ok(file)
+    match serde_json::from_str::<VocabFile>(&text) {
+        Ok(file) => {
+            check_schema(file.schema_version)?;
+            Ok(file)
+        }
+        // JSON 合法但有条目反序列化失败（事故：v2 同步曾把前端 CHUNK_TYPE_LABELS
+        // 的中文展示名「搭配/短语动词/习语/句式」当 chunkType 传上云端，回灌后
+        // 整库读不出 → 加词必失败、生词列表空白）：修复标签后逐词抢救并回写自愈，
+        // 与 load_articles_from_path 的既有策略一致。
+        Err(original) => match salvage_vocab_file(&text) {
+            Ok(file) => {
+                if let Ok(clean) = serde_json::to_string(&file) {
+                    let _ = crate::learning_store::write_path(path, &clean);
+                }
+                Ok(file)
+            }
+            Err(_) => Err(format!("生词数据损坏: {original}")),
+        },
+    }
+}
+
+/// 中文词块标签 → 枚举值（前端 CHUNK_TYPE_LABELS 的展示名，见 readerTypes.ts）。
+fn repair_chunk_type_label(label: &str) -> Option<&'static str> {
+    match label {
+        "搭配" => Some("collocation"),
+        "短语动词" => Some("phrasal"),
+        "习语" => Some("idiom"),
+        "句式" => Some("pattern"),
+        _ => None,
+    }
+}
+
+/// 从「JSON 合法但部分条目损坏」的生词文件里抢救：先把中文词块标签修回枚举值，
+/// 再剔除仍无法反序列化的词（只有坏条目出局，复习/阅读日志整体保留）。
+/// schemaVersion 取文件值；JSON 本身坏掉时不救（返回 Err，让调用方报错保护数据）。
+fn salvage_vocab_file(text: &str) -> Result<VocabFile, String> {
+    let mut value: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("生词数据损坏: {e}"))?;
+    let schema_version = value
+        .get("schemaVersion")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(READER_SCHEMA_VERSION as u64) as u32;
+    check_schema(schema_version)?;
+    if let Some(words) = value.get_mut("words").and_then(|v| v.as_array_mut()) {
+        for w in words.iter_mut() {
+            if let Some(label) = w.get("chunkType").and_then(|v| v.as_str()) {
+                if let Some(fixed) = repair_chunk_type_label(label) {
+                    w["chunkType"] = serde_json::json!(fixed);
+                }
+            }
+        }
+        words.retain(|w| serde_json::from_value::<VocabWord>(w.clone()).is_ok());
+    }
+    serde_json::from_value(value).map_err(|e| format!("生词数据损坏: {e}"))
 }
 
 fn load_books_from_path(path: &std::path::Path) -> Result<BooksFile, String> {
@@ -1362,6 +1413,82 @@ mod tests {
         std::fs::write(&path, "{\"schemaVersion\":1,\"articles\":[{\"id\":").unwrap();
         let err = load_articles_from_path(&path).unwrap_err();
         assert!(err.starts_with("文章数据损坏"), "{err}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn vocab_file_with_chinese_chunk_labels_is_salvaged_and_healed() {
+        // 真实事故（2026-11-03）：v2 同步把前端 CHUNK_TYPE_LABELS 的中文展示名
+        // （「搭配/句式」等）当 chunkType 传上云端，回灌后 ChunkType 枚举解析失败
+        // → 整库读不出 → 加生词必失败、生词列表空白。
+        // 期望：中文标签修回枚举值（词不丢），无法识别的坏词剔除，读一次后自愈。
+        let path = temporary_path("chinese-chunk-labels.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "schemaVersion": 1,
+                "reviewLog": { "schemaVersion": 1, "days": [{"day": "2026-10-30", "count": 1}] },
+                "words": [
+                    {
+                        "id": "attribute-to", "word": "attribute X to Y", "kind": "chunk",
+                        "chunkType": "句式", "pattern": "attribute X to Y", "trap": "attribute for",
+                        "senses": [{"pos": "pattern", "cn": "把 X 归因于 Y"}],
+                        "source": {"articleId": "trees", "sentenceIdx": 4},
+                        "srs": {"ease": 2.5, "intervalDays": 0, "reps": 0, "dueAt": 9, "lapses": 0},
+                        "addedAt": 0, "v": 2
+                    },
+                    {
+                        "id": "buffer-against", "word": "buffer against", "kind": "chunk",
+                        "chunkType": "搭配",
+                        "senses": [{"pos": "collocation", "cn": "缓冲，抵御"}],
+                        "source": {"articleId": "trees", "sentenceIdx": 3},
+                        "srs": {"ease": 2.5, "intervalDays": 0, "reps": 0, "dueAt": 9, "lapses": 0},
+                        "addedAt": 0
+                    },
+                    {
+                        "id": "unmappable", "word": "garbage entry", "chunkType": "不认识的值",
+                        "senses": [{"pos": "", "cn": "修不回来"}],
+                        "source": {"articleId": "", "sentenceIdx": 0},
+                        "srs": {"ease": 2.5, "intervalDays": 0, "reps": 0, "dueAt": 9, "lapses": 0},
+                        "addedAt": 0
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let file = load_vocab_from_path(&path).unwrap();
+        assert_eq!(file.words.len(), 2, "两个可修复词保留，坏词剔除");
+        let attr = file.words.iter().find(|w| w.id == "attribute-to").unwrap();
+        assert_eq!(attr.chunk_type, Some(ChunkType::Pattern), "句式 → pattern");
+        let buffer = file
+            .words
+            .iter()
+            .find(|w| w.id == "buffer-against")
+            .unwrap();
+        assert_eq!(
+            buffer.chunk_type,
+            Some(ChunkType::Collocation),
+            "搭配 → collocation"
+        );
+        assert_eq!(file.review_log.days.len(), 1, "复习日志保留");
+
+        // 回写自愈：文件里不再有中文标签，再读一遍是纯好消息。
+        let healed = load_vocab_from_path(&path).unwrap();
+        assert_eq!(healed.words.len(), 2);
+        let healed_text = std::fs::read_to_string(&path).unwrap();
+        assert!(!healed_text.contains("句式"), "{healed_text}");
+        assert!(!healed_text.contains("搭配"), "{healed_text}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn fully_corrupt_vocab_json_is_an_error_not_salvaged() {
+        // JSON 本身坏掉 ≠ 条目损坏：必须报错保护数据，绝不静默给空库。
+        let path = temporary_path("broken-vocab.json");
+        std::fs::write(&path, "{\"schemaVersion\":1,\"words\":[{\"id\":").unwrap();
+        let err = load_vocab_from_path(&path).unwrap_err();
+        assert!(err.starts_with("生词数据损坏"), "{err}");
         let _ = std::fs::remove_file(&path);
     }
 

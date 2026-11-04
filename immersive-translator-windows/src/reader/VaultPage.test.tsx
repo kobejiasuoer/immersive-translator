@@ -337,6 +337,34 @@ describe("待复习列表（胶带）", () => {
 });
 
 describe("左栏 rail", () => {
+  it("专注复习也不把缺失原文的收藏标为划词收藏", () => {
+    mount = mountVault(baseProps({ mode: "focus", articleTitle: () => null, speakSessions: [] }));
+    const stage = mount.container.querySelector(".stage")!;
+    expect(stage.textContent).toContain("原文不可用");
+    expect(stage.textContent).not.toContain("来自划词收藏");
+  });
+
+  it("原文缺失时区分各文章来源，不把词条误标为划词收藏", () => {
+    const second = makeWord({ id: "buffer", word: "buffer", source: { articleId: "a2", sentenceIdx: 0 } });
+    mount = mountVault(baseProps({
+      words: [UNWIND, second], due: [UNWIND, second],
+      articleTitle: () => null, speakSessions: [],
+    }));
+    const rail = mount.container.querySelector(".vault-rail")!;
+    expect(rail.textContent).toContain("原文不可用 · 1");
+    expect(rail.textContent).toContain("原文不可用 · 2");
+    expect(rail.textContent).not.toContain("未命名文章");
+    expect(rail.textContent?.replace(/\s+/g, "")).toContain("划词收藏0");
+    const items = mount.container.querySelectorAll(".vault-item");
+    expect(items).toHaveLength(2);
+    for (const item of items) {
+      expect(item.textContent).toContain("原文不可用");
+      expect(item.textContent).not.toContain("划词收藏");
+    }
+    act(() => findButton(rail as HTMLElement, "原文不可用 · 2").click());
+    expect(mount.container.querySelectorAll(".vault-item")).toHaveLength(1);
+  });
+
   it("内容来源/类型分组计数；rail 不出现任何词面", () => {
     mount = mountVault(baseProps({ words: [UNWIND, WEAK_CHUNK], due: [UNWIND, WEAK_CHUNK] }));
     const m = mount!;
@@ -398,7 +426,7 @@ describe("左栏 rail", () => {
     mount = mountVault(baseProps({ unnotedCount: 1, requestTranslate }));
     const m = mount!;
     expect(m.container.querySelector(".rail-note")!.textContent).toContain(
-      "有 1 条内容未整理，可能不是词汇（如命令行）。",
+      "有 1 条词汇尚未整理进笔记。",
     );
     expect(m.container.querySelector(".reader-note-modal")).toBeNull();
     act(() => findButton(m.container.querySelector(".rail-note") as HTMLElement, "去处理").click());
