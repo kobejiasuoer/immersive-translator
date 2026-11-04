@@ -4,10 +4,12 @@
  * 当前书卡（.folio-book-hero：书名 / 作者 · 第 N/M 章 · 进度条，点击继续读）
  * + 短文行（标题 + 百分比）。生词本 / 口语 / 笔记入口与今日卡已移交
  * 顶部导航岛与首页书架（ShelfPage）。
- * 删除契约不变：删书 = 章文章与进度全删、生词保留（confirm 文案原样）。
+ * 删除契约不变：删书 = 章文章与进度全删、生词保留（确认弹窗文案原样）。
  */
 
+import { useState } from "react";
 import { IconTrash } from "../ui/icons";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { useEscapeClose } from "./useEscapeClose";
 import type { ArticleSummary, BookMeta } from "../core/readerTypes";
 import { bookChapterIndexOf, bookOverallPercent } from "../core/readerTypes";
@@ -40,6 +42,12 @@ export function FolioSheet({
   onClose,
 }: Props) {
   const currentBook = books.find((b) => b.id === activeBookId) ?? books[0] ?? null;
+  /** 删除确认弹窗（应用内 ConfirmDialog，替代原生 window.confirm）。 */
+  const [pendingDelete, setPendingDelete] = useState<
+    | { kind: "book"; id: string; title: string; chapterCount: number }
+    | { kind: "article"; id: string; title: string }
+    | null
+  >(null);
 
   // Esc 关闭书架浮层（键盘用户不必先Tab 到关闭键）。
   useEscapeClose(onClose);
@@ -102,12 +110,12 @@ export function FolioSheet({
               className="folio-del"
               onClick={(e) => {
                 e.stopPropagation();
-                if (
-                  window.confirm(
-                    `删除《${b.title}》？将删除全部 ${b.chapters.length} 章内容与这本书的阅读进度，不可恢复；生词本不受影响。`,
-                  )
-                )
-                  onDeleteBook(b.id);
+                setPendingDelete({
+                  kind: "book",
+                  id: b.id,
+                  title: b.title,
+                  chapterCount: b.chapters.length,
+                });
               }}
               title="删除这本书（章文章与进度删除，生词保留）"
               aria-label={`删除《${b.title}》`}
@@ -148,7 +156,7 @@ export function FolioSheet({
               className="folio-del"
               onClick={(e) => {
                 e.stopPropagation();
-                if (window.confirm(`删除《${a.title}》？生词本不受影响。`)) onDelete(a.id);
+                setPendingDelete({ kind: "article", id: a.id, title: a.title });
               }}
               title="删除文章"
               aria-label={`删除《${a.title}》`}
@@ -164,6 +172,29 @@ export function FolioSheet({
           还没有书或短文。点「＋ 导入文件」，或在网页/文档里选中文字，按 Ctrl+Shift+R 送进阅读室。
         </div>
       )}
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={pendingDelete?.kind === "book" ? "删除这本书" : "删除这篇短文"}
+        message={
+          pendingDelete === null ? null : pendingDelete.kind === "book" ? (
+            <>
+              删除《{pendingDelete.title}》？将删除全部 {pendingDelete.chapterCount}
+              章内容与这本书的阅读进度，不可恢复；生词本不受影响。
+            </>
+          ) : (
+            <>删除《{pendingDelete.title}》？生词本不受影响。</>
+          )
+        }
+        confirmText="删除"
+        onConfirm={() => {
+          if (pendingDelete === null) return;
+          if (pendingDelete.kind === "book") onDeleteBook(pendingDelete.id);
+          else onDelete(pendingDelete.id);
+          setPendingDelete(null);
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </aside>
   );
 }

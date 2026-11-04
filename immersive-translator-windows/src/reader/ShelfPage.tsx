@@ -29,6 +29,7 @@ import {
 } from "../ui/icons";
 import type { ArticleSummary, BookMeta } from "../core/readerTypes";
 import { bookChapterIndexOf, bookOverallPercent } from "../core/readerTypes";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { EXAM_GOAL_LABELS, type CoverageStats, type ExamGoal } from "../core/examCoverage";
 
 /** 导入弹窗直达 tab（propContracts 外壳契约：onOpenImport 升级为 (tab?) => void）。 */
@@ -166,12 +167,10 @@ function bookFacts(b: BookMeta) {
   return { idx, percent, started, words, minutes: estimateMinutes(words) };
 }
 
-/** 删除书二次确认（与旧版同文案；返回 true=确认删除）。 */
-function confirmDeleteBook(b: BookMeta): boolean {
-  return window.confirm(
-    `删除《${b.title}》？将删除全部 ${b.chapters.length} 章内容与这本书的阅读进度，不可恢复；生词本不受影响。`,
-  );
-}
+/** 书架待删除项（确认弹窗状态；null = 弹窗关闭）。 */
+type PendingDelete =
+  | { kind: "book"; id: string; title: string; chapterCount: number }
+  | { kind: "article"; id: string; title: string };
 
 export function ShelfPage({
   books,
@@ -192,6 +191,8 @@ export function ShelfPage({
   onGoReview,
 }: Props) {
   const [tab, setTab] = useState<"books" | "articles">("books");
+  /** 删除确认弹窗（应用内 ConfirmDialog，替代原生 window.confirm）。 */
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
 
   // ---- 短文 tab 本地工具态（纯 UI，不落盘） ----
   const [query, setQuery] = useState("");
@@ -366,8 +367,7 @@ export function ShelfPage({
                 role="menuitem"
                 onClick={() => {
                   setMoreMenuId(null);
-                  if (window.confirm(`删除《${a.title}》？这篇短文将从书架移除；生词本不受影响。`))
-                    onDeleteArticle(a.id);
+                  setPendingDelete({ kind: "article", id: a.id, title: a.title });
                 }}
               >
                 <IconTrash size={13} />
@@ -486,7 +486,12 @@ export function ShelfPage({
                               className="shelf-iconbtn shelf-book-del"
                               title="移出书架（生词本不受影响）"
                               onClick={() => {
-                                if (confirmDeleteBook(b)) onDeleteBook(b.id);
+                                setPendingDelete({
+                                  kind: "book",
+                                  id: b.id,
+                                  title: b.title,
+                                  chapterCount: b.chapters.length,
+                                });
                               }}
                             >
                               <IconTrash size={13} />
@@ -563,7 +568,12 @@ export function ShelfPage({
                               title="移出书架（生词本不受影响）"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                if (confirmDeleteBook(b)) onDeleteBook(b.id);
+                                setPendingDelete({
+                                  kind: "book",
+                                  id: b.id,
+                                  title: b.title,
+                                  chapterCount: b.chapters.length,
+                                });
                               }}
                             >
                               <IconTrash size={12} />
@@ -754,6 +764,31 @@ export function ShelfPage({
           </>
         )}
       </div>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={pendingDelete?.kind === "book" ? "删除这本书" : "删除这篇短文"}
+        message={
+          pendingDelete === null ? null : pendingDelete.kind === "book" ? (
+            <>
+              删除《{pendingDelete.title}》？将删除全部 {pendingDelete.chapterCount}
+              章内容与这本书的阅读进度，不可恢复；生词本不受影响。
+            </>
+          ) : (
+            <>
+              删除《{pendingDelete.title}》？这篇短文将从书架移除；生词本不受影响。
+            </>
+          )
+        }
+        confirmText="删除"
+        onConfirm={() => {
+          if (pendingDelete === null) return;
+          if (pendingDelete.kind === "book") onDeleteBook(pendingDelete.id);
+          else onDeleteArticle(pendingDelete.id);
+          setPendingDelete(null);
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }
