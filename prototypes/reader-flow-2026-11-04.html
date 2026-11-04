@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>沉浸口语 · 阅读交互提案</title>
+  <link rel="stylesheet" href="reader-flow-2026-11-04.css">
+</head>
+<body>
+  <svg class="symbols" aria-hidden="true"><defs>
+    <symbol id="back" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6"/></symbol>
+    <symbol id="close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="sound" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4zM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="play" viewBox="0 0 24 24"><path d="m9 5 11 7-11 7z"/></symbol>
+    <symbol id="pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+    <symbol id="bookmark" viewBox="0 0 24 24"><path d="M6 4h12v16l-6-4-6 4z"/></symbol>
+    <symbol id="next" viewBox="0 0 24 24"><path d="m7 6 8 6-8 6zM18 6v12"/></symbol>
+    <symbol id="previous" viewBox="0 0 24 24"><path d="m17 6-8 6 8 6zM6 6v12"/></symbol>
+  </defs></svg>
+
+  <header class="appbar">
+    <button id="library" class="back-button" title="返回书架"><svg><use href="#back"/></svg><span>书架</span></button>
+    <span class="book-name">The Happy Prince</span>
+    <div class="top-actions">
+      <button id="contents-toggle" aria-expanded="false" aria-controls="contents">目录</button>
+      <button id="appearance-toggle" aria-label="阅读外观" aria-expanded="false" aria-controls="appearance"><span class="aa">Aa</span></button>
+    </div>
+    <div id="contents" class="menu" hidden>
+      <h2>本篇目录</h2>
+      <button id="chapter-start">The Happy Prince <span>正在阅读</span></button>
+      <p>短篇故事 · Oscar Wilde</p>
+    </div>
+    <div id="appearance" class="menu" hidden>
+      <h2>阅读外观</h2>
+      <div class="option"><span>文字大小</span><div><button id="font-smaller" aria-label="减小字号">−</button><output id="font-value">23</output><button id="font-larger" aria-label="增大字号">+</button></div></div>
+      <div class="option"><span>页面</span><div class="themes"><button class="swatch selected" data-theme="paper" aria-label="纸白" aria-pressed="true"></button><button class="swatch night" data-theme="night" aria-label="夜读" aria-pressed="false"></button></div></div>
+      <p>外观只改变排版，正文始终是原文。</p>
+    </div>
+  </header>
+
+  <main id="workspace">
+    <div id="reading-scroll" class="reading-scroll">
+      <article id="article" lang="en" aria-label="The Happy Prince 原文">
+        <header class="chapter-heading">
+          <div class="article-meta"><span>短篇故事</span><span>约 17 分钟</span><span class="level">B1</span></div>
+          <h1>The Happy Prince</h1>
+          <p class="byline">Oscar Wilde</p>
+        </header>
+        <div id="prose" class="prose"></div>
+        <footer class="chapter-end">
+          <span class="end-mark" aria-hidden="true">❧</span>
+          <p lang="zh-CN">先读完故事，再回味那些打动你的句子。</p>
+          <button id="finish">标记读完</button>
+          <p id="finish-status" class="finish-status" role="status"></p>
+        </footer>
+      </article>
+    </div>
+
+    <aside id="detail" class="detail" aria-labelledby="detail-title" hidden>
+      <header class="detail-heading"><h2 id="detail-title">读懂这句</h2><button id="detail-close" class="icon-button" aria-label="关闭解析，继续阅读"><svg><use href="#close"/></svg></button></header>
+      <div class="detail-body">
+        <blockquote id="detail-source" lang="en"></blockquote>
+        <section><h3>这句话在说什么</h3><p id="detail-meaning"></p></section>
+        <section><h3>顺着原文理解</h3><div id="detail-clauses"></div></section>
+        <section><h3>值得记住</h3><div id="detail-word"></div></section>
+        <button id="detail-listen" class="text-button"><svg><use href="#sound"/></svg>再听一遍</button>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="reading-dock">
+    <div class="audio-controls"><button id="previous-sentence" class="icon-button" aria-label="上一句"><svg><use href="#previous"/></svg></button><button id="play" class="play-button" aria-label="开始朗读"><svg><use href="#play"/></svg></button><button id="next-sentence" class="icon-button" aria-label="下一句"><svg><use href="#next"/></svg></button><button id="speed" class="speed" aria-label="朗读速度">1.0×</button></div>
+    <div class="reading-position"><span id="position-label">正在阅读</span><div class="progress"><i id="progress-fill"></i></div><span id="progress-label">0%</span></div>
+    <p class="gesture-hint">点词查义 · 划选看句意</p>
+  </footer>
+
+  <div id="help" class="help" role="dialog" aria-label="阅读帮助" hidden>
+    <div class="help-heading"><span id="help-kind">词义</span><button id="help-close" class="icon-button" aria-label="收起阅读帮助"><svg><use href="#close"/></svg></button></div>
+    <div id="help-content"></div>
+    <div class="help-actions"><button id="help-listen" class="text-button"><svg><use href="#sound"/></svg>发音</button><button id="help-save" class="text-button"><svg><use href="#bookmark"/></svg><span>收藏</span></button><button id="help-detail" class="text-button help-more">拆解这句</button></div>
+  </div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="reader-flow-2026-11-04.js"></script>
+</body>
+</html>

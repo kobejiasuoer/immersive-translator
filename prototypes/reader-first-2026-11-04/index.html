@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>沉浸口语 · 原文阅读</title>
+  <link rel="stylesheet" href="reader.css">
+  <script src="reader.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#prose">跳到正文</a>
+  <header class="appbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">i</span><span>沉浸口语 <span class="brand-section">/ 阅读</span></span></div>
+    <span class="bar-book" lang="en">The Happy Prince</span>
+      <div class="appbar-end">
+      <button class="text-button" id="saved-toggle" aria-haspopup="dialog">收藏<span id="saved-count"></span></button>
+      <div class="menu-wrap">
+        <button class="icon-button type-toggle" id="type-toggle" aria-label="阅读排版" aria-controls="type-menu" aria-expanded="false" title="阅读排版">Aa</button>
+        <section class="type-menu" id="type-menu" hidden aria-label="阅读排版设置">
+          <div class="menu-title"><strong>阅读排版</strong><button class="icon-button small" data-close-type aria-label="关闭排版设置">×</button></div>
+          <div class="size-control"><span>字号</span><div class="stepper"><button data-size="-1" aria-label="减小字号">−</button><output id="size-value">23</output><button data-size="1" aria-label="增大字号">+</button></div></div>
+          <label class="setting-row"><span>行距</span><select id="line-height"><option value="1.65">紧凑</option><option value="1.85" selected>舒适</option><option value="2.05">宽松</option></select></label>
+        </section>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <article class="reading-column" aria-labelledby="title">
+      <header class="book-heading">
+        <p class="book-meta">Oscar Wilde <span>开篇节选</span></p>
+        <h1 id="title" lang="en">The Happy Prince</h1>
+      </header>
+      <div class="prose" lang="en" id="prose" tabindex="-1" aria-label="原文"></div>
+      <footer class="chapter-end"><span id="completion-label">开篇节选结束</span><button id="finish-reading" class="finish-button" aria-pressed="false">标记读完</button></footer>
+    </article>
+  </main>
+
+  <button class="selection-action" id="selection-action" hidden aria-label="解释选中的内容">解释</button>
+
+  <footer class="player" aria-label="朗读控制">
+    <div class="player-details" id="player-details" hidden>
+      <div class="player-detail-heading"><span>朗读位置</span><output id="sentence-position">1 / 7</output></div>
+      <div class="player-seek"><button id="previous" aria-label="上一句">上一句</button><input id="progress" type="range" min="0" max="6" value="0" aria-label="朗读位置"><button id="next" aria-label="下一句">下一句</button></div>
+      <div class="player-rate"><span>语速</span><button id="speed" aria-label="朗读速度 1 倍">1.0×</button></div>
+    </div>
+    <button class="play-button" id="play" aria-label="开始朗读">
+      <svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 11 7-11 7z"/></svg>
+      <svg class="pause-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg>
+    </button>
+    <span id="play-state">朗读原文</span>
+    <button class="player-expand" id="player-expand" aria-label="展开朗读控制" aria-controls="player-details" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 14 4-4 4 4"/></svg></button>
+  </footer>
+
+  <dialog class="help-panel" id="help-card" aria-labelledby="help-title">
+      <header class="help-head"><div><span id="help-kind" class="help-kind"></span><h2 id="help-title" lang="en"></h2></div><button class="icon-button small" id="close-help" aria-label="关闭解释">×</button></header>
+      <p class="pronunciation" id="pronunciation" lang="en" hidden></p>
+      <p class="help-meaning" id="help-meaning" lang="en"></p>
+      <details class="structure-details" id="structure-details" hidden>
+        <summary>句子结构</summary>
+        <ol id="sentence-parts" lang="en"></ol>
+      </details>
+      <footer class="help-actions"><button id="help-audio">听发音</button><button id="save-word" aria-pressed="false">收藏</button></footer>
+  </dialog>
+
+  <dialog class="small-dialog" id="saved-dialog" aria-labelledby="saved-title">
+    <header class="small-dialog-head"><h2 id="saved-title">收藏的词句</h2><button class="icon-button" id="close-saved" aria-label="关闭收藏">×</button></header>
+    <div id="saved-list"></div><p class="prototype-note">此原型的收藏保存在当前浏览器，不同步到应用词库。</p>
+  </dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
