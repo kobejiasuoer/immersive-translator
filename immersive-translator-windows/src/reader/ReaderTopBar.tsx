@@ -1,8 +1,8 @@
 /**
  * 顶部外壳三段（2026-10-26 阅读页重构，原型 .topbar grid 1fr auto 1fr）：
  * 左 .shell-brand（monogram「I」→ onHome + 书架抽屉触发器：书架 · 当前书名）
- * 中 .shell-tabs（阅读 / 口语 / 笔记与复习 三档，vault 档角标 =
- *   待复习词 + 未整理进笔记的生词）
+ * 中 .shell-tabs（阅读 / 口语 / 笔记与复习 三档，vault 档角标 = 待复习词数；
+ *   未整理数单独在入口提示中说明，避免把重叠的词条重复计数）
  * 右 .shell-tools（全文检索 · 主题选择 · 阅读设置抽屉）
  * 布局与皮肤规则见 reader.css「外壳重构 2026-10-26」横幅（.shell-* 全局骨架，
  * 四视图共用平面胶囊）；根类 .floating-top-stage 保留（矮窗规则续命）。
@@ -31,9 +31,9 @@ interface Props {
   settings: ReaderSettings;
   /** 当前高亮档（reading|shelf→阅读、speak→口语、review|notes|vault→笔记与复习）。 */
   view: IslandSurface;
-  /** 待复习词数（vault 档角标的一半口径）。 */
+  /** 待复习词数（vault 档角标）。 */
   dueNow: number;
-  /** 未整理进任何笔记的生词数（vault 档角标的另一半口径）。 */
+  /** 未整理进任何笔记的生词数（入口提示，与待复习数可能重叠）。 */
   unnotedCount: number;
   onPatchSettings: (patch: Partial<ReaderSettings>) => void;
   onOpenDrawer: () => void;
@@ -216,8 +216,6 @@ export function ReaderTopBar({
     if (q) onSearch(q);
   }
 
-  const vaultCount = dueNow + unnotedCount;
-
   return (
     <header className={`floating-top-stage${focusMode ? " vault-focus-top" : ""}`}>
       <div className="shell-brand">
@@ -271,11 +269,11 @@ export function ReaderTopBar({
           className={`island-tab${view === "vault" ? " active" : ""}`}
           onClick={() => onNavigate("vault")}
           aria-current={view === "vault" ? "page" : undefined}
-          title="生词复习与笔记都在这一档"
+          title={`${dueNow} 条待复习 · ${unnotedCount} 条未整理进笔记`}
         >
           <IconNotebook size={14} />
           <span>笔记与复习</span>
-          {vaultCount > 0 && <span className="island-counter">{vaultCount}</span>}
+          {dueNow > 0 && <span className="island-counter">{dueNow}</span>}
         </button>
       </nav>
 

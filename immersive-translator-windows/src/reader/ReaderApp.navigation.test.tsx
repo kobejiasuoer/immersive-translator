@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ReaderApp } from "./ReaderApp";
 import { DEFAULT_SETTINGS } from "../lib/settingsStore";
 import { DEFAULT_READER_SETTINGS, type Article, type ArticleSummary, type BookMeta } from "../core/readerTypes";
+import { initialSrs } from "../core/readerSrs";
 import { actAsync, createHarness, findButton, type Harness } from "../views/authTestHarness";
 
 const mocks = vi.hoisted(() => ({
@@ -173,6 +174,128 @@ function deferInitialBooks(currentBooks: BookMeta[] = []) {
 }
 
 describe("ReaderApp 书架阅读导航", () => {
+  it("启动读取期间显示加载状态，不把尚未返回的数据当作空书架或零到期词", async () => {
+    const initial = deferInitialBooks();
+    const h = await mount();
+    expect(h.container.querySelector('.shelf-page [role="status"]')?.textContent).toContain("正在读取");
+    expect(h.container.textContent).not.toContain("还没有书");
+    expect(h.container.textContent).not.toContain("今天没有到期生词");
+    expect(h.container.querySelector('.shelf-page [role="tablist"]')).toBeNull();
+    // 书索引 IPC 未返回时，独立的生词读取已经发起，避免启动串行等待。
+    expect(mocks.invoke).toHaveBeenCalledWith("reader_get_vocab");
+
+    await actAsync(() => initial.finish([structuredClone(BOOK)]));
+    expect(h.container.querySelector('.shelf-page [role="status"]')).toBeNull();
+    expect(h.container.querySelector(".shelf-bookcard h3")?.textContent).toBe(BOOK.title);
+  });
+
+  it("启动读取失败显示可见错误，不把读失败解释为没有书", async () => {
+    const defaultInvoke = mocks.invoke.getMockImplementation()!;
+    let failed = true;
+    mocks.invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (failed && command === "reader_list_books") return Promise.reject(new Error("book index unavailable"));
+      return defaultInvoke(command, args);
+    });
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const h = await mount();
+    expect(h.container.querySelector('.shelf-page [role="alert"]')?.textContent).toContain("读取失败");
+    expect(h.container.textContent).not.toContain("还没有书");
+    expect(h.container.textContent).not.toContain("今天没有到期生词");
+    failed = false;
+    await actAsync(() => findButton(h.container, "重新读取").click());
+    expect(h.container.querySelector('.shelf-page [role="alert"]')).toBeNull();
+    expect(h.container.querySelector(".shelf-bookcard h3")?.textContent).toBe(BOOK.title);
+  });
+
+  it("账号身份已确认但语音凭据探测尚未完成时，也开始读取本地书架与生词", async () => {
+    const defaultInvoke = mocks.invoke.getMockImplementation()!;
+    let finishCredentials!: (secret: string) => void;
+    const credentials = new Promise<string>((resolve) => { finishCredentials = resolve; });
+    mocks.invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "secret_get") return credentials;
+      return defaultInvoke(command, args);
+    });
+    const h = await mount();
+    expect(mocks.invoke).toHaveBeenCalledWith("reader_list_articles");
+    expect(mocks.invoke).toHaveBeenCalledWith("reader_list_books");
+    expect(mocks.invoke).toHaveBeenCalledWith("reader_get_vocab");
+    expect(h.container.querySelector('.shelf-page [role="status"]')).not.toBeNull();
+    await actAsync(() => finishCredentials(""));
+    expect(h.container.querySelector(".shelf-bookcard h3")?.textContent).toBe(BOOK.title);
+  });
+
+  it("启动先确认账号学习空间，再读取该账号书架，不能提前读取默认访客空间", async () => {
+    const defaultInvoke = mocks.invoke.getMockImplementation()!;
+    const status = { loggedIn: true, user: { id: "reader-account-1" }, notice: null };
+    let finishIdentity!: (value: typeof status) => void;
+    let identityReady = false;
+    const identity = new Promise<typeof status>((resolve) => { finishIdentity = resolve; });
+    mocks.invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "auth_get_status") return identity;
+      // 模拟后端 auth_get_status 完成前默认 guest，完成后切换至该账号的数据空间。
+      if (command === "reader_list_books" && !identityReady) return Promise.resolve([]);
+      return defaultInvoke(command, args);
+    });
+    const h = await mount();
+    expect(h.container.querySelector('.shelf-page [role="status"]')).not.toBeNull();
+    expect(mocks.invoke).not.toHaveBeenCalledWith("reader_list_articles");
+    expect(mocks.invoke).not.toHaveBeenCalledWith("reader_list_books");
+    expect(mocks.invoke).not.toHaveBeenCalledWith("reader_get_vocab");
+
+    await actAsync(() => { identityReady = true; finishIdentity(status); });
+    expect(h.container.querySelector('.shelf-page [role="status"]')).toBeNull();
+    expect(h.container.querySelector(".shelf-bookcard h3")?.textContent).toBe(BOOK.title);
+  });
+
+  it("切换账号后，旧身份初始化的晚到失败不能覆盖当前账号的成功读取", async () => {
+    const defaultInvoke = mocks.invoke.getMockImplementation()!;
+    let failIdentity!: (error: Error) => void;
+    const initialIdentity = new Promise<unknown>((_resolve, reject) => { failIdentity = reject; });
+    let authReads = 0;
+    mocks.invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "auth_get_status" && ++authReads === 1) return initialIdentity;
+      return defaultInvoke(command, args);
+    });
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const h = await mount();
+    await actAsync(() => {
+      mocks.listeners.get("auth-state-changed")?.({ payload: { loggedIn: true, user: { id: "reader-account-2" }, notice: null } });
+    });
+    await actAsync(() => failIdentity(new Error("old identity unavailable")));
+    expect(h.container.querySelector('.shelf-page [role="alert"]')).toBeNull();
+    expect(h.container.querySelector(".shelf-bookcard h3")?.textContent).toBe(BOOK.title);
+  });
+
+  it("身份初始化失败后重新读取仍先确认账号，等待期间不能读取访客书架", async () => {
+    const defaultInvoke = mocks.invoke.getMockImplementation()!;
+    let authReads = 0;
+    mocks.invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "auth_get_status" && ++authReads === 1) return Promise.reject(new Error("identity unavailable"));
+      return defaultInvoke(command, args);
+    });
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const h = await mount();
+    expect(h.container.querySelector('.shelf-page [role="alert"]')).not.toBeNull();
+    expect(mocks.invoke).not.toHaveBeenCalledWith("reader_list_books");
+
+    const status = { loggedIn: true, user: { id: "reader-account-1" }, notice: null };
+    let finishIdentity!: (value: typeof status) => void;
+    let identityReady = false;
+    const identity = new Promise<typeof status>((resolve) => { finishIdentity = resolve; });
+    mocks.invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "auth_get_status") return identity;
+      if (command === "reader_list_books" && !identityReady) return Promise.resolve([]);
+      return defaultInvoke(command, args);
+    });
+    await actAsync(() => findButton(h.container, "重新读取").click());
+    expect(h.container.querySelector('.shelf-page [role="status"]')).not.toBeNull();
+    expect(mocks.invoke).not.toHaveBeenCalledWith("reader_list_articles");
+    expect(mocks.invoke).not.toHaveBeenCalledWith("reader_list_books");
+    expect(mocks.invoke).not.toHaveBeenCalledWith("reader_get_vocab");
+    await actAsync(() => { identityReady = true; finishIdentity(status); });
+    expect(h.container.querySelector(".shelf-bookcard h3")?.textContent).toBe(BOOK.title);
+  });
+
   it("真实书卡继续读打开断点章，并在真实阅读页定位到第三句", async () => {
     const h = await mount();
     await continueReading(h);
@@ -234,6 +357,50 @@ describe("ReaderApp 书架阅读导航", () => {
     await actAsync(() => initial.finish([structuredClone(BOOK)]));
     expect(h.container.querySelector(".shelf-bookcard")).toBeNull();
     expect(h.container.textContent).not.toContain(BOOK.title);
+  });
+
+  it("切换账号后，迟到的旧账号到期词不能覆盖当前账号的复习统计", async () => {
+    const defaultInvoke = mocks.invoke.getMockImplementation()!;
+    const oldVocab = {
+      words: [{ id: "lantern", word: "lantern", senses: [{ pos: "n.", cn: "灯笼" }], source: { articleId: CHAPTER.id, sentenceIdx: 1 }, srs: initialSrs(1), addedAt: 1 }],
+      reviewLog: { schemaVersion: 1, days: [] },
+    };
+    let finishVocab!: (vocab: typeof oldVocab) => void;
+    const pendingVocab = new Promise<typeof oldVocab>((resolve) => { finishVocab = resolve; });
+    let vocabReads = 0;
+    mocks.invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "reader_get_vocab" && ++vocabReads === 1) return pendingVocab;
+      return defaultInvoke(command, args);
+    });
+    const h = await mount();
+    expect(h.container.querySelector('.shelf-page [role="status"]')).not.toBeNull();
+    await actAsync(() => {
+      mocks.listeners.get("auth-state-changed")?.({ payload: { loggedIn: true, user: { id: "reader-account-2" }, notice: null } });
+    });
+    expect(h.container.querySelector(".shelf-statcard")?.textContent).toContain("今天没有到期生词");
+
+    await actAsync(() => finishVocab(oldVocab));
+    expect(h.container.querySelector(".shelf-statcard")?.textContent).toContain("今天没有到期生词");
+    expect(h.container.querySelector(".shelf-statcard")?.textContent).not.toContain("1 张到期");
+  });
+
+  it("当前账号书架已完成读取时，旧账号晚到的失败不能改成错误页", async () => {
+    const defaultInvoke = mocks.invoke.getMockImplementation()!;
+    let failInitialBooks!: (error: Error) => void;
+    const initialBooks = new Promise<BookMeta[]>((_resolve, reject) => { failInitialBooks = reject; });
+    let bookReads = 0;
+    mocks.invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "reader_list_books" && ++bookReads === 1) return initialBooks;
+      return defaultInvoke(command, args);
+    });
+    const h = await mount();
+    await actAsync(() => {
+      mocks.listeners.get("auth-state-changed")?.({ payload: { loggedIn: true, user: { id: "reader-account-2" }, notice: null } });
+    });
+    expect(h.container.querySelector(".shelf-bookcard h3")?.textContent).toBe(BOOK.title);
+    await actAsync(() => failInitialBooks(new Error("old account index unavailable")));
+    expect(h.container.querySelector('.shelf-page [role="alert"]')).toBeNull();
+    expect(h.container.querySelector(".shelf-bookcard h3")?.textContent).toBe(BOOK.title);
   });
 
   it("章节读取期间切换账号，迟到的旧账号正文不能再进入阅读页", async () => {

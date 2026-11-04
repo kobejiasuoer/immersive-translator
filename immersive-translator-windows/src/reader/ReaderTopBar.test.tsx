@@ -67,6 +67,24 @@ function key(element: HTMLElement, value: string, options: KeyboardEventInit = {
   return event;
 }
 
+describe("ReaderTopBar 复习计数", () => {
+  it("待复习与未整理重叠时，角标只显示待复习数量", () => {
+    render({ dueNow: 13, unnotedCount: 13 });
+    const tab = container.querySelector<HTMLButtonElement>('button[aria-current="page"]');
+    expect(container.querySelector(".island-counter")?.textContent).toBe("13");
+    const vault = Array.from(container.querySelectorAll<HTMLButtonElement>(".island-tab"))
+      .find((button) => button.textContent?.includes("笔记与复习"))!;
+    expect(vault.title).toContain("13 条待复习");
+    expect(vault.title).toContain("13 条未整理进笔记");
+    expect(tab?.textContent).toBe("阅读");
+  });
+
+  it("只有未整理内容时不冒充待复习角标", () => {
+    render({ dueNow: 0, unnotedCount: 13 });
+    expect(container.querySelector(".island-counter")).toBeNull();
+  });
+});
+
 describe("ReaderTopBar 更新提示插槽", () => {
   it("无提示时保留原有工具，有提示时放在工具区并保持检索入口", () => {
     render();

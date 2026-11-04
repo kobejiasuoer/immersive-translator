@@ -4,7 +4,7 @@ import { checkForUpdate, isStorePackaged, type UpdateInfo } from "./updater";
 import { readKnownUpdate, subscribeUpdateInfo } from "./updateNoticeStore";
 
 const STARTUP_DELAY_MS = 10_000;
-const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
 
 /** 仅由 reader 主窗口调度；检查失败保持静默，下载仍由关于页的明确点击触发。 */
 export function useProactiveUpdate(): UpdateInfo | null {
