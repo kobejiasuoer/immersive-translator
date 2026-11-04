@@ -4,6 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import {
   loadSettingsFullAsync,
   saveSettingsFullAsync,
+  savePersistedHotkeys,
   saveVoicePrefs,
   stripVoicePrefs,
   DEFAULT_SETTINGS,
@@ -29,7 +30,7 @@ import {
   normalizeHotkey,
   RECOMMENDED_HOTKEYS,
 } from "../core/hotkeyValidator";
-import { reregisterHotkeys, testConnectivity, openOnboarding, settingsTakePendingTab, listenSettingsNavigateTab, authFetchServerConfig, authServerBaseUrl, openLoginWindow } from "../lib/tauriBridge";
+import { reregisterHotkeys, getActiveHotkeys, testConnectivity, openOnboarding, settingsTakePendingTab, listenSettingsNavigateTab, authFetchServerConfig, authServerBaseUrl, openLoginWindow } from "../lib/tauriBridge";
 import {
   enable as enableAutostart,
   disable as disableAutostart,
@@ -478,17 +479,73 @@ export function Settings() {
     return () => window.removeEventListener("blur", cancelRecording);
   }, [activeTab]);
 
+  // ---- 热键自愈回显 ----
+  // 历史版本「立即生效」只写 Rust 侧不写 localStorage，设置页显示值可能与真实
+  // 生效键脱节（如 UI 显示 Ctrl+Shift+E、后端每次启动恢复 Ctrl+Shift+J）。
+  // 进入快捷键页读一次后端真实值：表单与快照一致（无未保存修改）且后端不同时
+  // 采纳后端值（表单+快照一起），正在编辑（dirty）时不动表单。
+  // 比较必须用 ref 里的最新提交值而非本 effect 闭包捕获值：fetch 返回时用户
+  // 可能已经键入，旧闭包值会误判「未编辑」而覆盖用户的未保存修改。
+  const latestHotkeysRef = useRef({ hotkey: "", ocrHotkey: "", readerHotkey: "" });
+  const latestSnapshotHotkeysRef = useRef<{
+    hotkey: string;
+    ocrHotkey: string;
+    readerHotkey: string;
+  } | null>(null);
+  useEffect(() => {
+    latestHotkeysRef.current = {
+      hotkey: settings.hotkey,
+      ocrHotkey: settings.ocrHotkey,
+      readerHotkey: settings.readerHotkey,
+    };
+    latestSnapshotHotkeysRef.current =
+      savedSnapshot === null
+        ? null
+        : {
+            hotkey: savedSnapshot.hotkey,
+            ocrHotkey: savedSnapshot.ocrHotkey,
+            readerHotkey: savedSnapshot.readerHotkey,
+          };
+  });
+  useEffect(() => {
+    if (activeTab !== "hotkeys") return;
+    let active = true;
+    getActiveHotkeys()
+      .then(([t, o, r]) => {
+        if (!active) return;
+        const form = latestHotkeysRef.current;
+        const snap = latestSnapshotHotkeysRef.current;
+        if (snap === null) return; // 设置尚未加载完成，无从判断是否 dirty
+        const untouched =
+          form.hotkey === snap.hotkey &&
+          form.ocrHotkey === snap.ocrHotkey &&
+          form.readerHotkey === snap.readerHotkey;
+        if (!untouched) return;
+        if (form.hotkey === t && form.ocrHotkey === o && form.readerHotkey === r) return;
+        const healed = { hotkey: t, ocrHotkey: o, readerHotkey: r };
+        setSettings((prev) => ({ ...prev, ...healed }));
+        setSavedSnapshot((prev) => (prev === null ? prev : { ...prev, ...healed }));
+      })
+      .catch(() => undefined); // invoke 不可用（如单测环境）：保持现状
+    return () => {
+      active = false;
+    };
+  }, [activeTab]);
+
   function updateHotkey(key: "hotkey" | "ocrHotkey" | "readerHotkey", value: string) {
     update(key, value);
     setHotkeyErrMsg(null);
     setHotkeysApplied(false);
   }
 
-  async function registerAllHotkeys(): Promise<boolean> {
+  async function registerAllHotkeys(
+    override?: Pick<AppSettings, "hotkey" | "ocrHotkey" | "readerHotkey">,
+  ): Promise<boolean> {
     setHotkeysApplied(false);
-    const t = normalizeHotkey(settings.hotkey);
-    const o = normalizeHotkey(settings.ocrHotkey);
-    const r = normalizeHotkey(settings.readerHotkey);
+    const source = override ?? settings;
+    const t = normalizeHotkey(source.hotkey);
+    const o = normalizeHotkey(source.ocrHotkey);
+    const r = normalizeHotkey(source.readerHotkey);
     if (t === o || t === r || o === r) {
       setHotkeyErrMsg("翻译、截图 OCR、阅读室热键两两不能相同");
       return false;
@@ -504,6 +561,16 @@ export function Settings() {
     setHotkeysApplying(true);
     try {
       await reregisterHotkeys(t, o, r);
+      // 注册成功立即写盘与 Rust 侧 hotkey.txt 同步。此前只注册不写
+      // localStorage，UI 会在下次打开设置时回退显示旧值，与真实生效键脱节。
+      savePersistedHotkeys({ hotkey: t, ocrHotkey: o, readerHotkey: r });
+      // 快照热键字段一并前移（存表单原值保持与 dirty 比较同口径），
+      // 避免下次「保存设置」把已生效键当未保存修改再重注册一遍。
+      setSavedSnapshot((prev) =>
+        prev === null
+          ? prev
+          : { ...prev, hotkey: source.hotkey, ocrHotkey: source.ocrHotkey, readerHotkey: source.readerHotkey },
+      );
       setHotkeyErrMsg(null);
       setHotkeysApplied(true);
       return true;
@@ -555,6 +622,11 @@ export function Settings() {
     setSettings(reset);
     setVault(resetVault);
     setSavedSnapshot(reset);
+    // 恢复默认也重注册：只重置 UI 不动后端会留下「显示默认键、实际生效旧键」
+    // 的脱节（注册失败时错误提示渲染在快捷键页，跳过去让它可见）。
+    void registerAllHotkeys(reset).then((ok) => {
+      if (!ok) setActiveTab("hotkeys");
+    });
     setSaved(false);
   }
 

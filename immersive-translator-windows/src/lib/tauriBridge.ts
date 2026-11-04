@@ -146,9 +146,13 @@ export async function reregisterHotkeys(
   return invoke<string>("reregister_hotkeys", { translateHotkey, ocrHotkey, readerHotkey });
 }
 
-/** 返回后端当前实际注册并持久化的全局热键。 */
-export async function getActiveHotkey(): Promise<string> {
-  return invoke<string>("get_active_hotkey");
+/**
+ * 返回后端当前实际生效的三个全局热键（翻译/OCR/阅读室，前端展示格式）。
+ * 设置页自愈回显用：UI 状态与后端脱节时（历史版本「立即生效」只写 Rust 侧
+ * 不写 localStorage），打开快捷键页读一次即可显示真实生效键。
+ */
+export async function getActiveHotkeys(): Promise<[string, string, string]> {
+  return invoke<[string, string, string]>("get_active_hotkeys");
 }
 
 // ---- 连通性测试 ----
