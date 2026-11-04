@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="ImmersiveTranslator"
-APP_VERSION="${APP_VERSION:-0.1.1}"
+APP_VERSION="${APP_VERSION:-0.12.1}"
 APP_BUILD="${APP_BUILD:-1}"
 APP_BUNDLE_ID="${APP_BUNDLE_ID:-local.immersive-translator.mvp}"
 APP_UPDATE_MANIFEST_URL="${APP_UPDATE_MANIFEST_URL:-}"
@@ -142,6 +142,11 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>zh_CN</string>
+    <!-- 显示名（访达/启动台/强制退出）：对齐 Windows productName「沉浸口语」
+         （tauri.conf.json:3）。CFBundleName/CFBundleExecutable 保持
+         ImmersiveTranslator：联动 dist 路径、SPM 资源 bundle 命名与 codesign 目标。 -->
+    <key>CFBundleDisplayName</key>
+    <string>沉浸口语</string>
     <key>CFBundleExecutable</key>
     <string>ImmersiveTranslator</string>
     <key>CFBundleIdentifier</key>

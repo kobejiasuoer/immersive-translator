@@ -3,124 +3,406 @@ import SwiftUI
 import ReaderCore
 import XfyunCore
 
-// MARK: - 「笔记与复习」三合一容器（v0.8 Phase 4 · VaultPage 的 Mac 对应物）
+// MARK: - 「笔记与复习」四态容器（2026-10-26 改版，VaultPage.tsx 的 Mac 对应物）
+//
+// 三栏 rail | stage | board；专注态（focus）rail/board 与顶栏中岛隐藏、单列居中。
+// 四态（VaultPlayMode）：home 复习首页（stage-head + 开始复习 Hero + 待复习胶带列表）·
+// notes 全部笔记（stage 内嵌既有 ReaderNotesView）· focus 专注复习（退出 Esc + 进度条 +
+// 轮转三卡）· export 导出（范围预过滤 + 包含 chips 只作用于预览 + 预览/源码 seg）。
+// 业务语义零改动：评分链 vm.gradeVocab / vm.gradeSpoken / recall 分桶逐字透传；
+// 导出 buildVaultMarkdown 纯函数不改；队列语义（due = focusIds 或全局到期、评分即出队、
+// Esc 退出只切档不清 focusIds）与 ReaderApp 完全一致。
+// 数据全部来自真实存储（vocabWords / reviewLog / speak sessions），无演示常量。
 
-/// 顶栏三档玩法切换（记忆胶带手账 / 3 分钟快刷闯关 / Markdown 笔记导出）+
-/// 右侧常驻「我的内化看板」；.review/.notes 两条兼容路由共用本容器
-///（openReview 落挑战档、openNotes 落 md 档、导航岛跨视图进入保留上次档位）。
-/// 数据全部来自真实存储（vocabWords / reviewLog / speak sessions），无演示常量。
 struct ReaderVaultView: View {
     @ObservedObject var vm: ReaderViewModel
     @Environment(\.readerPalette) private var palette
-    /// md 档「笔记库回看」弹层（Windows vault-notes-overlay）。
-    @State private var notesOpen = false
-    /// 挑战档会话队列与游标（REV-12）：上提到容器层，左栏词表与闯关舞台共用——
-    /// 词表序号 = 舞台「第 N / M 关」，点词改游标即跳卡（Windows reviewPos 共享语义）。
-    @State private var challengeQueue: [VocabWord] = []
-    @State private var challengePos = 0
+    /// rail 两组筛选（source × type 联合驱动首页列表；rail 自身只出计数不出现词面）。
+    @State private var source: VaultSourceFilter = .all
+    @State private var type: VaultTypeFilter = .all
+    /// 首页胶带揭开态（entry id 集；点击揭开/再贴上反复自测）。
+    @State private var peeled: Set<String> = []
+    /// 首页「给点提示」已展开的条目。
+    @State private var hinted: Set<String> = []
+    /// 专注复习会话（队列/游标/轮转/防重入）。
+    @StateObject private var focus = VaultFocusModel()
 
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
-            HStack(alignment: .top, spacing: 0) {
-                if vm.vaultPlayMode == .challenge {
-                    // 生词本词表（Windows VocabListPanel · 232px 左栏壳）：挑战档专属。
-                    VocabListPanelView(
-                        vm: vm,
-                        queue: challengeQueue,
-                        pos: challengePos,
-                        onJumpToCard: { index in
-                            guard challengeQueue.indices.contains(index) else { return }
-                            withAnimation(ReaderMotion.islandTab) { challengePos = index }
-                        },
-                        onExitFocus: { vm.focusReviewIds = nil }
-                    )
-                    .frame(width: 232)
-                    .frame(maxHeight: .infinity)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-                    Divider().opacity(0.4)
-                }
-                ScrollView {
-                    mainArea
-                        .padding(20)
-                        .frame(maxWidth: 760, alignment: .leading)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                Divider().opacity(0.4)
-                ScrollView {
-                    VaultDashboard(vm: vm)
-                        .padding(16)
-                }
-                .frame(width: 300)
-                .frame(maxHeight: .infinity)
+        ZStack(alignment: .bottom) {
+            if vm.vaultPlayMode == .focus {
+                focusLayout
+            } else {
+                wideLayout
             }
-        }
-        .overlay {
-            if notesOpen {
-                notesOverlay
-            }
+            vaultSwitchBar
         }
         .onAppear {
-            // .notes 兼容路由 = md 档（openNotes 已设；这里兜底路由直推的场景）。
-            if vm.route == .notes { vm.vaultPlayMode = .md }
-            if vm.activeNoteFile != nil { notesOpen = true }
+            focus.rebuild(vm: vm)
+            installKeys()
         }
-        .onChange(of: vm.route) { route in
-            if route == .notes { vm.vaultPlayMode = .md }
+        .onDisappear {
+            vm.reviewKeyHandler = nil
         }
-        .onChange(of: vm.activeNoteFile) { file in
-            // 生成弹窗「在笔记库打开」：vault 已挂载时（onAppear 不会再触发）也弹回看层。
-            if file != nil { notesOpen = true }
+        .onChange(of: vm.vaultPlayMode) { _ in
+            installKeys()
+            if vm.vaultPlayMode == .focus { focus.rebuild(vm: vm) }
+        }
+        .onChange(of: vm.focusReviewIds) { _ in
+            // 加练批次变化（开口命中 drain、看板靶向加练、rail 退出）只换队列，
+            // 会话进度（step/上一关结果/已评去重）保留——Windows 同语义。
+            focus.rebuild(vm: vm)
+        }
+        .onChange(of: vm.vocabWords) { _ in
+            focus.rebuild(vm: vm)
         }
     }
 
-    // MARK: 顶栏（三档玩法 + tape 计数）
+    // MARK: 宽态：三栏 rail | stage | board
 
-    private var topBar: some View {
-        HStack(spacing: 12) {
-            // M-08：三档切换改用透镜卡同款「胶囊槽 + 白底浮起」激活态
-            //（原型 .lens-mode-switch / .lens-mode-btn.active，html:602-625）——
-            // 与同窗导航岛、透镜卡「句子解析/查词」说同一种「选中」语言；
-            // accent 只留给角标、主按钮和当前句。
-            HStack(spacing: 2) {
-                ForEach([ReaderViewModel.VaultPlayMode.tape, .challenge, .md], id: \.self) { mode in
-                    modeTab(mode)
+    private var wideLayout: some View {
+        HStack(alignment: .top, spacing: 0) {
+            VaultRailView(vm: vm, source: $source, type: $type)
+                .frame(width: 210)
+                .frame(maxHeight: .infinity, alignment: .top)
+            Divider().opacity(0.4)
+            ScrollView {
+                stage
+                    .padding(20)
+                    .frame(maxWidth: 760, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider().opacity(0.4)
+            ScrollView {
+                VaultBoardView(vm: vm)
+                    .padding(16)
+            }
+            .frame(width: 320)
+            .frame(maxHeight: .infinity)
+        }
+        .padding(.bottom, 52)  // 底部快捷切换器让位
+    }
+
+    // MARK: 专注态：rail/board 隐藏、单列居中（Windows data-vault-view="focus"）
+
+    private var focusLayout: some View {
+        ScrollView {
+            FocusStageView(vm: vm, focus: focus)
+                .padding(.vertical, 18)
+                .frame(maxWidth: 680, alignment: .leading)
+                .frame(maxWidth: .infinity)
+        }
+        .padding(.bottom, 52)
+    }
+
+    // MARK: stage 分派（focus→FocusStage、export→ExportStage、否则 HomeStage）
+
+    @ViewBuilder
+    private var stage: some View {
+        switch vm.vaultPlayMode {
+        case .home, .notes:
+            // HomeStage 同时承载 home / notes 两档（VaultPage.tsx:372-532）：stage-head
+            //（seg「今日复习 / 全部笔记」+「导出笔记」）两档常驻；notes 档在其下内嵌笔记库，
+            // 无 Hero / 胶带列表。
+            HomeStageView(
+                vm: vm,
+                source: source,
+                type: type,
+                peeled: $peeled,
+                hinted: $hinted
+            )
+        case .export:
+            VaultExportStage(vm: vm)
+        case .focus:
+            EmptyView()
+        }
+    }
+
+    // MARK: 底部快捷切换器（.vault-switch，aria「复习状态快捷切换」）
+
+    private var vaultSwitchBar: some View {
+        HStack(spacing: 2) {
+            ForEach(
+                [ReaderViewModel.VaultPlayMode.home, .focus, .export],
+                id: \.self
+            ) { mode in
+                switchTab(mode)
+            }
+        }
+        .padding(3)
+        .background(Capsule().fill(palette.glassElevated))
+        .overlay(Capsule().strokeBorder(palette.glassBorderStrong, lineWidth: 1))
+        .shadow(color: palette.shadowPill, radius: 10, y: 4)
+        .padding(.bottom, 10)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("复习状态快捷切换")
+    }
+
+    private func switchTab(_ mode: ReaderViewModel.VaultPlayMode) -> some View {
+        let active = vm.vaultPlayMode == mode
+        return Button {
+            // focus 态常驻（等效「退出」）：只切档不清 focusIds，专注队列续跑。
+            withAnimation(ReaderMotion.islandTab) { vm.vaultPlayMode = mode }
+        } label: {
+            Text(mode.switchLabel ?? "")
+                .font(.system(size: 11.5, weight: active ? .semibold : .medium))
+                .foregroundColor(active ? palette.onInk : palette.textSecondary)
+                .padding(.horizontal, 12)
+                .frame(height: 24)
+                .background(Capsule().fill(active ? palette.text : Color.clear))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(mode.switchLabel ?? "")
+        .accessibilityAddTraits(active ? [.isSelected] : [])
+    }
+
+    // MARK: 键位（home Enter；focus Tab/H/Enter/1–3；Esc 退出由 vm.exitFocusModeOnEscape 统一处理）
+
+    private func installKeys() {
+        vm.reviewKeyHandler = { event in handleVaultKey(event) }
+    }
+
+    private func handleVaultKey(_ event: NSEvent) -> Bool {
+        // typing 守卫看阅读室自己的窗口（与 vm.handleKeyDown 同源；NSApp.keyWindow 可能是别的窗）。
+        let typing = ReaderViewModel.textInputHasFocus(in: vm.attachedWindow ?? NSApp.keyWindow)
+        return Self.dispatchVaultKey(event, vm: vm, focus: focus, typing: typing)
+    }
+
+    /// 「笔记与复习」档位键位派发（静态可单测；Windows VaultPage.tsx:186-200,:807-854）：
+    /// home 态 Enter = 开始复习（typing 守卫 + activeDue 非空）；focus 态交给
+    /// VaultFocusModel.handleKey（Tab 不受 typing 守卫，由它逐键位施加）。
+    static func dispatchVaultKey(_ event: NSEvent, vm: ReaderViewModel, focus: VaultFocusModel, typing: Bool) -> Bool {
+        if vm.vaultPlayMode == .home {
+            // due = activeDue：focusIds 非空时为该批词（ReaderApp.tsx:2067-2070）。
+            guard !typing, event.keyCode == 36 || event.keyCode == 76, !vm.reviewQueue.isEmpty else { return false }
+            withAnimation(ReaderMotion.islandTab) { vm.vaultPlayMode = .focus }
+            return true
+        }
+        if vm.vaultPlayMode == .focus {
+            return focus.handleKey(event, vm: vm, typing: typing)
+        }
+        return false
+    }
+}
+
+// MARK: - 左栏 rail（VocabListPanel.tsx VaultRail 的 Mac 对应物）
+//
+// 内容来源组（全部 / 各文章《title》 / 划词收藏 / 口语纠偏，带计数）× 类型组
+// （单词 / 词块 / 短语，toggle 取消）。rail DOM 不出现任何词面（防泄答案）；
+// 未整理提示 + 「去处理」；加练横幅「剩 N」+ 退出。
+
+struct VaultRailView: View {
+    @ObservedObject var vm: ReaderViewModel
+    @Binding var source: VaultSourceFilter
+    @Binding var type: VaultTypeFilter
+    @Environment(\.readerPalette) private var palette
+
+    private var counts: VaultRailCounts {
+        vaultRailCounts(
+            due: vm.reviewQueue,
+            speakSessions: vm.speakSessions,
+            articleTitle: { vm.articleTitle(articleId: $0) }
+        )
+    }
+
+    var body: some View {
+        let counts = counts
+        ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                if let focusCount = vm.focusReviewIds?.count, focusCount > 0 {
+                    focusBanner(focusCount)
+                }
+                sectionTitle("内容来源 · 待复习")
+                railItem(label: "全部", count: counts.total, active: source == .all) {
+                    source = .all
+                }
+                ForEach(counts.articleGroups, id: \.id) { group in
+                    railItem(
+                        label: "《\(group.title ?? "未命名文章")》",
+                        count: group.count,
+                        active: source == .article(group.id)
+                    ) {
+                        source = .article(group.id)
+                    }
+                }
+                railItem(label: "划词收藏", count: counts.popupCount, active: source == .popup) {
+                    source = .popup
+                }
+                railItem(label: "口语纠偏", count: counts.speakCount, active: source == .speak) {
+                    source = .speak
+                }
+                sectionTitle("类型 · 待复习")
+                railItem(label: "单词", count: counts.wordCount, active: type == .word, pressed: true) {
+                    // toggle 取消：再点同一档回全部（VocabListPanel.tsx:103-113）。
+                    type = type == .word ? .all : .word
+                }
+                railItem(label: "词块 / 短语", count: counts.chunkCount, active: type == .chunk, pressed: true) {
+                    type = type == .chunk ? .all : .chunk
+                }
+                if vm.vocabWords.isEmpty {
+                    Text("在阅读里查词收藏，复习从这里开始。")
+                        .font(.system(size: 11))
+                        .foregroundColor(palette.textTertiary)
+                        .padding(.top, 10)
+                }
+                if vm.unnotedWordCount > 0 {
+                    railNote(count: vm.unnotedWordCount)
                 }
             }
-            .padding(3)
-            .background(Capsule().fill(palette.background))
-            .overlay(Capsule().strokeBorder(palette.glassBorder, lineWidth: 1))
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("笔记与复习玩法切换")
+            .padding(14)
+        }
+    }
 
-            if vm.vaultPlayMode == .tape {
-                let coached = vm.speakSessions.reduce(0) { n, s in
-                    n + s.turns.filter { $0.role == .user && $0.coachDiff != nil }.count
-                }
-                Text("生词 \(vm.vocabWords.count) 词 · 口语改进 \(coached) 条")
+    private func sectionTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundColor(palette.textTertiary)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
+    }
+
+    private func railItem(label: String, count: Int, active: Bool, pressed: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(label)
+                    .font(.system(size: 11.5, weight: active ? .semibold : .medium))
+                    .foregroundColor(active ? palette.text : palette.textSecondary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text("\(count)")
                     .font(.system(size: 11).monospacedDigit())
                     .foregroundColor(palette.textTertiary)
             }
-            Spacer()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(active ? palette.accentSoft : Color.clear)
+            )
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
+        .buttonStyle(.plain)
+        .accessibilityLabel(label + "，\(count) 条")
+        .accessibilityAddTraits(active && pressed ? [.isSelected] : [])
     }
 
-    private func modeTab(_ mode: ReaderViewModel.VaultPlayMode) -> some View {
-        let active = vm.vaultPlayMode == mode
-        return Button {
-            withAnimation(ReaderMotion.islandTab) {
-                vm.vaultPlayMode = mode
+    /// 加练横幅：剩 N + 退出（退出回全局到期队列，Windows onExitFocus）。
+    private func focusBanner(_ count: Int) -> some View {
+        HStack {
+            Text("加练 · 只测笔记仍错词（剩 \(count)）")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundColor(palette.warn)
+                .lineLimit(1)
+            Spacer(minLength: 6)
+            Button("退出") {
+                vm.exitFocus()
             }
-        } label: {
-            Text(mode.label)
-                .font(.system(size: 12, weight: active ? .semibold : .medium))
+            .font(.system(size: 10.5, weight: .semibold))
+            .buttonStyle(.link)
+            .help("回到全部到期队列")
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.warnSoft))
+        .padding(.bottom, 6)
+    }
+
+    /// 未整理提示：有 N 条内容未整理，可能不是词汇（如命令行）。+ 去处理。
+    private func railNote(count: Int) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("有 \(count) 条内容未整理，可能不是词汇（如命令行）。")
+                .font(.system(size: 10.5))
+                .foregroundColor(palette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("去处理") {
+                vm.openNoteDialog()
+            }
+            .font(.system(size: 10.5, weight: .semibold))
+            .buttonStyle(.link)
+        }
+        .padding(.top, 10)
+    }
+}
+
+// MARK: - 复习首页（HomeStage：stage-head + Hero + 胶带列表；notes 档内嵌笔记库）
+
+private struct HomeStageView: View {
+    @ObservedObject var vm: ReaderViewModel
+    let source: VaultSourceFilter
+    let type: VaultTypeFilter
+    @Binding var peeled: Set<String>
+    @Binding var hinted: Set<String>
+    @Environment(\.readerPalette) private var palette
+
+    /// 列表条目：到期队列（已按 dueAt 排序）+ 口语纠偏轮。
+    /// due = activeDue：focusIds 非空时为该批词（无视到期），Esc 回首页仍显示加练批次。
+    private var entries: [VaultListEntry] {
+        buildVaultListEntries(
+            due: vm.reviewQueue,
+            speakSessions: vm.speakSessions,
+            sourceSentence: { vm.sourceSentence(articleId: $0, sentenceIdx: $1) },
+            articleTitle: { vm.articleTitle(articleId: $0) }
+        )
+    }
+
+    private var visible: [VaultListEntry] {
+        filterVaultListEntries(entries, source: source, type: type)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            stageHead
+            if vm.vaultPlayMode == .notes {
+                // notes 档：`.vault-notes-embed` 内嵌既有笔记库（VaultPage.tsx:462-464），
+                // 无 Hero / 胶带列表。
+                ReaderNotesView(vm: vm)
+                    .frame(minHeight: 520)
+            } else {
+                hero
+                listSection
+            }
+        }
+    }
+
+    // MARK: stage-head（seg 双档 + 导出笔记）
+
+    private var stageHead: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 2) {
+                segButton("今日复习", active: vm.vaultPlayMode == .home) {
+                    vm.vaultPlayMode = .home
+                }
+                segButton("全部笔记", active: vm.vaultPlayMode == .notes) {
+                    vm.vaultPlayMode = .notes
+                }
+            }
+            .padding(2)
+            .background(Capsule().fill(palette.background))
+            .overlay(Capsule().strokeBorder(palette.glassBorder, lineWidth: 1))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("笔记与复习档位")
+            Spacer(minLength: 8)
+            Button {
+                vm.vaultPlayMode = .export
+            } label: {
+                Label("导出笔记", systemImage: "arrow.down.doc")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(palette.text)
+                    .padding(.horizontal, 10)
+                    .frame(height: 26)
+                    .background(Capsule().strokeBorder(palette.glassBorderStrong, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func segButton(_ title: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11.5, weight: active ? .semibold : .medium))
                 .foregroundColor(active ? palette.text : palette.textTertiary)
                 .padding(.horizontal, 12)
-                .frame(height: 26)
+                .frame(height: 24)
                 .background {
-                    // .lens-mode-btn.active：glass-elevated 白底 + 2px 6px 轻投影
                     if active {
                         Capsule()
                             .fill(palette.glassElevated)
@@ -128,287 +410,340 @@ struct ReaderVaultView: View {
                     }
                 }
                 .clipShape(Capsule())
-                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help("切换到「\(mode.label)」")
         .accessibilityAddTraits(active ? [.isSelected] : [])
     }
 
-    @ViewBuilder
-    private var mainArea: some View {
-        switch vm.vaultPlayMode {
-        case .tape:
-            VaultTapeNotebook(vm: vm)
-        case .challenge:
-            VaultChallengeStage(vm: vm, queue: $challengeQueue, pos: $challengePos)
-        case .md:
-            VaultMarkdownExport(vm: vm, onOpenNotes: { notesOpen = true })
-        }
-    }
+    // MARK: 开始复习 Hero
 
-    // MARK: 笔记库回看弹层
-
-    private var notesOverlay: some View {
-        ZStack(alignment: .topTrailing) {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .ignoresSafeArea()
-                .onTapGesture { notesOpen = false }
-            VStack(spacing: 0) {
-                ReaderNotesView(vm: vm)
-                    .frame(maxWidth: 960, maxHeight: .infinity)
-            }
-            .padding(24)
-            .background(palette.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(palette.glassBorderStrong))
-            .shadow(color: palette.shadowSpatial, radius: 18, y: 8)
-            .padding(28)
-            Button("收起笔记库") { notesOpen = false }
-                .controlSize(.small)
-                .padding(10)
-        }
-        .transition(.opacity.combined(with: .scale(scale: 0.98)))
-    }
-}
-
-// MARK: - 内化三阶（ReaderCore masteryStage 统一派生，Windows readerSrs 同源）
-
-// MARK: - 模式 1：记忆胶带手账（REV-2）
-
-/// 手账行数据（生词原句行 + 口语改进行）。
-struct VaultTapeEntry: Identifiable {
-    enum Kind { case word, speak }
-
-    let id: String
-    let kind: Kind
-    /// 归档键（all 之外）：article:<id> / popup / speak。
-    let archiveKey: String
-    let category: String
-    // 生词行
-    var word: VocabWord?
-    var pre: String = ""
-    var blank: String = ""
-    var post: String = ""
-    var sentenceEn: String?
-    var sentenceZh: String?
-    /// 胶带覆盖层提示：「释义（首字母…）」。
-    var hint: String = ""
-    var tip: String = ""
-    // 口语行
-    var original: String = ""
-    var segs: [CoachSeg] = []
-    var better: String = ""
-    var note: String?
-}
-
-/// 手账条目构建：生词按 dueAt 升序 + 口语带 coachDiff 的 user 轮（真实数据）。
-func buildVaultTapeEntries(
-    words: [VocabWord],
-    speakSessions: [SpeakSession],
-    sourceSentence: (String, Int) -> (en: String, zh: String?)?,
-    articleTitle: (String) -> String?
-) -> [VaultTapeEntry] {
-    var entries: [VaultTapeEntry] = []
-    for w in words.sorted(by: { $0.srs.dueAt < $1.srs.dueAt }) {
-        // 原句取回（与导出同款回退）：articleId 非空优先原文通道，文章被删取不到
-        // 时回退词条自带例句；划词收藏直接用例句。
-        let fromArticle: (en: String, zh: String?)? = w.source.articleId.isEmpty
-            ? nil
-            : sourceSentence(w.source.articleId, w.source.sentenceIdx)
-        let src = fromArticle ?? w.example.map { (en: $0.en, zh: $0.zh) }
-        var pre = ""
-        var blank = w.word
-        var post = ""
-        if let src, !src.en.isEmpty, let range = findChunkRange(src.en, w.word) {
-            pre = substring16(src.en, 0, range.start)
-            blank = substring16(src.en, range.start, range.end)
-            post = substring16(src.en, range.end, Array(src.en.utf16).count)
-        }
-        let title = w.source.articleId.isEmpty ? nil : articleTitle(w.source.articleId)
-        entries.append(VaultTapeEntry(
-            id: "w:\(w.id)",
-            kind: .word,
-            archiveKey: w.source.articleId.isEmpty ? "popup" : "article:\(w.source.articleId)",
-            category: title != nil ? "\(title!) · 核心词块" : "划词收藏 · 核心词块",
-            word: w,
-            pre: pre,
-            blank: blank,
-            post: post,
-            sentenceEn: src?.en,
-            sentenceZh: src?.zh,
-            hint: "\(w.senses.first?.cn ?? w.word)（\(firstLetters(blank))）",
-            tip: [w.pattern, w.trap].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-        ))
-    }
-    for session in speakSessions {
-        for (idx, turn) in session.turns.enumerated() where turn.role == .user {
-            guard let coach = turn.coachDiff else { continue }
-            let better = coach.segs
-                .filter { $0.t != .del }
-                .map(\.v)
-                .joined(separator: " ")
-                .trimmingCharacters(in: .whitespaces)
-            guard !better.isEmpty else { continue }
-            let date = Date(timeIntervalSince1970: Double(turn.at) / 1000)
-            let comps = Calendar.current.dateComponents([.month, .day], from: date)
-            entries.append(VaultTapeEntry(
-                id: "s:\(session.id):\(idx)",
-                kind: .speak,
-                archiveKey: "speak",
-                category: "口语表达改进记录 · \(comps.month ?? 1)月\(comps.day ?? 1)日",
-                original: turn.text,
-                segs: coach.segs,
-                better: better,
-                note: coach.note
-            ))
-        }
-    }
-    return entries
-}
-
-/// UTF-16 子串（findChunkRange 的偏移是 UTF-16；越界收敛不崩）。
-func substring16(_ s: String, _ start: Int, _ end: Int) -> String {
-    let units = Array(s.utf16)
-    let a = min(max(0, start), units.count)
-    let b = min(max(a, end), units.count)
-    guard a < b else { return "" }
-    return String(decoding: units[a..<b], as: UTF16.self)
-}
-
-struct VaultTapeNotebook: View {
-    @ObservedObject var vm: ReaderViewModel
-    @Environment(\.readerPalette) private var palette
-    /// 已揭开的胶带（entry id 集；点击切换反复自测）。
-    @State private var peeled: Set<String> = []
-    @State private var archive = "all"
-
-    private var entries: [VaultTapeEntry] {
-        buildVaultTapeEntries(
-            words: vm.vocabWords,
-            speakSessions: vm.speakSessions,
-            sourceSentence: { vm.sourceSentence(articleId: $0, sentenceIdx: $1) },
-            articleTitle: { vm.articleTitle(articleId: $0) }
+    private var hero: some View {
+        let due = vm.reviewQueue
+        let total = due.count
+        let minutes = vaultMinutes(total)
+        let chips = vaultHeroModeChips(
+            due: due,
+            sourceSentence: { vm.sourceSentence(articleId: $0, sentenceIdx: $1) }
         )
+        return HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(total > 0 ? "今天有 \(total) 条要复习" : "今天没有要复习的了")
+                    .font(readerFont(19, .semibold, pair: vm.effectiveSettings.fontPair))
+                    .foregroundColor(palette.text)
+                Text(total > 0
+                    ? "预计 \(minutes) 分钟 · 都是你最近读到、收藏过的表达"
+                    : "到期的表达会按记忆曲线回来——明天再来，或去阅读室继续攒新词。")
+                    .font(.system(size: 12))
+                    .foregroundColor(palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    modeChip("填空", on: chips.cloze && total > 0)
+                    modeChip("听音", on: chips.dictation && total > 0)
+                    modeChip("开口", on: total > 0)
+                }
+            }
+            Spacer(minLength: 12)
+            VStack(alignment: .trailing, spacing: 5) {
+                Button {
+                    withAnimation(ReaderMotion.islandTab) { vm.vaultPlayMode = .focus }
+                } label: {
+                    Label("开始复习", systemImage: ReaderIcons.play)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .frame(height: 32)
+                        .background(Capsule().fill(total > 0 ? palette.accent : palette.ink4))
+                }
+                .buttonStyle(.plain)
+                .disabled(total == 0)
+                .help(total > 0 ? "进入专注复习" : "今天没有要复习的了")
+                if total > 0 {
+                    Text("按 Enter 也可以开始")
+                        .font(.system(size: 11))
+                        .foregroundColor(palette.textTertiary)
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(palette.glassSurface.opacity(0.6)))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(palette.glassBorder, lineWidth: 1))
     }
 
-    private var visible: [VaultTapeEntry] {
-        archive == "all" ? entries : entries.filter { $0.archiveKey == archive }
+    private func modeChip(_ text: String, on: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 10.5, weight: on ? .semibold : .medium))
+            .foregroundColor(on ? palette.accent : palette.textTertiary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2.5)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(on ? palette.accentSoft : palette.glassBorder.opacity(0.4))
+            )
     }
 
-    private var archiveOptions: [(value: String, label: String)] {
-        var counts: [String: Int] = [:]
-        var labels: [String: String] = [:]
-        for e in entries {
-            counts[e.archiveKey, default: 0] += 1
-            if labels[e.archiveKey] == nil { labels[e.archiveKey] = e.category }
+    // MARK: 待复习胶带列表
+
+    private var anyPeeled: Bool { visible.contains { peeled.contains($0.id) } }
+
+    private var listSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("先自己想一想，点胶带看答案")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(palette.textSecondary)
+                Spacer(minLength: 8)
+                if !visible.isEmpty {
+                    Button(anyPeeled ? "全部盖住" : "全部揭开") {
+                        peeled = anyPeeled ? [] : Set(visible.map(\.id))
+                    }
+                    .font(.system(size: 11.5))
+                    .buttonStyle(.link)
+                }
+            }
+            if visible.isEmpty {
+                Text("这个筛选下还没有条目。在阅读里查词收藏、或去口语里练几轮，条目会出现在这里。")
+                    .font(.system(size: 12))
+                    .foregroundColor(palette.textTertiary)
+                    .padding(.vertical, 28)
+                    .frame(maxWidth: .infinity)
+            } else {
+                ForEach(visible) { entry in
+                    if entry.kind == .word, let word = entry.word {
+                        VaultWordItemRow(
+                            entry: entry,
+                            word: word,
+                            peeled: peeled.contains(entry.id),
+                            hinted: hinted.contains(entry.id),
+                            palette: palette,
+                            fontPair: vm.effectiveSettings.fontPair,
+                            onToggle: { toggle(&peeled, entry.id) },
+                            onToggleHint: { toggle(&hinted, entry.id) },
+                            onGrade: { grade in vm.gradeVocab(word, grade, mode: .recognition, verdict: nil) },
+                            onSpeakSentence: { vm.speakRecallSentence($0) },
+                            onSpeakWord: { vm.speakWord($0) },
+                            onPractice: { vm.practiceVocabSpeak(word) }
+                        )
+                    } else {
+                        VaultSpeakItemRow(
+                            entry: entry,
+                            peeled: peeled.contains(entry.id),
+                            palette: palette,
+                            onToggle: { toggle(&peeled, entry.id) },
+                            onSpeak: { vm.speakWord($0) }
+                        )
+                    }
+                    Rectangle().fill(palette.glassBorder).frame(height: 1)
+                }
+            }
         }
-        var out: [(String, String)] = [("all", "全部（\(entries.count) 条）")]
-        for (key, label) in labels {
-            out.append((key, "\(label)（\(counts[key] ?? 0) 条）"))
-        }
-        return out
+    }
+
+    private func toggle(_ set: inout Set<String>, _ id: String) {
+        if set.contains(id) { set.remove(id) } else { set.insert(id) }
+    }
+}
+
+// MARK: - 首页词条行（VaultWordItem：防剧透——未揭开时译文/释义/评分带一律不渲染）
+
+private struct VaultWordItemRow: View {
+    let entry: VaultListEntry
+    let word: VocabWord
+    let peeled: Bool
+    let hinted: Bool
+    let palette: ReaderPalette
+    let fontPair: ReaderFontPair
+    let onToggle: () -> Void
+    let onToggleHint: () -> Void
+    let onGrade: (ReviewGrade) -> Void
+    let onSpeakSentence: (String) -> Void
+    let onSpeakWord: (String) -> Void
+    let onPractice: () -> Void
+
+    private var gloss: String {
+        word.senses
+            .map { $0.pos.isEmpty ? $0.cn : "\($0.pos) \($0.cn)" }
+            .joined(separator: "；")
+    }
+
+    private var wordCount: Int {
+        entry.blank.trimmingCharacters(in: .whitespaces)
+            .split(separator: " ").count
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("1 分钟遮罩自测手账 · 告别死板背单词卡")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(palette.textTertiary)
-                        .monospacedDigit()
-                    Text("生词原句 & 口语纠偏手账")
-                        .font(readerFont(19, .semibold, pair: vm.effectiveSettings.fontPair))
-                        .foregroundColor(palette.text)
-                }
-                Spacer()
-                Text("点击琥珀色胶带即可刮开自测")
-                    .font(.system(size: 11).monospacedDigit())
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(word.kind == .chunk ? "词块" : "单词")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(palette.accent)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background(Capsule().fill(palette.accentSoft))
+                Text(entry.sourceLabel)
+                    .font(.system(size: 11))
                     .foregroundColor(palette.textTertiary)
+                Spacer(minLength: 0)
+            }
+            // 原句行：pre + 胶带（blank）+ post。
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                Text(entry.pre)
+                VaultTapeChip(
+                    text: entry.blank,
+                    hint: "\(word.senses.first?.cn ?? word.word)（\(firstLetters(entry.blank))）",
+                    peeled: peeled,
+                    palette: palette,
+                    action: onToggle
+                )
+                .padding(.horizontal, 3)
+                Text(entry.post)
+            }
+            .font(readerFont(15, .regular, pair: fontPair))
+            .foregroundColor(palette.text)
+            .lineSpacing(4)
+            .fixedSize(horizontal: false, vertical: true)
+
+            // 防剧透：未揭开时译文/词典行/评分带一律不渲染（VaultPage.tsx:585）。
+            if peeled {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let zh = entry.sentenceZh, !zh.isEmpty {
+                        Text(zh)
+                            .font(.system(size: 12))
+                            .foregroundColor(palette.textTertiary)
+                    }
+                    Text(gloss.isEmpty ? word.word : "\(word.word) · \(gloss)")
+                        .font(.system(size: 12.5))
+                        .foregroundColor(palette.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                    VaultGradeBandRow(palette: palette, onGrade: onGrade)
+                }
             }
 
             HStack(spacing: 10) {
-                Picker("按来源归档", selection: $archive) {
-                    ForEach(archiveOptions, id: \.value) { option in
-                        Text(option.label).tag(option.value)
+                if !peeled {
+                    Button(action: onToggleHint) {
+                        Label("给点提示", systemImage: "questionmark.circle")
+                            .font(.system(size: 11))
                     }
+                    .buttonStyle(.link)
+                    .accessibilityAddTraits(hinted ? [.isSelected] : [])
                 }
-                .pickerStyle(.menu)
-                .frame(maxWidth: 320)
-                Spacer()
-                Button("全部盖上胶带自测") { peeled.removeAll() }
-                    .controlSize(.small)
-                Button("全部揭开") { peeled = Set(visible.map(\.id)) }
-                    .controlSize(.small)
+                if hinted, !peeled {
+                    // 提示行不露答案本身（首字母截断）。
+                    Text("首字母：\(firstLetters(entry.blank))（\(wordCount) 词）")
+                        .font(.system(size: 11))
+                        .foregroundColor(palette.textTertiary)
+                }
+                Spacer(minLength: 0)
+                Button {
+                    if let en = entry.sentenceEn, !en.isEmpty {
+                        onSpeakSentence(en)
+                    } else {
+                        onSpeakWord(word.word)
+                    }
+                } label: {
+                    Label("听原句", systemImage: ReaderIcons.speaker)
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.link)
+                Button(action: onPractice) {
+                    Label("去口语里用一次", systemImage: "mic")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.link)
             }
+        }
+        .padding(.vertical, 12)
+    }
+}
 
-            if visible.isEmpty {
-                Text("这里还没有手账条目。在阅读里查词收藏、或去口语里练几轮，胶带条目会自动出现在这里。")
+// MARK: - 首页口语纠偏行（VaultSpeakItem：原话 + diff；无评分带）
+
+private struct VaultSpeakItemRow: View {
+    let entry: VaultListEntry
+    let peeled: Bool
+    let palette: ReaderPalette
+    let onToggle: () -> Void
+    let onSpeak: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("口语纠偏")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(palette.clauseIndigo)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background(Capsule().fill(palette.clauseIndigoSoft))
+                Text(entry.dateLabel)
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundColor(palette.textTertiary)
+                Spacer(minLength: 0)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                Text("你原本说：\(entry.original)")
                     .font(.system(size: 12.5))
                     .foregroundColor(palette.textTertiary)
-                    .padding(.vertical, 40)
-                    .frame(maxWidth: .infinity)
-            } else {
-                // M-05：整份手账装进一张 22 圆角「手账纸」玻璃大卡
-                //（.notebook-sheet-card，html:1005-1012）；条目行落在同一张纸上，
-                // 行间只以发丝线分隔（.tape-entry-row 的 border-bottom）。
-                VStack(spacing: 0) {
-                    ForEach(Array(visible.enumerated()), id: \.element.id) { idx, entry in
-                        tapeRow(entry)
-                        if idx < visible.count - 1 {
-                            Rectangle().fill(palette.glassBorder).frame(height: 1)
-                        }
-                    }
+                Text(" → 地道说法：")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundColor(palette.textSecondary)
+                segsView
+            }
+            .fixedSize(horizontal: false, vertical: true)
+
+            // 揭开后 note 展示；无评分带（VaultPage.tsx:679）。
+            if peeled, let note = entry.note, !note.isEmpty {
+                Text(note)
+                    .font(.system(size: 12))
+                    .foregroundColor(palette.textTertiary)
+            }
+
+            HStack {
+                Spacer(minLength: 0)
+                Button {
+                    onSpeak(entry.better)
+                } label: {
+                    Label("听地道说法", systemImage: ReaderIcons.speaker)
+                        .font(.system(size: 11))
                 }
-                .padding(.vertical, 8)
-                .padding(.horizontal, 28)
-                .glassCard(palette: palette, radius: 22, heavyShadow: true)
+                .buttonStyle(.link)
             }
         }
+        .padding(.vertical, 12)
     }
 
+    /// diff 渲染：del 删除线 / ins 胶带 / keep 原样。
     @ViewBuilder
-    private func tapeRow(_ entry: VaultTapeEntry) -> some View {
-        if entry.kind == .word, let word = entry.word {
-            VaultTapeWordRow(
-                entry: entry,
-                word: word,
-                peeled: peeled.contains(entry.id),
-                palette: palette,
-                fontPair: vm.effectiveSettings.fontPair,
-                onToggle: { toggle(entry.id) },
-                onListen: {
-                    if let en = entry.sentenceEn, !en.isEmpty {
-                        vm.speakRecallSentence(en)
-                    } else {
-                        vm.speakWord(word.word)
-                    }
-                },
-                onPass: { vm.gradeVocab(word, .good, mode: .recognition, verdict: nil) },
-                onPractice: { vm.practiceVocabSpeak(word) }
-            )
-        } else {
-            VaultTapeSpeakRow(
-                entry: entry,
-                peeled: peeled.contains(entry.id),
-                palette: palette,
-                onToggle: { toggle(entry.id) },
-                onListen: { vm.speakWord(entry.better) }
-            )
-        }
-    }
-
-    private func toggle(_ id: String) {
-        withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.22)) {
-            if peeled.contains(id) { peeled.remove(id) } else { peeled.insert(id) }
+    private var segsView: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            ForEach(Array(entry.segs.enumerated()), id: \.offset) { _, seg in
+                switch seg.t {
+                case .del:
+                    Text(seg.v)
+                        .strikethrough()
+                        .font(.system(size: 13))
+                        .foregroundColor(palette.textTertiary.opacity(0.6))
+                case .ins:
+                    VaultTapeChip(
+                        text: seg.v,
+                        hint: "新说法（\(firstLetters(seg.v))）",
+                        peeled: peeled,
+                        palette: palette,
+                        action: onToggle
+                    )
+                    .padding(.horizontal, 3)
+                case .keep:
+                    Text("\(seg.v) ")
+                        .font(.system(size: 13.5, weight: .medium))
+                        .foregroundColor(palette.text)
+                }
+            }
         }
     }
 }
 
-/// 琥珀胶带（.memory-tape）：默认遮盖（覆盖层「点击揭开 · 提示」），点击揭开/再贴上。
-/// 键盘可达（原生 Button：Space/Enter 触发）。
+/// 琥珀胶带（.memory-tape）：默认遮盖（覆盖层带释义+首字母提示），点击揭开/再贴上。
 private struct VaultTapeChip: View {
     let text: String
     let hint: String
@@ -449,268 +784,62 @@ private struct VaultTapeChip: View {
     }
 }
 
-/// 三阶胶囊（.stage-pill）：s1 暖 / s2 靛 / s3 青绿（原型配色）。
-private struct VaultStagePill: View {
-    let stage: MasteryStage
+/// 三档评分带（VaultGradeBandRow）：没记住 / 有点模糊 / 记住了 + vaultNextLabel 副行；
+/// 建议档高亮；title 快捷键 1–3。
+struct VaultGradeBandRow: View {
     let palette: ReaderPalette
+    var suggested: ReviewGrade? = nil
+    let onGrade: (ReviewGrade) -> Void
 
     var body: some View {
-        let (bg, fg, label) : (Color, Color, String) = {
-            switch stage {
-            case .s1: return (palette.warnSoft, palette.warn, stage.tapeLabel)
-            case .s2: return (palette.clauseIndigoSoft, palette.clauseIndigo, stage.tapeLabel)
-            case .s3: return (palette.sonicTealSoft, palette.sonicTeal, stage.tapeLabel)
+        HStack(spacing: 8) {
+            ForEach(vaultGradeBands, id: \.grade) { band in
+                bandButton(band)
             }
-        }()
-        return Text(label)
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundColor(fg)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .background(bg)
-            .clipShape(Capsule())
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("评分")
+    }
+
+    private func bandButton(_ band: VaultGradeBand) -> some View {
+        Button {
+            onGrade(band.grade)
+        } label: {
+            VStack(spacing: 1) {
+                Text(band.name)
+                    .font(.system(size: 12, weight: suggested == band.grade ? .semibold : .medium))
+                    .foregroundColor(palette.text)
+                Text(vaultNextLabel(band.grade))
+                    .font(.system(size: 9.5))
+                    .foregroundColor(palette.textTertiary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity)
+            .background(suggested == band.grade ? palette.accent.opacity(0.12) : palette.surfaceAlt)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(suggested == band.grade ? palette.accent : palette.border, lineWidth: suggested == band.grade ? 1.6 : 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("快捷键 \(band.key)")
     }
 }
 
-private struct VaultTapeWordRow: View {
-    let entry: VaultTapeEntry
-    let word: VocabWord
-    let peeled: Bool
-    let palette: ReaderPalette
-    let fontPair: ReaderFontPair
-    let onToggle: () -> Void
-    let onListen: () -> Void
-    let onPass: () -> Void
-    let onPractice: () -> Void
+// MARK: - 专注复习（FocusStage：退出 Esc + 进度条 + 轮转三卡）
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text(entry.category)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(palette.textTertiary)
-                VaultStagePill(stage: masteryStage(word), palette: palette)
-                Spacer()
-            }
-            HStack(alignment: .firstTextBaseline, spacing: 0) {
-                Text(entry.pre)
-                VaultTapeChip(text: entry.blank, hint: entry.hint, peeled: peeled, palette: palette, action: onToggle)
-                    .padding(.horizontal, 3)
-                Text(entry.post)
-            }
-            .font(readerFont(15, .regular, pair: fontPair))
-            .foregroundColor(palette.text)
-            .lineSpacing(4)
-            .fixedSize(horizontal: false, vertical: true)
-
-            if let zh = entry.sentenceZh, !zh.isEmpty {
-                Text(zh)
-                    .font(.system(size: 12))
-                    .foregroundColor(palette.textTertiary)
-            }
-
-            HStack(spacing: 10) {
-                Text(entry.tip.isEmpty ? "首字母：\(firstLetters(entry.blank))" : "提示：\(entry.tip)")
-                    .font(.system(size: 11))
-                    .foregroundColor(palette.textTertiary)
-                    .lineLimit(1)
-                Spacer()
-                Button {
-                    onListen()
-                } label: {
-                    Label("听原句", systemImage: ReaderIcons.speaker)
-                        .font(.system(size: 11.5))
-                }
-                .buttonStyle(.link)
-                Button {
-                    onPass()
-                } label: {
-                    Label("秒懂过关", systemImage: "checkmark")
-                        .font(.system(size: 11.5, weight: .semibold))
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                Button("去口语里用一次 →") { onPractice() }
-                    .buttonStyle(.link)
-                    .font(.system(size: 11.5))
-            }
-        }
-        // M-05：行落在「手账纸」大卡上（.tape-entry-row：padding 16 0 + 发丝线分隔），
-        // 不再自带实底小卡。
-        .padding(.vertical, 16)
-    }
-}
-
-private struct VaultTapeSpeakRow: View {
-    let entry: VaultTapeEntry
-    let peeled: Bool
-    let palette: ReaderPalette
-    let onToggle: () -> Void
-    let onListen: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text(entry.category)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(palette.textTertiary)
-                Text("熟悉中 · 替代中式表达")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(palette.clauseIndigo)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(palette.clauseIndigoSoft)
-                    .clipShape(Capsule())
-                Spacer()
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                Text("你原本说：\(entry.original)")
-                    .font(.system(size: 12.5))
-                    .foregroundColor(palette.textTertiary)
-                HStack(alignment: .firstTextBaseline, spacing: 0) {
-                    Text("→ 地道说法：")
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundColor(palette.textSecondary)
-                    segsView
-                }
-                .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let note = entry.note, !note.isEmpty {
-                Text(note)
-                    .font(.system(size: 12))
-                    .foregroundColor(palette.textTertiary)
-            }
-
-            HStack(spacing: 10) {
-                Text("在口语里替换掉上面的说法，胶带遮住先自己回忆")
-                    .font(.system(size: 11))
-                    .foregroundColor(palette.textTertiary)
-                Spacer()
-                Button {
-                    onListen()
-                } label: {
-                    Label("听地道说法", systemImage: ReaderIcons.speaker)
-                        .font(.system(size: 11.5))
-                }
-                .buttonStyle(.link)
-            }
-        }
-        // M-05：同 VaultTapeWordRow——落在手账纸大卡上的行。
-        .padding(.vertical, 16)
-    }
-
-    /// 改写行：ins 片段贴胶带遮盖，del 片段弱化划线，keep 原样。
-    @ViewBuilder
-    private var segsView: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 0) {
-            ForEach(Array(entry.segs.enumerated()), id: \.offset) { _, seg in
-                switch seg.t {
-                case .del:
-                    Text(seg.v)
-                        .strikethrough()
-                        .foregroundColor(palette.textTertiary.opacity(0.6))
-                        .font(.system(size: 13))
-                case .ins:
-                    VaultTapeChip(text: seg.v, hint: "新说法（\(firstLetters(seg.v))）", peeled: peeled, palette: palette, action: onToggle)
-                        .padding(.horizontal, 3)
-                case .keep:
-                    Text("\(seg.v) ")
-                        .font(.system(size: 13.5, weight: .medium))
-                        .foregroundColor(palette.text)
-                }
-            }
-        }
-    }
-}
-
-// MARK: - 模式 2：3 分钟快刷闯关（REV-3）
-
-/// 闯关轮转：完形 → 听写 → 开口（每评一关 step+1；原句缺失时完形/听写降级开口卡）。
-private let vaultChallengeRotation: [RecallMode] = [.cloze, .dictation, .recognition]
-
-struct VaultChallengeStage: View {
+private struct FocusStageView: View {
     @ObservedObject var vm: ReaderViewModel
+    @ObservedObject var focus: VaultFocusModel
     @Environment(\.readerPalette) private var palette
-
-    private struct Outcome: Equatable {
-        let word: String
-        let text: String
-    }
-
-    // ---- 队列与会话状态 ----
-    /// 会话队列（容器持有：左栏词表共用，序号 = 关数；REV-12）。
-    @Binding var queue: [VocabWord]
-    /// 当前关游标（容器持有：左栏点词即跳卡）。
-    @Binding var pos: Int
-    /// 轮转步（每评/跳一关 +1）。
-    @State private var step = 0
-    @State private var outcome: Outcome?
-    /// 评分防重入：评分后到队列刷新的间隙同一张卡只允许评一次。
-    @State private var gradedIds: Set<String> = []
-    /// 听写卡自动朗读去重。
-    @State private var spokeIds: Set<String> = []
-    /// 本轮判分记录（REV-9 完成摘要：四格统计 + 错题预选）；进入舞台时清零。
-    @State private var results: [ReviewView.RecallResult] = []
-
-    // ---- 卡片内状态（每张卡重置） ----
-    @State private var input = ""
-    @State private var hints = 0
-    @State private var cnShown = false
-    @State private var verdict: RecallVerdict?
-    @State private var replays = VaultChallengeStage.dictationReplays
-    @FocusState private var inputFocused: Bool
-    static let dictationReplays = 3
-
-    private var current: VocabWord? {
-        queue.indices.contains(pos) ? queue[pos] : nil
-    }
-
-    private enum CardKind {
-        case cloze, dictation, speak
-    }
-
-    /// 当前卡的形态与句子素材（原句缺失/定位不到时完形/听写降级为开口卡）。
-    private var effective: (kind: CardKind, source: (en: String, zh: String?)?) {
-        guard let word = current else { return (.speak, nil) }
-        let desired = vaultChallengeRotation[step % vaultChallengeRotation.count]
-        let fromArticle = vm.sourceSentence(articleId: word.source.articleId, sentenceIdx: word.source.sentenceIdx)
-        let source = fromArticle ?? word.example.map { (en: $0.en, zh: $0.zh) }
-        if desired == .recognition || source == nil || source?.en.isEmpty != false {
-            return (.speak, nil)
-        }
-        if let source, desired == .dictation {
-            return (.dictation, source)
-        }
-        if let source, findChunkRange(source.en, word.word) != nil {
-            return (.cloze, source)
-        }
-        return (.speak, nil)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Text(kindBadge)
-                    .font(.system(size: 10.5, weight: .bold))
-                    .foregroundColor(palette.onInk)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(palette.accent)
-                    .clipShape(Capsule())
-                Text("第 \(min(pos + 1, max(queue.count, 1))) / \(max(queue.count, 1)) 关")
-                    .font(.system(size: 11.5).monospacedDigit())
-                    .foregroundColor(palette.textTertiary)
-                if vm.focusReviewIds != nil {
-                    Text("加练中")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(palette.warn)
-                }
-                Spacer()
-            }
-
-            if let outcome {
-                // 上一关结果条（vault-outcome-strip）
+            focusTop
+            if let outcome = focus.session.outcome {
                 HStack(spacing: 4) {
                     Text("上一关：")
                     Text(outcome.word).fontWeight(.semibold)
@@ -723,370 +852,392 @@ struct VaultChallengeStage: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(palette.accentSofter)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .accessibilityElement(children: .combine)
             }
-
-            if let word = current {
+            if let word = focus.current {
                 card(word)
-            } else if !results.isEmpty {
-                // 本轮评完：结果摘要 + 黄金出口（REV-9；与 ReviewView 同一张摘要卡）
-                summaryPanel
             } else {
                 donePanel
             }
         }
-        .onAppear {
-            rebuildQueue(resetSession: true)
-            installKeys()
-        }
-        .onDisappear {
-            vm.reviewKeyHandler = nil
-        }
-        .onChange(of: vm.focusReviewIds) { _ in
-            // 加练批次变化只换队列（开口命中的 drain、看板靶向加练都会改 focusIds），
-            // 会话进度（step/上一关结果/已评去重）保留——Windows ChallengeStage 的
-            // 这些状态同样跨 due 变化存活。
-            rebuildQueue(resetSession: false)
-        }
-        .onChange(of: current?.id) { _ in
-            resetCardState()
-            autoSpeakDictationIfNeeded()
-        }
-        .onChange(of: effective.kind) { _ in
-            autoSpeakDictationIfNeeded()
+        .onChange(of: focus.current?.id) { _ in
+            focus.resetCard()
+            focus.autoSpeakDictationIfNeeded(vm: vm)
         }
     }
 
-    private var kindBadge: String {
-        switch effective.kind {
-        case .cloze: return "完形 · 原句挖空"
-        case .dictation: return "听音 · 听整句写整句"
-        case .speak: return "开口 · 说一句直接过关"
+    /// focus-top：退出 Esc + 进度条 + n/m。
+    private var focusTop: some View {
+        let total = focus.queue.count
+        let percent = VaultFocusSession.progressPercent(pos: focus.pos, total: total)
+        return HStack(spacing: 10) {
+            Button {
+                withAnimation(ReaderMotion.islandTab) { vm.vaultPlayMode = .home }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: ReaderIcons.close).font(.system(size: 10, weight: .semibold))
+                    Text("退出")
+                    Text("Esc")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .background(palette.glassBorder)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundColor(palette.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .help("退出专注复习（专注队列保留）")
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(palette.glassBorderStrong)
+                    Capsule()
+                        .fill(palette.accent)
+                        .frame(width: max(0, geo.size.width * CGFloat(percent) / 100))
+                        .animation(ReaderMotion.islandTab, value: percent)
+                }
+            }
+            .frame(height: 5)
+            Text(VaultFocusSession.counterText(pos: focus.pos, total: total))
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundColor(palette.textTertiary)
         }
     }
-
-    private func rebuildQueue(resetSession: Bool) {
-        queue = vm.reviewQueue
-        pos = min(pos, max(0, queue.count - 1))
-        if queue.isEmpty { pos = 0 }
-        if resetSession {
-            outcome = nil
-            gradedIds = []
-            spokeIds = []
-            results = []
-        }
-        resetCardState()
-    }
-
-    private func resetCardState() {
-        input = ""
-        hints = 0
-        cnShown = false
-        verdict = nil
-        replays = Self.dictationReplays
-    }
-
-    /// 听写卡进入即自动朗读一次（word 音轨，不打断句子朗读）。
-    private func autoSpeakDictationIfNeeded() {
-        guard let word = current, effective.kind == .dictation, let source = effective.source,
-              !spokeIds.contains(word.id) else { return }
-        spokeIds.insert(word.id)
-        vm.speakRecallSentence(source.en)
-    }
-
-    // MARK: 卡片
 
     @ViewBuilder
     private func card(_ word: VocabWord) -> some View {
-        let sourceLabel = metaSource(word)
-        switch effective.kind {
+        let sourceLabel = vaultFocusSourceLabel(
+            articleTitle: word.source.articleId.isEmpty
+                ? nil
+                : vm.articleTitle(articleId: word.source.articleId)
+        )
+        switch focus.effectiveKind(vm: vm) {
         case .cloze:
-            VaultChallengeClozeCard(
+            VaultFocusClozeCard(
                 word: word,
-                source: effective.source,
-                input: $input,
-                hints: hints,
-                cnShown: cnShown,
-                verdict: verdict,
-                pos: pos,
-                total: queue.count,
+                spec: focus.spec(vm: vm),
+                input: $focus.input,
+                hints: focus.hints,
+                verdict: focus.verdict,
                 sourceLabel: sourceLabel,
                 palette: palette,
                 fontPair: vm.effectiveSettings.fontPair,
-                focused: $inputFocused,
-                onHint: { hints = min(3, hints + 1) },
-                onRevealCn: { cnShown = true },
-                onSubmit: { submitCloze(word) },
-                onGiveUp: { verdict = .wrong },
-                onJump: { vm.jumpToSource(articleId: word.source.articleId, sentenceIdx: word.source.sentenceIdx) },
-                onGrade: { grade($0, word: word) }
+                onHint: { focus.hints = min(2, focus.hints + 1) },
+                onSubmit: { focus.submitCloze(vm: vm) },
+                onGiveUp: { focus.verdict = .wrong },
+                onJump: {
+                    vm.jumpToSource(articleId: word.source.articleId, sentenceIdx: word.source.sentenceIdx)
+                },
+                onGrade: { focus.grade($0, vm: vm) }
             )
         case .dictation:
             VaultChallengeDictationCard(
                 word: word,
-                source: effective.source,
-                input: $input,
-                verdict: verdict,
-                replays: replays,
-                pos: pos,
-                total: queue.count,
+                source: focus.source(vm: vm),
+                input: $focus.input,
+                verdict: focus.verdict,
+                replays: focus.replays,
+                pos: focus.pos,
+                total: focus.queue.count,
                 sourceLabel: sourceLabel,
                 palette: palette,
-                focused: $inputFocused,
-                onReplay: { replayDictation(word) },
-                onSubmit: { submitDictation(word) },
-                onGiveUp: { verdict = .wrong },
-                onJump: { vm.jumpToSource(articleId: word.source.articleId, sentenceIdx: word.source.sentenceIdx) },
-                onGrade: { grade($0, word: word) }
+                onReplay: { focus.replayDictation(vm: vm) },
+                onSubmit: { focus.submitDictation(vm: vm) },
+                onGiveUp: { focus.verdict = .wrong },
+                onJump: {
+                    vm.jumpToSource(articleId: word.source.articleId, sentenceIdx: word.source.sentenceIdx)
+                },
+                onGrade: { focus.grade($0, vm: vm) }
             )
         case .speak:
             VaultSpeakChallengeCard(
                 word: word,
-                sample: vm.sourceSentence(articleId: word.source.articleId, sentenceIdx: word.source.sentenceIdx)?.en
-                    ?? word.example?.en,
-                pos: pos,
-                total: queue.count,
+                sample: focus.source(vm: vm)?.en,
+                pos: focus.pos,
+                total: focus.queue.count,
                 sourceLabel: sourceLabel,
                 palette: palette,
                 fontPair: vm.effectiveSettings.fontPair,
-                onPass: { passSpeak(word) },
-                onGiveUp: { skipCurrent() },
+                onPass: { focus.passSpeak(vm: vm) },
+                onGiveUp: { focus.skip(vm: vm) },
                 onSpeakSample: { vm.speakRecallSentence($0) }
             )
             .id(word.id)  // 换词重置录音/打字状态
         }
     }
 
-    private func metaSource(_ word: VocabWord) -> String {
-        if let title = vm.articleTitle(articleId: word.source.articleId) {
-            return "来自「\(title)」· 第 \(word.source.sentenceIdx + 1) 句"
-        }
-        return "来自划词收藏"
-    }
-
-    // MARK: 判分与推进
-
-    private func submitCloze(_ word: VocabWord) {
-        guard verdict == nil, let source = effective.source,
-              !input.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        let blank = VaultChallengeClozeCard.blankText(source.en, word.word) ?? word.word
-        verdict = judgeCloze(input, blank, options: JudgeOptions(trap: word.trap, accepted: [word.word]))
-    }
-
-    private func submitDictation(_ word: VocabWord) {
-        guard verdict == nil, let source = effective.source,
-              !input.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        verdict = judgeDictation(input, source.en, options: JudgeOptions(trap: word.trap))
-    }
-
-    private func replayDictation(_ word: VocabWord) {
-        guard let source = effective.source else { return }
-        if verdict == nil {
-            guard replays > 0 else { return }
-            replays -= 1
-        }
-        vm.speakRecallSentence(source.en)
-    }
-
-    /// 评分落盘（gradeVocab 刷新队列数据；快照移除当前词 → 游标自然指向下一关）。
-    private func grade(_ g: ReviewGrade, word: VocabWord) {
-        guard !gradedIds.contains(word.id) else { return }
-        gradedIds.insert(word.id)
-        let mode: RecallMode
-        switch effective.kind {
-        case .cloze: mode = .cloze
-        case .dictation: mode = .dictation
-        case .speak: mode = .recognition
-        }
-        let judged: RecallVerdict? = mode == .recognition ? nil : verdict
-        vm.gradeVocab(word, g, mode: mode, verdict: judged)
-        results.append(ReviewView.RecallResult(wordId: word.id, mode: mode, judged: judged, grade: g))
-        outcome = Outcome(word: word.word, text: "已按「\(g.label)」完成")
-        step += 1
-        queue.removeAll { $0.id == word.id }
-        if pos >= queue.count { pos = 0 }
-        if vm.focusReviewIds != nil {
-            // 加练队列里任意评分都把词移出批次（对齐 Windows gradeAndDrainFocus），
-            // 左栏横幅「剩 N」与队列同步；onChange(focusReviewIds) 重建队列但保留会话。
-            vm.focusReviewIds = vm.focusReviewIds?.filter { $0 != word.id }
-        }
-    }
-
-    /// 开口卡命中目标词：easy 档 + spokenAt（内化三阶最高档）。
-    private func passSpeak(_ word: VocabWord) {
-        guard !gradedIds.contains(word.id) else { return }
-        gradedIds.insert(word.id)
-        if vm.focusReviewIds != nil {
-            // 加练队列里开口命中：同样按 easy+spokenAt 落盘，并把词移出队列
-            //（对齐 Windows gradeSpokenAndDrainFocus）。
-            vm.focusReviewIds = vm.focusReviewIds?.filter { $0 != word.id }
-        }
-        vm.gradeSpoken(word)
-        results.append(ReviewView.RecallResult(wordId: word.id, mode: .recognition, judged: nil, grade: .easy))
-        outcome = Outcome(word: word.word, text: "开口命中 · 已按「很轻松」完成并记一次口语表达")
-        step += 1
-        queue.removeAll { $0.id == word.id }
-        if pos >= queue.count { pos = 0 }
-    }
-
-    /// 放弃（跳过不评分）：词不离队，游标手动推进（末尾回绕）。
-    private func skipCurrent() {
-        guard let word = current else { return }
-        outcome = Outcome(word: word.word, text: "跳过（未评分）")
-        step += 1
-        if queue.count > pos + 1 {
-            pos += 1
-        } else {
-            pos = 0
-        }
-    }
-
-    /// 本轮闯关完成摘要（REV-9 黄金出口）：复用 ReviewView 的 SummaryPanelView——
-    /// 四格判分统计 +「把这轮错题整理成笔记」（预选本轮 wrong/close/trap 词，无错题禁用）
-    /// +「去笔记库看复盘」；下方保留「回手账自测」出口（Windows vault-done-panel）。
-    private var summaryPanel: some View {
-        VStack(spacing: 10) {
-            SummaryPanelView(
-                results: results,
-                palette: palette,
-                title: "本轮闯关完成 🎉",
-                onRestart: {
-                    results = []
-                    gradedIds = []
-                },
-                onGenerateNote: { ids in vm.openNoteDialog(preselect: ids) },
-                onOpenNotes: { vm.openNotes() }
-            )
-            Button("回手账自测") {
-                withAnimation(ReaderMotion.islandTab) { vm.vaultPlayMode = .tape }
-            }
-            .controlSize(.small)
-        }
-        .transition(.opacity.combined(with: .scale(scale: 0.98)))
-    }
-
+    /// 完成态（队列空）：完成文案 + 副行 + 三按钮。
     private var donePanel: some View {
         VStack(spacing: 10) {
-            Text(vm.stats.total == 0 ? "生词本还是空的" : "本轮闯关完成 🎉")
+            Text(vm.stats.total == 0 ? "生词本还是空的" : "本轮复习完成 🎉")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundColor(palette.text)
             Text(vm.stats.total == 0
-                 ? "在阅读室里查词并点击「加入生词本」，闯关卡会出现在这里。"
-                 : "这一批都过了。换个玩法，或回阅读室继续攒新词。")
+                ? "在阅读室里查词并点击「加入生词本」，复习卡会出现在这里。"
+                : "这一批都过了。整理成笔记，或回阅读室继续攒新词。")
                 .font(.system(size: 12.5))
                 .foregroundColor(palette.textSecondary)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
-                Button("回手账自测") {
-                    withAnimation(ReaderMotion.islandTab) { vm.vaultPlayMode = .tape }
+                Button("回复习首页") {
+                    withAnimation(ReaderMotion.islandTab) { vm.vaultPlayMode = .home }
                 }
-                    .controlSize(.small)
-                Button("整理成笔记") { vm.openNoteDialog() }
-                    .controlSize(.small)
-                    .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                Button("回阅读室") {
+                    vm.openReading()
+                }
+                .controlSize(.small)
+                Button("整理成笔记") {
+                    vm.openNoteDialog()
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
             }
         }
         .padding(.vertical, 48)
         .frame(maxWidth: .infinity)
     }
+}
 
-    // MARK: 键盘（1-4 评分 · ↩ 采纳建议档 · Space 听写重播 · H 提示；输入框聚焦不劫持）
+// MARK: - 专注会话模型（队列 / 游标 / 轮转 / 防重入；可单测）
 
-    private func installKeys() {
-        vm.reviewKeyHandler = { event in
-            handleKey(event)
-        }
+@MainActor
+final class VaultFocusModel: ObservableObject {
+    @Published var session = VaultFocusSession()
+    @Published var queue: [VocabWord] = []
+    @Published var pos = 0
+    // ---- 卡片内状态（每张卡重置） ----
+    @Published var input = ""
+    @Published var hints = 0
+    @Published var verdict: RecallVerdict?
+    @Published var replays = VaultFocusModel.dictationReplays
+    /// 听写卡自动朗读去重。
+    var spokeIds: Set<String> = []
+    static let dictationReplays = 3
+
+    var current: VocabWord? {
+        queue.indices.contains(pos) ? queue[pos] : nil
     }
 
-    private func handleKey(_ event: NSEvent) -> Bool {
+    /// 队列 = focusIds 批次或全局到期（vm.reviewQueue 同源）。
+    func rebuild(vm: ReaderViewModel) {
+        let next = vm.reviewQueue
+        queue = next
+        pos = VaultFocusSession.settledPos(pos, total: queue.count)
+    }
+
+    func resetCard() {
+        input = ""
+        hints = 0
+        verdict = nil
+        replays = Self.dictationReplays
+    }
+
+    // MARK: 形态与素材
+
+    func source(vm: ReaderViewModel) -> (en: String, zh: String?)? {
+        guard let word = current else { return nil }
+        return ReaderVaultView.entrySource(word, vm: vm)
+    }
+
+    /// 当前卡实际形态（原句缺失降级开口；完形还需能定位到挖空范围）。
+    func effectiveKind(vm: ReaderViewModel) -> VaultFocusCardKind {
+        guard let word = current else { return .speak }
+        let src = source(vm: vm)
+        let blankFound = src.map { VaultFocusModel.blankRange($0.en, word.word) != nil } ?? false
+        return vaultFocusEffectiveKind(
+            desired: session.desiredKind,
+            hasSentence: src?.en.isEmpty == false,
+            blankFound: blankFound
+        )
+    }
+
+    /// 完形 spec：pre/blank/post 切分。
+    func spec(vm: ReaderViewModel) -> (sentence: String, zh: String?, pre: String, blank: String, post: String)? {
+        guard let word = current, let src = source(vm: vm), !src.en.isEmpty,
+              let range = VaultFocusModel.blankRange(src.en, word.word) else { return nil }
+        return (
+            sentence: src.en,
+            zh: src.zh,
+            pre: substring16(src.en, 0, range.start),
+            blank: substring16(src.en, range.start, range.end),
+            post: substring16(src.en, range.end, Array(src.en.utf16).count)
+        )
+    }
+
+    static func blankRange(_ sentence: String, _ word: String) -> ReaderCore.TextRange? {
+        findChunkRange(sentence, word)
+    }
+
+    // MARK: 提交 / 重播
+
+    func submitCloze(vm: ReaderViewModel) {
+        guard verdict == nil, let word = current, let spec = spec(vm: vm),
+              !input.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        verdict = judgeCloze(
+            input,
+            spec.blank,
+            options: JudgeOptions(trap: word.trap, accepted: [word.word])
+        )
+    }
+
+    func submitDictation(vm: ReaderViewModel) {
+        guard verdict == nil, let word = current, let src = source(vm: vm),
+              !input.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        verdict = judgeDictation(input, src.en, options: JudgeOptions(trap: word.trap))
+    }
+
+    func replayDictation(vm: ReaderViewModel) {
+        guard let src = source(vm: vm) else { return }
+        if verdict == nil {
+            guard replays > 0 else { return }
+            replays -= 1
+        }
+        vm.speakRecallSentence(src.en)
+    }
+
+    /// 听写卡进入即自动朗读一次（word 音轨，不打断句子朗读）。
+    func autoSpeakDictationIfNeeded(vm: ReaderViewModel) {
+        guard let word = current, effectiveKind(vm: vm) == .dictation,
+              let src = source(vm: vm), !spokeIds.contains(word.id) else { return }
+        spokeIds.insert(word.id)
+        vm.speakRecallSentence(src.en)
+    }
+
+    // MARK: 评分 / 开口 / 放弃
+
+    /// 普通评分（三档带 / 听写四档带）：防重入 → 落盘（vm.gradeVocab 一条链含
+    /// recall 分桶）→ 加练批次 drain → 词出队游标收拢。
+    @discardableResult
+    func grade(_ g: ReviewGrade, vm: ReaderViewModel) -> Bool {
+        guard let word = current else { return false }
+        // 先取本卡形态（session.grade 会推进 step，之后再算就成下一关的形态了）。
+        let kind = effectiveKind(vm: vm)
+        guard session.grade(wordId: word.id, word: word.word, grade: g) else { return false }
+        let mode: RecallMode
+        switch kind {
+        case .cloze: mode = .cloze
+        case .dictation: mode = .dictation
+        case .speak: mode = .recognition
+        }
+        vm.gradeVocab(word, g, mode: mode, verdict: mode == .recognition ? nil : verdict)
+        drain(word, vm: vm)
+        return true
+    }
+
+    /// 开口卡命中目标词：easy 档 + spokenAt（vm.gradeSpoken）+ drain。
+    @discardableResult
+    func passSpeak(vm: ReaderViewModel) -> Bool {
+        guard let word = current,
+              session.passSpeak(wordId: word.id, word: word.word) else { return false }
+        vm.gradeSpoken(word)
+        drain(word, vm: vm)
+        return true
+    }
+
+    /// 放弃（跳过不评分）：词不离队，游标手动推进（末尾回绕）。
+    func skip(vm: ReaderViewModel) {
+        guard let word = current else { return }
+        pos = session.skip(word: word.word, pos: pos, total: queue.count)
+    }
+
+    /// 评分/开口后：词出队 + 加练批次同步 drain（Windows gradeAndDrainFocus）+
+    /// 队列耗尽收拢 pos=0。
+    private func drain(_ word: VocabWord, vm: ReaderViewModel) {
+        queue.removeAll { $0.id == word.id }
+        if vm.focusReviewIds != nil {
+            vm.focusReviewIds = vm.focusReviewIds?.filter { $0 != word.id }
+        }
+        pos = VaultFocusSession.settledPos(pos, total: queue.count)
+    }
+
+    // MARK: 键位（Tab 下一级提示 / H 同 Tab / Enter 提交·采纳 / 1–3 直选；仅完形卡）
+
+    func handleKey(_ event: NSEvent, vm: ReaderViewModel, typing: Bool) -> Bool {
         guard current != nil else { return false }
-        if let responder = NSApp.keyWindow?.firstResponder, responder is NSTextView || responder is NSTextField {
+        // VaultPage.tsx:821 `if (effKind !== "cloze" || !spec || !current) return;`：
+        // 听写卡 / 开口卡不接全局键——听写卡 Enter 由输入框自己提交、判分后只走四档
+        // GradeFooter 点击（建议档可为 easy，不经 vaultSuggested 收敛）；开口卡走录音链。
+        guard effectiveKind(vm: vm) == .cloze, spec(vm: vm) != nil else { return false }
+        guard let key = event.charactersIgnoringModifiers?.lowercased() else { return false }
+        // Tab 不受 typing 守卫：完形答题时它就是「下一级提示」。
+        if event.keyCode == 48 {  // Tab
+            if verdict == nil, hints < 2 {
+                hints = min(2, hints + 1)
+                return true
+            }
             return false
         }
-        guard let key = event.charactersIgnoringModifiers?.lowercased() else { return false }
-        let gradeable = effective.kind == .speak || verdict != nil
-        if ["1", "2", "3", "4"].contains(key), gradeable, let word = current {
-            let picked: ReviewGrade = key == "1" ? .forgot : key == "2" ? .hard : key == "3" ? .good : .easy
-            grade(picked, word: word)
+        guard !typing else { return false }
+        if key == "h", verdict == nil, hints < 2 {
+            hints = min(2, hints + 1)
             return true
         }
-        if key == "return", let v = verdict, let word = current {
-            grade(verdictToSuggestedGrade(v), word: word)
-            return true
-        }
-        if key == "h", effective.kind == .cloze, verdict == nil {
-            hints = min(3, hints + 1)
-            return true
-        }
-        if key == " ", effective.kind == .dictation, verdict == nil, replays > 0 {
-            replays -= 1
-            if let source = effective.source {
-                vm.speakRecallSentence(source.en)
+        if event.keyCode == 36 || event.keyCode == 76 {  // Return / 小键盘 Enter
+            if verdict == nil {
+                submitCloze(vm: vm)
+                return true
             }
+            // 已判分 → 采纳建议档（easy 收敛 good，不是 easy）。
+            grade(vaultSuggested(verdict!), vm: vm)
             return true
+        }
+        if verdict != nil, ["1", "2", "3"].contains(key) {
+            // 数字直选三档（VAULT_GRADE_BANDS key 契约）。
+            if let band = vaultGradeBands.first(where: { $0.key == key }) {
+                grade(band.grade, vm: vm)
+                return true
+            }
         }
         return false
     }
 }
 
-// MARK: - 闯关完形卡（判分链路与阅读室/迷你窗同向量：judgeCloze(输入, 句中词块原文)）
+// MARK: - 专注完形卡（FocusCloze：26px 衬线大句 + 两级提示阶梯 + 三档评分带）
 
-private struct VaultChallengeClozeCard: View {
+struct VaultFocusClozeCard: View {
     let word: VocabWord
-    let source: (en: String, zh: String?)?
+    let spec: (sentence: String, zh: String?, pre: String, blank: String, post: String)?
     @Binding var input: String
     let hints: Int
-    let cnShown: Bool
     let verdict: RecallVerdict?
-    let pos: Int
-    let total: Int
     let sourceLabel: String
     let palette: ReaderPalette
     let fontPair: ReaderFontPair
-    var focused: FocusState<Bool>.Binding
     let onHint: () -> Void
-    let onRevealCn: () -> Void
     let onSubmit: () -> Void
     let onGiveUp: () -> Void
     let onJump: () -> Void
     let onGrade: (ReviewGrade) -> Void
+    /// 行内输入框焦点（Windows BlankInput autoFocus：进卡即聚焦）。
+    @FocusState private var inputFocused: Bool
 
-    /// 句中被挖空的词块原文（判分答案；与 ReaderReviewView.chunkBlank 同语义）。
-    static func blankText(_ sentence: String, _ phrase: String) -> String? {
-        guard let range = findChunkRange(sentence, phrase) else { return nil }
-        return substring16(sentence, range.start, range.end)
+    private var graded: Bool { verdict != nil }
+    private var wordCount: Int {
+        (spec?.blank ?? "").trimmingCharacters(in: .whitespaces)
+            .split(separator: " ").count
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            VaultCardMeta(pill: "完形", tone: palette.accent, source: sourceLabel, pos: pos, total: total, palette: palette)
-            if let source, let blank = Self.blankText(source.en, word.word) {
-                sentence(source: source, blank: blank)
-                if let zh = source.zh, !zh.isEmpty {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text("中文提示：").font(.system(size: 12)).foregroundColor(palette.textTertiary)
-                        Text(cnShown ? zh : "＿＿＿＿")
-                            .font(.system(size: 12))
-                            .foregroundColor(cnShown ? palette.textSecondary : palette.textTertiary.opacity(0.5))
-                            .contentShape(Rectangle())
-                            .onTapGesture { if !cnShown { onRevealCn() } }
-                    }
+            if let spec {
+                HStack(spacing: 8) {
+                    Text("填空")
+                        .font(.system(size: 10.5, weight: .bold))
+                        .foregroundColor(palette.accent)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(palette.accentSoft))
+                    Text(sourceLabel)
+                        .font(.system(size: 11))
+                        .foregroundColor(palette.textTertiary)
+                    Spacer(minLength: 0)
                 }
-                if verdict == nil {
-                    hintLadder(blank: blank)
-                    HStack(spacing: 10) {
-                        TextField("写出被挖空的部分", text: $input)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 13.5))
-                            .frame(maxWidth: 320)
-                            .focused(focused)
-                            .onSubmit { onSubmit() }
-                        Button("提交判分", action: onSubmit)
-                            .controlSize(.small)
-                            .buttonStyle(.borderedProminent)
-                            .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty)
-                        Button("想不出来，直接看答案", action: onGiveUp)
-                            .controlSize(.small)
-                    }
+                // 26px 衬线大句（Windows .q-sent）。
+                sentence(spec)
+                if !graded {
+                    hintLadder(spec)
                 } else if let verdict {
                     VaultVerdictPanel(verdict: verdict, palette: palette, onJump: onJump) {
                         if verdict == .close {
@@ -1094,84 +1245,833 @@ private struct VaultChallengeClozeCard: View {
                                 .font(.system(size: 12))
                                 .foregroundColor(palette.textSecondary)
                         }
-                        Text(blank + (blank != word.word ? "（词条原形：\(word.word)）" : ""))
+                        if verdict == .trap {
+                            Text("你写了 \(input.trimmingCharacters(in: .whitespaces)) —— \(word.trap ?? "这是常见的直译错误")")
+                                .font(.system(size: 12))
+                                .foregroundColor(palette.textSecondary)
+                        }
+                        Text(spec.blank + (spec.blank != word.word ? "（词条原形：\(word.word)）" : ""))
                             .font(.system(size: 13, weight: .medium))
                             .foregroundColor(palette.text)
                     }
-                    VaultGradeBar(suggest: verdictToSuggestedGrade(verdict), ask: "这个空，你答上来了吗？", palette: palette, onGrade: onGrade)
+                    answerRowGraded(verdict: verdict)
                 }
+                if !graded {
+                    answerRowPending
+                }
+                HStack {
+                    Text("提示不会显示答案本身")
+                    Spacer(minLength: 12)
+                    Text("提交后选择「记住了 / 模糊 / 没记住」")
+                }
+                .font(.system(size: 10.5))
+                .foregroundColor(palette.textTertiary)
             }
         }
-        // M-05：闯关大卡套 .challenge-stage-box 材质（html:1080-1089）——
-        // 22 圆角 glass-elevated + shadow-spatial + 发丝边 + 顶内高光。
         .padding(.vertical, 24)
         .padding(.horizontal, 28)
-        .glassCard(palette: palette, radius: 22, elevated: true, heavyShadow: true)
-        .onAppear { focused.wrappedValue = true }
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(palette.glassSurface)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(palette.glassBorderStrong, lineWidth: 1)
+        )
+        .shadow(color: palette.shadowPill, radius: 12, y: 6)
     }
 
-    private func sentence(source: (en: String, zh: String?), blank: String) -> some View {
-        let range = findChunkRange(source.en, word.word)
-        let pre = range.map { substring16(source.en, 0, $0.start) } ?? source.en
-        let post = range.map { substring16(source.en, $0.end, Array(source.en.utf16).count) } ?? ""
-        let base = Text(pre + "　")
-        let mid: Text
+    /// 大句：pre + 挖空（未答 = 行内输入框 BlankInput / 已判分 = 结果配色）+ post。
+    /// 未答态用行内流布局把 pre 词、输入框、post 词排成可换行的一句（Windows `.q-sent`
+    /// 里 `<BlankInput>` 是 inline 元素，与前后文同流）。
+    @ViewBuilder
+    private func sentence(_ spec: (sentence: String, zh: String?, pre: String, blank: String, post: String)) -> some View {
+        let bigFont = readerFont(26, .regular, pair: fontPair)
         if let verdict {
             let color: Color = verdict == .perfect ? palette.ok : (verdict == .close ? palette.warn : palette.err)
-            mid = Text(blank).foregroundColor(color).underline()
+            (Text(spec.pre + "　") + Text(spec.blank).foregroundColor(color).underline() + Text("　" + spec.post))
+                .font(bigFont)
+                .foregroundColor(palette.text)
+                .lineSpacing(6)
+                .fixedSize(horizontal: false, vertical: true)
         } else {
-            let typed = input.isEmpty ? "　　　　" : input
-            mid = Text(typed).underline().foregroundColor(palette.accent)
+            InlineFlowLayout(itemSpacing: 7, lineSpacing: 12) {
+                ForEach(Array(Self.tokens(spec.pre).enumerated()), id: \.offset) { token in
+                    Text(token.element).font(bigFont).foregroundColor(palette.text)
+                }
+                VaultBlankInput(
+                    text: $input,
+                    palette: palette,
+                    fontPair: fontPair,
+                    focused: $inputFocused,
+                    onSubmit: onSubmit
+                )
+                ForEach(Array(Self.tokens(spec.post).enumerated()), id: \.offset) { token in
+                    Text(token.element).font(bigFont).foregroundColor(palette.text)
+                }
+            }
+            .onAppear { inputFocused = true }
+            .onChange(of: word.id) { _ in inputFocused = true }
         }
-        return (base + mid + Text("　" + post))
-            .font(readerFont(16, .regular, pair: fontPair))
-            .foregroundColor(palette.text)
-            .lineSpacing(4)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// 按空白切词（行内流的最小排版单元；空串不产出 token）。
+    static func tokens(_ text: String) -> [String] {
+        text.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+    }
+
+    /// 两级提示阶梯（提示 1 整句译文 / 提示 2 首字母与长度；都不显示答案本身）。
+    @ViewBuilder
+    private func hintLadder(_ spec: (sentence: String, zh: String?, pre: String, blank: String, post: String)) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            hintStep(lv: "提示 1", shown: hints >= 1) {
+                if let zh = spec.zh, !zh.isEmpty {
+                    Text("译文：\(zh)")
+                } else {
+                    Text("这篇没有配译文")
+                }
+            } collapsed: {
+                Text("整句译文")
+            }
+            hintStep(lv: "提示 2", shown: hints >= 2) {
+                Text("首字母与长度：\(firstLetters(spec.blank))（\(wordCount) 词）")
+            } collapsed: {
+                Text("首字母与长度")
+            }
+        }
     }
 
     @ViewBuilder
-    private func hintLadder(blank: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if hints >= 1, let gloss = word.senses.first?.cn {
-                hintRow(tag: "提示 1", text: gloss)
-            }
-            if hints >= 2 {
-                hintRow(tag: "提示 2", text: "\(firstLetters(blank))（\(blank.split(separator: " ").count) 词）")
-            }
-            if hints >= 3 {
-                if let pattern = word.pattern {
-                    hintRow(tag: "槽位记法", text: pattern)
-                } else if let zh = source?.zh {
-                    hintRow(tag: "中文句", text: zh)
-                }
-            }
-            if hints < 3 {
-                Button("再给一点提示（H）", action: onHint)
-                    .buttonStyle(.link)
-                    .font(.system(size: 11.5))
-            }
-        }
-    }
-
-    private func hintRow(tag: String, text: String) -> some View {
+    private func hintStep<Expanded: View, Collapsed: View>(
+        lv: String,
+        shown: Bool,
+        @ViewBuilder expanded: () -> Expanded,
+        @ViewBuilder collapsed: () -> Collapsed
+    ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(tag)
+            Text(lv)
                 .font(.system(size: 10, weight: .bold))
                 .foregroundColor(palette.accent)
                 .padding(.horizontal, 5)
                 .padding(.vertical, 1)
                 .background(palette.accent.opacity(0.1))
                 .clipShape(Capsule())
+            if shown {
+                expanded()
+                    .font(.system(size: 12))
+                    .foregroundColor(palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                collapsed()
+                    .font(.system(size: 12))
+                    .foregroundColor(palette.textTertiary)
+                Button("展开", action: onHint)
+                    .font(.system(size: 11, weight: .semibold))
+                    .buttonStyle(.link)
+            }
+        }
+    }
+
+    /// 未答操作行：提交 / 我不会 + 键位提示（Enter 提交 / Tab 下一级提示）。
+    private var answerRowPending: some View {
+        HStack(spacing: 10) {
+            Button(action: onSubmit) {
+                Text("提交")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .frame(height: 30)
+                    .background(Capsule().fill(input.trimmingCharacters(in: .whitespaces).isEmpty ? palette.ink4 : palette.accent))
+            }
+            .buttonStyle(.plain)
+            .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty)
+            Button("我不会", action: onGiveUp)
+                .font(.system(size: 12.5, weight: .medium))
+                .buttonStyle(.bordered)
+            HStack(spacing: 8) {
+                keyHint("Enter", "提交")
+                keyHint("Tab", "下一级提示")
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// 已判分操作行：三档评分带（建议档高亮）+ 键位 Enter {建议档} / 1–3 直选。
+    private func answerRowGraded(verdict: RecallVerdict) -> some View {
+        let suggest = vaultSuggested(verdict)
+        let bandName = vaultGradeBands.first { $0.grade == suggest }?.name ?? ""
+        return VStack(alignment: .leading, spacing: 8) {
+            VaultGradeBandRow(palette: palette, suggested: suggest, onGrade: onGrade)
+            HStack(spacing: 12) {
+                keyHint("Enter", bandName)
+                HStack(spacing: 3) {
+                    keyCap("1")
+                    Text("–")
+                    keyCap("3")
+                    Text("直选")
+                }
+                .font(.system(size: 10.5))
+                .foregroundColor(palette.textTertiary)
+            }
+        }
+    }
+
+    private func keyHint(_ key: String, _ label: String) -> some View {
+        HStack(spacing: 3) {
+            keyCap(key)
+            Text(label)
+        }
+        .font(.system(size: 10.5))
+        .foregroundColor(palette.textTertiary)
+    }
+
+    private func keyCap(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .padding(.horizontal, 4).padding(.vertical, 1)
+            .background(palette.glassBorder)
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+    }
+}
+
+// MARK: - 导出（ExportStage：范围预过滤 + 包含 chips 只作用预览 + 预览/源码 seg）
+
+struct VaultExportStage: View {
+    @ObservedObject var vm: ReaderViewModel
+    @Environment(\.readerPalette) private var palette
+    @State private var scope: VaultExportScope = .week
+    @State private var inclEx = true
+    @State private var inclDef = true
+    @State private var inclIpa = false
+    @State private var inclNote = true
+    @State private var tab: Tab = .preview
+    @State private var copied = false
+    @State private var copyToken = 0
+    @State private var saveError: String?
+
+    private enum Tab {
+        case preview, source
+    }
+
+    private var dateKey: String {
+        dayKey(nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+    }
+
+    /// 范围筛选只在调用侧预过滤（buildVaultMarkdown 纯函数与三段结构零改动）。
+    private var filteredWords: [VocabWord] {
+        filterVaultExportWords(
+            vm.vocabWords,
+            scope: scope,
+            nowMs: Int64(Date().timeIntervalSince1970 * 1000)
+        )
+    }
+
+    private var filteredSessions: [SpeakSession] {
+        filterVaultExportSessions(
+            vm.speakSessions,
+            scope: scope,
+            nowMs: Int64(Date().timeIntervalSince1970 * 1000)
+        )
+    }
+
+    private var markdown: String {
+        buildVaultMarkdown(
+            words: filteredWords,
+            sourceSentence: { vm.sourceSentence(articleId: $0, sentenceIdx: $1) },
+            speakSessions: filteredSessions,
+            dateKey: dateKey
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            stageHead
+            // `.exp > h2`（VaultPage.tsx:1219）：导出区标题。
+            Text("导出学习笔记")
+                .font(readerFont(20, .semibold, pair: vm.effectiveSettings.fontPair))
+                .foregroundColor(palette.text)
+                .accessibilityAddTraits(.isHeader)
+            options
+            if let saveError {
+                Text("保存失败：\(saveError)")
+                    .font(.system(size: 11.5))
+                    .foregroundColor(palette.err)
+            }
+            tabBar
+            switch tab {
+            case .source:
+                ScrollView {
+                    Text(markdown)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(palette.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: .infinity)
+            case .preview:
+                preview
+            }
+        }
+    }
+
+    /// stage-head：← 返回复习 + 复制 Markdown（已复制 2.4s）+ 保存为 .md。
+    private var stageHead: some View {
+        HStack(spacing: 10) {
+            Button {
+                withAnimation(ReaderMotion.islandTab) { vm.vaultPlayMode = .home }
+            } label: {
+                Text("← 返回复习")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundColor(palette.textSecondary)
+            }
+            .buttonStyle(.plain)
+            Spacer(minLength: 8)
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(markdown, forType: .string)
+                copied = true
+                copyToken += 1
+                let token = copyToken
+                Task {
+                    try? await Task.sleep(nanoseconds: 2_400_000_000)
+                    guard token == copyToken else { return }  // 连点：由后一次计时复位
+                    copied = false
+                }
+            } label: {
+                Label(copied ? "已复制" : "复制 Markdown", systemImage: copied ? "checkmark" : ReaderIcons.copy)
+                    .font(.system(size: 11.5))
+            }
+            .controlSize(.small)
+            Button {
+                save()
+            } label: {
+                Label("保存为 .md", systemImage: "arrow.down.doc")
+                    .font(.system(size: 11.5, weight: .semibold))
+            }
+            .controlSize(.small)
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    /// 范围 / 包含 chips。
+    private var options: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("范围")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(palette.textSecondary)
+                ForEach(VaultExportScope.allCases, id: \.self) { s in
+                    chip(s.label, on: scope == s) { scope = s }
+                }
+            }
+            HStack(spacing: 8) {
+                Text("包含")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(palette.textSecondary)
+                chip("原句", on: inclEx) { inclEx.toggle() }
+                chip("释义", on: inclDef) { inclDef.toggle() }
+                chip("音标", on: inclIpa) { inclIpa.toggle() }
+                chip("用法提示", on: inclNote) { inclNote.toggle() }
+            }
+        }
+    }
+
+    private func chip(_ text: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             Text(text)
-                .font(.system(size: 12))
-                .foregroundColor(palette.textSecondary)
+                .font(.system(size: 11, weight: on ? .semibold : .medium))
+                .foregroundColor(on ? palette.onInk : palette.textSecondary)
+                .padding(.horizontal, 10)
+                .frame(height: 22)
+                .background(Capsule().fill(on ? palette.text : palette.glassBorder.opacity(0.4)))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? [.isSelected] : [])
+    }
+
+    /// 预览/源码 seg + 共 N 条。
+    private var tabBar: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 2) {
+                segTab("预览", active: tab == .preview) { tab = .preview }
+                segTab("Markdown 源码", active: tab == .source) { tab = .source }
+            }
+            .padding(2)
+            .background(Capsule().fill(palette.background))
+            .overlay(Capsule().strokeBorder(palette.glassBorder, lineWidth: 1))
+            Spacer(minLength: 8)
+            Text("共 \(filteredWords.count) 条")
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundColor(palette.textTertiary)
+        }
+    }
+
+    private func segTab(_ title: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11.5, weight: active ? .semibold : .medium))
+                .foregroundColor(active ? palette.text : palette.textTertiary)
+                .padding(.horizontal, 12)
+                .frame(height: 24)
+                .background {
+                    if active {
+                        Capsule()
+                            .fill(palette.glassElevated)
+                            .shadow(color: Color.black.opacity(0.08), radius: 3, y: 1)
+                    }
+                }
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(active ? [.isSelected] : [])
+    }
+
+    /// 预览（包含 chips 只作用于这一层，不影响 Markdown 源）：
+    /// h3 `{dateKey} 英语精读笔记` + 词条 word / 音标（ipa 开）/ 释义 / 原句 / 用法。
+    private var preview: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("\(dateKey) 英语精读笔记")
+                    .font(.system(size: 15, weight: .semibold, design: .serif))
+                    .foregroundColor(palette.text)
+                ForEach(filteredWords) { w in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(w.word)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(palette.text)
+                            if inclIpa, let phonetic = w.phonetic, !phonetic.isEmpty {
+                                Text("/\(phonetic.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(palette.textTertiary)
+                            }
+                            if inclDef {
+                                let gloss = w.senses
+                                    .map { $0.pos.isEmpty ? $0.cn : "\($0.pos) \($0.cn)" }
+                                    .joined(separator: "；")
+                                if !gloss.isEmpty {
+                                    Text(gloss)
+                                        .font(.system(size: 12))
+                                        .foregroundColor(palette.textSecondary)
+                                        .lineLimit(2)
+                                }
+                            }
+                        }
+                        if inclEx, let src = ReaderVaultView.entrySource(
+                            w,
+                            vm: vm
+                        ), !src.en.isEmpty {
+                            Text(src.en)
+                                .font(.system(size: 12, design: .serif))
+                                .italic()
+                                .foregroundColor(palette.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if inclNote {
+                            let usage = [w.pattern, w.trap].compactMap { $0 }.filter { !$0.isEmpty }
+                            if !usage.isEmpty {
+                                Text("用法：\(usage.joined(separator: " · "))")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(palette.textTertiary)
+                            }
+                        }
+                    }
+                    .padding(.bottom, 4)
+                }
+                if filteredWords.isEmpty {
+                    Text("这个范围内还没有可导出的词条。")
+                        .font(.system(size: 12))
+                        .foregroundColor(palette.textTertiary)
+                        .padding(.vertical, 28)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    /// 保存为 .md：NSSavePanel（默认文件名 `{dateKey}-学习笔记.md`）；失败行就地展示。
+    private func save() {
+        saveError = nil
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.plainText]
+        panel.allowsOtherFileTypes = true  // 保留 .md 扩展名（规格 §4-6）
+        panel.nameFieldStringValue = vaultExportFileName(dateKey: dateKey)
+        let markdownText = markdown
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try markdownText.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                saveError = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            }
         }
     }
 }
 
-// MARK: - 闯关听写卡
+// MARK: - 右侧看板（Board：今日进度环 + 三阶分段条 + 28 天热力 + 易错项；focus 态隐藏）
+
+private struct VaultBoardView: View {
+    @ObservedObject var vm: ReaderViewModel
+    @Environment(\.readerPalette) private var palette
+
+    /// due = activeDue（VaultPage 由 ReaderApp 以 due={activeDue} 喂数据）：看板「还差 N 条」
+    /// 在加练批次下按批次计。
+    private var due: [VocabWord] { vm.reviewQueue }
+    private var stageCounts: MasteryStageCounts { masteryStageCounts(vm.vocabWords) }
+    /// 易错词：错题（wrong+trap）最多的前 3 个，按错题数降序。
+    private var weakWords: [(word: VocabWord, bad: Int)] { weakVocab(vm.vocabWords, limit: 3) }
+
+    /// 三阶图例（STAGE_LEGEND）：刚收集 / 眼熟（读到能懂） / 能说出口。
+    private static let stageLegend: [(stage: MasteryStage, label: String)] = [
+        (MasteryStage.s1, "刚收集"),
+        (MasteryStage.s2, "眼熟（读到能懂）"),
+        (MasteryStage.s3, "能说出口"),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            progressCard
+            stageCard
+            heatmapCard
+            weakCard
+        }
+    }
+
+    /// 今日进度：conic 环的等价物 Circle().trim（{reviewedToday}/{todayTotal}）+
+    /// 还差 N 条 + 约 X 分钟。
+    private var progressCard: some View {
+        let stats = vm.stats
+        let todayTotal = stats.reviewedToday + due.count
+        let pct = todayTotal > 0 ? min(1, Double(stats.reviewedToday) / Double(todayTotal)) : 0
+        return card {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle().stroke(palette.glassBorderStrong, lineWidth: 5)
+                    Circle()
+                        .trim(from: 0, to: pct)
+                        .stroke(palette.accent, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .animation(ReaderMotion.islandTab, value: pct)
+                    Text("\(stats.reviewedToday)/\(todayTotal)")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .monospacedDigit()
+                        .foregroundColor(palette.text)
+                }
+                .frame(width: 56, height: 56)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("今日进度")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundColor(palette.textTertiary)
+                    Text("还差 \(due.count) 条")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundColor(palette.text)
+                    Text("约 \(vaultMinutes(due.count)) 分钟")
+                        .font(.system(size: 11))
+                        .foregroundColor(palette.textTertiary)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    /// 掌握阶段：三色分段条 + 图例 + 各计数（masteryStage 口径不变）。
+    private var stageCard: some View {
+        let total = max(1, vm.vocabWords.count)
+        return card {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("掌握阶段")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(palette.textTertiary)
+                GeometryReader { geo in
+                    HStack(spacing: 0) {
+                        Rectangle().fill(palette.warn)
+                            .frame(width: geo.size.width * Double(stageCounts.s1) / Double(total))
+                        Rectangle().fill(palette.clauseIndigo)
+                            .frame(width: geo.size.width * Double(stageCounts.s2) / Double(total))
+                        Rectangle().fill(palette.sonicTeal)
+                            .frame(width: geo.size.width * Double(stageCounts.s3) / Double(total))
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    .frame(height: 6)
+                    .frame(width: geo.size.width, alignment: .leading)
+                }
+                .frame(height: 6)
+                ForEach(Self.stageLegend, id: \.stage) { row in
+                    HStack {
+                        Circle()
+                            .fill(color(of: row.stage))
+                            .frame(width: 7, height: 7)
+                        Text(row.label)
+                            .font(.system(size: 11))
+                            .foregroundColor(palette.textSecondary)
+                        Spacer(minLength: 6)
+                        Text("\(stageCounts[row.stage])")
+                            .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                            .foregroundColor(palette.text)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 近 28 天：热力 28 格（today 格高亮）+ 出勤 / 空态提示。
+    private var heatmapCard: some View {
+        let buckets = heatBuckets(vm.reviewLog, nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+        let attended = buckets.filter { $0.count > 0 }.count
+        let todayCount = buckets.first { $0.isToday }?.count ?? 0
+        return card {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("近 28 天")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(palette.textTertiary)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 14), spacing: 3) {
+                    ForEach(buckets, id: \.dayKey) { bucket in
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(heatColor(bucket.level))
+                            .frame(height: 12)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 2)
+                                    .strokeBorder(bucket.isToday ? palette.accent : .clear, lineWidth: 1.5)
+                            )
+                            .help("\(bucket.dayKey) · 复习 \(bucket.count) 次")
+                            .accessibilityLabel("\(bucket.dayKey)\(bucket.isToday ? "（今天）" : "") 复习 \(bucket.count) 次")
+                    }
+                }
+                Text(todayCount == 0 ? "完成第一轮复习，就会点亮今天。" : "出勤 \(attended) 天")
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundColor(palette.textTertiary)
+            }
+        }
+    }
+
+    /// 易错项靶向加练：错题前 3 + 「1 分钟只练这 N 个易错项」+「去口语里加练 →」。
+    private var weakCard: some View {
+        card {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("易错项靶向加练")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(palette.textTertiary)
+                if weakWords.isEmpty {
+                    Text("暂无错题记录——保持复习，错题会出现在这里。")
+                        .font(.system(size: 11))
+                        .foregroundColor(palette.textTertiary)
+                } else {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(weakWords, id: \.word.id) { entry in
+                            HStack(spacing: 4) {
+                                Text("•")
+                                Text(entry.word.word).fontWeight(.semibold)
+                                Text("（错题 \(entry.bad) 次）")
+                            }
+                            .font(.system(size: 11.5))
+                            .foregroundColor(palette.textSecondary)
+                        }
+                    }
+                    Button {
+                        // 看板靶向加练：startFocusReview 直落专注态（Windows 同款两连调用）。
+                        vm.startFocusReview(ids: weakWords.map(\.word.id))
+                        withAnimation(ReaderMotion.islandTab) { vm.vaultPlayMode = .focus }
+                    } label: {
+                        Text("1 分钟只练这 \(weakWords.count) 个易错项")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    Button {
+                        if let first = weakWords.first {
+                            vm.practiceVocabSpeak(first.word)
+                        }
+                    } label: {
+                        Text("去口语里加练 →")
+                            .font(.system(size: 11.5))
+                    }
+                    .buttonStyle(.link)
+                }
+            }
+        }
+    }
+
+    private func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 0) { content() }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(palette.glassSurface.opacity(0.55)))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(palette.glassBorder, lineWidth: 1))
+    }
+
+    private func color(of stage: MasteryStage) -> Color {
+        switch stage {
+        case .s1: return palette.warn
+        case .s2: return palette.clauseIndigo
+        case .s3: return palette.sonicTeal
+        }
+    }
+
+    private func heatColor(_ level: Int) -> Color {
+        switch level {
+        case 0: return palette.surfaceAlt
+        case 1: return palette.sonicTeal.opacity(0.25)
+        case 2: return palette.sonicTeal.opacity(0.52)
+        default: return palette.sonicTeal
+        }
+    }
+}
+
+// MARK: - 词条原句取回（首页/导出/口语条目共用）
+
+extension ReaderVaultView {
+    /// articleId 非空优先原文通道，取不到回退词条自带例句（划词收藏直接用例句）。
+    static func entrySource(
+        _ word: VocabWord,
+        vm: ReaderViewModel
+    ) -> (en: String, zh: String?)? {
+        if !word.source.articleId.isEmpty {
+            return vm.sourceSentence(articleId: word.source.articleId, sentenceIdx: word.source.sentenceIdx)
+        }
+        return word.example.map { (en: $0.en, zh: $0.zh) }
+    }
+}
+
+// MARK: - UTF-16 子串（findChunkRange 的偏移是 UTF-16；越界收敛不崩）
+
+func substring16(_ s: String, _ start: Int, _ end: Int) -> String {
+    let units = Array(s.utf16)
+    let a = min(max(0, start), units.count)
+    let b = min(max(a, end), units.count)
+    guard a < b else { return "" }
+    return String(decoding: units[a..<b], as: UTF16.self)
+}
+
+// MARK: - 行内挖空输入框（ReviewView.tsx:1002-1047 BlankInput 的 Mac 对应物）
+//
+// placeholder「写出被挖空的部分」/ aria「被挖空的词块」/ Enter 提交（输入框自接管，
+// 全局快捷键让路——否则判分刚落就被同一下 Enter「采纳建议档」）/ 自动聚焦 /
+// 宽度随内容：min(320, max(150, 文本宽 + 30))（`.q-sent .cloze-blank-input` min-width 150）。
+
+struct VaultBlankInput: View {
+    @Binding var text: String
+    let palette: ReaderPalette
+    let fontPair: ReaderFontPair
+    var focused: FocusState<Bool>.Binding
+    let onSubmit: () -> Void
+
+    static let placeholder = "写出被挖空的部分"
+    static let fontSize: CGFloat = 26
+
+    /// Windows BlankInput 的宽度规则（useLayoutEffect 量测 + 30，夹到 [150, 320]）。
+    static func width(for text: String, fontPair: ReaderFontPair) -> CGFloat {
+        let sample = text.isEmpty ? placeholder : text
+        let font = readerNSFont(fontSize, pair: fontPair)
+        let measured = (sample as NSString).size(withAttributes: [.font: font]).width
+        return min(320, max(150, measured + 30))
+    }
+
+    var body: some View {
+        TextField(
+            "",
+            text: $text,
+            prompt: Text(Self.placeholder).font(.system(size: 14)).italic().foregroundColor(palette.ink4)
+        )
+        .textFieldStyle(.plain)
+        .font(readerFont(Self.fontSize, .regular, pair: fontPair))
+        .foregroundColor(palette.text)
+        .multilineTextAlignment(.center)
+        .autocorrectionDisabled()
+        .focused(focused)
+        .onSubmit(onSubmit)
+        .padding(.horizontal, 8)
+        .frame(width: Self.width(for: text, fontPair: fontPair), height: 40)
+        .background(
+            VaultTopRoundedRect(radius: 6)
+                .fill(focused.wrappedValue ? palette.accentSoft : palette.accentSofter)
+        )
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(palette.accent).frame(height: 2)
+        }
+        .accessibilityLabel("被挖空的词块")
+    }
+}
+
+/// 只圆上两角的矩形（CSS `border-radius: 6px 6px 0 0`；macOS 13 无 UnevenRoundedRectangle）。
+private struct VaultTopRoundedRect: Shape {
+    var radius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let r = min(radius, min(rect.width, rect.height) / 2)
+        p.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + r))
+        p.addQuadCurve(to: CGPoint(x: rect.minX + r, y: rect.minY), control: CGPoint(x: rect.minX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX - r, y: rect.minY))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + r), control: CGPoint(x: rect.maxX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        p.closeSubpath()
+        return p
+    }
+}
+
+/// 行内流布局（Layout 协议）：子视图按阅读顺序左→右排列、放不下换行，同一行按底边对齐
+///（大句文字与行内输入框的近似基线对齐）。FocusCloze 大句「pre 词 + 输入框 + post 词」用。
+struct InlineFlowLayout: Layout {
+    var itemSpacing: CGFloat = 6
+    var lineSpacing: CGFloat = 8
+
+    private struct Row {
+        var items: [(index: Int, size: CGSize)] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func rows(width: CGFloat, subviews: Subviews) -> [Row] {
+        var rows: [Row] = [Row()]
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.unspecified)
+            var row = rows[rows.count - 1]
+            let extra = row.items.isEmpty ? 0 : itemSpacing
+            if !row.items.isEmpty, row.width + extra + size.width > width {
+                rows.append(Row())
+                row = rows[rows.count - 1]
+            }
+            row.items.append((index, size))
+            row.width += (row.items.count == 1 ? 0 : itemSpacing) + size.width
+            row.height = max(row.height, size.height)
+            rows[rows.count - 1] = row
+        }
+        return rows
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 600
+        let rows = rows(width: width, subviews: subviews)
+        let height = rows.reduce(0) { $0 + $1.height } + CGFloat(max(0, rows.count - 1)) * lineSpacing
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(width: bounds.width, subviews: subviews) {
+            var x = bounds.minX
+            for item in row.items {
+                subviews[item.index].place(
+                    at: CGPoint(x: x, y: y + row.height - item.size.height),
+                    anchor: .topLeading,
+                    proposal: ProposedViewSize(item.size)
+                )
+                x += item.size.width + itemSpacing
+            }
+            y += row.height + lineSpacing
+        }
+    }
+}
+
+// MARK: - 听写卡（复用既有组件与四档评分带，判分链路零改动）
 
 private struct VaultChallengeDictationCard: View {
     let word: VocabWord
@@ -1183,12 +2083,12 @@ private struct VaultChallengeDictationCard: View {
     let total: Int
     let sourceLabel: String
     let palette: ReaderPalette
-    var focused: FocusState<Bool>.Binding
     let onReplay: () -> Void
     let onSubmit: () -> Void
     let onGiveUp: () -> Void
     let onJump: () -> Void
     let onGrade: (ReviewGrade) -> Void
+    @FocusState private var inputFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -1196,7 +2096,7 @@ private struct VaultChallengeDictationCard: View {
             if let source {
                 HStack(spacing: 10) {
                     Button(action: onReplay) {
-                        Text(verdict != nil ? "再听一遍" : (replays < VaultChallengeStage.dictationReplays ? "重播句子" : "播放句子"))
+                        Text(verdict != nil ? "再听一遍" : (replays < VaultFocusModel.dictationReplays ? "重播句子" : "播放句子"))
                             .frame(minWidth: 72)
                     }
                     .controlSize(.small)
@@ -1213,22 +2113,40 @@ private struct VaultChallengeDictationCard: View {
 
                 if verdict == nil {
                     VStack(alignment: .leading, spacing: 10) {
-                        TextEditor(text: $input)
+                        // Windows DictationCard textarea（ReviewView.tsx:1114-1130）：placeholder
+                        //「听写整句（不区分大小写与标点）」、Enter（非 Shift）提交判分、aria「听写输入」。
+                        // Mac 用多行 TextField：Return = onSubmit 提交；换行用 ⌥Return（macOS 多行
+                        // 输入框惯例，Windows 为 Shift+Enter——仅修饰键差异，提交语义一致）。
+                        TextField("听写整句（不区分大小写与标点）", text: $input, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .lineLimit(3...6)
                             .font(.system(size: 14))
-                            .frame(minHeight: 84)
-                            .scrollContentBackground(.hidden)
-                            .padding(6)
+                            .autocorrectionDisabled()
+                            .padding(8)
+                            .frame(minHeight: 84, alignment: .top)
                             .background(palette.surfaceAlt)
                             .cornerRadius(8)
                             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.border))
-                            .focused(focused)
-                        HStack {
+                            .focused($inputFocused)
+                            .onSubmit(onSubmit)
+                            .accessibilityLabel("听写输入")
+                        HStack(spacing: 10) {
                             Button("提交判分", action: onSubmit)
                                 .controlSize(.small)
                                 .buttonStyle(.borderedProminent)
-                                .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty)
                             Button("听不出，看句子", action: onGiveUp)
                                 .controlSize(.small)
+                            // `.rc-keyhint`：<kbd>Enter</kbd> 提交（ReviewView.tsx:1177-1179）。
+                            HStack(spacing: 4) {
+                                Text("Enter")
+                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                    .padding(.horizontal, 4).padding(.vertical, 1)
+                                    .background(palette.glassBorder)
+                                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                                Text("提交")
+                            }
+                            .font(.system(size: 10.5))
+                            .foregroundColor(palette.textTertiary)
                         }
                     }
                 } else if let verdict {
@@ -1243,20 +2161,144 @@ private struct VaultChallengeDictationCard: View {
                             .font(.system(size: 12.5, weight: .medium))
                             .foregroundColor(palette.text)
                     }
+                    // 听写卡保留四档评分带（GRADE_COPY 契约：easy「很轻松」）。
                     VaultGradeBar(suggest: verdictToSuggestedGrade(verdict), ask: "这一句，你写出来了吗？", palette: palette, onGrade: onGrade)
                 }
             }
         }
-        // M-05：闯关大卡套 .challenge-stage-box 材质（html:1080-1089）——
-        // 22 圆角 glass-elevated + shadow-spatial + 发丝边 + 顶内高光。
         .padding(.vertical, 24)
         .padding(.horizontal, 28)
-        .glassCard(palette: palette, radius: 22, elevated: true, heavyShadow: true)
-        .onAppear { focused.wrappedValue = true }
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(palette.glassSurface)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(palette.glassBorderStrong, lineWidth: 1)
+        )
+        .shadow(color: palette.shadowPill, radius: 12, y: 6)
+        .onAppear { inputFocused = true }
     }
 }
 
-// MARK: - 开口造句过关卡（REV-4：录音 → VAD 静音自动收 → 讯飞 ASR → 命中即过关）
+// MARK: - 卡片小件（meta / verdict / 四档评分带）
+
+private struct VaultCardMeta: View {
+    let pill: String
+    let tone: Color
+    let source: String
+    let pos: Int
+    let total: Int
+    let palette: ReaderPalette
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(pill)
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundColor(tone)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(tone.opacity(0.15))
+                .clipShape(Capsule())
+            Text(source)
+                .font(.system(size: 11))
+                .foregroundColor(palette.textTertiary)
+            Spacer()
+            Text("\(min(pos + 1, max(total, 1))) / \(max(total, 1))")
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundColor(palette.textTertiary)
+        }
+    }
+}
+
+private struct VaultVerdictPanel<Content: View>: View {
+    let verdict: RecallVerdict
+    let palette: ReaderPalette
+    var onJump: (() -> Void)?
+    @ViewBuilder let content: Content
+
+    private var color: Color {
+        switch verdict {
+        case .perfect: return palette.ok
+        case .close: return palette.warn
+        case .trap: return palette.err
+        case .wrong: return palette.err
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(verdict.headline)
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundColor(color)
+            content
+            if let onJump {
+                Button("回到原文", action: onJump)
+                    .buttonStyle(.link)
+                    .font(.system(size: 11.5))
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(color.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct VaultGradeBar: View {
+    let suggest: ReviewGrade?
+    let ask: String
+    let palette: ReaderPalette
+    let onGrade: (ReviewGrade) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(ask)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(palette.text)
+            HStack(spacing: 8) {
+                ForEach(Array(ReviewGrade.allCases.enumerated()), id: \.element) { index, grade in
+                    button(grade: grade, key: "\(index + 1)", suggested: suggest == grade)
+                }
+            }
+            Text("↩ 采纳「\(suggest?.label ?? "")」档 · 1–4 改选")
+                .font(.system(size: 10.5))
+                .foregroundColor(palette.textTertiary)
+        }
+    }
+
+    private func button(grade: ReviewGrade, key: String, suggested: Bool) -> some View {
+        Button {
+            onGrade(grade)
+        } label: {
+            VStack(spacing: 2) {
+                Text(grade.label)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundColor(palette.text)
+                Text(grade.nextLabel)
+                    .font(.system(size: 10))
+                    .foregroundColor(palette.textTertiary)
+                Text(key)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(palette.textTertiary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity)
+            .background(suggested ? palette.accent.opacity(0.12) : palette.surfaceAlt)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(suggested ? palette.accent : palette.border, lineWidth: suggested ? 1.6 : 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - 开口造句过关卡（录音 → VAD 静音自动收 → 讯飞 ASR → 命中即过关）
 
 /// 「开口造句过关」：看目标词 + 参考例句，点麦克风说一句包含目标词的话——
 /// 录音（MicRecorder + VadDetector 1.4s 静音自动收，再点立即收）→ 讯飞听写转写
@@ -1351,10 +2393,18 @@ private struct VaultSpeakChallengeCard: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             }
         }
-        // M-05：开口卡同样走 .challenge-stage-box 玻璃材质。
         .padding(.vertical, 24)
         .padding(.horizontal, 28)
-        .glassCard(palette: palette, radius: 22, elevated: true, heavyShadow: true)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(palette.glassSurface)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(palette.glassBorderStrong, lineWidth: 1)
+        )
+        .shadow(color: palette.shadowPill, radius: 12, y: 6)
         .onDisappear {
             // 卸载保护：录音中切卡/换词直接丢弃，不留悬空麦克风。
             recorder?.cancel()
@@ -1574,354 +2624,5 @@ private struct VaultSpeakChallengeCard: View {
         typedVerdict = nil
         typed = ""
         finishing = false
-    }
-}
-
-// MARK: - 卡片小件
-
-private struct VaultCardMeta: View {
-    let pill: String
-    let tone: Color
-    let source: String
-    let pos: Int
-    let total: Int
-    let palette: ReaderPalette
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(pill)
-                .font(.system(size: 10.5, weight: .bold))
-                .foregroundColor(tone)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 2)
-                .background(tone.opacity(0.15))
-                .clipShape(Capsule())
-            Text(source)
-                .font(.system(size: 11))
-                .foregroundColor(palette.textTertiary)
-            Spacer()
-            Text("\(min(pos + 1, max(total, 1))) / \(max(total, 1))")
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundColor(palette.textTertiary)
-        }
-    }
-}
-
-private struct VaultVerdictPanel<Content: View>: View {
-    let verdict: RecallVerdict
-    let palette: ReaderPalette
-    var onJump: (() -> Void)?
-    @ViewBuilder let content: Content
-
-    private var color: Color {
-        switch verdict {
-        case .perfect: return palette.ok
-        case .close: return palette.warn
-        case .trap: return palette.err
-        case .wrong: return palette.err
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(verdict.headline)
-                .font(.system(size: 13.5, weight: .semibold))
-                .foregroundColor(color)
-            content
-            if let onJump {
-                Button("回到原文", action: onJump)
-                    .buttonStyle(.link)
-                    .font(.system(size: 11.5))
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(color.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-private struct VaultGradeBar: View {
-    let suggest: ReviewGrade?
-    let ask: String
-    let palette: ReaderPalette
-    let onGrade: (ReviewGrade) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(ask)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(palette.text)
-            HStack(spacing: 8) {
-                ForEach(Array(ReviewGrade.allCases.enumerated()), id: \.element) { index, grade in
-                    button(grade: grade, key: "\(index + 1)", suggested: suggest == grade)
-                }
-            }
-            Text("↩ 采纳「\(suggest?.label ?? "")」档 · 1–4 改选")
-                .font(.system(size: 10.5))
-                .foregroundColor(palette.textTertiary)
-        }
-    }
-
-    private func button(grade: ReviewGrade, key: String, suggested: Bool) -> some View {
-        Button {
-            onGrade(grade)
-        } label: {
-            VStack(spacing: 2) {
-                Text(grade.label)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundColor(palette.text)
-                Text(grade.nextLabel)
-                    .font(.system(size: 10))
-                    .foregroundColor(palette.textTertiary)
-                Text(key)
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundColor(palette.textTertiary)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity)
-            .background(suggested ? palette.accent.opacity(0.12) : palette.surfaceAlt)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(suggested ? palette.accent : palette.border, lineWidth: suggested ? 1.6 : 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-// MARK: - 模式 3：Markdown 笔记导出（ReaderCore VaultExport.buildVaultMarkdown 的界面壳）
-
-struct VaultMarkdownExport: View {
-    @ObservedObject var vm: ReaderViewModel
-    let onOpenNotes: () -> Void
-    @Environment(\.readerPalette) private var palette
-    @State private var copied = false
-    /// 复制反馈代数：连点时只有最后一次点击的复位生效（2.4s 从最后一次复制算起）。
-    @State private var copyToken = 0
-
-    private var markdown: String {
-        buildVaultMarkdown(
-            words: vm.vocabWords,
-            sourceSentence: { vm.sourceSentence(articleId: $0, sentenceIdx: $1) },
-            speakSessions: vm.speakSessions,
-            dateKey: dayKey(nowMs: Int64(Date().timeIntervalSince1970 * 1000))
-        )
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Markdown 结构化学习笔记（可直接复制进 Notion / Obsidian）")
-                        .font(readerFont(15.5, .semibold, pair: vm.effectiveSettings.fontPair))
-                        .foregroundColor(palette.text)
-                    Text("自动汇总自阅读查词、口语表达改进与发音诊断")
-                        .font(.system(size: 11.5))
-                        .foregroundColor(palette.textTertiary)
-                }
-                Spacer()
-                Button {
-                    onOpenNotes()
-                } label: {
-                    Label("笔记库回看", systemImage: "books.vertical")
-                        .font(.system(size: 11.5))
-                }
-                .controlSize(.small)
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(markdown, forType: .string)
-                    copied = true
-                    copyToken += 1
-                    let token = copyToken
-                    Task {
-                        try? await Task.sleep(nanoseconds: 2_400_000_000)
-                        guard token == copyToken else { return } // 期间又复制过：由后一次计时复位
-                        copied = false
-                    }
-                } label: {
-                    Label(copied ? "已复制" : "复制 Markdown", systemImage: copied ? "checkmark" : ReaderIcons.copy)
-                        .font(.system(size: 11.5))
-                }
-                .controlSize(.small)
-                .buttonStyle(.borderedProminent)
-            }
-
-            ScrollView {
-                Text(markdown)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(palette.textSecondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-            }
-        }
-    }
-}
-
-// MARK: - 右侧：我的内化看板（Windows InternalizationDashboard）
-
-private struct VaultDashboard: View {
-    @ObservedObject var vm: ReaderViewModel
-    @Environment(\.readerPalette) private var palette
-
-    private var due: [VocabWord] { vm.dueWords }
-
-    private var stageCounts: MasteryStageCounts {
-        masteryStageCounts(vm.vocabWords)
-    }
-
-    /// 易错词：错题（wrong+trap）最多的前 3 个，按错题数降序（ReaderCore weakVocab）。
-    private var weakWords: [(word: VocabWord, bad: Int)] {
-        weakVocab(vm.vocabWords, limit: 3)
-    }
-
-    var body: some View {
-        let stats = vm.stats
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("我的内化看板")
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundColor(palette.text)
-                Spacer()
-                Text("连续 \(stats.streak) 天")
-                    .font(.system(size: 11).monospacedDigit())
-                    .foregroundColor(palette.textTertiary)
-            }
-
-            // 今日内化进度
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("今日内化进度")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(palette.textTertiary)
-                    Spacer()
-                    Text("\(stats.reviewedToday) / \(stats.reviewedToday + due.count) 项已完成")
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundColor(palette.textSecondary)
-                }
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(palette.border.opacity(0.3))
-                        let total = stats.reviewedToday + due.count
-                        Capsule()
-                            .fill(palette.accent)
-                            .frame(width: geo.size.width * CGFloat(total > 0 ? Double(stats.reviewedToday) / Double(total) : 0))
-                    }
-                }
-                .frame(height: 6)
-                let dueSpoken = due.filter { $0.spokenAt != nil }.count
-                Text("剩余 \(due.count) 项待过关 · 其中 \(dueSpoken) 项已在口语对谈中用出")
-                    .font(.system(size: 10.5))
-                    .foregroundColor(palette.textTertiary)
-            }
-
-            // 词块内化三阶段
-            VStack(alignment: .leading, spacing: 6) {
-                Text("词块内化三阶段（看见自己的积累）")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(palette.textTertiary)
-                ForEach(MasteryStage.allCases, id: \.self) { stage in
-                    stageRow(stage: stage, count: stageCounts[stage])
-                }
-            }
-
-            // 近 28 天学习足迹
-            VStack(alignment: .leading, spacing: 6) {
-                let buckets = heatBuckets(vm.reviewLog, nowMs: Int64(Date().timeIntervalSince1970 * 1000))
-                let attended = buckets.filter { $0.count > 0 }.count
-                HStack {
-                    Text("近 28 天学习足迹")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(palette.textTertiary)
-                    Spacer()
-                    Text("出勤 \(attended) 天")
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundColor(palette.textSecondary)
-                }
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 14), spacing: 3) {
-                    ForEach(buckets, id: \.dayKey) { bucket in
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(heatColor(bucket.level))
-                            .frame(height: 12)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 2)
-                                    .strokeBorder(bucket.isToday ? palette.accent : .clear, lineWidth: 1.5)
-                            )
-                            .help("\(bucket.dayKey) · 复习 \(bucket.count) 次")
-                            .accessibilityLabel("\(bucket.dayKey)\(bucket.isToday ? "（今天）" : "") 复习 \(bucket.count) 次")
-                    }
-                }
-            }
-
-            // 易错项靶向加练
-            VStack(alignment: .leading, spacing: 8) {
-                Text("易错项靶向加练")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(palette.textTertiary)
-                if weakWords.isEmpty {
-                    Text("暂无错题记录——保持复习，错题会出现在这里。")
-                        .font(.system(size: 11))
-                        .foregroundColor(palette.textTertiary)
-                } else {
-                    VStack(alignment: .leading, spacing: 3) {
-                        ForEach(weakWords, id: \.word.id) { entry in
-                            HStack(spacing: 4) {
-                                Text("•")
-                                Text(entry.word.word).fontWeight(.semibold)
-                                Text("（错题 \(entry.bad) 次）")
-                            }
-                            .font(.system(size: 11.5))
-                            .foregroundColor(palette.textSecondary)
-                        }
-                    }
-                    Button {
-                        vm.startFocusReview(ids: weakWords.map(\.word.id))
-                    } label: {
-                        Text("1 分钟只练这 \(weakWords.count) 个易错项")
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    Button("去口语里加练 →") {
-                        if let first = weakWords.first {
-                            vm.practiceVocabSpeak(first.word)
-                        }
-                    }
-                        .buttonStyle(.link)
-                        .font(.system(size: 11.5))
-                }
-            }
-        }
-        // M-05：看板套玻璃材质阶梯（14 圆角 + blur + shadow-pill），三套皮肤
-        // 不再只换颜色。
-        .padding(16)
-        .glassCard(palette: palette, radius: 14)
-    }
-
-    private func stageRow(stage: MasteryStage, count: Int) -> some View {
-        HStack {
-            Text(stage.dashboardLabel)
-                .font(.system(size: 11))
-                .foregroundColor(palette.textSecondary)
-            Spacer()
-            VaultStagePill(stage: stage, palette: palette)
-                .scaleEffect(0.9, anchor: .trailing)
-            Text("\(count) 词")
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                .foregroundColor(palette.text)
-        }
-    }
-
-    private func heatColor(_ level: Int) -> Color {
-        switch level {
-        case 0: return palette.surfaceAlt
-        case 1: return palette.sonicTeal.opacity(0.25)
-        case 2: return palette.sonicTeal.opacity(0.52)
-        default: return palette.sonicTeal
-        }
     }
 }

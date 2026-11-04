@@ -67,7 +67,7 @@ enum SelectedTextReader {
         var focusedElement: CFTypeRef?
         let systemWide = AXUIElementCreateSystemWide()
         guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedElement) == .success,
-              let element = focusedElement as! AXUIElement? else {
+              let element = axUIElement(from: focusedElement) else {
             return nil
         }
         var selectedText: CFTypeRef?
@@ -78,6 +78,17 @@ enum SelectedTextReader {
         let text = value as? String ?? ""
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return clean.isEmpty ? nil : clean
+    }
+
+    /// CFTypeRef → AXUIElement 的防御式转换（对齐 Windows uia.rs：元素/属性任一步取不到就降级返回，绝不 panic）。
+    /// CF 类型的条件转型与强制转型在运行时都不校验真实类型：条件转型到 AXUIElement 编译期直接报错
+    ///「conditional downcast to CoreFoundation type will always succeed」，强制转型遇到非 AXUIElement
+    /// 也不会拦截，会把错类型当 AXUIElement 继续传给 AX API。故先比对 CFTypeID：nil 或非
+    /// AXUIElement 一律返回 nil，调用方 readSelectedText() 继续走 `.copyFailed` 文案。
+    static func axUIElement(from value: CFTypeRef?) -> AXUIElement? {
+        guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        // 类型已由 CFTypeID 确认，这里只是引用的静态类型转换。
+        return unsafeDowncast(value, to: AXUIElement.self)
     }
 
     /// ③ 等待用户手动 ⌘C：提示后监听剪贴板序列号，出现新文本即返回；

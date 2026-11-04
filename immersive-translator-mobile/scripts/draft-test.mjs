@@ -47,7 +47,7 @@ async function clearMount() { api.unmount(); await wait(20); await api.flushPers
 async function profile(label) { await clearMount(); await api.switchProfile(label + '-' + crypto.randomUUID(), false); }
 
 try {
-  await build({ stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import {useLocalDraft} from './core/useLocalDraft';import LearningImport from './screens/LearningImport';import {LearningNote} from './screens/LearningHome';import ReviewScreen from './screens/ReviewScreen';import {NavCtx} from './ui/nav';export * from './store';let root;export let probe;function Probe({id}){const [value,set,ready,clear]=useLocalDraft(id,'');probe={id,value,set,ready,clear};return <div data-ready={ready}>{value}</div>;}export function render(kind,props,nav){root??=createRoot(document.getElementById('root'));const C={hook:Probe,note:LearningNote,import:LearningImport,review:ReviewScreen}[kind];root.render(<NavCtx.Provider value={nav}><C {...props}/></NavCtx.Provider>);}export function unmount(){root?.unmount();root=null;probe=null;}`, resolveDir: fileURLToPath(new URL('../src', import.meta.url)), sourcefile: 'draft-tests.tsx', loader: 'tsx' }, outfile, bundle: true, platform: 'browser', format: 'esm', jsx: 'automatic', define: { 'import.meta.env.DEV': 'true', 'import.meta.env.VITE_API_BASE_URL': JSON.stringify('https://draft-tests.invalid'), 'process.env.NODE_ENV': JSON.stringify('development') } });
+  await build({ stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import {useLocalDraft} from './core/useLocalDraft';import LearningImport from './screens/LearningImport';import {LearningNote} from './screens/LearningHome';import ReviewScreen from './screens/ReviewScreen';import {NavCtx} from './ui/nav';export * from './store';let root;export let probe;function Probe({id}){const [value,set,ready,clear]=useLocalDraft(id,'');probe={id,value,set,ready,clear};return <div data-ready={ready}>{value}</div>;}export function render(kind,props,nav){root??=createRoot(document.getElementById('root'));const C={hook:Probe,note:LearningNote,import:LearningImport,review:ReviewScreen}[kind];root.render(<NavCtx.Provider value={nav}><div className="app"><C {...props}/></div></NavCtx.Provider>);}export function unmount(){root?.unmount();root=null;probe=null;}`, resolveDir: fileURLToPath(new URL('../src', import.meta.url)), sourcefile: 'draft-tests.tsx', loader: 'tsx' }, outfile, bundle: true, platform: 'browser', format: 'esm', jsx: 'automatic', define: { 'import.meta.env.DEV': 'true', 'import.meta.env.VITE_API_BASE_URL': JSON.stringify('https://draft-tests.invalid'), 'process.env.NODE_ENV': JSON.stringify('development') } });
   api = await import(pathToFileURL(outfile).href);
   await api.initializeStore('draft-tests-' + crypto.randomUUID());
 
@@ -81,12 +81,14 @@ try {
   const beforePops = pops; q('form').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true })); await until(() => pops > beforePops, 'note save');
   assert.equal(api.getState().notes[0].body, 'Saved body'); await clearMount(); api.render('note', {}, nav); await until(() => q('textarea'), 'fresh note');
   assert.equal(q('input').value, ''); assert.equal(q('textarea').value, ''); pass('saving a new note clears its draft and the next new note is empty');
-  await clearMount(); const noteId = api.getState().notes[0].id; api.render('note', { id: noteId }, nav); await until(() => q('textarea'), 'edit note');
-  type(q('textarea'), 'Unsubmitted edit retained'); await wait(25); await api.flushPersist(); await clearMount(); api.render('note', { id: noteId }, nav); await until(() => q('textarea'), 'restore edit note');
+  /* 原型 learning-note（html:3005-3008）：已有笔记先读后改——阅读态页头「编辑笔记」圆钮进编辑抽屉。 */
+  await clearMount(); const noteId = api.getState().notes[0].id; api.render('note', { id: noteId }, nav); await until(() => q('.v2-free-note'), 'note reading view'); click(button('编辑笔记'));
+  await until(() => q('textarea'), 'edit note');
+  type(q('textarea'), 'Unsubmitted edit retained'); await wait(25); await api.flushPersist(); await clearMount(); api.render('note', { id: noteId }, nav); await until(() => q('.v2-free-note'), 'restore note reading view'); click(button('编辑笔记')); await until(() => q('textarea'), 'restore edit note');
   assert.equal(q('textarea').value, 'Unsubmitted edit retained'); assert.equal(api.getState().notes[0].body, 'Saved body'); pass('returning to an edited note restores the draft without changing the saved note');
 
   await profile('import'); api.render('import', {}, nav); await until(() => q('textarea'), 'import');
-  type(q('textarea'), 'Account scoped text. It must never appear in another account.'); await wait(20); click(button('预览内容')); await until(() => button('保存并开始阅读'), 'import preview'); await wait(20); await api.flushPersist();
+  type(q('textarea'), 'Account scoped text. It must never appear in another account.'); await wait(20); click(button('预览正文')); await until(() => button('保存并开始阅读'), 'import preview'); await wait(20); await api.flushPersist();
   const importIdentity = api.profileIdentity(), digest = crypto.subtle.digest.bind(crypto.subtle), hashEntered = deferred(), hashRelease = deferred();
   crypto.subtle.digest = async (...args) => { hashEntered.resolve(); await hashRelease.promise; return digest(...args); };
   try { click(button('保存并开始阅读')); await hashEntered.promise; await api.switchProfile('import-other-' + crypto.randomUUID(), false); hashRelease.resolve(); await until(() => q('[role=alert]'), 'stale import rejection'); assert.match(text(q('[role=alert]')), /账号已切换/); assert.equal(api.getState().articles.filter(a => a.sourceType === 'paste').length, 0); } finally { crypto.subtle.digest = digest; }
@@ -94,13 +96,13 @@ try {
   pass('switching accounts while SHA-256 awaits never imports into the new account and preserves the source draft');
 
   await profile('review'); api.actions.saveWord({ word: 'durable', kind: 'word', senses: [{ pos: 'adj.', cn: '持久的' }] }, 'word'); await api.flushPersist(); api.hideToast();
-  const wordId = api.getState().vocab[0].id; api.render('review', { wordId }, nav); await until(() => button('点按翻面'), 'review card'); click(button('点按翻面')); await until(() => all('.grade').length === 4, 'review grades');
+  const wordId = api.getState().vocab[0].id; api.render('review', { wordId }, nav); await until(() => button('点按翻面'), 'review card'); click(button('点按翻面')); await until(() => all('.grade').length === 3, 'review grades');
   click(all('.grade')[2]); await until(() => api.getState().reviewEvents.length === 1, 'grade event'); await api.flushPersist(); await clearMount();
-  api.render('review', { wordId }, nav); await until(() => text(document.body).includes('复习完成'), 'durable grade recovery'); assert.equal(api.getState().reviewEvents.filter(e => e.kind === 'grade').length, 1); assert.equal(all('.grade').length, 0);
+  api.render('review', { wordId }, nav); await until(() => text(document.body).includes('本轮完成'), 'durable grade recovery'); assert.equal(api.getState().reviewEvents.filter(e => e.kind === 'grade').length, 1); assert.equal(all('.grade').length, 0);
   pass('unmounting after durable grading restores completion and cannot score the card twice');
 
   await profile('undo'); api.actions.saveWord({ word: 'regrade', kind: 'word', senses: [{ pos: 'v.', cn: '重评' }] }, 'word'); await api.flushPersist(); api.hideToast();
-  const undoWord = api.getState().vocab[0].id; api.render('review', { wordId: undoWord }, nav); await until(() => button('点按翻面'), 'undo card'); click(button('点按翻面')); await until(() => all('.grade').length === 4, 'undo grades'); click(all('.grade')[2]); await until(() => button('撤销'), 'undo action');
+  const undoWord = api.getState().vocab[0].id; api.render('review', { wordId: undoWord }, nav); await until(() => button('点按翻面'), 'undo card'); click(button('点按翻面')); await until(() => all('.grade').length === 3, 'undo grades'); click(all('.grade')[2]); await until(() => button('撤销'), 'undo action');
   const firstEvent = api.getState().reviewEvents.find(e => e.kind === 'grade'); click(button('撤销')); await until(() => api.getState().reviewEvents.some(e => e.kind === 'undo'), 'undo event'); click(all('.grade')[1]); await until(() => api.getState().reviewEvents.filter(e => e.kind === 'grade').length === 2, 'regrade event'); await api.flushPersist();
   const grades = api.getState().reviewEvents.filter(e => e.kind === 'grade'); assert.notEqual(grades[0].id, grades[1].id); assert.equal(api.getState().reviewEvents.find(e => e.kind === 'undo').reversesEventId, firstEvent.id);
   pass('undo permits regrading with a new event ID and keeps an auditable reversal');
@@ -108,7 +110,7 @@ try {
   await profile('invalid-review'); api.actions.saveWord({ word: 'fresh', kind: 'word', senses: [{ pos: 'adj.', cn: '新的' }] }, 'word'); await api.flushPersist(); api.hideToast();
   const freshWord = api.getState().vocab[0].id;
   for (const payload of [null, { queue: null, pos: 0, finished: true }, { queue: [{ id: 'deleted-word' }], pos: 0, finished: true }]) {
-    await api.commitRepository({ records: [{ collection: 'local.review', id: freshWord, payload }] }); api.render('review', { wordId: freshWord }, nav); await until(() => button('点按翻面'), 'invalid review fallback'); assert.equal(text(document.body).includes('复习完成'), false); assert.equal(api.getState().reviewEvents.length, 0); await clearMount();
+    await api.commitRepository({ records: [{ collection: 'local.review', id: freshWord, payload }] }); api.render('review', { wordId: freshWord }, nav); await until(() => button('点按翻面'), 'invalid review fallback'); assert.equal(text(document.body).includes('本轮完成'), false); assert.equal(api.getState().reviewEvents.length, 0); await clearMount();
   }
   pass('null, invalid-schema, and stale-word review drafts cannot fabricate a completed session');
 

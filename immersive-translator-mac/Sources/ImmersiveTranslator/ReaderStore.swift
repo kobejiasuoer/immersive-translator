@@ -28,7 +28,11 @@ final class ReaderStore {
         }
     }
 
-    static let shared = ReaderStore()
+    /// 学习接力：接线后域文件读写全部经 LearningStore（SQLite files 表优先、
+    /// commit 派生 outbox 单事务、兼容文件导出）；nil（既有测试）= 纯文件 IO。
+    let learning: LearningStore?
+
+    static let shared = ReaderStore(learning: LearningStore.shared)
 
     private let queue = DispatchQueue(label: "local.immersive-translator.reader-store")
     private let fileManager = FileManager.default
@@ -36,7 +40,7 @@ final class ReaderStore {
     /// 基目录（默认应用支持目录；与 NoteStore 同法，测试可注入临时目录）。
     let baseDirectory: URL
 
-    init(baseDirectory: URL? = nil) {
+    init(baseDirectory: URL? = nil, learning: LearningStore? = nil) {
         if let baseDirectory {
             self.baseDirectory = baseDirectory
         } else {
@@ -44,9 +48,35 @@ final class ReaderStore {
                 ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
             self.baseDirectory = base.appendingPathComponent("ImmersiveTranslator", isDirectory: true)
         }
+        self.learning = learning
     }
 
-    var directory: URL { baseDirectory }
+    /// 域数据目录：接线 LearningStore 后命名空间感知（guest=根，账号=learning/<ns>）。
+    var directory: URL {
+        if let learning, let dir = try? learning.dataDirectory() {
+            return dir
+        }
+        return baseDirectory
+    }
+
+    /// 读域文件文本（接线后 files 表优先、磁盘兼容兜底；NotFound → nil = 空库）。
+    private func readText(_ url: URL) -> String? {
+        if let learning {
+            guard let text = try? learning.readPath(url) else { return nil }
+            return text
+        }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// 删除域文件（接线后走 commit(nil)：outbox 记 tombstone + files 置 NULL +
+    /// 磁盘删除）。
+    private func removeDomainFile(_ url: URL) {
+        if let learning {
+            try? learning.commit(url, nil)
+            return
+        }
+        try? fileManager.removeItem(at: url)
+    }
 
     var articlesURL: URL { directory.appendingPathComponent("reader_articles.json") }
     var vocabURL: URL { directory.appendingPathComponent("reader_vocab.json") }
@@ -59,7 +89,16 @@ final class ReaderStore {
 
     /// 临时文件 + rename，落盘原子化。父目录（含 books/ 子目录）一并确保存在
     ///（对齐 Windows books_dir 的 create_dir_all，否则首本书落盘 ENOENT）。
+    /// 接线 LearningStore 后走 commit：派生 outbox 单事务 + 事务外导出兼容文件
+    ///（导出失败只发 learning-export-warning，数据不回滚）。
     private func writeAtomically(_ data: Data, to url: URL) throws {
+        if let learning {
+            guard let text = String(data: data, encoding: .utf8) else {
+                throw ReaderStoreError.schemaIncompatible("非 UTF-8 数据无法落域文件")
+            }
+            try learning.commit(url, text)
+            return
+        }
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let tmp = url.deletingPathExtension().appendingPathExtension("json.tmp")
         try data.write(to: tmp, options: .atomic)
@@ -85,8 +124,8 @@ final class ReaderStore {
     // MARK: - 文章
 
     private func loadArticlesFile() throws -> ArticlesFile {
-        guard fileManager.fileExists(atPath: articlesURL.path) else { return .empty }
-        let data = try Data(contentsOf: articlesURL)
+        guard let raw = readText(articlesURL) else { return .empty }
+        let data = Data(raw.utf8)
         if data.isEmpty { return .empty }
         guard let topLevel = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return .empty
@@ -158,8 +197,8 @@ final class ReaderStore {
     // MARK: - 书（书级载体）
 
     private func loadJSONFile<T: Decodable>(_ type: T.Type, url: URL, file: String, empty: T) throws -> T {
-        guard fileManager.fileExists(atPath: url.path) else { return empty }
-        let data = try Data(contentsOf: url)
+        guard let raw = readText(url) else { return empty }
+        let data = Data(raw.utf8)
         if data.isEmpty { return empty }
         guard let topLevel = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return empty
@@ -241,9 +280,7 @@ final class ReaderStore {
             guard index.books.count != before else { return false }
             try writeAtomically(try ReaderFileCodec.encode(index), to: booksIndexURL)
             let url = try bookFileURL(bookId: bookId)
-            if fileManager.fileExists(atPath: url.path) {
-                try fileManager.removeItem(at: url)
-            }
+            removeDomainFile(url)
             return true
         }
     }
@@ -275,8 +312,8 @@ final class ReaderStore {
     // MARK: - 生词 + 复习日志
 
     private func loadVocabFile() throws -> VocabFile {
-        guard fileManager.fileExists(atPath: vocabURL.path) else { return .empty }
-        let data = try Data(contentsOf: vocabURL)
+        guard let raw = readText(vocabURL) else { return .empty }
+        let data = Data(raw.utf8)
         if data.isEmpty { return .empty }
         guard let topLevel = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return .empty
@@ -400,5 +437,144 @@ final class ReaderStore {
     func saveGlobalReaderSettings(_ settings: ReaderSettings) {
         let data = (try? ReaderFileCodec.encode(settings)) ?? Data()
         UserDefaults.standard.set(data, forKey: Self.globalSettingsKey)
+    }
+
+    // MARK: - 学习接力复习提交（readerStore.ts readerGradeVocab / readerUndoReview 对应物）
+
+    /// JS 空值合并 `??` 的左值判定：undefined 与 null 都算「空」（返回 nil 以便回退）。
+    static func nonNullish(_ value: Any?) -> Any? {
+        guard let unwrapped = LearningJSON.unwrap(value), !(unwrapped is NSNull) else { return nil }
+        return unwrapped
+    }
+
+    /// 一次不可变评分事件 + 由事件归并出的词条快照原子提交；返回事件 id 与
+    /// 归并后的词条 JSON。事件带 day / generation / recall；改评带
+    /// supersedesEventId（Windows gradeEventIds 模式）。learning 未接线时抛错，
+    /// 调用方回退旧链路（gradeSrs + saveVocabWord）。
+    func gradeVocabWord(
+        _ word: VocabWord,
+        grade: ReviewGrade,
+        mode: RecallMode,
+        bucket: RecallBucket?,
+        now: Int64,
+        supersedesEventId: String? = nil,
+        expectedNamespace: String? = nil
+    ) throws -> (eventId: String, word: JSONObject) {
+        guard let learning else { throw LearningStoreError("学习存储未接线") }
+        let wordDict = (try? JSONSerialization.jsonObject(with: ReaderFileCodec.encode(word))) as? JSONObject ?? [:]
+        let namespace = expectedNamespace ?? learning.currentNamespace()
+        let stored = try learning.list("reading-vocab", expectedNamespace: namespace)
+        let payload = stored.first { $0.id == word.id }?.payload as? JSONObject
+        // `payload?.baseline ?? word.srs` / `payload?.baselineRecall ?? word.recall`：
+        // JS `??` 对 null 与 undefined 都回退；两者都缺时 baselineRecall 为 undefined
+        //（序列化省略，由 commitReview 的 ensureBaseline 补齐），绝不写 null。
+        let baseline: Any = Self.nonNullish(payload?["baseline"]) ?? word.srs.jsonObject
+        let baselineRecall: Any? = Self.nonNullish(payload?["baselineRecall"]) ?? word.recall?.jsonObject
+        let generation = LearningJSON.string(payload?["generation"]) ?? "legacy-\(word.addedAt)"
+        let deviceId = try learning.deviceId()
+        var event: JSONObject = [
+            "v": 2,
+            "id": UUID().uuidString.lowercased(),
+            "wordId": word.id,
+            "deviceId": deviceId,
+            "reviewedAt": now,
+            "day": dayKey(nowMs: now),
+            "kind": "grade",
+            "grade": grade.rawValue,
+            "mode": mode.rawValue,
+            "generation": generation,
+        ]
+        if let bucket {
+            event["recall"] = ["bucket": bucket.rawValue]
+        }
+        if let supersedesEventId {
+            event["supersedesEventId"] = supersedesEventId
+        }
+        // 客户端先归并一遍（Rust 端 learning_commit_review 内部同样归并，双保险；
+        // srs/recall 结果以落库为准）。归并输入只收形状合法的事件（readerStore.ts:67
+        // `!e.deleted && isReviewEvent(e.payload)`）——库里一条畸形事件不得让评分整体失败。
+        let events = try learning.list("review-events", expectedNamespace: namespace)
+            .filter { !$0.deleted && isReviewEvent($0.payload) }
+            .compactMap { LearningJSON.object($0.payload) }
+        let reduced = try reduceReviewEvents(
+            baseline: VocabSrsState(json: baseline),
+            input: events + [event],
+            wordId: word.id,
+            generation: generation,
+            baselineRecall: baselineRecall.map { RecallStat(json: $0) }
+        )
+        var committed = wordDict
+        committed["baseline"] = baseline
+        if let baselineRecall {
+            committed["baselineRecall"] = baselineRecall
+        } else {
+            committed.removeValue(forKey: "baselineRecall")
+        }
+        committed["generation"] = generation
+        committed["srs"] = reduced.srs.jsonObject
+        committed["recall"] = reduced.recall.jsonObject
+        let finalWord = try learning.commitReview(word: committed, event: event, expectedNamespace: namespace)
+        return (event["id"] as! String, finalWord)
+    }
+
+    /// 撤销一次评分：生成 undo 事件并归并（无 baseline 抛 "No review baseline"）。
+    func undoReviewWord(
+        _ word: VocabWord, eventId: String, now: Int64, expectedNamespace: String? = nil
+    ) throws -> JSONObject {
+        guard let learning else { throw LearningStoreError("学习存储未接线") }
+        let namespace = expectedNamespace ?? learning.currentNamespace()
+        let stored = try learning.list("reading-vocab", expectedNamespace: namespace)
+        // readerStore.ts:75 `if(!p?.baseline) throw`——假值（缺失/null）一律视为无基线。
+        guard let payload = stored.first(where: { $0.id == word.id })?.payload as? JSONObject,
+              LearningJSON.truthy(payload["baseline"]), let baseline = LearningJSON.unwrap(payload["baseline"]) else {
+            throw LearningStoreError("No review baseline")
+        }
+        let generation = LearningJSON.string(payload["generation"])
+        let deviceId = try learning.deviceId()
+        // readerStore.ts:76 `generation:p.generation`——实体无 generation 时该键为
+        // undefined，序列化即省略（合法事件只归 legacy- 代）；绝不能写 null
+        //（isReviewEvent 判非法 → 撤销整体失败）。
+        var event: JSONObject = [
+            "v": 2,
+            "id": UUID().uuidString.lowercased(),
+            "wordId": word.id,
+            "deviceId": deviceId,
+            "reviewedAt": now,
+            "kind": "undo",
+            "mode": "recognition",
+            "reversesEventId": eventId,
+        ]
+        if let generation {
+            event["generation"] = generation
+        }
+        // readerStore.ts:77 撤销路径只按 isReviewEvent 过滤（不看 deleted）。
+        let events = try learning.list("review-events", expectedNamespace: namespace)
+            .filter { isReviewEvent($0.payload) }
+            .compactMap { LearningJSON.object($0.payload) }
+        let baselineRecall: Any = payload["baselineRecall"] ?? NSNull()
+        let reduced = try reduceReviewEvents(
+            baseline: VocabSrsState(json: baseline),
+            input: events + [event],
+            wordId: word.id,
+            generation: generation,
+            baselineRecall: LearningJSON.isNull(baselineRecall) ? nil : RecallStat(json: baselineRecall)
+        )
+        var wordDict = (try? JSONSerialization.jsonObject(with: ReaderFileCodec.encode(word))) as? JSONObject ?? [:]
+        wordDict["baseline"] = baseline
+        // baselineRecall / generation 缺省时同样省略键（JSON.stringify 丢 undefined），
+        // 由 commitReview 内 ensureBaseline 按 Rust 口径补齐。
+        if LearningJSON.isUndefined(payload["baselineRecall"]) {
+            wordDict.removeValue(forKey: "baselineRecall")
+        } else {
+            wordDict["baselineRecall"] = baselineRecall
+        }
+        if let generation {
+            wordDict["generation"] = generation
+        } else {
+            wordDict.removeValue(forKey: "generation")
+        }
+        wordDict["srs"] = reduced.srs.jsonObject
+        wordDict["recall"] = reduced.recall.jsonObject
+        return try learning.commitReview(word: wordDict, event: event, expectedNamespace: namespace)
     }
 }

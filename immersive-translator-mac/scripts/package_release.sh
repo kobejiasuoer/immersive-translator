@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="ImmersiveTranslator"
-VERSION="${1:-${APP_VERSION:-0.1.1}}"
+VERSION="${1:-${APP_VERSION:-0.12.1}}"
 BUILD="${APP_BUILD:-1}"
 RELEASE_DIR="${RELEASE_DIR:-$ROOT_DIR/release}"
 if [[ "$RELEASE_DIR" != /* ]]; then

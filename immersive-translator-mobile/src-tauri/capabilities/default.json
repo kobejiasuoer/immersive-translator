@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "notification:default",
+    "study-notifications:default",
     "haptics:default",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",

@@ -229,7 +229,7 @@ final class ReaderShellChromeTests: XCTestCase {
     @MainActor
     func testEscapeClosesSettingsDrawerOnAnyRoute() {
         // 齿轮在顶栏，任何路由都能开抽屉：Esc 派发不依赖 route（笔记与复习路由也要能收）。
-        for route in [ReaderViewModel.Route.shelf, .reading, .review, .notes, .speak] {
+        for route in [ReaderViewModel.Route.shelf, .reading, .vault, .speak] {
             let vm = makeVM()
             vm.route = route
             vm.settingsDrawerShown = true
@@ -289,6 +289,16 @@ final class ReaderShellChromeTests: XCTestCase {
         window.contentView = textView
         XCTAssertTrue(window.makeFirstResponder(textView), "前置：NSTextView 成为第一响应者")
         XCTAssertTrue(ReaderViewModel.textInputHasFocus(in: window), "NSTextView 聚焦应判为输入焦点")
+
+        // 只读但可选中的正文视图（ReaderTextView/ProseFlowTextView 同款配置）：点选
+        // 即成为第一响应者，但不算输入——否则阅读快捷键被点正文卡死（对齐 Windows
+        // isTyping 只认 input/textarea/contentEditable）。
+        let readOnlyTextView = NSTextView(frame: NSRect(x: 0, y: 0, width: 240, height: 120))
+        readOnlyTextView.isEditable = false
+        readOnlyTextView.isSelectable = true
+        window.contentView = readOnlyTextView
+        XCTAssertTrue(window.makeFirstResponder(readOnlyTextView), "前置：只读可选中视图成为第一响应者")
+        XCTAssertFalse(ReaderViewModel.textInputHasFocus(in: window), "只读可选中视图不算输入焦点：点选正文后快捷键应照常生效")
 
         let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
         window.contentView = textField
@@ -522,5 +532,110 @@ final class ReaderShellChromeTests: XCTestCase {
         await chat.gate.open("not json at all")
         await settle()
         XCTAssertEqual(vm.dict, .chunkCard(chunk: chunk, sentenceIdx: 1), "迟到查词结果不得覆盖即时卡")
+    }
+
+    // MARK: - 2026-10-26 三段外壳对账（§2.4 测试组 9）：folio 平面白胶囊 vs 毛玻璃；focus 态中岛隐藏
+
+    func testShellPillSkinFollowsFolioRoutes() {
+        // 根 div data-skin="folio" 仅 shelf/reading 两视图挂（ReaderApp.tsx:2330-2335）：
+        // 三段改平面白胶囊；speak/vault 保留毛玻璃三段语义。
+        XCTAssertEqual(ShellPillSkin.forRoute(.shelf), .flat)
+        XCTAssertEqual(ShellPillSkin.forRoute(.reading), .flat)
+        XCTAssertEqual(ShellPillSkin.forRoute(.speak), .glass)
+        XCTAssertEqual(ShellPillSkin.forRoute(.vault), .glass)
+    }
+
+    func testFlatShellPillUsesSurfaceTokenPerTheme() {
+        // folio 平面白胶囊底 = var(--surface)（reader.css:9344-9352）；毛玻璃胶囊底 = --glass-pill。
+        for theme in ReaderTheme.allCases {
+            let tokens = ReaderThemeTokens.tokens(for: theme)
+            let palette = ReaderPalette.palette(for: theme)
+            assertColor(palette.surface, equals: tokens.surface, "\(theme) 平面白胶囊底应等于 surface 令牌")
+            assertColor(palette.glassPill, equals: tokens.glassPill, "\(theme) 毛玻璃胶囊底应等于 glass-pill 令牌")
+        }
+    }
+
+    // MARK: - folio + light 颜色令牌矩阵（reader.css:9262-9276，规格 §2.3）
+
+    func testFolioLightTokenMatrixAppliesOnlyToLightFolioCell() {
+        // folio + light 一格改品牌绿：accent #1f6b57 / hover #185646 / soft #e3f0ea /
+        // line #b9d8cc / mod #4b5a9a / warn #a1620f / warn-soft #fbf1e1。
+        let folio = ReaderThemeTokens.tokens(for: .light, skin: .folio)
+        XCTAssertEqual(folio.accent.hex, "#1F6B57")
+        XCTAssertEqual(folio.accentHover.hex, "#185646")
+        XCTAssertEqual(folio.accentSoft.hex, "#E3F0EA")
+        XCTAssertEqual(folio.accentSoft.alpha, 1)
+        XCTAssertEqual(folio.accentLine.hex, "#B9D8CC")
+        XCTAssertEqual(folio.mod.hex, "#4B5A9A")
+        XCTAssertEqual(folio.warn.hex, "#A1620F")
+        XCTAssertEqual(folio.warnSoft.hex, "#FBF1E1")
+        // 未在该作用域重定义的令牌保持原值（scope 铁律）。
+        let base = ReaderThemeTokens.tokens(for: .light)
+        XCTAssertEqual(folio.accentSofter, base.accentSofter)
+        XCTAssertEqual(folio.accentGlow, base.accentGlow)
+        XCTAssertEqual(folio.err, base.err)
+        XCTAssertEqual(folio.canvasBg, base.canvasBg)
+
+        // 其余三主题挂 folio 不覆盖（sepia #1B6B58 / dark·oled #E26D52 原值生效）。
+        for theme in [ReaderTheme.sepia, .dark, .oled] {
+            let withSkin = ReaderThemeTokens.tokens(for: theme, skin: .folio)
+            let plain = ReaderThemeTokens.tokens(for: theme)
+            XCTAssertEqual(withSkin, plain, "\(theme) 的 folio 不改色（作用域只在 folio+light）")
+        }
+        // 非 folio 视图（speak/vault）的 light 也不覆盖。
+        XCTAssertEqual(ReaderThemeTokens.tokens(for: .light, skin: .base), base)
+
+        // 色板通道一致：palette(for:skin:) 的 accent 取到的就是矩阵里的品牌绿。
+        assertColor(
+            ReaderPalette.palette(for: .light, skin: .folio).accent,
+            equals: .init("#1F6B57"),
+            "folio+light 主色 = 品牌绿 #1f6b57（书架/阅读页主按钮、开关、进度条）"
+        )
+        assertColor(
+            ReaderPalette.palette(for: .light, skin: .folio).warn,
+            equals: .init("#A1620F"),
+            "folio+light warn = #a1620f"
+        )
+        assertColor(
+            ReaderPalette.palette(for: .light, skin: .base).accent,
+            equals: .init("#C84B31"),
+            "非 folio 的 light 保持原 accent #C84B31"
+        )
+    }
+
+    func testReaderSkinFoldsRoutes() {
+        // 根皮肤 folio 仅 shelf/reading 两视图挂（ReaderApp.tsx:2330-2335）。
+        XCTAssertEqual(ReaderSkin(folding: .shelf), .folio)
+        XCTAssertEqual(ReaderSkin(folding: .reading), .folio)
+        XCTAssertEqual(ReaderSkin(folding: .speak), .base)
+        XCTAssertEqual(ReaderSkin(folding: .vault), .base)
+    }
+
+    @MainActor
+    func testFocusModeHidesCenterIslandOnlyInVaultFocus() {
+        // ReaderTopBar.tsx:45-47 focusMode = view === "vault" && vaultMode === "focus"。
+        let vm = makeVM()
+        XCTAssertFalse(vm.vaultFocusMode)
+        vm.startFocusReview(ids: ["w"])
+        XCTAssertTrue(vm.vaultFocusMode, "vault + focus → 中岛隐藏")
+        vm.vaultPlayMode = .export
+        XCTAssertFalse(vm.vaultFocusMode, "vault + 其他档不隐藏")
+    }
+
+    @MainActor
+    func testSideColumnVisibilityDrivesDockCenteringContract() {
+        // dock 居中契约：右栏占位仅在 阅读档 + 有文章 + 非禅模式 + 非专注模式 时计入。
+        let vm = makeVM()
+        // 全局设置直接赋值（不走 patchSettings 落 UserDefaults，避免测试碰用户真实设置）。
+        vm.globalSettings = ReaderSettings.default
+        XCTAssertFalse(ReaderBodyView.sideColumnVisible(vm: vm), "书架首页无右栏")
+        vm.article = thirtySentenceArticle()
+        vm.route = .reading
+        XCTAssertTrue(ReaderBodyView.sideColumnVisible(vm: vm))
+        vm.globalSettings.spotlightMode = true
+        XCTAssertFalse(ReaderBodyView.sideColumnVisible(vm: vm), "专注模式收起右侧解析面板（--reading-side-w: 0）")
+        vm.globalSettings.spotlightMode = false
+        vm.globalSettings.zenMode = true
+        XCTAssertFalse(ReaderBodyView.sideColumnVisible(vm: vm), "禅模式隐藏侧栏")
     }
 }

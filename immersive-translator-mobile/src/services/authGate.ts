@@ -3,7 +3,13 @@ import { actions, activeRepository, finishGuestClaim, flushPersist, getState, me
 import { createPersistence } from "../core/persistence";
 import type { AudioRead } from "../core/persistence";
 import { cloudState, logout } from "./cloud";
-export interface LoginIntent { taskId?: string; articleId?: string; reason?: string; dictionary?: { entry: DictEntry; signal: AbortSignal } }
+/**
+ * kind 三态（account-onboarding-parity）：
+ * - "relay"：首启「已有电脑端记录？登录接续」，标题按接续语境展示；
+ * - "new"：首启「创建账号」，登录完成后推入学习方向页；
+ * - 缺省（upgrade）：功能门（词典收藏等）拦下的登录，标题显示本机已有记录保留。
+ */
+export interface LoginIntent { kind?: "relay" | "new"; taskId?: string; articleId?: string; reason?: string; dictionary?: { entry: DictEntry; signal: AbortSignal } }
 let intent: LoginIntent | null = null;
 let pending: Promise<boolean> | null = null;
 let settle: ((ok: boolean) => void) | null = null;

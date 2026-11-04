@@ -11,7 +11,7 @@ const copy = value => structuredClone(value);
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return {promise,resolve}; };
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const tests = [], test = (name,run) => tests.push([name,run]);
-function runtime({native=false, invoke=async()=>null, persistence}={}) {
+function runtime({native=false, invoke=async()=>null, persistence, voice}={}) {
   const dom = new JSDOM('<html><body></body></html>', {url:'https://preview.local'});
   const w = dom.window; w.matchMedia = () => ({matches:false,addEventListener(){}});
   globalThis.window=w; globalThis.document=w.document; globalThis.Event=w.Event; globalThis.CustomEvent=w.CustomEvent; globalThis.localStorage=w.localStorage;
@@ -23,7 +23,7 @@ function runtime({native=false, invoke=async()=>null, persistence}={}) {
     mod.require=name=> {
       if(name==='react')return {useSyncExternalStore(){}};
       if(name==='./device'||name==='./services/device')return {isTauri:()=>native,invokeRaw:invoke,haptic(){},reportDiag(){},scheduleDailyReminder(){}};
-      if(name==='./services/voice')return {cloudAvailable:()=>false,speakCloud(){throw new Error('unused');}};
+      if(name==='./services/voice')return {prepareAudioPlayback(){},voiceErrorText:()=>"语音服务暂时不可用",speakCloud(){throw new Error('unused');},...voice};
       if(name==='./core/persistence'&&persistence)return {createPersistence:persistence};
       if(name.startsWith('.')){let next=path.resolve(path.dirname(file),name);if(!path.extname(next))next+='.ts';return load(next);}
       return require(name);
@@ -73,10 +73,47 @@ test('switching drains old-profile writes produced while destination loads',asyn
 test('concurrent profile selections execute in request order',async()=>{
   const db=repositories(),rt=runtime({persistence:db.create});try{const s=rt.load('store.ts');await s.initializeStore();const entered=deferred(),release=deferred();db.hooks.load=async id=>{if(id==='u1'){entered.resolve();await release.promise;}};const first=s.switchProfile('u1',false);await entered.promise;const second=s.switchProfile('u2',false);release.resolve();await Promise.all([first,second]);assert.equal(s.profileIdentity(),'u2');}finally{rt.close();}
 });
-test('BYOK writes are ordered, scoped per profile, and excluded from snapshots',async()=>{
-  const db=repositories(),secrets=new Map(),entered=deferred(),release=deferred();let blocked=false;
-  const invoke=async(cmd,args)=>{if(cmd==='secret_get')return secrets.get(args.key)??null;if(cmd==='secret_put'){if(args.value==='old'&&!blocked){blocked=true;entered.resolve();await release.promise;}secrets.set(args.key,args.value);}if(cmd==='secret_delete')secrets.delete(args.key);};
-  const rt=runtime({native:true,invoke,persistence:db.create});try{const s=rt.load('store.ts');await s.initializeStore();s.actions.setApiKey('old');await entered.promise;s.actions.setApiKey('new');const p=s.switchProfile('u2',false);release.resolve();await p;assert.equal(s.getState().settings.apiKey,'');assert.equal(secrets.get('mobile.profile.guest.apiKey'),'new');await s.switchProfile('guest',false);assert.equal(s.getState().settings.apiKey,'new');assert.equal(db.data.get('guest').state.settings.apiKey,'');assert(!secrets.has('apiKey'));}finally{rt.close();}
+test('legacy provider secrets are discarded while learning records survive snapshot load',async()=>{
+  const db=repositories();let rt=runtime({persistence:db.create});
+  try {
+    const s=rt.load('store.ts');await s.initializeStore();
+    s.actions.saveNote({id:'preserved-note',title:'Learning',body:'Keep this local record',sub:'',insight:''});
+    s.actions.setSettings({goal:'职场沟通'});await s.flushPersist();rt.close();
+    const saved=db.data.get('guest').state;
+    Object.assign(saved.settings,{apiKey:'legacy-key',voiceAppId:'legacy-app',voiceApiKey:'legacy-voice-key',voiceApiSecret:'legacy-secret',provider:'custom',baseUrl:'https://legacy.invalid',model:'legacy-model'});
+    const calls=[];rt=runtime({native:true,persistence:db.create,invoke:async(cmd,args)=>{calls.push({cmd,args});if(cmd.startsWith('secret_'))throw new Error('Provider secrets must not be loaded or migrated');return null;}});
+    const restored=rt.load('store.ts');await restored.initializeStore();
+    for(const key of ['apiKey','voiceAppId','voiceApiKey','voiceApiSecret'])assert.equal(restored.getState().settings[key],'');
+    assert.equal(restored.getState().notes[0].id,'preserved-note');assert.equal(restored.getState().settings.goal,'职场沟通');
+    assert.equal(restored.actions.setApiKey,undefined);assert.equal(restored.actions.setVoiceCreds,undefined);
+    await restored.switchProfile('u2',false);await restored.switchProfile('guest',false);
+    assert.equal(restored.getState().notes[0].body,'Keep this local record');
+    for(const key of ['apiKey','voiceAppId','voiceApiKey','voiceApiSecret'])assert.equal(restored.getState().settings[key],'');
+    assert(!calls.some(call=>call.cmd.startsWith('secret_')));await restored.flushPersist();
+  } finally {rt.close();}
+});
+test('guest speech waits for login and cancelling makes no synthesis request',async()=>{
+  const db=repositories();let calls=0,failures=0,localCalls=0;
+  const rt=runtime({persistence:db.create,voice:{speakCloud(){calls++;return {stop(){},done:Promise.resolve()};}}});
+  try{const s=rt.load('store.ts'),gate=rt.load('services/authGate.ts');window.speechSynthesis={speak(){localCalls++;},cancel(){},getVoices:()=>[]};await s.initializeStore();s.speak('Hello',1,undefined,'en',()=>failures++);await tick();assert.equal(calls,0);await gate.cancelLogin();await tick();assert.equal(calls,0);assert.equal(localCalls,0);assert.equal(failures,1);}finally{rt.close();}
+});
+test('stopped pending login never starts a late speech request',async()=>{
+  const db=repositories();let calls=0;
+  globalThis.fetch=async()=>response(200,session());
+  const rt=runtime({persistence:db.create,voice:{speakCloud(){calls++;return {stop(){},done:Promise.resolve()};}}});
+  try{const s=rt.load('store.ts'),c=rt.load('services/cloud.ts'),gate=rt.load('services/authGate.ts');await s.initializeStore();s.speak('Hello');s.stopSpeak();await c.login('u1@test.local','p','password');await gate.completeLogin(false);await tick();assert.equal(calls,0);}finally{rt.close();}
+});
+test('confirmed guest login continues speech only in the authenticated profile',async()=>{
+  const db=repositories();let calls=0,ends=0;
+  globalThis.fetch=async()=>response(200,session());
+  const rt=runtime({persistence:db.create,voice:{speakCloud(){calls++;return {stop(){},done:Promise.resolve()};}}});
+  try{const s=rt.load('store.ts'),c=rt.load('services/cloud.ts'),gate=rt.load('services/authGate.ts');await s.initializeStore();s.speak('Hello',1,()=>ends++);assert.equal(calls,0);await c.login('u1@test.local','p','password');await gate.completeLogin(false);await tick();assert.equal(s.profileIdentity(),'u1');assert.equal(calls,1);assert.equal(ends,1);}finally{rt.close();}
+});
+test('failed account speech reports failure without local fallback or success callback',async()=>{
+  const db=repositories();let failures=0,ends=0,localCalls=0;
+  globalThis.fetch=async()=>response(200,session());
+  const rt=runtime({persistence:db.create,voice:{speakCloud(){return {stop(){},done:Promise.reject(new Error('failure'))};}}});
+  try{const s=rt.load('store.ts'),c=rt.load('services/cloud.ts');window.speechSynthesis={speak(){localCalls++;},cancel(){},getVoices:()=>[]};await s.initializeStore('u1');await c.login('u1@test.local','p','password');s.speak('Hello',1,()=>ends++,'en',()=>failures++);await tick();assert.equal(localCalls,0);assert.equal(ends,0);assert.equal(failures,1);}finally{rt.close();}
 });
 test('article archive preserves source content and undo never duplicates it',async()=>{
   const db=repositories(),rt=runtime({persistence:db.create});try{const s=rt.load('store.ts');await s.initializeStore();const a=s.getState().articles[0],count=s.getState().articles.length;s.actions.deleteArticle(a.id);assert.equal(s.getState().articles.length,count);assert.equal(s.getState().articles.find(x=>x.id===a.id).archived,true);assert.deepEqual(s.getState().articles.find(x=>x.id===a.id).sentences,a.sentences);s.actions.undoTrash();assert.equal(s.getState().articles.length,count);assert.equal(s.getState().articles.find(x=>x.id===a.id).archived,false);await s.flushPersist();}finally{rt.close();}

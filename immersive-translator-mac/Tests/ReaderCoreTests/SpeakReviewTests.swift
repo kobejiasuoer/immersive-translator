@@ -33,7 +33,7 @@ final class SpeakReviewTests: XCTestCase {
 
     private func session(_ turns: [SpeakTurn]) -> SpeakSession {
         SpeakSession(
-            id: "s1", scenario: .ordering, difficulty: .medium,
+            id: "s1", scenario: "ordering", difficulty: .medium,
             turns: turns, createdAt: 0, updatedAt: 0
         )
     }

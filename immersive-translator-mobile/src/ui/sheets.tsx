@@ -1,15 +1,17 @@
 import { openPractice } from "../screens/LearningHome";
+import { startKeyboardViewportSync } from "./keyboardViewport";
+import { attachSheetDrag } from "./sheetDrag";
 /**
  * 底部 sheet 集（§2.2）——词典/词块卡（两级查询 #40/#41）、Aa 面板、语速、
  * 本篇菜单、文内搜索、退出复习确认、陪练小结、直译导出、导入四路、只练差词。
  * 可下拉关闭（治 I6）：>120px 或快速下拉释放关闭（§1.8）。
  */
 import { useEffect, useRef, useState } from "react";
-import { actions, getState, speak, toast, useApp } from "../store";
+import { actions, effectiveSentenceZh, getState, speak, toast, useApp } from "../store";
 import { Icon } from "./icons";
 import { Seg } from "./kit";
 import { useNav } from "./nav";
-import { chatStream, llmConfigured, lookupWord } from "../services/translate";
+import { chatStream, llmConfigured, lookupWord, type DictLookup } from "../services/translate";
 import { useCloud } from "../services/cloud";
 import { canContinueDictionaryLogin } from "../services/authGate";
 import { isTauri, readClipboard, shareText, writeClipboard } from "../services/device";
@@ -27,15 +29,8 @@ import type { DictEntry, DictSenses, Sheet } from "../store";
    被键盘盖住下半部，需收起键盘才能看到/点到。监听 visualViewport：可视高度与排版视口
    之差 >120px 视为键盘（排除地址栏收缩噪声），写入 --kb-inset 让 .sheet 抬升。
    jsdom/无 visualViewport 环境自动跳过，--kb-inset 回退 0px。 */
-if (typeof window !== "undefined" && window.visualViewport) {
-  const vv = window.visualViewport;
-  const applyKbInset = () => {
-    const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-    document.documentElement.style.setProperty("--kb-inset", kb > 120 ? `${Math.round(kb)}px` : "0px");
-  };
-  vv.addEventListener("resize", applyKbInset);
-  vv.addEventListener("scroll", applyKbInset);
-}
+const stopKeyboardViewportSync = startKeyboardViewportSync();
+if (import.meta.hot) import.meta.hot.dispose(stopKeyboardViewportSync);
 
 /** txt 字节 → 文本（治 sheets-8 剩余半项）：BOM 识别（UTF-8/UTF-16）→ UTF-8 试解，
  *  出 U+FFFD（多字节序列被劈坏）则按 GB18030（GBK 超集，中文 txt 常见编码）重读——
@@ -72,81 +67,26 @@ const SHEET_TITLES: Record<Sheet["kind"], string> = {
 export function SheetHost({ inert = false }: { inert?: boolean }) {
   const sheet = useApp((s) => s.sheet);
   const sheetElRef = useRef<HTMLDivElement>(null);
-  const drag = useRef({ sy: 0, dy: 0, t0: 0, on: false, taken: false });
 
-  /* U-21（＝M-06＋P-15）：下拉关闭挂 sheet 根——iOS 半模态「任意位置下拉」；
-     scrollTop>0 让位滚动、dy<0 忽略、首次 dy>6 才接管（防点击误判），
-     释放 >120px 或 >0.4px/ms 快速轻扫即关（§1.8），否则 280ms 弹回。 */
   useEffect(() => {
-    const el = sheetElRef.current;
-    if (!el || !sheet) return;
-    /* 打开时清掉上次拖拽中断残留的 inline 样式（治 sheets-7）：拖拽期间弹层被他途
-       关闭（如第二根手指点遮罩）时 up 永不执行，inline transition/transform 残留在
-       .sheet 上——下次打开任何弹层都会错位下移且丢失开窗动画。 */
-    el.style.transition = "";
-    el.style.transform = "";
-
-    const swallowClick = (ev: Event) => {
-      ev.stopPropagation();
-      ev.preventDefault();
-    };
-
-    function down(e: PointerEvent) {
-      drag.current = { sy: e.clientY, dy: 0, t0: performance.now(), on: true, taken: false };
-      const scroller = (e.target as HTMLElement).closest(".sheet-body");
-      /* 内容已下滚：手势让位给滚动 */
-      if (scroller && scroller.scrollTop > 0) {
-        drag.current.on = false;
-        return;
-      }
-    }
-    function move(e: PointerEvent) {
-      if (!drag.current.on) return;
-      const dy = e.clientY - drag.current.sy;
-      if (dy < 0) return; /* 上滑交给滚动 */
-      if (!drag.current.taken) {
-        if (dy < 6) return; /* 死区：Aa ± 等点击不误判 */
-        drag.current.taken = true;
-        if (el) el.style.transition = "none";
-      }
-      drag.current.dy = dy;
-      if (el) el.style.transform = `translateY(${dy}px)`;
-    }
-    function up() {
-      if (!drag.current.on) return;
-      drag.current.on = false;
-      const dt = performance.now() - drag.current.t0;
-      const v = drag.current.dy / Math.max(1, dt); /* px/ms */
-      if (el) {
-        el.style.transition = "";
-        el.style.transform = "";
-      }
-      if (drag.current.taken) {
-        /* 拖过的手势吞掉随后的 click，防误触底下按钮 */
-        window.addEventListener("click", swallowClick, { capture: true, once: true });
-      }
-      if (drag.current.dy > 120 || (drag.current.taken && v > 0.4)) actions.setSheet(null);
-    }
-    el.addEventListener("pointerdown", down);
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", up);
-    return () => {
-      el.removeEventListener("pointerdown", down);
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", up);
-      window.removeEventListener("click", swallowClick, { capture: true });
-    };
-  }, [sheet]);
+    const panel = sheetElRef.current;
+    if (!panel || !sheet || inert) return;
+    return attachSheetDrag(panel, () => actions.setSheet(null));
+  }, [sheet, inert]);
 
   const open = sheet !== null;
   return (
     <>
       <div className={`sheet-dim ${open ? "on" : ""}`} aria-hidden="true" onClick={() => actions.setSheet(null)} />
       <div ref={sheetElRef} inert={inert || undefined} role="dialog" aria-modal="true" aria-label={sheet ? SHEET_TITLES[sheet.kind] : undefined} className={`sheet ${open ? "on" : ""}`}>
-        <div className="sheet-grab">
-          <i />
+        {/* 抽屉基座头部：grab + 右上 X 关闭钮（proto-parity：与原型各抽屉头部一致） */}
+        <div className="sheet-top">
+          <div className="sheet-grab" aria-hidden="true">
+            <i />
+          </div>
+          <button type="button" className="sheet-x" aria-label="关闭当前面板" onClick={() => actions.setSheet(null)}>
+            <Icon name="close" size={18} />
+          </button>
         </div>
         <div className="sheet-body">{sheet && <SheetContent sheet={sheet} />}</div>
       </div>
@@ -193,15 +133,18 @@ function DictSheet({ entry }: { entry: DictEntry }) {
   }, [generation, entry]);
   const vocab = useApp((s) => s.vocab);
   const articles = useApp((s) => s.articles);
-  const [detail, setDetail] = useState(false);
-  const [detailDone, setDetailDone] = useState(false);
-  const [detailRes, setDetailRes] = useState<{ defs: { pos: string; cn: string }[]; ex?: string } | null>(null);
+  const sourceZhOverrides = useApp(s => entry.articleId ? s.sentenceZh[entry.articleId] : undefined);
   const [llm, setLlm] = useState(false);
   const [llmDone, setLlmDone] = useState(false);
-  const [llmRes, setLlmRes] = useState<string | null>(null);
+  const [llmRes, setLlmRes] = useState<DictLookup | null>(null);
+  const [lookupError, setLookupError] = useState("");
+  useEffect(() => { setLlm(false); setLlmDone(false); setLlmRes(null); setLookupError(""); }, [entry]);
 
   const savedEntry = vocab.find((v) => norm(v.word) === norm(entry.word));
   const saved = entry.saved || !!savedEntry;
+  const senses = llmRes?.defs ?? (savedEntry?.senses.length ? savedEntry.senses : entry.senses);
+  const missing = !senses.some(s => s.cn.trim() && !/^（(?:暂无释义|查询失败|词典服务未返回)/.test(s.cn));
+  const example = llmRes?.ex ?? entry.example ?? (typeof savedEntry?.example === "string" ? savedEntry.example : undefined);
   const article: Article | undefined = entry.articleId ? articles.find((a) => a.id === entry.articleId) : undefined;
 
   function collect() {
@@ -211,7 +154,8 @@ function DictSheet({ entry }: { entry: DictEntry }) {
         kind: entry.type === "chunk" ? "chunk" : "word",
         chunkType: entry.chunkType,
         phonetic: entry.phonetic,
-        senses: entry.senses as DictSenses[],
+        senses: senses as DictSenses[],
+        example,
         pattern: entry.pattern,
         trap: entry.trap,
       },
@@ -221,47 +165,33 @@ function DictSheet({ entry }: { entry: DictEntry }) {
     actions.setSheet(null);
   }
 
-  function remove() {
-    if (savedEntry) actions.deleteWord(savedEntry.id);
-    actions.setSheet(null);
-  }
-
-  function runDetail() {
-    if (requests.current.size) return;
-    const controller = new AbortController(); requests.current.add(controller);
-    setDetail(true); setDetailDone(false);
-    void lookupWord(entry.word, controller.signal, entry).then(result => { if (!controller.signal.aborted) setDetailRes(result); }).catch(error => { if (!controller.signal.aborted) setDetailRes({ defs: [{ pos: "查询未完成", cn: error instanceof Error ? error.message : String(error) }] }); }).finally(() => { requests.current.delete(controller); if (!controller.signal.aborted) setDetailDone(true); });
-  }
-
   function runLlm() {
     if (requests.current.size) return;
     const controller = new AbortController(); requests.current.add(controller);
-    setLlm(true); setLlmDone(false);
-    void lookupWord(entry.word, controller.signal, entry).then(result => { if (!controller.signal.aborted) setLlmRes(result.defs[0]?.cn || "未取得释义"); }).catch(error => { if (!controller.signal.aborted) setLlmRes(error instanceof Error ? error.message : String(error)); }).finally(() => { requests.current.delete(controller); if (!controller.signal.aborted) setLlmDone(true); });
+    setLlm(true); setLlmDone(false); setLookupError("");
+    void lookupWord(entry.word, controller.signal, entry).then(result => {
+      if (controller.signal.aborted) return;
+      if (!result.defs.length || result.defs.some(s => /^（(?:查询失败|词典服务未返回)/.test(s.cn))) throw new Error("查询未完成，请检查网络后重试。");
+      setLlmRes(result);
+    }).catch(error => { if (!controller.signal.aborted) setLookupError(error instanceof Error ? error.message : String(error)); }).finally(() => { requests.current.delete(controller); if (!controller.signal.aborted) setLlmDone(true); });
   }
 
   return (
     <>
-      {entry.type === "missing" ? (
+      {/* 头部（原型 SHEETS.lookup，html:1815-1818）：accent eyebrow + 大衬线词 + 音标/听发音 pill */}
+      <span className="v2-eyebrow">原句里的表达</span>
+      {missing ? (
         <>
-          <div className="dict-head">
-            <div style={{ flex: 1 }}>
-              <div className="dict-word">{entry.word}</div>
-              <div className="meta" style={{ marginTop: 4 }}>
-                词典未收录
-              </div>
-            </div>
-            <button className="iconbtn" aria-label="发音" onClick={() => speak(entry.word, 0.9)}>
-              <Icon name="speaker" size={19} />
+          <h2 className="serif v2-lookup-title">{entry.word}</h2>
+          <div className="v2-lookup-pronunciation">
+            <span>还没有释义</span>
+            <button className="v2-lookup-listen" aria-label="听发音" onClick={() => speak(entry.word, 0.9)}>
+              <Icon name="speaker" size={14} />
+              听发音
             </button>
           </div>
-          <div className="hintbox">这个小词不在内置词典里。可以先收进生词本，或让模型兜底查一次。</div>
-          {llmDone ? (
-            <div className="sense">
-              <span className="pos">模型释义 · 仅供参考</span>
-              {llmRes}
-            </div>
-          ) : llm ? (
+          <div className="hintbox">查询这个表达的含义，或先收藏后补充自己的理解。</div>
+          {lookupError ? <p className="sheet-note" role="alert">{lookupError}</p> : llm && !llmDone ? (
             <>
               <div className="skel" style={{ marginTop: 16 }} />
               <div className="skel" style={{ width: "70%" }} />
@@ -270,22 +200,20 @@ function DictSheet({ entry }: { entry: DictEntry }) {
         </>
       ) : (
         <>
-          <div className="dict-head">
-            <div style={{ flex: 1 }}>
-              <div className="dict-word">
-                {entry.word}
-                {entry.type === "chunk" && <span className="type-badge">{entry.chunkType || "词块"}</span>}
-              </div>
-              {entry.phonetic && <div className="dict-pho">{entry.phonetic}</div>}
-            </div>
-            <button className="iconbtn" aria-label="发音" onClick={() => speak(entry.word, 0.9)}>
-              <Icon name="speaker" size={19} />
+          {/* 词典卡头部（原型 SHEETS.lookup html:1816）：大衬线词 + 音标/听发音 + 词性释义行；
+              词块类别 tag、句式变体行、直译陷阱盒与「详细查词典」不在原型卡内（词条详情页保留） */}
+          <h2 className="serif v2-lookup-title">{entry.word}</h2>
+          <div className="v2-lookup-pronunciation">
+            {entry.phonetic ? <span className="dict-pho" style={{ marginTop: 0 }}>{entry.phonetic}</span> : <span />}
+            <button className="v2-lookup-listen" aria-label="听发音" onClick={() => speak(entry.word, 0.9)}>
+              <Icon name="speaker" size={14} />
+              听发音
             </button>
           </div>
-          {entry.senses.length ? (
-            entry.senses.map((s, i) => (
+          {senses.length ? (
+            senses.map((s, i) => (
               <div className="sense" key={i}>
-                <span className="pos">{s.pos}</span>
+                {s.pos && <span className="pos">{s.pos}</span>}
                 {s.cn}
               </div>
             ))
@@ -294,33 +222,12 @@ function DictSheet({ entry }: { entry: DictEntry }) {
               暂无释义
             </div>
           )}
-          {entry.pattern && <div className="pattern">{entry.pattern}</div>}
-          {entry.trap && <div className="trap-note">直译陷阱 · {entry.trap}</div>}
-          {detail && (
-            <>
-              <hr className="hr" style={{ margin: "16px 0 4px" }} />
-              <div className="overline">详细释义 · AI 词典</div>
-              {detailDone && detailRes ? (
-                <>
-                  {detailRes.defs.map((d, i) => (
-                    <div className="sense" style={{ fontSize: 15 }} key={i}>
-                      <span className="pos">{d.pos}</span>
-                      {d.cn}
-                    </div>
-                  ))}
-                  {detailRes.ex && <div className="hintbox">{detailRes.ex}</div>}
-                </>
-              ) : (
-                <>
-                  <div className="skel" style={{ marginTop: 12 }} />
-                  <div className="skel" style={{ width: "64%" }} />
-                </>
-              )}
-            </>
-          )}
+          {example && <p className="sheet-note" lang="en">{example}</p>}
+          {llmRes && <p className="sheet-note">释义已查到，收藏时会一起保存。</p>}
         </>
       )}
 
+      {/* 来源句卡（原型 .trunk html:1816：accent-soft 底 + 「来源 · 第 N 句」eyebrow + 原句 + 中文） */}
       {article && entry.sentIdx !== undefined && article.sentences[entry.sentIdx] && (
         <button
           className="src-card"
@@ -330,23 +237,17 @@ function DictSheet({ entry }: { entry: DictEntry }) {
           }}
         >
           <div className="f">
-            来自《{article.title}》 · 第 {entry.sentIdx + 1} 句 · 点按定位回读
+            {article.title} · 第 {entry.sentIdx + 1} 句
           </div>
           <div className="q">{article.sentences[entry.sentIdx].en}</div>
+          {effectiveSentenceZh(sourceZhOverrides, entry.sentIdx, article.sentences[entry.sentIdx].zh) && <div className="src-cn">{effectiveSentenceZh(sourceZhOverrides, entry.sentIdx, article.sentences[entry.sentIdx].zh)}</div>}
         </button>
       )}
 
-      <button className="btn" style={{margin:"14px 22px",width:"calc(100% - 44px)"}} onClick={()=>{
-        if(!saved) collect(); else actions.setSheet(null);
-        void openPractice(nav,{mode:"word",title:entry.word,word:entry.word,reference:"用 "+entry.word+" 说一句自己的话。",...(entry.articleId?{source:{articleId:entry.articleId,sentenceIdx:entry.sentIdx??0}}:{})});
-      }}>{saved?"用这个表达说一句":"收藏并用它说一句"}</button>
-      {/* 已收藏态的「已在生词本」不能当 flex 项与按钮行并排——会把「详细查词典」挤到折行，所以这里只做分支不做统一容器 */}
-      {entry.type === "missing" ? (
-        <div className="dict-actions">
-          <button className="da" disabled={llm && !llmDone} onClick={runLlm}>
-            <Icon name="bolt" size={15} />
-            模型兜底查一次
-          </button>
+      {/* 主按钮（原型口径）：未收藏=「收藏到生词本」，已收藏=「已收藏 · 查看词条」进词条页；
+          「说一句」为次按钮（smoke 链路「收藏并用它说一句」文案保留） */}
+      {missing ? (
+        <div className="dict-actions" style={{ marginTop: 16 }}>
           <button
             className="da pri"
             onClick={() => {
@@ -356,36 +257,47 @@ function DictSheet({ entry }: { entry: DictEntry }) {
           >
             仍要收藏 · 暂无释义
           </button>
+          <button className="da" disabled={llm && !llmDone} onClick={runLlm}>
+            <Icon name="bolt" size={15} />
+            {lookupError ? "重试查询" : "查询释义"}
+          </button>
         </div>
-      ) : saved ? (
-        <>
-          {/* §3.7 已收藏态 =「已在生词本 ✓」+「移除」（移除走撤销 toast，5s 可恢复） */}
-          <div className="overline" style={{ marginTop: 18, display: "flex", alignItems: "center", gap: 6, color: "var(--ok)", letterSpacing: "0.06em" }}>
-            <Icon name="check" size={13} />
-            已在生词本
-          </div>
-          <div className="dict-actions" style={{ marginTop: 8 }}>
-            <button className="da" onClick={remove}>
-              <Icon name="trash" size={15} />
-              移除
-            </button>
-            <button className="da" disabled={detail && !detailDone} onClick={runDetail}>
-              <Icon name="search" size={15} />
-              详细查词典
-            </button>
-          </div>
-        </>
       ) : (
-        <div className="dict-actions">
-          <button className="da pri" onClick={collect}>
-            <Icon name="plus" size={15} />
-            收进生词本
+        <>
+          <button
+            className="btn"
+            style={{ marginTop: 16 }}
+            onClick={() => {
+              if (!saved || llmRes) {
+                collect();
+                return;
+              }
+              /* 已收藏：进词条详情（原型 read-collect 既有词分支 openWordDetail） */
+              if (savedEntry) {
+                actions.setSheet(null);
+                nav.push("learningWord", { id: savedEntry.id });
+              }
+            }}
+          >
+            <Icon name={saved ? "check" : "star"} size={15} />
+            {llmRes && saved ? "保存新释义" : saved ? "已收藏 · 查看词条" : "收藏到生词本"}
           </button>
-          <button className="da" disabled={detail && !detailDone} onClick={runDetail}>
-            <Icon name="search" size={15} />
-            详细查词典
+          <button
+            className="btn-ghost"
+            style={{ marginTop: 10 }}
+            onClick={() => {
+              if (!saved || llmRes) collect();
+              void openPractice(nav, { mode: "word", title: entry.word, word: entry.word, reference: "用 " + entry.word + " 说一句自己的话。", ...(entry.articleId ? { source: { articleId: entry.articleId, sentenceIdx: entry.sentIdx ?? 0 } } : {}) });
+            }}
+          >
+            <Icon name="mic" size={15} />
+            {saved ? "用这个表达说一句" : "收藏并用它说一句"}
           </button>
-        </div>
+          <p className="sheet-note" style={{ margin: "10px 0 0", textAlign: "center" }}>
+            练完可以回到这句，阅读位置会保留。
+          </p>
+          {/* 移除/详细查词典不在原型词典卡内（html:1816）：移除入口保留在生词本词条详情页 */}
+        </>
       )}
     </>
   );
@@ -431,6 +343,7 @@ function AaSheet() {
           value={prefs.topic}
           items={[
             ["paper", "纸色"],
+            ["sepia", "暖黄"],
             ["black", "纯黑"],
           ]}
           onChange={(topic) => actions.setReaderPrefs({ topic })}
@@ -492,7 +405,6 @@ function RateSheet() {
 
 /* ---------- 本篇菜单（···） ---------- */
 function MoreSheet() {
-  const nav = useNav();
   const mask = useApp((s) => s.reader.mask);
   return (
     <>
@@ -522,16 +434,6 @@ function MoreSheet() {
       >
         <Icon name="undo" size={17} />
         重新遮住全部译文
-      </button>
-      <button
-        className="menu-item"
-        onClick={() => {
-          actions.setSheet(null);
-          nav.push("share");
-        }}
-      >
-        <Icon name="share" size={17} />
-        分享这篇文章
       </button>
     </>
   );
@@ -614,7 +516,7 @@ function wordCount(s: string): number {
 }
 
 /** 未配置模型/流式失败时的本地规则兜底尾注。 */
-const INSIGHT_UNCONFIGURED_NOTE = "配置模型服务后可获得 AI 会话洞察";
+const INSIGHT_UNCONFIGURED_NOTE = "登录后可获得 AI 会话洞察";
 
 /** 本地规则洞察：基于真实 chat 统计（开口次数、最长一句、可复读句），无任何写死评语。 */
 function buildLocalInsight(chat: ChatTurn[], me: number): string {

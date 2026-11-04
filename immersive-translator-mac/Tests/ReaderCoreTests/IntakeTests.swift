@@ -358,6 +358,68 @@ final class IntakeTests: XCTestCase {
         XCTAssertEqual(built?.titleCnState, .pending)
         XCTAssertNil(built?.level)
     }
+
+    // MARK: - 导入正文 5 万字符整段截断（web_extract.rs cap_text_chars 对齐）
+
+    func testCapTruncatesAtParagraphBoundary() {
+        // "12345" 之后：sep 2 + len 5 = 7，5+7=12 > 10 → 在段落边界截掉后两段。
+        let (out, truncated) = capTextChars("12345\n\n67890\n\nabc", maxChars: 10)
+        XCTAssertEqual(out, "12345")
+        XCTAssertTrue(truncated)
+        // 恰好放得下（含分隔符预算）→ 全保留且不标 truncated。
+        let (fits, fitsTruncated) = capTextChars("12345\n\n6789", maxChars: 12)
+        XCTAssertEqual(fits, "12345\n\n6789")
+        XCTAssertFalse(fitsTruncated)
+    }
+
+    func testCapKeepsFirstParagraphEvenIfOverLimit() {
+        // 首段恒保留（宁多勿空）：即使单段超限也原样返回、不标 truncated。
+        let (out, truncated) = capTextChars("aaaaaaaaaaaa", maxChars: 5)
+        XCTAssertEqual(out, "aaaaaaaaaaaa")
+        XCTAssertFalse(truncated)
+    }
+
+    func testCapKeepsShortTextUnchanged() {
+        let (out, truncated) = capTextChars("aa\n\nbb\n\ncc", maxChars: 100)
+        XCTAssertEqual(out, "aa\n\nbb\n\ncc")
+        XCTAssertFalse(truncated)
+    }
+
+    func testExtractArticleTruncatesLongBody() {
+        // 40 段 × 250 词（清洗后每段 1,499 字符）≈ 60,038 字符（含分隔符）> 50,000。
+        // 末段独有 TAILMARKER 词必须随截断消失；首段 HEADMARKER 必须保留。
+        let unit = "wordx "
+        var paras: [String] = []
+        for i in 0..<40 {
+            var p = String(repeating: unit, count: 250)
+            if i == 0 {
+                p += "headmarkerkept "
+            } else if i == 39 {
+                p += "tailmarkercut "
+            }
+            paras.append(p)
+        }
+        let html = "<html><body>" + paras.map { "<p>\($0.trimmingCharacters(in: .whitespaces))</p>" }.joined() + "</body></html>"
+        guard case .success(let article) = extractArticle(finalURL: "https://example.gov/long", html: html, minWords: 20) else {
+            return XCTFail("应成功")
+        }
+        XCTAssertTrue(article.truncated)
+        XCTAssertLessThanOrEqual(article.text.unicodeScalars.count, maxArticleChars)
+        XCTAssertTrue(article.text.contains("headmarkerkept"))
+        XCTAssertFalse(article.text.contains("tailmarkercut"))
+    }
+
+    func testFetchedArticleTruncatedDefaultsToFalse() {
+        // truncated 缺省 false：既有调用点/断言零变化（Equatable 兼容）。
+        let a = FetchedArticle(url: "u", host: "h", title: "t", text: "x")
+        let b = FetchedArticle(url: "u", host: "h", title: "t", text: "x", truncated: false)
+        XCTAssertEqual(a, b)
+        XCTAssertFalse(a.truncated)
+    }
+
+    func testMaxArticleCharsIsFiftyThousand() {
+        XCTAssertEqual(maxArticleChars, 50_000)
+    }
 }
 
 /// 测试用 zlib raw-deflate 压缩（Compression 框架）。

@@ -59,40 +59,46 @@ extension ReaderChatClient: ReaderChatChannel {
 @MainActor
 final class ReaderViewModel: ObservableObject {
     /// 阅读室内部路由。v0.8 起书架是首页（启动落 shelf，点书卡/短文进 reading）；
-    /// 顶部导航岛三档由 `islandSurface` 归并高亮（shelf/reading→阅读、review/notes→笔记与复习）。
+    /// 2026-10-26 改版对齐 Windows `ReaderApp.tsx:155`：原 review/notes 两值删除——
+    /// 笔记与复习只有唯一的 `.vault` 容器，玩法档在 `VaultPlayMode` 上。
+    /// 顶部导航岛三档由 `islandSurface` 归并高亮（shelf/reading→阅读、speak→口语、vault→笔记与复习）。
     enum Route: Equatable {
         case shelf
         case reading
-        case review
-        case notes
         case speak
+        case vault
 
         /// ReaderCore 的纯数据镜像（导航岛归并 / 面名计算走核心函数，可单测）。
         var kind: ReaderRouteKind {
             switch self {
             case .shelf: return .shelf
             case .reading: return .reading
-            case .review: return .review
-            case .notes: return .notes
             case .speak: return .speak
+            case .vault: return .vault
             }
         }
     }
 
-    /// 「笔记与复习」三档玩法（v0.8 VaultPlayMode）：记忆胶带手账 /
-    /// 3 分钟快刷闯关 / Markdown 笔记导出。跨视图进入保留上次档位；
-    /// 显式入口各自落档——复习类入口落挑战档（对齐 Windows goReview），
-    /// 笔记库入口落 md 档（goNotes），托盘「生词本」→ 挑战档。
-    enum VaultPlayMode: String, Equatable {
-        case tape
-        case challenge
-        case md
+    /// 「笔记与复习」四态（2026-10-26 改版 VaultPage.tsx:75；原 tape/challenge/md 删除）：
+    /// - home   复习首页（goReview 入口落此档）；
+    /// - notes  全部笔记（goNotes 落此档；stage 内嵌笔记库）；
+    /// - focus  专注复习（startFocusReview / Hero「开始复习」落此档）；
+    /// - export 导出（首页「导出笔记」按钮落此档）。
+    /// 跨视图进入保留上次档位；导航岛 / 底部快捷切换器只切档不清 focusIds。
+    enum VaultPlayMode: String, Equatable, CaseIterable {
+        case home
+        case notes
+        case focus
+        case export
 
-        var label: String {
+        /// 底部快捷切换器三档文案（复习首页 / 专注复习 / 导出；notes 不在切换器里，
+        /// 由首页 seg「全部笔记」进入）。
+        var switchLabel: String? {
             switch self {
-            case .tape: return "记忆胶带手账（点按自测）"
-            case .challenge: return "3 分钟快刷闯关（填空 / 听音 / 开口）"
-            case .md: return "Markdown 笔记导出"
+            case .home: return "复习首页"
+            case .notes: return nil
+            case .focus: return "专注复习"
+            case .export: return "导出"
             }
         }
     }
@@ -189,6 +195,11 @@ final class ReaderViewModel: ObservableObject {
                articleId != current.id {
                 pendingSpeak = nil
             }
+            // 随读抽查作答态随文章：槽位 id 是 `句号:起点`，换篇不清会把上一篇的印章
+            // 错位盖到新篇同号句上（Windows 组件态随 ReadingView 卸载清空，语义等价）。
+            if oldValue?.id != article?.id {
+                clozeState = [:]
+            }
         }
     }
     @Published var vocabWords: [VocabWord] = []
@@ -199,10 +210,18 @@ final class ReaderViewModel: ObservableObject {
             if route != .speak, case .vocab = pendingSpeak?.kind {
                 pendingSpeak = nil
             }
+            // 阅读设置浮层是阅读页组件态：离开阅读视图即收（Windows settingsOpen 随
+            // ReadingView 卸载复位）。
+            if route != .reading {
+                readingSettingsPopShown = false
+            }
         }
     }
-    /// 「笔记与复习」当前玩法档（三合一容器顶栏高亮来源；Windows 初始 tape）。
-    @Published var vaultPlayMode: VaultPlayMode = .tape
+    /// 「笔记与复习」当前档（四态容器；Windows 初始 home）。
+    @Published var vaultPlayMode: VaultPlayMode = .home
+    /// 导入弹窗初始 tab（书架发现三列 discover/feed/lib 直达；缺省文库）。
+    /// 每次重开都以该值作初值生效（Windows importInitialTab 契约）。
+    @Published var importInitialTab: ReaderImportTab = .lib
     /// 口语会话快照（手账口语改进行与 Markdown 导出的数据源；进 vault 时刷新）。
     @Published var speakSessions: [SpeakSession] = []
     /// 弹出式书架浮层（v0.8 FolioSheet）：由顶栏左上「书架 · 书名」触发；
@@ -213,6 +232,9 @@ final class ReaderViewModel: ObservableObject {
     @Published var toast: String = ""
     /// toast 行内动作（与 toast 同生同灭；nil = 无按钮）。
     @Published var toastAction: ToastAction?
+    /// 标题翻译失败原因（瞬态，不落盘；重启后只剩「标题翻译失败」无原因）。
+    /// 对齐 ReaderApp.tsx:276 的 titleCnError React state。
+    @Published var titleCnError: String?
     @Published var translating: StepProgress?
     @Published var chunking: ChunkProgress?
     @Published var dict: DictPanel = .closed
@@ -221,6 +243,9 @@ final class ReaderViewModel: ObservableObject {
     @Published var peekAll = false
     @Published var importSheetShown = false
     @Published var settingsDrawerShown = false
+    /// 阅读页工具栏「阅读设置」浮层（ReadingView.tsx settingsOpen）：Windows 由 ReadingView
+    /// 自己监听 Esc 关闭（:377-403 键位切分线）；Mac 走 vm 统一 Esc 链，放最上层。
+    @Published var readingSettingsPopShown = false
     /// 播放引擎状态的镜像（PlayBar 绑定用）。
     @Published private(set) var playbackPlaying = false
     @Published private(set) var shadowingWait = false
@@ -267,6 +292,9 @@ final class ReaderViewModel: ObservableObject {
     private var bookSaveTask: Task<Void, Never>?
     private var translationTask: Task<Void, Never>?
     private var translationRunID = 0
+    /// 429 退避等待注入点（单测用短值驱动真实等待路径）：nil = 生产常量
+    /// ReaderCore.translateBackoffWaitMs（固定 20s）。
+    var translateBackoffWaitMsOverride: Int?
     private var toastTask: Task<Void, Never>?
     /// 阅读计时：本次打开这篇文章以来的累计秒数（章末小结「本章用时」用，
     /// 切章清零）与未落盘缓冲。
@@ -299,8 +327,9 @@ final class ReaderViewModel: ObservableObject {
     @Published var noteDialogShown = false
     /// 生成弹窗的预选词条（笔记库「滚进新笔记」）。
     @Published var noteDialogPreselect: [String] = []
-    /// 笔记存储（与 ReaderStore 同一应用支持目录下的 notes/）。
-    let noteStore = NoteStore()
+    /// 笔记存储（与 ReaderStore 同一应用支持目录下的 notes/；init 内按 store 的
+    /// 学习存储接线）。
+    let noteStore: NoteStore
     /// 跟读评测状态机（shadowingMode + shadowingAssess 时接管跟读等待）。
     let assess = ShadowAssessController()
     /// 差词训练控制器（报告卡「只练 N 个词」落点；UI 直观察它，不经 vm 转发）。
@@ -322,8 +351,26 @@ final class ReaderViewModel: ObservableObject {
     /// 所以 vm 级用例一律走这里，不碰 Keychain / 网络。
     init(chat: any ReaderChatChannel, store: ReaderStore = .shared) {
         self.store = store
+        // 笔记与阅读域同一学习存储（接线后 .md 经 commit 派生 notes 实体、随账号
+        // 命名空间切目录；单测注入的 ReaderStore 未接线 → 纯文件 IO）。
+        self.noteStore = NoteStore(baseDirectory: store.baseDirectory, learning: store.learning)
         self.chat = chat
         self.globalSettings = store.loadGlobalReaderSettings()
+        // 旧 xfyun → cloud 迁移（对齐 readerSettingsStore.ts:47-61：启动时判定一次，
+        // 允许则旧值升格 cloud 并落盘）。判定探测（Keychain/登录态）只在应用运行时
+        // 进行——xctest 无 AppDelegate，跳过探测即迁移不生效（纯谓词在 ReaderCoreTests）。
+        // NSApp 是隐式解包可选值，xctest 进程里为 nil，必须可选链访问，否则直接崩。
+        if (NSApp?.delegate as? AppDelegate) != nil {
+            LegacyTtsMigration.allowed = LegacyTtsMigration.resolveAllowed(
+                hasAnyXfyunCredential: { XfyunCredentialsStore.shared.hasAnyCredential },
+                isLoggedIn: { AppAuthStatusCenter.shared.status?.loggedIn ?? false }
+            )
+            let before = globalSettings.ttsProvider
+            Self.migrateLegacyTtsProviderInPlace(settings: &globalSettings)
+            if globalSettings.ttsProvider != before {
+                store.saveGlobalReaderSettings(globalSettings)
+            }
+        }
 
         playback.$playing
             .receive(on: RunLoop.main)
@@ -346,6 +393,38 @@ final class ReaderViewModel: ObservableObject {
         NotificationCenter.default.publisher(for: .readerArticleAdded)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.refreshArticleList() }
+            .store(in: &cancellables)
+        // 学习接力：一轮同步完成（learning-sync-complete）后刷新词表与书架
+        //（对齐 Windows ReaderApp 在 auth-state-changed 后 refresh 的观感——
+        // 拉到的生词/文章/复习日志即时进场）。
+        NotificationCenter.default.publisher(for: .learningSyncComplete)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.refreshVocab()
+                self.refreshArticleList()
+            }
+            .store(in: &cancellables)
+        // 练习接力「回到原文这句」（Windows ReaderApp.tsx:1902 接 reader-relay-source）：
+        // 原文已删（取到 null）→ 固定 toast；存在 → 跳阅读并定位 sentenceIdx；取文章
+        // 本身抛错 → toast 错误原文（`.catch(error=>showToast(String(error)))`），不得
+        // 冒充「原文已删除」。
+        NotificationCenter.default.publisher(for: .readerRelaySource)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] note in
+                guard let self,
+                      let source = note.userInfo?["source"] as? [String: Any],
+                      let articleId = source["articleId"] as? String else { return }
+                self.openRelaySource(articleId: articleId, sentenceIdx: (source["sentenceIdx"] as? NSNumber)?.intValue ?? 0)
+            }
+            .store(in: &cancellables)
+        // 兼容文件导出失败（learning-export-warning）：数据已入库，只提示可稍后重试。
+        NotificationCenter.default.publisher(for: .learningExportWarning)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] note in
+                guard let self, let message = note.userInfo?["message"] as? String else { return }
+                self.showToast(message)
+            }
             .store(in: &cancellables)
         // 每秒阅读计时：阅读路线且应用前台时累计（播放/静读都算），
         // 15s 批量并入章 Article.progress.secondsListened 与书级 secondsListened。
@@ -447,6 +526,13 @@ final class ReaderViewModel: ObservableObject {
         case .cloudFallback(let info):
             // 云合成失败但已回落本地合成（朗读未断流）：把归因讲清楚。
             showToast("云朗读失败，已换系统朗读：\(info.message)", action: info.allowSettings ? Self.openSettingsToastAction : nil)
+        case .gatewayEdgeFallback(let notice):
+            // 网关守卫回落 / 配额耗尽转 Edge（ReaderApp.tsx:354-360 同语义；引擎侧已去重）。
+            showToast(notice.message, action: notice.redeemAction ? Self.redeemQuotaToastAction : nil)
+        case .gatewayFailure(let failure):
+            // 网关朗读失败已停止：文案已按 Windows handleSpeechError 两分支拼好（不透传
+            // 服务端原文）；仅 quota_exceeded 附「兑换更多额度」，其余无动作位。
+            showToast(failure.message, action: failure.redeemAction ? Self.redeemQuotaToastAction : nil)
         }
     }
 
@@ -763,7 +849,20 @@ final class ReaderViewModel: ObservableObject {
     var knownIds: Set<String> { Set(vocabWords.map(\.id)) }
 
     var effectiveSettings: ReaderSettings {
-        mergeReaderSettings(globalSettings, article?.settings)
+        let merged = mergeReaderSettings(globalSettings, article?.settings)
+        // 文章级旧 xfyun 覆盖同样过迁移（ReaderApp.tsx:394-398：mergeReaderSettings
+        // + 迁移谓词；不满足迁移条件保留旧「缺凭据→本地回落」语义，不串 Edge）。
+        var settings = merged
+        Self.migrateLegacyTtsProviderInPlace(settings: &settings)
+        return settings
+    }
+
+    /// 旧 xfyun → cloud 迁移的落值步骤（纯函数；迁移允许标志为 App 启动判定）。
+    static func migrateLegacyTtsProviderInPlace(settings: inout ReaderSettings) {
+        settings.ttsProvider = migrateLegacyTtsProviderValue(
+            settings.ttsProvider,
+            migrationAllowed: LegacyTtsMigration.allowed
+        )
     }
 
     var stats: ReviewStats {
@@ -842,8 +941,7 @@ final class ReaderViewModel: ObservableObject {
     func openArticle(id: String) {
         guard let full = (try? store.getArticle(id: id)) ?? nil else { return }
         settleReadingSeconds()  // 上一章的未落盘秒数先写库；本章用时重新累计
-        translationTask?.cancel()
-        translationRunID += 1
+        invalidateTranslationRun()
         route = .reading
         folioOpen = false   // 选中书目即收起书架浮层
         tocBookId = nil     // 目录弹层回落到当前文章所属书
@@ -894,8 +992,7 @@ final class ReaderViewModel: ObservableObject {
 
     /// 关闭当前文章的阅读态（删文/删书共用）：停播、清光标、关联弹层一并收起。
     private func clearOpenArticle() {
-        translationTask?.cancel()
-        translationRunID += 1
+        invalidateTranslationRun()
         bookTocShown = false
         tocBookId = nil
         chapterEnd = nil
@@ -964,6 +1061,11 @@ final class ReaderViewModel: ObservableObject {
             bookList = try store.saveBook(meta: meta, articles: chapters)
             refreshArticleList()
             showToast("已导入《\(draft.title)》· \(metas.count) 章")
+            // 发现页下载入库成功才埋 discover_import（本地导入草稿无 sourceBookId 不埋；
+            // 对齐 Windows ReaderApp.tsx:1536-1538 入库 toast 之后的 discoverImportProps 分流）。
+            if let props = discoverImportProps(draft), let bookId = props["bookId"] {
+                ReaderTelemetry.track(.discoverImport(bookId: bookId))
+            }
             openArticle(id: metas[0].id)
         } catch {
             showToast("导入书籍失败：\((error as? LocalizedError)?.errorDescription ?? "\(error)")")
@@ -1112,12 +1214,24 @@ final class ReaderViewModel: ObservableObject {
     // MARK: - 翻译管线（段级流式 + 单段重试 + 手改译文）
 
     func runTranslationPipeline(for articleID: String) {
-        translationTask?.cancel()
-        translationRunID += 1
+        invalidateTranslationRun()
         let runID = translationRunID
         translationTask = Task { [weak self] in
             await self?.ensureTranslated(articleID: articleID, runID: runID)
         }
+    }
+
+    /// 让在途翻译 run 失效（切文 / 关文 / 重跑管线 / 单段重试共用）：取消任务、
+    /// 代数 +1，并同步清掉「翻译中 N/M 段」chip。旧 run 失效后只会静默退出、不再碰
+    /// translating，接管的新 run 需要时自己重新置 chip——于是新文章管线即便在
+    /// 「先在设置里配置翻译接口」处早退，也不会残留旧文章进度。对齐 Windows
+    /// ReaderApp.tsx:898-903 / 940-944 的 B1 修复（旧 run 先清 chip 再退出）；
+    /// Mac 在失效点同步清而不是等旧 run 醒来再清（Task cancel + runID 代数是既定
+    /// 并发架构，旧 run 无从得知新 run 是否已置 chip，由它来清会误清新 chip）。
+    private func invalidateTranslationRun() {
+        translationTask?.cancel()
+        translationRunID += 1
+        translating = nil
     }
 
     private func isCurrentRun(_ articleID: String, _ runID: Int) -> Bool {
@@ -1128,6 +1242,8 @@ final class ReaderViewModel: ObservableObject {
         guard let input = article, input.id == articleID else { return }
         let configured = (try? chat.configuration()) != nil
         guard configured else {
+            // 早退不碰 chip：runTranslationPipeline 失效旧 run 时已清掉旧进度，
+            // 中途清空配置再切文也不会残留旧文章的「翻译中 N/M 段」。
             showToast("先在设置里配置翻译接口，译文才会自动生成")
             return
         }
@@ -1141,12 +1257,16 @@ final class ReaderViewModel: ObservableObject {
         }
         let pendingGroups = groups.sorted { $0.key < $1.key }
         let titlePending = input.titleCnState == .pending
+        // chip 只归当前 run 写（失效点已清旧进度，失效 run 不得再置/清新 run 的 chip）。
         if !titlePending, pendingGroups.isEmpty {
-            await MainActor.run { self.translating = nil }
+            await MainActor.run {
+                if self.isCurrentRun(articleID, runID) { self.translating = nil }
+            }
             return
         }
 
         await MainActor.run {
+            guard self.isCurrentRun(articleID, runID) else { return }
             self.translating = StepProgress(done: 0, total: pendingGroups.count + (titlePending ? 1 : 0))
         }
 
@@ -1156,6 +1276,7 @@ final class ReaderViewModel: ObservableObject {
         }
 
         if titlePending {
+            // 标题只发一次、不参与 429 退避（对齐 ReaderApp.tsx:876-890）。
             do {
                 let cn = try await chat.complete(
                     systemPrompt: buildTitleTranslateSystemPrompt(target: target),
@@ -1165,6 +1286,7 @@ final class ReaderViewModel: ObservableObject {
                     .components(separatedBy: .newlines)
                     .first?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if isCurrentRun(articleID, runID) { titleCnError = nil }
                 patch { a in
                     if !line.isEmpty {
                         a.titleCn = line
@@ -1174,6 +1296,10 @@ final class ReaderViewModel: ObservableObject {
                     }
                 }
             } catch {
+                let status = Self.channelHTTPStatus(of: error)
+                if isCurrentRun(articleID, runID) {
+                    titleCnError = ErrorMessageFormatter.readerParagraphErrorText(status: status)
+                }
                 patch { $0.titleCnState = .failed }
             }
             await MainActor.run {
@@ -1183,9 +1309,19 @@ final class ReaderViewModel: ObservableObject {
             }
         }
 
+        // 整篇自动退避计数（429 等待次数，跨段共享；手动重试发起的新 run 从 0 重新起算）。
+        let backoffs = TranslateBackoffCounter()
         for (_, sentences) in pendingGroups {
+            // 中途切文 / 新 run 接管：裸 return 不会卡死 chip——失效点
+            //（invalidateTranslationRun）已同步清掉本 run 的 chip（B1 对等）。
             guard isCurrentRun(articleID, runID) else { return }
-            await translateParagraph(sentences, target: target, articleID: articleID, runID: runID)
+            await translateGroupWithBackoff(
+                sentences,
+                target: target,
+                articleID: articleID,
+                runID: runID,
+                backoffs: backoffs
+            )
             await MainActor.run {
                 if isCurrentRun(articleID, runID) {
                     self.translating?.done += 1
@@ -1202,19 +1338,113 @@ final class ReaderViewModel: ObservableObject {
         ensureAnnotated()
     }
 
-    private func translateParagraph(
+    // MARK: - 段级 429 自动退避（对齐 ReaderApp.tsx:894-997 + paragraphTranslate.ts）
+
+    /// 整篇翻译 run 共享的退避计数盒：一个 run 内跨段共享 429 等待次数，
+    /// 手动重试发起的新 run 换新盒子从 0 起算。引用语义（class）让
+    /// ensureTranslated 持有、各段循环里递增。
+    final class TranslateBackoffCounter {
+        var runBackoffs = 0
+    }
+
+    /// 单段一次尝试的三种收尾（对齐 ReaderApp.tsx:949-980 的分桶语义）。
+    private enum ParagraphOutcome {
+        /// 编号行对齐成功（句子已写 done）。
+        case done
+        /// HTTP 200 但编号行对不齐 → failed 不带原因。
+        case unaligned
+        /// 请求错误（结构化 HTTP 状态码；nil = 超时/断网/未配置等）。
+        case failed(httpStatus: Int?)
+        /// run 已失效（切文章/新 run 接管）：静默退出，不写任何句子状态。
+        case stale
+    }
+
+    /// 从通道错误里提结构化 HTTP 状态码（超时/断网/未配置等非 HTTP 失败 → nil）。
+    /// 只认 ReaderChatError.http，绝不匹配错误 message 文本。
+    private static func channelHTTPStatus(of error: Error) -> Int? {
+        if case ReaderChatClient.ReaderChatError.http(let status, _) = error { return status }
+        return nil
+    }
+
+    /// 一段的翻译（含 429 自动退避）：仅结构化 429 触发重试，每段最多 1 次、
+    /// 整篇（backoffs 计数盒）封顶 6 次；等待固定 20s（单测可经
+    /// translateBackoffWaitMsOverride 注入短值），等待醒来先确认 run 仍有效
+    /// 再重试，失效则退出且不重发请求（对齐 ReaderApp.tsx:924-948）。
+    /// 失败分桶在循环外收尾一次：退避等待期间句子保持 pending（与 Windows
+    /// 观察面一致，不提前落 failed）。
+    func translateGroupWithBackoff(
         _ sentences: [SentencePair],
         target: String,
         articleID: String,
-        runID: Int
+        runID: Int,
+        backoffs: TranslateBackoffCounter
     ) async {
-        let expected = sentences.count
-        let numberedInput = buildParagraphRequestInput(sentences.map(\.en))
+        let waitMs = translateBackoffWaitMsOverride ?? translateBackoffWaitMs
+        // 重试请求复用：系统提示词只构造一次，重试与首次完全相同
+        //（对齐 ReaderApp.tsx:945-947 循环外捕获 systemPrompt/onDelta）。
         let systemPrompt = buildParagraphTranslateSystemPrompt(
             targetLanguage: target,
             customStyle: chat.customStyle,
             glossaryText: chat.glossaryText
         )
+        var groupRetries = 0
+        var outcome = await attemptParagraph(
+            sentences,
+            systemPrompt: systemPrompt,
+            articleID: articleID,
+            runID: runID
+        )
+        while case let .failed(status) = outcome,
+              ReaderCore.planTranslateRetry(
+                httpStatus: status,
+                groupRetries: groupRetries,
+                runBackoffs: backoffs.runBackoffs
+              ) != nil {
+            groupRetries += 1
+            backoffs.runBackoffs += 1
+            do {
+                try await Task.sleep(nanoseconds: UInt64(waitMs) * 1_000_000)
+            } catch {
+                // 切文章/手动重试接管：Task 被 cancel，sleep 抛 CancellationError。
+                // 静默退出，不把句子标 failed（对齐 Windows 退避期间切文先清 chip 再退出）。
+                return
+            }
+            // 等待醒来先查 run 有效性：失效则不再发重试请求。
+            guard isCurrentRun(articleID, runID) else { return }
+            outcome = await attemptParagraph(
+                sentences,
+                systemPrompt: systemPrompt,
+                articleID: articleID,
+                runID: runID
+            )
+        }
+        switch outcome {
+        case .done:
+            break
+        case .unaligned:
+            markParagraphFailed(sentences, articleID: articleID, runID: runID, errorText: nil)
+        case let .failed(status):
+            markParagraphFailed(
+                sentences,
+                articleID: articleID,
+                runID: runID,
+                errorText: ErrorMessageFormatter.readerParagraphErrorText(status: status)
+            )
+        case .stale:
+            break
+        }
+    }
+
+    /// 一段的单次请求尝试：流式部分解析 + 完整解析；只写成功态，失败分桶由
+    /// translateGroupWithBackoff 收尾（退避循环中不提前落 failed）。
+    private func attemptParagraph(
+        _ sentences: [SentencePair],
+        systemPrompt: String,
+        articleID: String,
+        runID: Int
+    ) async -> ParagraphOutcome {
+        let expected = sentences.count
+        let numberedInput = buildParagraphRequestInput(sentences.map(\.en))
 
         func patchGroup(_ transform: (SentencePair) -> SentencePair) {
             guard isCurrentRun(articleID, runID) else { return }
@@ -1249,13 +1479,9 @@ final class ReaderViewModel: ObservableObject {
                 }
             )
             // 完整解析换回；cancelled 时已收到的部分也按完整解析尝试。
+            guard isCurrentRun(articleID, runID) else { return .stale }
             guard let parsed = parseParagraphResponse(finalText, expectedCount: expected) else {
-                patchGroup { st in
-                    var next = st
-                    next.zhState = .failed
-                    return next
-                }
-                return
+                return .unaligned
             }
             patchGroup { st in
                 var next = st
@@ -1265,11 +1491,30 @@ final class ReaderViewModel: ObservableObject {
                 }
                 return next
             }
+            return .done
         } catch {
-            guard isCurrentRun(articleID, runID) else { return }
-            patchGroup { st in
+            guard isCurrentRun(articleID, runID) else { return .stale }
+            return .failed(httpStatus: Self.channelHTTPStatus(of: error))
+        }
+    }
+
+    /// 收尾分桶的 failed 写回：errorText 非 nil 时写 zhError（按状态码定稿的
+    /// 文案）；nil 一并清空（parse 对齐失败与 run 失效不写原因）。
+    /// 对齐 ReaderApp.tsx:988-997 markParagraphFailed。
+    private func markParagraphFailed(
+        _ sentences: [SentencePair],
+        articleID: String,
+        runID: Int,
+        errorText: String?
+    ) {
+        guard isCurrentRun(articleID, runID) else { return }
+        let ids = Set(sentences.map(\.idx))
+        scheduleSave { a in
+            a.sentences = a.sentences.map { st in
+                guard ids.contains(st.idx) else { return st }
                 var next = st
                 next.zhState = .failed
+                next.zhError = errorText
                 return next
             }
         }
@@ -1356,7 +1601,8 @@ final class ReaderViewModel: ObservableObject {
         ensureAnnotated()
     }
 
-    /// 单段重试：把该段失败句重置回 pending 后单独重跑。
+    /// 单段重试：把该段失败句重置回 pending（清掉 zhError）后单独重跑；
+    /// 新 run，退避配额从 0 重新起算（对齐 ReaderApp.tsx:1002-1022）。
     func retryParagraph(_ paragraphIdx: Int) {
         scheduleSave { a in
             a.sentences = a.sentences.map { st in
@@ -1364,26 +1610,34 @@ final class ReaderViewModel: ObservableObject {
                 var next = st
                 next.zh = nil
                 next.zhState = .pending
+                next.zhError = nil
                 return next
             }
         }
         guard let current = article else { return }
-        translationTask?.cancel()
-        translationRunID += 1
+        invalidateTranslationRun()
         let runID = translationRunID
         let target = chat.resolveTarget(for: current.sentences.first?.en ?? current.title)
         let group = current.sentences.filter { $0.paragraphIdx == paragraphIdx && $0.zhState == .pending }
         guard !group.isEmpty else { return }
         translating = StepProgress(done: 0, total: 1)
         translationTask = Task { [weak self] in
-            await self?.translateParagraph(group, target: target, articleID: current.id, runID: runID)
+            await self?.translateGroupWithBackoff(
+                group,
+                target: target,
+                articleID: current.id,
+                runID: runID,
+                backoffs: TranslateBackoffCounter()
+            )
             await MainActor.run {
                 if self?.isCurrentRun(current.id, runID) == true { self?.translating = nil }
             }
         }
     }
 
+    /// 标题重试：先清失败原因，再单独重跑标题（对齐 ReaderApp.tsx:1024-1029）。
     func retryTitle() {
+        titleCnError = nil
         scheduleSave { a in
             a.titleCn = nil
             a.titleCnState = .pending
@@ -1641,8 +1895,8 @@ final class ReaderViewModel: ObservableObject {
         }
     }
 
-    /// 透镜卡 / 折叠卡 / 刊头「用这句（围绕本章）练口语」：记 pendingSpeak book
-    /// 意图再进口语（ReaderApp.tsx:1625 practiceSentence 的 pendingSpeak 通道，
+    /// 透镜卡 / 浮层 / 刊头「用这句练口语」：记 pendingSpeak book
+    /// 意图再进口语（ReaderApp.tsx:1843-1853 practiceSentence 的 pendingSpeak 通道，
     /// 消费在 openSpeak）：该句进摘要首位，口语侧开场白自然从这句聊起。
     func practiceSentence(idx: Int) {
         guard let current = article,
@@ -1651,6 +1905,24 @@ final class ReaderViewModel: ObservableObject {
         pendingSpeak = PendingSpeakIntent(kind: .book(articleId: current.id, sentenceIdx: idx))
         openSpeak()
         showToast("已带入第 \(idx + 1) 句进入口语对话")
+    }
+
+    /// 刊头「围绕本章练口语」（ReaderApp.tsx:1855-1865 practiceChapter）：以当前
+    /// 光标句为锚带入本章语境，toast 文案与单句带入区分。
+    func practiceChapter(idx: Int) {
+        guard let current = article,
+              let en = current.sentences[safe: idx]?.en,
+              !en.isEmpty else { return }
+        pendingSpeak = PendingSpeakIntent(kind: .book(articleId: current.id, sentenceIdx: idx))
+        openSpeak()
+        showToast("已带入本章进入口语对话")
+    }
+
+    /// 解析面板对当前句是否处于 idle 速览态：没有本句的 loading/ready/error 记录
+    ///（Windows xrayIdle，ReaderApp.tsx:2481-2486）——E 快捷键仅此时触发解析，
+    /// 已解析/解析中/解析失败的句子按 E 不再重复发请求（重试走面板内按钮）。
+    var xrayIdleForCurrent: Bool {
+        xray?.sentenceIdx != activeSentenceIdx
     }
 
     /// pendingSpeak book 语境（对齐 ReaderApp.tsx:1931-1948 speakBookContext 的
@@ -1790,6 +2062,23 @@ final class ReaderViewModel: ObservableObject {
         jumpTo(idx: sentenceIdx)
     }
 
+    /// 练习接力「回到原文这句」落点（ReaderApp.tsx:1902：readerGetArticle 取到 null
+    /// → 「原文已删除…」；取文章抛错 → toast 错误原文；存在 → 跳阅读定位该句）。
+    func openRelaySource(articleId: String, sentenceIdx: Int) {
+        let found: Article?
+        do {
+            found = try store.getArticle(id: articleId)
+        } catch {
+            showToast((error as? LocalizedError)?.errorDescription ?? String(describing: error))
+            return
+        }
+        guard found != nil else {
+            showToast("原文已删除，练习仍保留完整参考句和反馈")
+            return
+        }
+        jumpToSource(articleId: articleId, sentenceIdx: sentenceIdx)
+    }
+
     /// 来源句（含译文）。
     func sourceSentence(articleId: String, sentenceIdx: Int) -> (en: String, zh: String?)? {
         guard !articleId.isEmpty,
@@ -1816,6 +2105,8 @@ final class ReaderViewModel: ObservableObject {
 
     /// 应用一档评分并落盘：SRS 演进 + 错题分桶 + 复习打卡 + 刷新统计。
     /// mode/verdict 来自复习卡的判分上下文（识别卡 judged=nil 按评分归桶）。
+    /// 学习接线路径：不可变评分事件（带 day/generation/recall）→
+    /// LearningStore.commitReview，SRS/recall 由事件归并重建（Rust 落库为准）。
     func gradeVocab(
         _ word: VocabWord,
         _ grade: ReviewGrade,
@@ -1823,9 +2114,24 @@ final class ReaderViewModel: ObservableObject {
         verdict: RecallVerdict?
     ) {
         let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let bucket = recallBucket(mode: mode, judged: verdict, grade: grade)
+        if store.learning != nil {
+            do {
+                _ = try store.gradeVocabWord(word, grade: grade, mode: mode, bucket: bucket, now: now)
+                // 复习日志由 hydrateReviews 重建（baselineReviewLog + 活跃事件 day），
+                // 不在本地另记一套账。
+                if let file = try? store.getVocabFile() {
+                    reviewLog = file.reviewLog
+                }
+                refreshVocab()
+                ReviewTouchpointManager.shared.refreshBadge()
+            } catch {
+                showToast("保存复习记录失败")
+            }
+            return
+        }
         var graded = word
         graded.srs = gradeSrs(word.srs, grade, now: now)
-        let bucket = recallBucket(mode: mode, judged: verdict, grade: grade)
         graded.recall = recordRecallStat(word.recall, mode: mode, bucket: bucket, nowMs: now)
         do {
             try store.saveVocabWord(graded)
@@ -1860,40 +2166,41 @@ final class ReaderViewModel: ObservableObject {
 
     /// 回整页书架（首页）。keepFolio = 删除后保持浮层打开（Windows 删除契约）。
     func openShelf(keepFolio: Bool = false) {
-        focusReviewIds = nil
+        exitFocus()
         if !keepFolio { folioOpen = false }
         route = .shelf
     }
 
     func openReading() {
-        focusReviewIds = nil
+        exitFocus()
         route = .reading
     }
 
+    /// 复习类入口（托盘/菜单「生词本」经 bootstrap(openReview:) 走到这里）：
+    /// 2026-10-26 改版落复习首页档（对齐 Windows goReview → vault·home），
+    /// Hero「开始复习」再进专注态。
     func openReview() {
-        focusReviewIds = nil
-        // 复习类入口统一落挑战档（对齐 Windows goReview → vault·challenge；
-        // 托盘/菜单「生词本」经 bootstrap(openReview:) 走到这里）。
-        vaultPlayMode = .challenge
-        route = .review
+        exitFocus()
+        vaultPlayMode = .home
+        route = .vault
         reviewPos = 0
         loadSourceArticles(ids: vocabWords.map(\.source.articleId))
         refreshNotes()  // 「N 未整理」角标需要笔记覆盖数据
-        refreshSpeakSessions()  // 手账口语改进行
+        refreshSpeakSessions()  // 首页口语纠偏条目与 rail 计数
     }
 
     /// 进入「笔记与复习」档但保留上次玩法档（导航岛第三档；Windows
-    /// navigateSurface(vault) 已在 vault 内不重置模式）。
+    /// navigateSurface(vault) 不重置 vaultMode——已在 vault 内跨视图进入保留上次档位）。
     func openVault() {
-        route = .review
+        route = .vault
         loadSourceArticles(ids: vocabWords.map(\.source.articleId))
         refreshNotes()
         refreshSpeakSessions()
     }
 
-    /// 导航岛三档路由（对齐 ReaderApp.tsx:1647 navigateSurface）：切档先收书架浮层；
+    /// 导航岛三档路由（对齐 ReaderApp.tsx:1867-1878 navigateSurface）：切档先收书架浮层；
     /// 阅读档没有打开的文章时续读最近一篇/一本（都没有才落空态）；
-    /// 「笔记与复习」档已在 review/notes 内时不重置（Windows「已在 vault 不重置玩法档」）。
+    /// 「笔记与复习」档已在 vault 内时不重置玩法档。
     func navigate(to surface: IslandSurface) {
         folioOpen = false
         switch surface {
@@ -1906,14 +2213,19 @@ final class ReaderViewModel: ObservableObject {
         case .speak:
             openSpeak()
         case .vault:
-            if route == .review || route == .notes { return }
+            if route == .vault { return }
             openVault()
         }
     }
 
-    /// 导航岛当前高亮档（shelf/reading→阅读、speak→口语、review/notes→笔记与复习）。
+    /// 导航岛当前高亮档（shelf/reading→阅读、speak→口语、vault→笔记与复习）。
     var islandSurface: IslandSurface {
         IslandSurface(folding: route.kind)
+    }
+
+    /// 专注复习态（仅 vault + focus）：顶栏中岛隐藏、vault 单列居中（Windows focusMode）。
+    var vaultFocusMode: Bool {
+        route == .vault && vaultPlayMode == .focus
     }
 
     /// 「笔记与复习」档角标 = 到期数 + 未整理数；收藏 / 评分 / 生成笔记后随 @Published 数据实时变。
@@ -1939,9 +2251,21 @@ final class ReaderViewModel: ObservableObject {
         folioOpen = false
     }
 
-    /// 书架浮层「＋ 导入文件」：开导入向导并收起浮层（Windows FolioSheet onOpenImport + onClose）。
+    /// 书架浮层「＋ 导入文件」：开导入向导（缺省文库 tab）并收起浮层
+    ///（Windows FolioSheet onOpenImport 不带 tab + onClose）。
     func openImportFromFolio() {
+        openImport(tab: nil)
         folioOpen = false
+    }
+
+    /// 打开导入弹窗，可指定直达 tab（书架发现三列 discover/feed/lib、书架浮层与
+    /// 阅读页空态不带 tab 落缺省文库）。挂点：FolioSheet/ShelfPage/ReadingView。
+    /// 白名单防御（Windows IMPORT_OPEN_TABS，ReaderApp.tsx:376-379）：调用方直传
+    /// 控件回调时第一个参数可能是事件对象等非 tab 值——Mac 侧等效输入是任意不在
+    /// 白名单里的字符串，一律回落 `lib`；否则弹窗七个 tab 全不命中、只剩头和 tab 条
+    ///（2026-10-26 回归的教训）。
+    func openImport(tab raw: String? = nil) {
+        importInitialTab = resolveImportOpenTab(raw)
         importSheetShown = true
     }
 
@@ -1960,7 +2284,8 @@ final class ReaderViewModel: ObservableObject {
         flushReadingSeconds()      // 未落盘的阅读秒数不丢
     }
 
-    /// 笔记复盘区「只测仍错的词」：只排这批词，不等到期。
+    /// 笔记复盘/章末卡/结课条/看板易错项的「只测这批词」：只排这批词，不等到期，
+    /// 直落专注态（对齐 Windows startFocusReview → vaultMode focus）。
     func startFocusReview(ids: [String]) {
         guard !ids.isEmpty else {
             showToast("这篇笔记的词这一轮都通过了，没有要补的")
@@ -1968,18 +2293,28 @@ final class ReaderViewModel: ObservableObject {
         }
         focusReviewIds = ids
         reviewPos = 0
-        // 弱项加练直落挑战档（对齐 Windows onStartFocusReview → vaultMode challenge）。
-        vaultPlayMode = .challenge
-        route = .review
+        vaultPlayMode = .focus
+        route = .vault
+        // 加练批次的原句要能取到（完形/听写素材）：按词条来源文章拉进缓存。
+        let batch = Set(ids)
+        loadSourceArticles(ids: vocabWords.filter { batch.contains($0.id) }.map(\.source.articleId))
+        refreshSpeakSessions()
+    }
+
+    /// 离开复习队列的入口（rail 退出横幅 / 阅读档等）：回全局到期队列。
+    /// 注意：focus 态底部切换器/Esc 只切档不清 focusIds（专注队列续跑），
+    /// 只有显式退出加练或离开 vault 路由（goShelf/goReading/goSpeak）才清。
+    func exitFocus() {
+        focusReviewIds = nil
     }
 
     // MARK: - 笔记库
 
+    /// 笔记库入口：vault「全部笔记」档（对齐 Windows goNotes → vaultMode notes）。
     func openNotes() {
-        focusReviewIds = nil
-        // 笔记库入口落 md 档（对齐 Windows goNotes → vault·md），.notes 路由兼容保留。
-        vaultPlayMode = .md
-        route = .notes
+        exitFocus()
+        vaultPlayMode = .notes
+        route = .vault
         refreshNotes()
         refreshSpeakSessions()
     }
@@ -1992,7 +2327,7 @@ final class ReaderViewModel: ObservableObject {
     /// 进口语面（导航岛 / 带入意图共用入口）：切路由后消费 pendingSpeak——
     /// 这是意图开会的唯一落点，保证「带入 → 进面 → 开会」一条链。
     func openSpeak() {
-        focusReviewIds = nil
+        exitFocus()
         route = .speak
         speak.refreshRecent()
         consumePendingSpeak()
@@ -2147,6 +2482,133 @@ final class ReaderViewModel: ObservableObject {
         return dueWords
     }
 
+    // MARK: - 随读抽查（原位挖空微测；ReadingView.tsx:186-214,:492-513 + ReaderApp.tsx:1779-1793）
+
+    /// 槽位作答状态（usedHint 在判分前就要记，verdict 判分后写入）。
+    struct ClozeSlotState: Equatable {
+        var usedHint = false
+        var verdict: RecallVerdict?
+        var input: String?
+    }
+
+    /// 判分后的胶带小条（左下角，最多 3 条，3.2s 自动退场）。
+    struct ClozeToast: Identifiable, Equatable {
+        let id: Int
+        let word: String
+        let label: String
+        let tone: RecallVerdict
+    }
+
+    @Published var clozeState: [String: ClozeSlotState] = [:]
+    @Published private(set) var clozeToasts: [ClozeToast] = []
+    private var clozeToastSeq = 0
+    private var clozeSlotsCache: (signature: String, slots: [Int: ClozeSlot])?
+
+    /// 随读抽查开关（settings.spotQuizMode 生效值）。
+    var clozeQuizOn: Bool { effectiveSettings.spotQuizEnabled }
+
+    /// 已读句的挖空槽（每段一槽）；开关关闭 / 无文章时恒为空集——正文零残留。
+    /// 词块/生词跨度与正文标注同源（chunkHighlight / showVocabMarks 只影响参与合并的候选）。
+    var clozeSlots: [Int: ClozeSlot] {
+        guard clozeQuizOn, let article else { return [:] }
+        let settings = effectiveSettings
+        let known: Set<String> = settings.showVocabMarks ? knownIds : []
+        let watermark = article.progress.sentenceIdx
+        var hasher = Hasher()
+        hasher.combine(article.id)
+        hasher.combine(watermark)
+        hasher.combine(settings.chunkHighlight)
+        hasher.combine(known)
+        for s in article.sentences {
+            hasher.combine(s.idx)
+            hasher.combine(s.en)
+            for chunk in s.chunks ?? [] { hasher.combine(chunk.text) }
+        }
+        let signature = String(hasher.finalize())
+        if let cache = clozeSlotsCache, cache.signature == signature { return cache.slots }
+        var spans: [Int: [ChunkSpan]] = [:]
+        for s in article.sentences {
+            let list = buildSentenceSpans(s.en, settings.chunkHighlight ? s.chunks : nil, knownIds: known)
+            if !list.isEmpty { spans[s.idx] = list }
+        }
+        let slots = pickClozeSlots(spansBySentence: spans, sentences: article.sentences, watermark: watermark)
+        clozeSlotsCache = (signature, slots)
+        return slots
+    }
+
+    /// 战绩（命中 / 接近 / 陷阱 / 已答 / 待答）。
+    var clozeTallyNow: ClozeTally {
+        var verdicts: [String: RecallVerdict] = [:]
+        for (id, st) in clozeState { if let v = st.verdict { verdicts[id] = v } }
+        return clozeTally(slots: clozeSlots, verdicts: verdicts)
+    }
+
+    /// 某句槽位的渲染态（offset = 该句在所在文本块里的起点：对照行 0 / 画报流拼接坐标）。
+    func clozeRenderMark(sentenceIdx: Int, offset: Int) -> ClozeRenderMark? {
+        guard let slot = clozeSlots[sentenceIdx] else { return nil }
+        let st = clozeState[slot.id]
+        return ClozeRenderMark(
+            id: slot.id,
+            start: slot.start + offset,
+            end: slot.end + offset,
+            answer: slot.answer,
+            isKnown: slot.isKnown,
+            verdict: st?.verdict,
+            input: st?.input,
+            note: clozeNoteText(slot),
+            peeked: peekAll && st?.verdict == nil
+        )
+    }
+
+    /// 提交判分（judgeCloze 本地判；用过提示的 perfect 降档为 close）→ 作答态 → 胶带 toast →
+    /// known 槽联动 SRS。Enter 空输入也判（judgeCloze 空串 = wrong，与 Windows 一致）。
+    func commitCloze(_ slot: ClozeSlot, raw: String) {
+        let verdict0 = judgeCloze(raw, slot.answer, options: JudgeOptions(trap: slot.trap))
+        let usedHint = clozeState[slot.id]?.usedHint ?? false
+        let verdict = clozeApplyHintPenalty(verdict0, usedHint: usedHint)
+        clozeState[slot.id] = ClozeSlotState(
+            usedHint: usedHint,
+            verdict: verdict,
+            input: raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        pushClozeToast(slot, verdict)
+        clozeVerdict(slot, verdict)
+    }
+
+    /// 「?」首字母提示：记 usedHint（命中会降档为「接近」），返回要填进输入框的首字母串。
+    @discardableResult
+    func useClozeHint(_ slot: ClozeSlot) -> String {
+        var st = clozeState[slot.id] ?? ClozeSlotState()
+        st.usedHint = true
+        clozeState[slot.id] = st
+        return firstLetters(slot.answer)
+    }
+
+    /// 随读抽查判分 → SRS：只有生词再现槽联动（限幅：即时回忆最高只记 good，见
+    /// clozeVerdictToGrade）；词块槽不进生词本，纯在正文里给反馈（ReaderApp.tsx:1779-1793）。
+    func clozeVerdict(_ slot: ClozeSlot, _ verdict: RecallVerdict) {
+        guard slot.isKnown, let vocabId = slot.vocabId,
+              let word = vocabWords.first(where: { $0.id == vocabId }) else { return }
+        gradeVocab(word, clozeVerdictToGrade(verdict), mode: .cloze, verdict: verdict)
+    }
+
+    private func pushClozeToast(_ slot: ClozeSlot, _ verdict: RecallVerdict) {
+        clozeToastSeq += 1
+        let key = clozeToastSeq
+        let toast = ClozeToast(
+            id: key,
+            word: slot.answer,
+            label: clozeToastLabel(isKnown: slot.isKnown, verdict: verdict),
+            tone: verdict
+        )
+        clozeToasts = Array(clozeToasts.suffix(2)) + [toast]
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 3_200_000_000)
+            guard let self else { return }
+            self.clozeToasts.removeAll { $0.id == key }
+        }
+    }
+
     // MARK: - 键盘（空格仅阅读器内生效；J/K/L 备选；H 暂显全部译文；Esc 统一收浮层；
     //         滑杆聚焦时方向键/翻页键/Home/End 翻句）
 
@@ -2168,12 +2630,23 @@ final class ReaderViewModel: ObservableObject {
     var playScrubberFocused = false
 
     /// 输入焦点守卫（对齐 useEscapeClose.ts:12-13 注释：输入中按 Esc 是「撤销输入」
-    /// 而非「关浮层」）。窗口控制器派发层已挡第一道（ReaderWindowController 的本地
-    /// 监听对 NSTextView/NSTextField 聚焦时直接放行系统），这里挡第二道——
-    /// vm 被单测或其他入口直接调用时语义一致。
+    /// 而非「关浮层」）。窗口控制器把全部 keyDown 都交到 handleKeyDown，由这里逐键位
+    /// 施加 typing 守卫（阅读页全局键让路；vault focus 态 Esc/Tab 例外）——vm 被单测
+    /// 或其他入口直接调用时语义一致。
+    /// 只认可编辑的 NSTextView（含字段编辑器）或 NSTextField：阅读正文
+    /// （ReaderTextView/ProseFlowTextView）是 isEditable=false、isSelectable=true 的
+    /// 只读视图，点一下词句就会成为第一响应者；若一并算输入，Space/J/K/L/H/E 会在
+    /// 点过正文后全部失效（Windows isTyping 只认 input/textarea/contentEditable，
+    /// ReaderApp.tsx:2097-2105）。
     static func textInputHasFocus(in window: NSWindow?) -> Bool {
         guard let responder = window?.firstResponder else { return false }
-        return responder is NSTextView || responder is NSTextField
+        if responder is NSTextField {
+            return true
+        }
+        if let textView = responder as? NSTextView {
+            return textView.isEditable
+        }
+        return false
     }
 
     /// 浮层 Esc 统一收尾（SHELL-10 / READ-10）：一次只收最上层，层序按 ReaderRootView
@@ -2182,6 +2655,11 @@ final class ReaderViewModel: ObservableObject {
     /// 返回 true = 已消费；false = 没有可收的浮层。
     @discardableResult
     func dismissTopOverlayOnEscape() -> Bool {
+        // 阅读设置浮层是阅读页内最上层的浮层（ReadingView.tsx:377-403 自己的 Esc 监听）。
+        if readingSettingsPopShown {
+            readingSettingsPopShown = false
+            return true
+        }
         if drill.state.shown {
             drill.close()
             return true
@@ -2195,6 +2673,16 @@ final class ReaderViewModel: ObservableObject {
             return true
         }
         return false
+    }
+
+    /// 「笔记与复习」focus 态 Esc = 退出专注（VaultPage.tsx:816-820）：只切档回
+    /// 复习首页，不清 focusReviewIds（专注队列续跑，底部切换器「专注复习」可回来）。
+    /// 返回 true = 已消费（当前在 vault + focus）。
+    @discardableResult
+    func exitFocusModeOnEscape() -> Bool {
+        guard route == .vault, vaultPlayMode == .focus else { return false }
+        vaultPlayMode = .home
+        return true
     }
 
     /// READ-6 键盘滑杆按键 → 目标语（已夹到 0...total-1；nil = 不是滑杆键或无句子）：
@@ -2221,17 +2709,25 @@ final class ReaderViewModel: ObservableObject {
     }
 
     func handleKeyDown(_ event: NSEvent) -> Bool {
+        let typing = Self.textInputHasFocus(in: attachedWindow)
         if event.keyCode == Self.escapeKeyCode {
-            // 焦点在输入框：不收浮层，交还系统行为（撤销输入/取消编辑）。
-            if Self.textInputHasFocus(in: attachedWindow) { return false }
+            if typing {
+                // 焦点在输入框：focus 态 Esc 仍是退出语义（Windows 不受 typing 守卫），
+                // 其余场景交还系统行为（撤销输入/取消编辑）。
+                return exitFocusModeOnEscape()
+            }
             if dismissTopOverlayOnEscape() { return true }
+            if exitFocusModeOnEscape() { return true }
         }
-        if route == .review || route == .notes {
-            // 「笔记与复习」三合一容器（review/notes 两条兼容路由共用一套键盘处理，
-            // 由当前档位的视图注入）。
+        if route == .vault {
+            // 「笔记与复习」四态容器（home Enter / focus Tab·H·Enter·1-3 等键位
+            // 由当前档位的视图注入；typing 守卫由其按键位施加——Tab 在输入框内仍是下一级提示）。
             return reviewKeyHandler?(event) ?? false
         }
         guard route == .reading else { return false }
+        // 阅读页全局键（Space/J/K/L/H/E）在输入框内一律让路（ReaderApp.tsx:2096-2129 非输入态；
+        // 挖空输入 / 译文编辑 / 检索框自接管按键）。
+        guard !typing else { return false }
         readingSession.noteInteraction(now: Date.timeIntervalSinceReferenceDate)
         // READ-6 键盘滑杆：进度条聚焦时接管翻句键，复用 jumpTo（播放中跳读、
         // 未播放只移光标）；未聚焦时方向键照旧流向正文滚动。
@@ -2248,8 +2744,22 @@ final class ReaderViewModel: ObservableObject {
         if key == "j" { jumpTo(idx: activeSentenceIdx + 1); return true }
         if key == "l" { jumpTo(idx: activeSentenceIdx - 1); return true }
         if key == "h" {
-            peekAll = true
-            return true
+            // H 按住显影（Windows ReaderApp.tsx:2122-2124）：仅遮罩或随读抽查开启时
+            // 有意义（显影译文 / 挖空答案），其余场景不消费。
+            if effectiveSettings.maskTranslation || effectiveSettings.spotQuizEnabled {
+                peekAll = true
+                return true
+            }
+            return false
+        }
+        if key == "e" {
+            // E 句子解析（ReaderApp.tsx ReadingView.tsx:396）：仅解析面板 idle
+            // 速览态触发，已解析/解析中/失败的句子不重复发请求。
+            if article != nil, xrayIdleForCurrent {
+                openXray(idx: activeSentenceIdx)
+                return true
+            }
+            return false
         }
         return false
     }
@@ -2263,14 +2773,27 @@ final class ReaderViewModel: ObservableObject {
 
     func showToast(_ message: String, action: ToastAction? = nil) {
         toast = message
-        toastAction = action
+        // 主窗 toast 动作位同款（ReaderApp.tsx:2806-2817）：配额耗尽文案自动带上
+        // 「兑换更多额度」按钮（分类口径与口语页错误位一致——含「额度已用完」）。
+        let resolvedAction = action ?? (speakFriendlyNotice(message).kind == .redeem ? Self.redeemQuotaToastAction : nil)
+        toastAction = resolvedAction
+        // 带「兑换更多额度」动作的 toast 停留 8s（对齐 ReaderApp.tsx showToast
+        // `action ? 8000 : 3200`，08595f3）；其余维持 3.2s。
+        let lingering = resolvedAction?.title == Self.redeemQuotaToastAction.title
+        let durationNs: UInt64 = lingering ? 8_000_000_000 : 3_200_000_000
         toastTask?.cancel()
         toastTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 3_200_000_000)
+            try? await Task.sleep(nanoseconds: durationNs)
             guard !Task.isCancelled else { return }
             self?.toast = ""
             self?.toastAction = nil
         }
+    }
+
+    /// 配额耗尽 toast 的「兑换更多额度」按钮：跳设置账号分区兑换码卡（与口语页
+    /// 错误位同一落点，AppDelegate.openAccountRedeem）。
+    private static let redeemQuotaToastAction = ToastAction(title: "兑换更多额度") {
+        (NSApp.delegate as? AppDelegate)?.openAccountRedeem()
     }
 }
 

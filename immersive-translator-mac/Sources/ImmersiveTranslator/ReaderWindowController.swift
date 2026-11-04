@@ -3,7 +3,7 @@ import SwiftUI
 
 /// 沉浸阅读室窗口（1200×800，最小 960×620）。
 /// 负责窗口生命周期与阅读器内的键盘快捷键（Space/J/K/L/H，
-/// 输入框聚焦时不劫持）。
+/// 输入框聚焦时由 vm.handleKeyDown 的 typing 守卫逐键让路；Esc/Tab 的 focus 态例外见 vm）。
 ///
 /// 关窗契约（对齐 Windows ReaderApp.tsx:1218-1235 onCloseRequested）：点标题栏 ✕
 /// = 先停朗读 / 收麦 / 取消在途评测，再隐藏窗口；窗口 isReleasedWhenClosed=false
@@ -96,10 +96,10 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate {
         guard keyDownMonitor == nil else { return }
         keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, event.window === self.window else { return event }
-            // 输入框/文本编辑区聚焦时不劫持按键
-            if let responder = self.window?.firstResponder, responder is NSTextView || responder is NSTextField {
-                return event
-            }
+            // 输入框/文本编辑区聚焦时也交给 vm 判定：typing 守卫在 vm.handleKeyDown 内
+            // 逐键位施加——阅读页 Space/J/K/L/H/E 让路，但「笔记与复习」focus 态的
+            // Esc（退出专注）与 Tab（下一级提示）不受 typing 守卫（VaultPage.tsx:814-828），
+            // 否则这两条只在单测可达、生产事件链永远到不了。
             let handled = self.viewModel.handleKeyDown(event)
             return handled ? nil : event
         }

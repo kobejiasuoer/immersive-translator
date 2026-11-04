@@ -122,8 +122,95 @@ final class TelemetryEventTests: XCTestCase {
         XCTAssertNil(TelemetryEvent.decodeLine("{\"ts\":1,\"name\":\"x\",\"props\":\"oops\"}"))
     }
 
+    // MARK: - 口语场景体系三事件（名/字段逐字对齐 Windows analytics.ts:24-32 白名单）
+
+    func testSpeakSessionStartLineShape() throws {
+        let line = try TelemetryEvent.speakSessionStart(scenarioId: "usr_abc", scenarioSource: .user)
+            .jsonLine(nowMs: nowMs)
+        let dict = try lineDict(line)
+        XCTAssertEqual(dict["name"] as? String, "speak_session_start")
+        let props = try XCTUnwrap(dict["props"] as? [String: Any])
+        XCTAssertEqual(props["scenarioId"] as? String, "usr_abc")
+        XCTAssertEqual(props["scenarioSource"] as? String, "user")
+        XCTAssertEqual(Set(props.keys), ["scenarioId", "scenarioSource"])
+        for source in SpeakScenarioSource.allCases {
+            let event = TelemetryEvent.speakSessionStart(scenarioId: "x", scenarioSource: source)
+            XCTAssertEqual(event.props["scenarioSource"], .string(source.rawValue))
+        }
+    }
+
+    func testScenarioCreateLineShape() throws {
+        for via in ["generate", "manual"] {
+            let line = try TelemetryEvent.scenarioCreate(via: via).jsonLine(nowMs: nowMs)
+            let dict = try lineDict(line)
+            XCTAssertEqual(dict["name"] as? String, "scenario_create")
+            let props = try XCTUnwrap(dict["props"] as? [String: Any])
+            XCTAssertEqual(props["via"] as? String, via)
+            XCTAssertEqual(Set(props.keys), ["via"])
+        }
+    }
+
+    func testScenarioGenerateResultOmitsParseErrorKeyWhenAbsent() throws {
+        let ok = try lineDict(try TelemetryEvent.scenarioGenerateResult(ok: true).jsonLine(nowMs: nowMs))
+        XCTAssertEqual(ok["name"] as? String, "scenario_generate_result")
+        let okProps = try XCTUnwrap(ok["props"] as? [String: Any])
+        XCTAssertEqual(okProps["ok"] as? Bool, true)
+        XCTAssertEqual(Set(okProps.keys), ["ok"])
+
+        // 接口失败/取消：只 {ok:false}，不带 parseError 键
+        let failed = try lineDict(try TelemetryEvent.scenarioGenerateResult(ok: false).jsonLine(nowMs: nowMs))
+        let failedProps = try XCTUnwrap(failed["props"] as? [String: Any])
+        XCTAssertEqual(failedProps["ok"] as? Bool, false)
+        XCTAssertEqual(Set(failedProps.keys), ["ok"])
+
+        // 解析失败：四类口径
+        for code in ["empty", "no_json", "bad_json", "missing_required"] {
+            let parsed = try lineDict(try TelemetryEvent.scenarioGenerateResult(ok: false, parseError: code).jsonLine(nowMs: nowMs))
+            let props = try XCTUnwrap(parsed["props"] as? [String: Any])
+            XCTAssertEqual(props["ok"] as? Bool, false)
+            XCTAssertEqual(props["parseError"] as? String, code)
+            XCTAssertEqual(Set(props.keys), ["ok", "parseError"])
+        }
+        XCTAssertEqual(ScenarioGenParseError.allCodes, ["empty", "no_json", "bad_json", "missing_required"])
+    }
+
+    // MARK: - 资讯订阅 / 发现书库（feed_view / feed_import / discover_view / discover_import）
+
+    func testFeedAndDiscoverLineShapes() throws {
+        // feed_view：空 props。
+        let feedView = try lineDict(try TelemetryEvent.feedView().jsonLine(nowMs: nowMs))
+        XCTAssertEqual(feedView["name"] as? String, "feed_view")
+        XCTAssertTrue(try XCTUnwrap(feedView["props"] as? [String: Any]).isEmpty)
+
+        // feed_import：props { host }（发起导入意图口径）。
+        let feedImport = try lineDict(try TelemetryEvent.feedImport(host: "www.nasa.gov").jsonLine(nowMs: nowMs))
+        XCTAssertEqual(feedImport["name"] as? String, "feed_import")
+        let feedImportProps = try XCTUnwrap(feedImport["props"] as? [String: Any])
+        XCTAssertEqual(feedImportProps["host"] as? String, "www.nasa.gov")
+        XCTAssertEqual(Set(feedImportProps.keys), ["host"])
+
+        // discover_view：空 props。
+        let discoverView = try lineDict(try TelemetryEvent.discoverView().jsonLine(nowMs: nowMs))
+        XCTAssertEqual(discoverView["name"] as? String, "discover_view")
+        XCTAssertTrue(try XCTUnwrap(discoverView["props"] as? [String: Any]).isEmpty)
+
+        // discover_import：props { bookId }（入库成功后）。
+        let discoverImport = try lineDict(try TelemetryEvent.discoverImport(bookId: "alice").jsonLine(nowMs: nowMs))
+        XCTAssertEqual(discoverImport["name"] as? String, "discover_import")
+        let discoverImportProps = try XCTUnwrap(discoverImport["props"] as? [String: Any])
+        XCTAssertEqual(discoverImportProps["bookId"] as? String, "alice")
+        XCTAssertEqual(Set(discoverImportProps.keys), ["bookId"])
+    }
+
     private func strictTs(_ value: Any?) throws -> Int64 {
         let number = try XCTUnwrap(value as? NSNumber)
         return number.int64Value
     }
+}
+
+private extension ScenarioGenParseError {
+    static let allCodes: [String] = [
+        ScenarioGenParseError.empty.rawValue, ScenarioGenParseError.noJson.rawValue,
+        ScenarioGenParseError.badJson.rawValue, ScenarioGenParseError.missingRequired.rawValue,
+    ]
 }

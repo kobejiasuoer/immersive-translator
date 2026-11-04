@@ -217,6 +217,46 @@ struct TranslationWaitStatusText {
     }
 }
 
+/// App 层登录态镜像（阅读抽屉等拿不到 AppDelegate 引用的视图订阅；AppDelegate
+/// 启动时把 serverAuth.$status 转发进来，状态语义与 ServerAuthClient 一致）。
+@MainActor
+final class AppAuthStatusCenter: ObservableObject {
+    static let shared = AppAuthStatusCenter()
+    /// nil = 尚未收到首次广播（对应 Windows gatewayLoggedIn 的「读取中…」态）。
+    @Published private(set) var status: AuthStatus?
+
+    func publish(_ next: AuthStatus) {
+        status = next
+    }
+}
+
+/// 旧 xfyun → cloud 迁移允许标志（对齐 Windows readerSettingsStore
+/// resolveLegacyTtsMigrationAllowed：任一讯飞凭据存在或已登录沉浸云，探测失败
+/// 按无；判定一次供全局设置与文章级覆盖共用）。ReaderViewModel 打开阅读窗时
+/// 判定并回写（xctest 无 AppDelegate，探测跳过、迁移不生效）。
+enum LegacyTtsMigration {
+    static var allowed = false
+
+    /// 迁移允许判定（对齐 Windows readerSettingsStore.ts:47-61
+    /// resolveLegacyTtsMigrationAllowed，全局设置与文章级旧覆盖共用）：任一讯飞凭据
+    /// 存在或已登录沉浸云 → 允许；探测失败（抛错）按无该项处理。
+    static func resolveAllowed(
+        hasAnyXfyunCredential: () throws -> Bool,
+        isLoggedIn: () throws -> Bool
+    ) -> Bool {
+        let credentials = (try? hasAnyXfyunCredential()) ?? false
+        let loggedIn = (try? isLoggedIn()) ?? false
+        return shouldMigrateLegacyTtsProvider(
+            .xfyun,
+            signals: LegacyTtsMigrationSignals(hasAnyXfyunCredential: credentials, loggedIn: loggedIn)
+        )
+    }
+
+    static func resetForTests() {
+        allowed = false
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settingsStore = SettingsStore()
@@ -224,7 +264,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 服务端账号（令牌 Keychain 单槽、单飞刷新、启动预填；状态 @Published 供
     /// 设置 chip / 账号分区 / 菜单分流订阅）。
     let serverAuth = ServerAuthClient()
-    private lazy var translator = TranslationClient(settingsStore: settingsStore)
+    /// 沉浸云选中时翻译请求自动携带账号令牌（AuthTokenManager 取票：临期单飞
+    /// 刷新，Windows「到期自动续期」同语义）；其他 provider 不取令牌。
+    private lazy var translator = TranslationClient(
+        settingsStore: settingsStore,
+        accountTokenProvider: { [weak serverAuth] in
+            guard let serverAuth else { return nil }
+            return try? await serverAuth.manager.getAccessToken()
+        }
+    )
     private lazy var panelController = TranslationPanelController(
         settingsStore: settingsStore,
         historyStore: historyStore,
@@ -336,10 +384,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 首启引导窗关闭观察者（一次性：触发后即移除，再手动打开引导不会再弹阅读室）。
     private var onboardingCloseObserver: NSObjectProtocol?
 
+    /// 语音网关运行时接线（应用启动唯一调用点，对齐 Windows main.tsx:11
+    /// installVoiceHttpTransport）：REST 通道 / WSS 工厂 / 能力下发 / 登录态探针。
+    private func installVoiceGatewayRuntime(serverAuth: ServerAuthClient) {
+        VoiceGatewayRuntime.shared.install(
+            http: { method, path, body in
+                try await serverAuth.authorizedRequest(method: method, path: path, body: body)
+            },
+            serverConfig: {
+                try await serverAuth.fetchServerConfig()
+            }
+        )
+        VoiceLoginProbe.provider = { [weak serverAuth] in
+            await MainActor.run { serverAuth?.status.loggedIn ?? false }
+        }
+    }
+
+    /// 登录成功瞬间自动切云（按规格 voice.md §1.1(b) / 验收 #18 与 Windows
+    /// Settings.tsx:170-172 注释写明的意图）：只认交互式登录成功
+    ///（ServerAuthClient.loginSuccessSerial 递增），启动静默续登录不触发——Mac status
+    /// 初值即 loggedOut 且 bootstrap 异步发布 true，纯 loggedIn 边沿会把启动续登录误判
+    /// 成登录瞬间、每次启动把存量讯飞用户切走。
+    /// 与 Windows 实际运行行为并非 1:1（记录待决策）：Windows `loggedIn =
+    /// accountStatus?.loggedIn ?? false`（Settings.tsx:167）把读取中的 null 折成 false，
+    /// useAccountStatus 初值为 null、异步拉到已登录后同样产生 false→true 边沿——已登录
+    /// 用户的设置窗挂载时也会被代切 gateway，与其注释「null→true 不算登录瞬间」不符，
+    /// 属 Windows 侧潜在缺陷，Mac 不复刻。已是 gateway 无感；讯飞凭据原样保留、随时
+    /// 可切回。设置窗口从未打开过也能落盘（规格 §四差异 6），设置窗按
+    /// voiceAutoSwitchNoticeSerial 展示 4s 绿色轻提示。
+    private func observeLoginForVoiceSwitch() {
+        serverAuth.$loginSuccessSerial
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.settingsStore.applyLoginVoiceAutoSwitch()
+            }
+            .store(in: &cancellables)
+        // 登录态镜像：阅读抽屉「音色来源」行等无法拿到 AppDelegate 的视图订阅。
+        serverAuth.$status
+            .sink { AppAuthStatusCenter.shared.publish($0) }
+            .store(in: &cancellables)
+    }
+
+    /// 登录事件后触发学习接力静默同步（对齐 Windows ReaderApp.tsx:1899 的
+    /// auth-state-changed 订阅：`next=status.user?.id??"guest"; if(next===account)return;
+    /// …; if(status.loggedIn) syncLearningRecordsSilently()`）——账号身份变化（游客→A、
+    /// A→B 直切、A→游客）且处于登录态就触发；同账号的重复广播（续登录 / notice
+    /// 变化）早退不触发。dropFirst 对应挂载时以当前账号初始化 account。
+    private func observeLoginForLearningRelay() {
+        learningRelayLoginTriggers(serverAuth.$status)
+            .sink { _ in
+                Task { @MainActor in
+                    _ = await LearningRelaySync.shared.syncLearningRecordsSilently()
+                }
+            }
+            .store(in: &cancellables)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 云同步环境接线（先于 bootstrap：LearningStore 挂到 serverAuth 后，
+        // 启动静默续登录即按 user.id 切命名空间；Windows lib.rs:1493
+        // learning_store::init + auth.rs after_login 的接线顺序对应物）。
+        // 口语记录 speak-sessions/speak-assessments 与兑换码共用 serverAuth 的
+        // withAuth 鉴权传输；存储为 SQLite 权威 LearningStore。
+        SpeakSyncCenter.shared.configure(serverAuth: serverAuth)
         // 启动静默续登录（§4.4）：Keychain 预填 → 广播已登录（离线也显示）→
         // 后台单飞刷新校验存活；fatal 才转未登录。
         serverAuth.bootstrap()
+        // 语音网关运行时接线（Windows main.tsx installVoiceHttpTransport 的 Mac
+        // 对应物，唯一调用点）：REST 经 serverAuth.authorizedRequest（withAuth：
+        // Bearer + 401 单飞刷新重放）；WSS 用 URLSessionWebSocketTask；能力下发
+        // 复用 fetchServerConfig。令牌不出进程（红线 D4/D5 的 Mac 等效物）。
+        installVoiceGatewayRuntime(serverAuth: serverAuth)
+        // 登录自动切云 · 兜底接线（规格 §四差异 6）：设置窗口从未打开时也落盘切
+        // gateway；设置窗打开时其 onChange 负责同一落盘 + 绿色轻提示（幂等）。
+        observeLoginForVoiceSwitch()
+        // 学习接力启动触发（对齐 Windows ReaderApp.tsx:340 挂载即静默同步 +
+        // :1899 登录事件后静默同步）：已登录时 migrate + 按协商同步 7 集合；
+        // 未登录抛「登录后才能同步学习资料」静默吞掉（零网络）。
+        observeLoginForLearningRelay()
+        Task { @MainActor in
+            _ = await LearningRelaySync.shared.syncLearningRecordsSilently()
+        }
+        // 口语场景目录接线（A1）：官方目录缓存 + GET /v1/scenarios 拉取 + 本地
+        // speak-scenarios 用户场景装载进内存注册表；SpeakView 出现时 preload → refresh。
+        ScenarioCatalogService.shared.configure(.production(
+            serverAuth: serverAuth,
+            cacheStore: ScenarioCacheStore(),
+            syncStore: SpeakSyncCenter.shared.records?.store
+        ))
+        // 发现书库接线（B2）：/v1/books 目录与下载的可选 Bearer 取自 serverAuth.manager
+        //（未登录走匿名，端点匿名可读，绝不因取票失败拒绝请求）。
+        DiscoverService.shared.configure(serverAuth: serverAuth)
         configureMenuBar()
         hotKeyManager = HotKeyManager { [weak self] action in
             Task { @MainActor in
@@ -371,18 +506,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let manager = ReviewTouchpointManager.shared
         manager.onDueCountChange = { [weak self] due in
             self?.refreshMenu()
-            if let item = self?.statusItem {
-                if due > 0 {
-                    let title = NSMutableAttributedString(string: "译 ", attributes: [
-                        .font: NSFont.menuBarFont(ofSize: 0),
-                    ])
-                    title.append(NSAttributedString(string: String(due), attributes: [
-                        .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize(for: .small), weight: .bold),
-                        .foregroundColor: NSColor.systemRed,
-                    ]))
-                    item.button?.attributedTitle = title
+            guard let button = self?.statusItem?.button else { return }
+            if let icon = Brand.trayIconImage() {
+                // 角标 = 托盘图标 + 红胶囊白字合成（StatusBarBadge，对齐 Windows
+                // tray_badge.rs「红圆白字、due=0 无角标、上限 999」；规格 tray.md §2.2）。
+                // due=0 时 trayIconWithBadge 返回纯图标副本，归零回归无角标态。
+                button.title = ""
+                button.attributedTitle = NSAttributedString()
+                if let composed = StatusBarBadge.trayIconWithBadge(base: icon, due: due) {
+                    button.image = composed
+                    button.imagePosition = .imageLeft
+                }
+            } else {
+                // 资源缺失兜底（与 configureMenuBar 退回「译」同路径，规格 §2.2 原样）：
+                // 「译」左、胶囊右（Windows 角标在图标右上，Mac 胶囊尾随语义一致）。
+                button.attributedTitle = NSAttributedString()
+                button.title = "译"
+                if due > 0, let badge = StatusBarBadge.badgeImage(due: due) {
+                    button.image = badge
+                    button.imagePosition = .imageTrailing
                 } else {
-                    item.button?.title = "译"
+                    button.image = nil
                 }
             }
         }
@@ -403,7 +547,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 到期角标高频刷新时尤其明显（对齐 Windows TrayHandles 存句柄只 set_icon/set_text）。
         if statusItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-            item.button?.title = "译"
+            // 菜单栏按钮图标（对齐 Windows 托盘 lib.rs:1518-1520 用 app 图标实物）：
+            // 18pt 彩色「书页对话」非模板图。到期角标由 onDueCountChange 以
+            // StatusBarBadge.trayIconWithBadge 合成（图标左 + 红胶囊右），此处只放纯图标。
+            if let trayIcon = Brand.trayIconImage() {
+                item.button?.image = trayIcon
+                item.button?.imagePosition = .imageLeft
+            } else {
+                // 资源缺失兜底：退回「译」文字，菜单栏不空白。
+                item.button?.title = "译"
+            }
             // 菜单栏按钮 tooltip（对齐 Windows 托盘 TrayIconBuilder tooltip）：品牌名常驻。
             item.button?.toolTip = "沉浸口语"
             statusItem = item
@@ -411,32 +564,104 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildStatusMenu()
     }
 
-    /// 只重建菜单内容并赋给既有 status item；不触碰 button（角标 attributedTitle
+    /// 只重建菜单内容并赋给既有 status item；不触碰 button（角标合成图
     /// 由 onDueCountChange 维护，重赋菜单不能把它冲掉）。
     private func rebuildStatusMenu() {
         guard let item = statusItem else { return }
 
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "翻译选中文本  \(settingsStore.selectionHotKeyShortcut.title)", action: #selector(menuTranslateSelection), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "截图 OCR 翻译  \(settingsStore.ocrHotKeyShortcut.title)", action: #selector(menuTranslateScreenshot), keyEquivalent: ""))
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "沉浸阅读室  \(settingsStore.readerHotKeyShortcut.title)", action: #selector(openReader), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "生词本...", action: #selector(openVocabReview), keyEquivalent: ""))
-        let quickTitle = ReviewTouchpointManager.shared.dueCount > 0
-            ? "快速复习（\(ReviewTouchpointManager.shared.dueCount) 到期）" : "快速复习"
-        menu.addItem(NSMenuItem(title: quickTitle, action: #selector(openQuickReview), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "录音直译...", action: #selector(toggleLiveCaption), keyEquivalent: ""))
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "账号登录...", action: #selector(openAccount), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "翻译历史...", action: #selector(openHistory), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "检查更新...", action: #selector(menuCheckForUpdates), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "设置...", action: #selector(openSettings), keyEquivalent: ","))
-        menu.addItem(NSMenuItem(title: "使用引导", action: #selector(showOnboarding), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "检查权限", action: #selector(checkPermissions), keyEquivalent: ""))
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q"))
+        for entry in Self.statusMenuEntries(
+            selectionShortcut: settingsStore.selectionHotKeyShortcut,
+            ocrShortcut: settingsStore.ocrHotKeyShortcut,
+            readerShortcut: settingsStore.readerHotKeyShortcut,
+            dueCount: ReviewTouchpointManager.shared.dueCount
+        ) {
+            switch entry.kind {
+            case .separator:
+                menu.addItem(.separator())
+            case .action(let title, let selector, let key, let modifiers):
+                let menuItem = NSMenuItem(title: title, action: selector, keyEquivalent: key ?? "")
+                // modifiers 为 nil 保留 NSMenuItem 默认 .command（设置 ⌘, / 退出 ⌘Q）。
+                if let modifiers {
+                    menuItem.keyEquivalentModifierMask = modifiers
+                }
+                menu.addItem(menuItem)
+            }
+        }
         menu.items.forEach { $0.target = self }
         item.menu = menu
+    }
+
+    // MARK: 状态栏菜单结构（Windows §8.1 对齐，规格 docs/mac-ui-fix-specs-2026-11-02/tray.md §2.1）
+
+    /// 菜单条目纯数据（rebuildStatusMenu 的唯一数据源，测试据此锚定文案/顺序/分组）。
+    struct StatusMenuEntry: Equatable {
+        enum Kind: Equatable {
+            /// 动作项：key/modifiers 非 nil → 原生 keyEquivalent 渲染（右对齐等宽字形）；
+            /// nil → 无快捷键提示（modifiers nil 保留 NSMenuItem 默认 .command，
+            /// 「设置 ⌘,」「退出 ⌘Q」即走此路径）。
+            case action(title: String, selector: Selector, key: String?, modifiers: NSEvent.ModifierFlags?)
+            case separator
+        }
+        let kind: Kind
+    }
+
+    /// Windows §8.1（docs/reading-room-handoff.md）：**分隔线分两组**——上组「动作」
+    /// （对当前内容做点什么）、下组「窗口/应用」（打开某个界面）。结构：
+    /// 动作组六项（无内部分隔）→ 分隔线（Windows 组界）→ 入口组六项 →
+    /// 分隔线（macOS 防误触惯例，平台差异 tray.md §4-4）→ 退出。
+    /// 文案逐字对齐 Windows lib.rs:1502-1510（无「...」后缀、阅读室不简写）；
+    /// Windows 相对顺序逐项保持，Mac 独有项按功能就近插入。
+    static func statusMenuEntries(
+        selectionShortcut: HotKeyShortcut,
+        ocrShortcut: HotKeyShortcut,
+        readerShortcut: HotKeyShortcut,
+        dueCount: Int
+    ) -> [StatusMenuEntry] {
+        var entries: [StatusMenuEntry] = []
+        // ── 动作组 ──
+        entries.append(hotKeyEntry("翻译选中文本", shortcut: selectionShortcut, selector: #selector(AppDelegate.menuTranslateSelection)))
+        entries.append(hotKeyEntry("截图翻译 (OCR)", shortcut: ocrShortcut, selector: #selector(AppDelegate.menuTranslateScreenshot)))
+        // 动态文案（对齐 Windows review_reminder.rs:147-152 逐字）。
+        entries.append(StatusMenuEntry(kind: .action(
+            title: dueCount > 0 ? "快速复习（\(dueCount) 到期）" : "快速复习",
+            selector: #selector(AppDelegate.openQuickReview),
+            key: nil,
+            modifiers: nil
+        )))
+        entries.append(StatusMenuEntry(kind: .action(title: "生词本", selector: #selector(AppDelegate.openVocabReview), key: nil, modifiers: nil)))
+        entries.append(StatusMenuEntry(kind: .action(title: "录音直译", selector: #selector(AppDelegate.toggleLiveCaption), key: nil, modifiers: nil)))
+        entries.append(hotKeyEntry("沉浸阅读室", shortcut: readerShortcut, selector: #selector(AppDelegate.openReader)))
+        entries.append(StatusMenuEntry(kind: .separator))
+        // ── 入口组 ──
+        entries.append(StatusMenuEntry(kind: .action(title: "账号登录", selector: #selector(AppDelegate.openAccount), key: nil, modifiers: nil)))
+        entries.append(StatusMenuEntry(kind: .action(title: "翻译历史", selector: #selector(AppDelegate.openHistory), key: nil, modifiers: nil)))
+        entries.append(StatusMenuEntry(kind: .action(title: "检查更新", selector: #selector(AppDelegate.menuCheckForUpdates), key: nil, modifiers: nil)))
+        entries.append(StatusMenuEntry(kind: .action(title: "设置", selector: #selector(AppDelegate.openSettings), key: ",", modifiers: nil)))
+        entries.append(StatusMenuEntry(kind: .action(title: "使用引导", selector: #selector(AppDelegate.showOnboarding), key: nil, modifiers: nil)))
+        entries.append(StatusMenuEntry(kind: .action(title: "检查权限", selector: #selector(AppDelegate.checkPermissions), key: nil, modifiers: nil)))
+        entries.append(StatusMenuEntry(kind: .separator))
+        entries.append(StatusMenuEntry(kind: .action(title: "退出", selector: #selector(AppDelegate.quit), key: "q", modifiers: nil)))
+        return entries
+    }
+
+    /// 热键动作项：可映射 → 原生 keyEquivalent + 纯文案标题（右对齐）；不可映射
+    /// → 回落「标题 + 两空格 + hint」内嵌兜底（旧行为）。
+    private static func hotKeyEntry(_ title: String, shortcut: HotKeyShortcut, selector: Selector) -> StatusMenuEntry {
+        if let equivalent = shortcut.menuKeyEquivalent() {
+            return StatusMenuEntry(kind: .action(
+                title: title,
+                selector: selector,
+                key: equivalent.character,
+                modifiers: equivalent.modifiers
+            ))
+        }
+        return StatusMenuEntry(kind: .action(
+            title: "\(title)  \(shortcut.title)",
+            selector: selector,
+            key: nil,
+            modifiers: nil
+        ))
     }
 
     /// 菜单刷新入口（到期数变化 / 热键设置变化）：原地复用 status item，无重建位移。
@@ -553,6 +778,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsController.showAccountSection()
     }
 
+    /// 语音页配额耗尽的「兑换更多额度」动作位：打开设置账号分区并定位兑换码卡
+    /// （Windows settingsOpenTab("account") + Settings.openAccountRedeem 对应物；
+    /// SpeakView 错误位与主窗 toast 动作共用本入口）。
+    func openAccountRedeem() {
+        settingsController.showAccountRedeemSection()
+    }
+
     /// 第二实例启动时由 SingleInstanceGuard 激活通知触发：前置设置窗
     /// （Windows 同款：聚焦 settings 窗）。
     func activateForSecondInstance() {
@@ -615,6 +847,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// settingsStore 不持有设置窗引用，仿 openReaderFromTouchpoint 先例经
     /// NSApp.delegate 消费（ReaderViewModel.openSettingsToastAction）。
     func openSettingsFromReader() {
+        openSettings()
+    }
+
+    /// 阅读抽屉云音色行「去语音页配置/登录」：打开设置并直达「语音」分区
+    /// （Windows settingsOpenTab("voice") 对应物）。
+    func openVoiceSettings() {
+        SettingsSectionRequest.shared.request(.voice)
         openSettings()
     }
 
@@ -2043,6 +2282,12 @@ private struct TranslationErrorRecovery {
             return TranslationErrorRecovery(
                 statusMessage: "缺少 API Key",
                 settingsTitle: "检查 API Key",
+                allowsRetry: false
+            )
+        case .platformNotLoggedIn:
+            return TranslationErrorRecovery(
+                statusMessage: "未登录沉浸云",
+                settingsTitle: "登录沉浸云",
                 allowsRetry: false
             )
         case .invalidEndpoint:

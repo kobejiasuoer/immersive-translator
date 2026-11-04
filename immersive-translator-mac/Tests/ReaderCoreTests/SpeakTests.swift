@@ -6,25 +6,25 @@ import XCTest
 
 final class SpeakTests: XCTestCase {
     func testScenarioAndDifficultyLookup() {
-        XCTAssertEqual(scenarioOf(.ordering).label, "点餐")
-        XCTAssertEqual(scenarioOf(.travel).emoji, "✈️")
+        XCTAssertEqual(scenarioOf("ordering").title, "点餐")
+        XCTAssertEqual(scenarioOf("travel").emoji, "✈️")
         XCTAssertEqual(difficultyOf(.hard).label, "进阶")
         XCTAssertEqual(difficultyOf(.easy).note.contains("简单"), true)
     }
 
     func testNewSpeakSessionOpensWithAssistantOpener() {
-        let s = newSpeakSession(.interview, .medium, now: 1000)
+        let s = newSpeakSession("interview", .medium, now: 1000)
         XCTAssertEqual(s.turns.count, 1)
         XCTAssertEqual(s.turns[0].role, .assistant)
-        XCTAssertEqual(s.turns[0].text, scenarioOf(.interview).opener)
-        XCTAssertEqual(s.turns[0].hintZh, scenarioOf(.interview).openerZh)
+        XCTAssertEqual(s.turns[0].text, scenarioOf("interview").opener)
+        XCTAssertEqual(s.turns[0].hintZh, scenarioOf("interview").openerZh)
         XCTAssertTrue(s.id.hasPrefix("s"))
         XCTAssertEqual(s.createdAt, 1000)
         XCTAssertNil(s.context)
     }
 
     func testBuildSpeakSystemPromptContainsScenarioBrief() {
-        let prompt = buildSpeakSystemPrompt(.ordering, .easy)
+        let prompt = buildSpeakSystemPrompt("ordering", .easy)
         XCTAssertTrue(prompt.contains("服务员"))
         XCTAssertTrue(prompt.contains("最简单"))
         XCTAssertTrue(prompt.contains("\"EN: \""))
@@ -171,9 +171,9 @@ final class SpeakTests: XCTestCase {
 
     func testNewSpeakSessionWithContextKeepsContext() {
         let ctx = SpeakSessionContext.vocab(wordIds: ["w1", "w2"])
-        let s = newSpeakSession(.smalltalk, .easy, now: 42, context: ctx)
+        let s = newSpeakSession("smalltalk", .easy, now: 42, context: ctx)
         XCTAssertEqual(s.context, ctx)
-        XCTAssertEqual(s.turns[0].text, scenarioOf(.smalltalk).opener)  // 静态开场白；插值版由调用方替换
+        XCTAssertEqual(s.turns[0].text, scenarioOf("smalltalk").opener)  // 静态开场白；插值版由调用方替换
     }
 
     func testSpeakContextOpenerBookAndVocab() {
@@ -193,7 +193,7 @@ final class SpeakTests: XCTestCase {
 
     func testBuildSpeakSystemPromptWithBookContext() {
         let prompt = buildSpeakSystemPrompt(
-            .smalltalk, .medium,
+            "smalltalk", .medium,
             context: .book(bookTitle: "Dune", chapterArticleId: "a9", chapterIdx: 4, excerpt: ["The spice must flow.", "Fear is the mind-killer."]),
             targets: [SpeakContextTarget(word: "spice", zh: "香料"), SpeakContextTarget(word: "fear", zh: "恐惧")]
         )
@@ -206,7 +206,7 @@ final class SpeakTests: XCTestCase {
 
     func testBuildSpeakSystemPromptWithVocabContext() {
         let prompt = buildSpeakSystemPrompt(
-            .smalltalk, .easy,
+            "smalltalk", .easy,
             context: .vocab(wordIds: ["x1"]),
             targets: [SpeakContextTarget(word: "resilient", zh: "有弹性的")]
         )
@@ -216,7 +216,7 @@ final class SpeakTests: XCTestCase {
     }
 
     func testBuildSpeakSystemPromptWithoutContextHasNoContextLines() {
-        let prompt = buildSpeakSystemPrompt(.ordering, .medium)
+        let prompt = buildSpeakSystemPrompt("ordering", .medium)
         XCTAssertFalse(prompt.contains("本次对话语境"))
         XCTAssertFalse(prompt.contains("目标词块"))
     }
@@ -314,13 +314,13 @@ final class SpeakTests: XCTestCase {
 
     func testSpeakSceneTitleContextAware() {
         let book = SpeakSession(
-            id: "s1", scenario: .smalltalk, difficulty: .medium, turns: [], createdAt: 1, updatedAt: 1,
+            id: "s1", scenario: "smalltalk", difficulty: .medium, turns: [], createdAt: 1, updatedAt: 1,
             context: .book(bookTitle: "Dune", chapterArticleId: "a", chapterIdx: 1, excerpt: [])
         )
         XCTAssertEqual(speakSceneTitle(book), "聊刚读的《Dune》第 2 章")
-        let vocab = SpeakSession(id: "s2", scenario: .smalltalk, difficulty: .easy, turns: [], createdAt: 1, updatedAt: 1, context: .vocab(wordIds: []))
+        let vocab = SpeakSession(id: "s2", scenario: "smalltalk", difficulty: .easy, turns: [], createdAt: 1, updatedAt: 1, context: .vocab(wordIds: []))
         XCTAssertEqual(speakSceneTitle(vocab), "今日生词造句闯关")
-        let plain = SpeakSession(id: "s3", scenario: .interview, difficulty: .hard, turns: [], createdAt: 1, updatedAt: 1)
+        let plain = SpeakSession(id: "s3", scenario: "interview", difficulty: .hard, turns: [], createdAt: 1, updatedAt: 1)
         XCTAssertEqual(speakSceneTitle(plain), "英文面试")
     }
 
@@ -340,7 +340,7 @@ final class SpeakTests: XCTestCase {
         var turn = SpeakTurn(role: .assistant, text: "Hello", hintZh: "你好", at: 42)
         turn.shadowScore = 4.3
         let session = SpeakSession(
-            id: "s1", scenario: .smalltalk, difficulty: .hard,
+            id: "s1", scenario: "smalltalk", difficulty: .hard,
             turns: [turn, SpeakTurn(role: .user, text: "hi", at: 43)],
             createdAt: 42, updatedAt: 43
         )
@@ -376,7 +376,7 @@ final class SpeakTests: XCTestCase {
         let book: SpeakSessionContext = .book(bookTitle: "Dune", chapterArticleId: "a", chapterIdx: 2, excerpt: ["x", "y"])
         let vocab: SpeakSessionContext = .vocab(wordIds: ["w1"])
         for ctx in [book, vocab] {
-            let session = SpeakSession(id: "s", scenario: .smalltalk, difficulty: .easy, turns: [], createdAt: 1, updatedAt: 1, context: ctx)
+            let session = SpeakSession(id: "s", scenario: "smalltalk", difficulty: .easy, turns: [], createdAt: 1, updatedAt: 1, context: ctx)
             let data = try JSONEncoder().encode(session)
             let back = try JSONDecoder().decode(SpeakSession.self, from: data)
             XCTAssertEqual(back.context, ctx)

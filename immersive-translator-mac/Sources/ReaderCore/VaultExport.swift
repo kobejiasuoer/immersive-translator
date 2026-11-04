@@ -187,3 +187,53 @@ public func buildVaultMarkdown(
     while let last = lines.last, last.isEmpty { lines.removeLast() }
     return lines.joined(separator: "\n")
 }
+
+// MARK: - 导出范围预过滤（2026-10-26 改版 ExportStage，VaultPage.tsx:1131-1176）
+//
+// 范围 chips（本周 / 今天 / 全部）只在调用侧预过滤 words（addedAt）与 speakSessions
+//（createdAt）再喂 buildVaultMarkdown——纯函数与三段结构零改动。
+// 「包含」chips（原句 / 释义 / 音标 / 用法提示）只作用于预览渲染层，不进本模块。
+
+/// 导出范围：week 本周（最近 7 天，默认）/ today 今天 / all 全部。
+public enum VaultExportScope: String, Equatable, CaseIterable {
+    case week
+    case today
+    case all
+
+    /// 范围 chip 文案（EXP_SCOPES）。
+    public var label: String {
+        switch self {
+        case .week: return "本周（最近 7 天）"
+        case .today: return "今天"
+        case .all: return "全部"
+        }
+    }
+}
+
+private let vaultExportWeekMs: Int64 = 7 * 24 * 60 * 60 * 1000
+
+/// 时间戳是否落在范围内：today 按本地日键相等；week 按 now − 7 天起算。
+func vaultExportInScope(_ ts: Int64, scope: VaultExportScope, nowMs: Int64) -> Bool {
+    switch scope {
+    case .all: return true
+    case .today: return dayKey(nowMs: ts) == dayKey(nowMs: nowMs)
+    case .week: return ts >= nowMs - vaultExportWeekMs
+    }
+}
+
+/// 词条按 addedAt 预过滤。
+public func filterVaultExportWords(_ words: [VocabWord], scope: VaultExportScope, nowMs: Int64) -> [VocabWord] {
+    guard scope != .all else { return words }
+    return words.filter { vaultExportInScope($0.addedAt, scope: scope, nowMs: nowMs) }
+}
+
+/// 口语会话按 createdAt 预过滤。
+public func filterVaultExportSessions(_ sessions: [SpeakSession], scope: VaultExportScope, nowMs: Int64) -> [SpeakSession] {
+    guard scope != .all else { return sessions }
+    return sessions.filter { vaultExportInScope($0.createdAt, scope: scope, nowMs: nowMs) }
+}
+
+/// 保存文件名：`{dateKey}-学习笔记.md`（Windows saveTextFile 同名）。
+public func vaultExportFileName(dateKey: String) -> String {
+    "\(dateKey)-学习笔记.md"
+}

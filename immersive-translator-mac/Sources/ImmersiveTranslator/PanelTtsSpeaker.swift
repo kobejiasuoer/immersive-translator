@@ -84,6 +84,42 @@ final class PanelTtsSpeaker: NSObject, ObservableObject, AVAudioPlayerDelegate, 
             speakCloud(gen: gen) { try await XfyunTtsEngine.shared.audioData(for: clean) }
         case .edge:
             speakCloud(gen: gen) { try await EdgeTtsEngine.shared.audioData(for: clean) }
+        case .cloud:
+            // 云音色档：跟随语音页 voiceProvider（外围消费点，网关化属后续批次；
+            // 守卫不过按裁决落 edge/本地，不弹网关回落提示）。
+            speakCloudRouted(clean: clean, chinese: chinese, gen: gen)
+        }
+    }
+
+    /// 云音色档路由：网关整段合成 / 讯飞（缺凭据归因）/ Edge / 本地系统语音。
+    private func speakCloudRouted(clean: String, chinese: Bool, gen: Int) {
+        cloudTask = Task { [weak self] in
+            guard let self else { return }
+            switch await CloudTtsRouter.route(xfyunReady: XfyunTtsEngine.shared.isReady) {
+            case .gateway:
+                do {
+                    let data = try await CloudTtsRouter.gatewayAudioData(text: clean)
+                    guard gen == self.generation, !Task.isCancelled else { return }
+                    try self.play(data: data, gen: gen)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    self.failSpeaking(gen: gen, error: error)
+                }
+            case .xfyun:
+                guard XfyunTtsEngine.shared.isReady else {
+                    self.failSpeaking(
+                        gen: gen,
+                        error: XfyunSessionError.business(code: -1, message: "讯飞合成凭据未配置（设置 → 语音）")
+                    )
+                    return
+                }
+                self.speakCloud(gen: gen) { try await XfyunTtsEngine.shared.audioData(for: clean) }
+            case .edge:
+                self.speakCloud(gen: gen) { try await EdgeTtsEngine.shared.audioData(for: clean) }
+            case .local:
+                self.speakLocal(clean, chinese: chinese, gen: gen)
+            }
         }
     }
 

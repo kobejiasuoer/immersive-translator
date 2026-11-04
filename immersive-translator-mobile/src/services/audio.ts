@@ -12,6 +12,7 @@
  * 拒绝授权 → 返回 null，由调用方显示真实拒权态或文字输入。
  */
 import { invoke } from "./device";
+import { beginAudioRecording, isAudioRecordingActive } from "./webAudioSession";
 
 export interface CaptureOpts {
   /** 平滑电平回调（0..1，约每 128ms 一次）。 */
@@ -256,6 +257,7 @@ function assemble(state: CaptureState): CaptureStopResult {
  * iOS Safari 需在用户手势内调用（AudioContext resume）。
  */
 export async function startPcmCapture(opts: CaptureOpts = {}): Promise<Capture | null> {
+  const releaseRecording = beginAudioRecording();
   let stream: MediaStream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -266,6 +268,7 @@ export async function startPcmCapture(opts: CaptureOpts = {}): Promise<Capture |
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
+      releaseRecording();
       return null;
     }
   }
@@ -274,7 +277,13 @@ export async function startPcmCapture(opts: CaptureOpts = {}): Promise<Capture |
   try {
     ctx = new AudioContext({ sampleRate: TARGET_RATE });
   } catch {
-    ctx = new AudioContext(); // 实际非 16k → 处理器内重采样
+    try {
+      ctx = new AudioContext(); // 实际非 16k → 处理器内重采样
+    } catch (error) {
+      stream.getTracks().forEach((track) => track.stop());
+      releaseRecording();
+      throw error;
+    }
   }
   try {
     await ctx.resume(); // iOS 手势内解锁
@@ -393,10 +402,9 @@ export async function startPcmCapture(opts: CaptureOpts = {}): Promise<Capture |
     } catch {
       /* 已关闭 */
     }
-    /* 录音后重设 playback 音频会话（治「录完就播全无声」）：WebKit 录音时把会话切到
-       PlayAndRecord，停止后的自动恢复有竞态窗——录制刚停就播的云 TTS（陪练句队）
-       会掉进听筒路由/中断态。fire-and-forget：浏览器/失败均静默（会话设置幂等）。 */
-    await invoke("restore_playback_audio");
+    // Release WebKit's recording override before restoring the native playback session.
+    releaseRecording();
+    if (!isAudioRecordingActive()) await invoke("restore_playback_audio");
   }
   function teardown(flushWorklet: boolean): Promise<void> {
     if (!teardownFlight) teardownFlight = performTeardown(flushWorklet);

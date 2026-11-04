@@ -6,16 +6,19 @@
  *  · 首次打开只提供明确的入门样文，不制造收藏、练习或复习历史。
  */
 import { useSyncExternalStore } from "react";
-import type { Article, VocabWord } from "./core/types";
+import type { Article, SentenceParseContent, VocabWord } from "./core/types";
 import { createPersistence, type Repository, type CommitInput } from "./core/persistence";
 import { canonicalJson, initialSrs, mergePracticeTask, reduceReviewEvents, stampPracticeTask, type ReviewEvent } from "../../packages/learning-core/src/index";
 import type { PracticeTask } from "./services/practice";
 import type { SpeakSession } from "./core/sessions";
 import type { GlossaryPair } from "./core/glossary";
-import { DEMO_SLOW, DEMO_TREES, type ChatTurn } from "./core/demo";
+import { DEMO_STARTER, type ChatTurn } from "./core/demo";
+import { curatedFeedDocs } from "./core/curated";
 import { type ReviewGrade } from "./core/srs";
-import { haptic, invokeRaw, isTauri, reportDiag, scheduleDailyReminder } from "./services/device";
-import { cloudAvailable, speakCloud } from "./services/voice";
+import { haptic, isTauri, reportDiag } from "./services/device";
+import { prepareAudioPlayback, speakCloud, voiceErrorText } from "./services/voice";
+import { cloudState } from "./services/cloud";
+import { ensureAccount } from "./services/authGate";
 
 export type Theme = "light" | "dark";
 export type ThemePref = Theme | "system";
@@ -25,31 +28,39 @@ export interface ReaderPrefs {
   mode: "bi" | "en" | "zh";
   mask: boolean;
   fs: number;
-  topic: "paper" | "black";
+  /** 阅读主题档（visual-theme-cleanup：第三档 sepia=纸书暖黄，经运行所有者授权扩联合）。
+      旧持久化数据只有 paper/black，纯放宽无迁移；sepia 由 App 级 data-theme=sepia 全局生效。 */
+  topic: "paper" | "sepia" | "black";
   chunkMark: boolean;
   rate: number;
+  /** 阅读行距档（原型阅读设置口径：1.55 紧凑 / 1.78 舒适 / 2 宽松）。 */
+  lh: number;
+  /** 阅读新手引导条已收起（原型 APP.ui.coachDismissed；持久化避免每次进阅读器复现）。 */
+  coachDismissed?: boolean;
 }
 
 export interface Settings {
   themePref: ThemePref;
   provider: string;
-  /** API Key 已入系统钥匙串（真机）：true 时 localStorage 不再落明文（persistable 置空） */
+  /** 旧供应商设置兼容字段；不再使用，迁移时清空。 */
   keyStored: boolean;
-  /** API Key 仅在内存和当前资料的系统钥匙串中保存。 */
+  /** 旧版字段，移动端不使用个人服务密钥。 */
   apiKey: string;
   /** 接口地址覆盖；空 = 用 provider 预设（custom 时必填） */
   baseUrl: string;
   /** 模型名覆盖；空 = 用 provider 预设 */
   model: string;
-  /** 讯飞三件套（语音链路）；三件是否已入系统钥匙串：true 时 localStorage 不落明文（U-11 与模型 Key 同路径） */
+  /** 旧版语音凭据兼容字段；迁移时清空。 */
   voiceAppId: string;
   voiceApiKey: string;
   voiceApiSecret: string;
   voiceKeyStored: boolean;
-  /** 云朗读引擎：edge = 微软 Edge 在线（神经音色，免费无凭据，默认）；xfyun = 讯飞合成（需三件套） */
+  /** 旧供应商字段仅保留快照兼容，移动端不再读取或使用。 */
   ttsEngine: "edge" | "xfyun";
-  /** Edge 音色 ShortName；空 = 按文本语言自动（中文晓晓 / 英文 Ava） */
+  /** 旧音色设置兼容字段；声音改由 ttsVoice 决定。 */
   edgeVoice: string;
+  /** 服务器下发的声音 ID；空值使用服务器默认声音。 */
+  ttsVoice: string;
   conn: "idle" | "loading" | "ok" | "fail";
   connMsg: string;
   dir: "e2c" | "c2e" | "auto";
@@ -87,6 +98,14 @@ export interface NoteItem {
   sourceSentenceIdx?: number;
 }
 
+/** 我的场景（speaking-parity）：名称 ≤32 + 想说清楚什么 ≤120，按「目标/细节/问题」三步生成练习。 */
+export interface CustomScene {
+  id: string;
+  title: string;
+  goal: string;
+  createdAt: number;
+}
+
 export interface DictSenses {
   pos: string;
   cn: string;
@@ -98,6 +117,7 @@ export interface DictEntry {
   chunkType?: string;
   phonetic?: string;
   senses: DictSenses[];
+  example?: string;
   pattern?: string;
   trap?: string;
   sentence?: string;
@@ -159,6 +179,8 @@ export interface AppState {
   articles: Article[];
   /** 阅读进度：articleId → 已读到的句 idx（#42 断点续读） */
   progress: Record<string, number>;
+  /** 完成必须由用户明确确认，与阅读断点独立保存。 */
+  readingCompleted: Record<string, boolean>;
   settings: Settings;
   history: HistoryItem[];
   notes: NoteItem[];
@@ -171,8 +193,6 @@ export interface AppState {
   readerTarget: { articleId: string; sent: number; nonce: number } | null;
   /** 阅读内打开的文章 id（词典卡原句/分享等需要知道上下文） */
   readingArticleId: string | null;
-  /** 应用内通知横幅（60s 自动收起由 App 计时，§3.14） */
-  banner: { title: string; body: string; at: number } | null;
   /** 最近一次评分（5s 撤销用，治 I7）；counted=本次评分是否计入了当日清卡数（回流卡不重复计）；
       wasTrap=本次评分是否计入过 week.trap（撤销时同步回滚，治 state-7 虚高）；
       prevWrongAt=评分前该词的 lastWrongAt（撤销时还原判错标记，治 ux-cross-1）。 */
@@ -183,8 +203,17 @@ export interface AppState {
   shareIn: { text: string; source: string } | null;
   /** 诊断事件环形队列（上限 30，不落盘；registerDiagSink → pushDiag） */
   diag: DiagItem[];
-  /** 「今晚不再提醒」snooze 时间戳：showBanner 当晚（自然日口径）不再弹，次日恢复；随状态持久化 */
-  snoozedAt: number;
+  /** 句级译文覆盖（本地 profile 专属，随快照持久化；不进云同步集合、不改 reading-articles schemaVersion）：
+   *  articleId → 句 idx（字符串键）→ 用户改定的译文。 */
+  sentenceZh: Record<string, Record<string, string>>;
+  /** 当日实际到达的句子；跨日重新去重，跳读不补计中间未读句。 */
+  readLog: { day: string; count: number; seen: Record<string, number[]> };
+  sentenceParseCache: Record<string, Record<string, { en: string; result: SentenceParseContent }>>;
+  /** 我的场景（speaking-parity · 本地 profile 专属，随快照持久化，不进云同步集合）。 */
+  customScenes: CustomScene[];
+  /** 已订阅的精选资讯源 id（proto-parity · 原型 APP.feeds，html:1579）：本地 profile 专属，
+      随快照持久化、不进云同步集合；订阅即把该源样例文档（core/curated.ts）加入书架。 */
+  curatedFeeds: string[];
 }
 
 /* ---------- 演示初值（标注演示口径；仅供首次启动/跳过 Onboarding） ---------- */
@@ -215,11 +244,14 @@ function demoState(): AppState {
     tab: "today",
     vocab: [],
     tasks: [], reviewEvents: [], sessions: [], glossary: [], speakDifficulty: "easy",
-    articles: [DEMO_TREES, DEMO_SLOW].map(a => ({ ...a, sourceType: "sample" as const })),
+    /* 首启书架内容种子：原型 DOCUMENTS.starter「A Small Break」（proto-parity-2026-11-01，
+       html:1524）——read-fresh 态书架为空（我的内容不渲染）、hero 预览与「开始这篇短文」同源。 */
+    articles: [{ ...DEMO_STARTER, sourceType: "sample" as const }],
     progress: {},
+    readingCompleted: {},
     settings: {
       themePref: "system",
-      provider: "openai",
+      provider: "account",
       keyStored: false,
       apiKey: "",
       baseUrl: "",
@@ -230,6 +262,7 @@ function demoState(): AppState {
       voiceKeyStored: false,
       ttsEngine: "edge",
       edgeVoice: "",
+      ttsVoice: "",
       conn: "idle",
       connMsg: "",
       dir: "e2c",
@@ -240,52 +273,37 @@ function demoState(): AppState {
       daily: false,
       dnd: false,
       remindTime: "21:30",
-      goal: "读外刊与原版书",
+      /* 学习方向默认值随原型 createState goal:'daily'（mobile-accepted-2026-10-29.html:1577）；
+         旧持久值「读外刊与原版书」等由 GoalSheet 的 GOAL_LEGACY 映射到新三方向 */
+      goal: "日常表达",
     },
-    /* 统计基线归零（治 demo 14/15）：不再播种演示历史与虚高统计；DEMO_VOCAB/DEMO_TREES/DEMO_SLOW 为内容种子保留 */
+    /* 统计基线归零（治 demo 14/15）：不再播种演示历史与虚高统计；DEMO_VOCAB/DEMO_STARTER 为内容种子保留 */
     history: [],
     notes: [],
     stats: { clearedToday: 0, clearedIds: [], streak: 0, week: { review: 0, add: 0, trap: 0 }, day: todayKey(), weekKey: isoWeekKey() },
-    reader: { mode: "bi", mask: false, fs: 19, topic: "paper", chunkMark: true, rate: 1 },
+    /* rate 默认 0.85×：原型 createState settings.speed（html:1578）与播放条语速胶囊一致 */
+    reader: { mode: "bi", mask: true, fs: 18, topic: "paper", chunkMark: true, rate: 0.85, lh: 1.78 },
     sheet: null,
     trash: null,
     /* 剪贴板默认空（§3.1「检测到新文本才显示」）——不再无条件塞演示 CLIP，空态今天页剪贴板块随之隐藏（治 P-06） */
     clip: null,
     readerTarget: null,
     readingArticleId: null,
-    banner: null,
     lastGrade: null,
     remaskAt: 0,
     shareIn: null,
     diag: [],
-    snoozedAt: 0,
+    sentenceZh: {},
+    readLog: { day: todayKey(), count: 0, seen: {} },
+    sentenceParseCache: {},
+    customScenes: [],
+    curatedFeeds: [],
   };
 }
 
 /* ---------- 持久化（版本化 hydrate；旧版本/坏数据 → 演示态） ---------- */
 const STORE_KEY = "ita.v3.state";
-const STORE_VERSION = 4;
-/** API Key 的钥匙串条目 key（Rust keychain.rs service="ita.secrets"，account 即此值）。 */
-const KEYCHAIN_APIKEY = "apiKey";
-/** 讯飞三件套的钥匙串条目 key（U-11：与模型 Key 同路径，不再明文落 localStorage）。 */
-const KEYCHAIN_VOICE_APPID = "voiceAppId";
-const KEYCHAIN_VOICE_KEY = "voiceApiKey";
-const KEYCHAIN_VOICE_SECRET = "voiceApiSecret";
-let credentialQueue: Promise<unknown> = Promise.resolve();
-const profileSecret = (identity: string, key: string) => `mobile.profile.${encodeURIComponent(identity)}.${key}`;
-function credentialWork<T>(work: () => Promise<T>): Promise<T> {
-  const next = credentialQueue.catch(() => undefined).then(work); credentialQueue = next; return next;
-}
-async function readCredential(identity: string, key: string): Promise<string | null> {
-  return credentialWork(async () => {
-    const scoped = profileSecret(identity, key);
-    const value = await invokeRaw<string | null>("secret_get", { key: scoped });
-    if (value !== null || identity !== "guest") return value;
-    const legacy = await invokeRaw<string | null>("secret_get", { key });
-    if (legacy !== null) { await invokeRaw("secret_put", {key: scoped, value: legacy}); await invokeRaw("secret_delete", {key}); }
-    return legacy;
-  });
-}
+const STORE_VERSION = 5;
 
 function persistable(s: AppState) {
   return {
@@ -296,6 +314,7 @@ function persistable(s: AppState) {
     vocab: s.vocab,
     articles: s.articles,
     progress: s.progress,
+    readingCompleted: s.readingCompleted,
     /* Secrets never enter the snapshot, including browser preview and failed Keychain writes. */
     settings: {
       ...s.settings,
@@ -312,13 +331,18 @@ function persistable(s: AppState) {
     clip: s.clip,
     /* 诊断汇落盘（尾部 30 条）：真机问题要拔线拉库看，仅会话内等于没埋仪器 */
     diag: s.diag.slice(-30),
-    /* snooze 需跨重启生效（当晚不再弹）；shareIn 仅会话内，不落盘 */
-    snoozedAt: s.snoozedAt,
+    /* 句级译文覆盖与今日已读句数：本地 profile 专属（sync.ts 的 COLLECTIONS 投影不含它们，
+       不扩云同步协议）；旧快照缺字段 → migrate 兜底空值 */
+    sentenceZh: s.sentenceZh,
+    readLog: s.readLog,
+    sentenceParseCache: s.sentenceParseCache,
+    customScenes: s.customScenes,
+    curatedFeeds: s.curatedFeeds,
   };
 }
 
 function migrate(raw: Record<string, unknown>): AppState | null {
-  if (raw.version !== 3 && raw.version !== STORE_VERSION) return null;
+  if (raw.version !== 3 && raw.version !== 4 && raw.version !== STORE_VERSION) return null;
   if (![raw.vocab, raw.articles, raw.history, raw.notes].every(Array.isArray)) return null;
   const base = demoState();
   try {
@@ -351,7 +375,9 @@ function migrate(raw: Record<string, unknown>): AppState | null {
       }),
       articles: (raw.articles as Article[]) || base.articles,
       progress: (raw.progress as Record<string, number>) || base.progress,
-      settings: { ...base.settings, ...((raw.settings as Partial<Settings>) || {}), themePref: themePref || "system" },
+      /* 旧版末句断点无法证明用户确认过完成，保留断点，不推测完成。 */
+      readingCompleted: raw.readingCompleted && typeof raw.readingCompleted === "object" ? Object.fromEntries(Object.entries(raw.readingCompleted).filter(([, value]) => typeof value === "boolean")) as Record<string, boolean> : {},
+      settings: { ...base.settings, ...((raw.settings as Partial<Settings>) || {}), themePref: themePref || "system", apiKey: "", baseUrl: "", model: "", provider: "account", voiceAppId: "", voiceApiKey: "", voiceApiSecret: "", keyStored: false, voiceKeyStored: false, voice: false, edgeVoice: "" },
       history: (raw.history as HistoryItem[]) || base.history,
       notes: (raw.notes as NoteItem[]) || base.notes,
       stats,
@@ -364,11 +390,18 @@ function migrate(raw: Record<string, unknown>): AppState | null {
       clip: (raw.clip as { en: string; zh: string; ts: number } | null | undefined) ?? null,
       readerTarget: null,
       readingArticleId: null,
-      banner: null,
       lastGrade: null,
       remaskAt: 0,
       shareIn: null,
-      snoozedAt: typeof raw.snoozedAt === "number" ? raw.snoozedAt : 0,
+      /* 阅读域本地字段（reading-parity）：旧快照无值 → 空覆盖表 / 归零的今日计数 */
+      sentenceZh: (raw.sentenceZh as AppState["sentenceZh"]) || {},
+      /* 历史 high 指标不包含真正读过的句子，不能迁成 seen；旧日计数重置。 */
+      readLog: migrateReadLog(raw.readLog),
+      sentenceParseCache: migrateSentenceParseCache(raw.sentenceParseCache),
+      /* 我的场景（speaking-parity）：旧快照无值 → 空列表 */
+      customScenes: Array.isArray(raw.customScenes) ? (raw.customScenes as AppState["customScenes"]).filter(s => s && typeof s.id === "string" && typeof s.title === "string" && typeof s.goal === "string") : [],
+      /* 精选资讯源订阅（proto-parity）：旧快照无值 → 空列表 */
+      curatedFeeds: Array.isArray(raw.curatedFeeds) ? (raw.curatedFeeds as unknown[]).filter((v): v is string => typeof v === "string") : [],
     };
   } catch {
     return null;
@@ -476,11 +509,6 @@ async function initializeStoreNow(identity: string, options: ProfileSwitchOption
       if (raw) {
         const legacy = migrate(JSON.parse(raw));
         if (!legacy) throw new Error("旧版资料无法迁移，原始资料已保留");
-        const keys = [[KEYCHAIN_APIKEY, legacy.settings.apiKey], [KEYCHAIN_VOICE_APPID, legacy.settings.voiceAppId], [KEYCHAIN_VOICE_KEY, legacy.settings.voiceApiKey], [KEYCHAIN_VOICE_SECRET, legacy.settings.voiceApiSecret]];
-        if (keys.some(([, value]) => value)) {
-          if (!isTauri()) throw new Error("旧资料含服务密钥，请在原生应用迁移到系统钥匙串；原资料未改动");
-          for (const [key, value] of keys) if (value) await credentialWork(() => invokeRaw("secret_put", { key: profileSecret(identity, key), value }));
-        }
         loaded = legacy;
         const sessions = localStorage.getItem("ita.v3.speak.sessions");
         const glossary = localStorage.getItem("ita.v3.glossary");
@@ -491,11 +519,6 @@ async function initializeStoreNow(identity: string, options: ProfileSwitchOption
         nextRevision = (await next.migrateLegacy({ migrationId: "v3-to-v4", entries: { [STORE_KEY]: JSON.stringify(safe), "ita.v3.speak.sessions": sessions, "ita.v3.glossary": glossary }, state: safe })).revision;
         for (const key of [STORE_KEY, STORE_KEY + ".bak", "ita.v3.speak.sessions", "ita.v3.glossary", "ita.v3.speak.diff"]) localStorage.removeItem(key);
       } else nextRevision = (await next.saveSnapshot(persistable(loaded), nextRevision)).revision;
-    }
-    if (isTauri()) {
-      const keys = [KEYCHAIN_APIKEY, KEYCHAIN_VOICE_APPID, KEYCHAIN_VOICE_KEY, KEYCHAIN_VOICE_SECRET];
-      const values = await Promise.all(keys.map(key => readCredential(identity, key).catch(error => { if(import.meta.env.DEV && String(error).includes("SECURE_STORAGE_UNSUPPORTED")) return null; throw error; })));
-      loaded.settings = { ...loaded.settings, apiKey: values[0] || "", voiceAppId: values[1] || "", voiceApiKey: values[2] || "", voiceApiSecret: values[3] || "", keyStored: true, voiceKeyStored: true };
     }
     // Loading the target store can take time. Drain writes produced in the old
     // profile during that time before closing it and resetting the queue.
@@ -530,7 +553,7 @@ export async function switchProfile(identity: string, bringGuest: boolean, optio
   if (claim) await finishGuestClaim(identity);
 }
 
-type GuestClaimState = Pick<AppState, "articles" | "vocab" | "notes" | "tasks" | "reviewEvents" | "sessions" | "history" | "glossary" | "progress">;
+type GuestClaimState = Pick<AppState, "articles" | "vocab" | "notes" | "tasks" | "reviewEvents" | "sessions" | "history" | "glossary" | "progress"> & Partial<Pick<AppState, "readingCompleted" | "sentenceParseCache" | "readLog">>;
 export interface GuestClaim { version: 1; accountId: string; state: GuestClaimState }
 const GUEST_CLAIMS = "local-guest-claims";
 /** Move selected guest data into an account-bound recovery record atomically.
@@ -559,7 +582,8 @@ export async function prepareGuestClaim(accountId: string, all: boolean, selecti
       const articleId = selection.articleId ?? task?.source?.articleId;
       const articles = all ? current.articles : current.articles.filter(row => row.id === articleId);
       const tasks = all ? current.tasks : task ? [task] : [];
-      const selected: GuestClaimState = { articles, tasks, vocab: all ? current.vocab : [], notes: all ? current.notes : [], reviewEvents: all ? current.reviewEvents : [], sessions: all ? current.sessions : [], history: all ? current.history : [], glossary: all ? current.glossary : [], progress: all ? current.progress : Object.fromEntries(Object.entries(current.progress).filter(([id]) => id === articleId)) };
+      const selectedIds = new Set(articles.map(a => a.id));
+      const selected: GuestClaimState = { articles, tasks, vocab: all ? current.vocab : [], notes: all ? current.notes : [], reviewEvents: all ? current.reviewEvents : [], sessions: all ? current.sessions : [], history: all ? current.history : [], glossary: all ? current.glossary : [], progress: all ? current.progress : Object.fromEntries(Object.entries(current.progress).filter(([id]) => id === articleId)), readingCompleted: Object.fromEntries(Object.entries(current.readingCompleted).filter(([id]) => selectedIds.has(id))), sentenceParseCache: Object.fromEntries(Object.entries(current.sentenceParseCache).filter(([id]) => selectedIds.has(id))), readLog: { ...current.readLog, seen: Object.fromEntries(Object.entries(current.readLog.seen).filter(([id]) => selectedIds.has(id))) } };
       if (![selected.articles,selected.tasks,selected.vocab,selected.notes,selected.reviewEvents,selected.sessions,selected.history,selected.glossary].some(rows => rows.length) && !Object.keys(selected.progress).length) return {};
       // The existing recovery batch already belongs to this account. Extend it
       // with the current explicit selection, atomically with removing that
@@ -572,7 +596,8 @@ export async function prepareGuestClaim(accountId: string, all: boolean, selecti
       const sampleIds = new Set(articles.filter(row => row.sourceType === "sample").map(row => row.id));
       remainingArticles.push(...samples.articles.filter(row => sampleIds.has(row.id)));
       records.push({ collection: GUEST_CLAIMS, id: accountId, payload: claim, expectedVersion: previous?.version ?? 0 });
-      return { articles: remainingArticles, tasks: current.tasks.filter(row => !tasks.some(item => item.id === row.id)), progress: Object.fromEntries(Object.entries(current.progress).filter(([id]) => !articles.some(row => row.id === id))), ...(all ? { vocab: [], notes: [], reviewEvents: [], sessions: [], history: [], glossary: [], stats: samples.stats, clip: null, trash: null, lastGrade: null } : {}) };
+      const remainingSeen = Object.fromEntries(Object.entries(current.readLog.seen).filter(([id]) => !selectedIds.has(id)));
+      return { articles: remainingArticles, tasks: current.tasks.filter(row => !tasks.some(item => item.id === row.id)), progress: Object.fromEntries(Object.entries(current.progress).filter(([id]) => !selectedIds.has(id))), readingCompleted: Object.fromEntries(Object.entries(current.readingCompleted).filter(([id]) => !selectedIds.has(id))), sentenceParseCache: Object.fromEntries(Object.entries(current.sentenceParseCache).filter(([id]) => !selectedIds.has(id))), readLog: { ...current.readLog, seen: remainingSeen, count: Object.values(remainingSeen).reduce((sum, indices) => sum + indices.length, 0) }, ...(all ? { vocab: [], notes: [], reviewEvents: [], sessions: [], history: [], glossary: [], stats: samples.stats, clip: null, trash: null, lastGrade: null } : {}) };
       }, {records}, valid);
       if (!valid()) throw new DOMException("资料认领已取消", "AbortError");
       return claim;
@@ -626,7 +651,14 @@ export function mergeGuestClaim(current: GuestClaimState, guest: GuestClaimState
   for(const row of reviewEvents){const old=current.reviewEvents.find(item=>item.id===row.id);if(old&&!same(old,row))throw new Error("复习事件 ID 内容冲突，访客资料仍保留待恢复");}
   const progress = {...current.progress};
   for(const [id,value] of Object.entries(guest.progress)){const target=articleId(id)!;progress[target]=Math.max(progress[target]??0,value);}
-  return { articles, vocab: merge(current.vocab,vocab), notes: merge(current.notes,notes), tasks: merge(current.tasks,tasks,mergePracticeTask), reviewEvents: [...current.reviewEvents,...reviewEvents.filter(row=>!current.reviewEvents.some(old=>old.id===row.id))], sessions: merge(current.sessions,guest.sessions), history: merge(current.history,guest.history), glossary: [...current.glossary,...guest.glossary.filter(pair=>!current.glossary.some(old=>same(old,pair)))], progress, onboarded: true };
+  const readingCompleted = { ...current.readingCompleted };
+  for (const [id, value] of Object.entries(guest.readingCompleted ?? {})) readingCompleted[articleId(id)!] = value;
+  const sentenceParseCache = { ...current.sentenceParseCache };
+  for (const [id, value] of Object.entries(guest.sentenceParseCache ?? {})) sentenceParseCache[articleId(id)!] = { ...sentenceParseCache[articleId(id)!], ...value };
+  const seen = { ...migrateReadLog(current.readLog).seen };
+  for (const [id, indices] of Object.entries(migrateReadLog(guest.readLog).seen)) { const target = articleId(id)!; seen[target] = [...new Set([...(seen[target] ?? []), ...indices])]; }
+  const readLog = { day: todayKey(), seen, count: Object.values(seen).reduce((sum, indices) => sum + indices.length, 0) };
+  return { articles, vocab: merge(current.vocab,vocab), notes: merge(current.notes,notes), tasks: merge(current.tasks,tasks,mergePracticeTask), reviewEvents: [...current.reviewEvents,...reviewEvents.filter(row=>!current.reviewEvents.some(old=>old.id===row.id))], sessions: merge(current.sessions,guest.sessions), history: merge(current.history,guest.history), glossary: [...current.glossary,...guest.glossary.filter(pair=>!current.glossary.some(old=>same(old,pair)))], progress, readingCompleted, sentenceParseCache, readLog, onboarded: true };
 }
 export async function finishGuestClaim(accountId: string, valid: () => boolean = () => true): Promise<void> {
   await serializeProfile(async () => {
@@ -718,6 +750,53 @@ function applyFsDom(scale: number) {
   document.documentElement.style.setProperty("--fs-scale", String(scale));
 }
 
+/* ---------- 阅读今日计数：只计 markRead 明确到达的句子，每个自然日重新去重。 ---------- */
+function migrateSentenceParseCache(value: unknown): AppState["sentenceParseCache"] {
+  const cache: AppState["sentenceParseCache"] = {};
+  if (!value || typeof value !== "object") return cache;
+  for (const [articleId, rawEntries] of Object.entries(value)) {
+    if (!rawEntries || typeof rawEntries !== "object") continue;
+    const entries: AppState["sentenceParseCache"][string] = {};
+    for (const [idx, raw] of Object.entries(rawEntries)) {
+      if (!raw || typeof raw !== "object") continue;
+      const entry = raw as { en?: unknown; result?: Partial<SentenceParseContent> };
+      if (typeof entry.en !== "string" || !entry.result || typeof entry.result.trunk !== "string" || !Array.isArray(entry.result.parts) || !entry.result.parts.length || !entry.result.parts.every(part => part && typeof part.label === "string" && typeof part.text === "string")) continue;
+      entries[idx] = { en: entry.en, result: { trunk: entry.result.trunk, parts: entry.result.parts, ...(typeof entry.result.zh === "string" ? { zh: entry.result.zh } : {}) } };
+    }
+    if (Object.keys(entries).length) cache[articleId] = entries;
+  }
+  return cache;
+}
+function migrateReadLog(value: unknown): AppState["readLog"] {
+  const empty = { day: todayKey(), count: 0, seen: {} };
+  if (!value || typeof value !== "object") return empty;
+  const raw = value as Partial<AppState["readLog"]>;
+  if (raw.day !== todayKey() || !raw.seen || typeof raw.seen !== "object") return empty;
+  const seen = Object.fromEntries(Object.entries(raw.seen).map(([id, indices]) => [id, Array.isArray(indices) ? [...new Set(indices.filter(idx => Number.isInteger(idx) && idx >= 0))] : []]));
+  return { day: raw.day, count: Object.values(seen).reduce((sum, indices) => sum + indices.length, 0), seen };
+}
+function bumpReadLog(log: AppState["readLog"], articleId: string, sent: number): AppState["readLog"] {
+  const day = todayKey();
+  const base = log.day === day ? log : { day, count: 0, seen: {} };
+  const indices = base.seen[articleId] ?? [];
+  if (indices.includes(sent)) return base;
+  return { day, count: base.count + 1, seen: { ...base.seen, [articleId]: [...indices, sent] } };
+}
+/** 今日已读句数（跨日自动归零；书架根页「今日已读 N 句」格的数据源）。 */
+export function readTodayCount(s: AppState): number {
+  return s.readLog.day === todayKey() ? s.readLog.count : 0;
+}
+
+/** 句级显示译文：本地覆盖（sentenceZh[articleId]）优先，回退文章句自带译文。 */
+export function effectiveSentenceZh(
+  articleOverrides: Record<string, string> | undefined,
+  sentIdx: number,
+  zh: string | null,
+): string | null {
+  const value = articleOverrides?.[String(sentIdx)];
+  return value ? value : zh;
+}
+
 /* ---------- 派生：reviewStats（#52 今天页 folio / hero / 生词页组头同源） ---------- */
 export interface ReviewStats {
   due: number;
@@ -754,6 +833,24 @@ export function reviewStats(s: AppState): ReviewStats {
   return out;
 }
 
+/* ---------- 复习到期派生（vault-review-parity）：导航/角标消费的同源选择器 ----------
+   只暴露数据源；角标 UI 本身归 visual-theme-cleanup 阶段（不动 GlassNav）。
+   与 reviewStats 同款「按引用 + 30s 时效」缓存：useSyncExternalStore 要求快照引用稳定，
+   且 forgot 卡 10 分钟回流期间停留页面不至显示过期值。 */
+let dueCache: { src: AppState; at: number; out: VocabWord[] } | null = null;
+/** 当前到期（未暂停、dueAt≤now），按 dueAt 升序 —— 复习安排抽屉/下一轮构卡的同一数据源。 */
+export function dueReviews(s: AppState): VocabWord[] {
+  const now = Date.now();
+  if (dueCache && dueCache.src === s && now - dueCache.at < 30_000) return dueCache.out;
+  const out = [...s.vocab.filter((v) => !v.paused && v.dueAt <= now)].sort((a, b) => a.dueAt - b.dueAt);
+  dueCache = { src: s, at: now, out };
+  return out;
+}
+/** 到期计数（数值快照，供角标/入口行消费；与 reviewStats().due 同口径）。 */
+export function dueReviewCount(s: AppState): number {
+  return dueReviews(s).length;
+}
+
 /* ---------- actions（保持 API 形状，§6.3①） ---------- */
 export const actions = {
   setTheme(theme: Theme) {
@@ -786,69 +883,29 @@ export const actions = {
     state = { ...state, reader: { ...state.reader, ...patch } };
     emit();
   },
+
+  /* 订阅精选资讯源（proto-parity · 原型 ACT subscribe-feed，html:2205）：源 id 入订阅表 +
+     该源全部样例文档按 id 去重加入书架；toast「已订阅，可以开始阅读」。取消订阅只移除
+     订阅关系，已入库文档保留（原型 ACT unsubscribe-feed：「已取消订阅，已有短文保留」）。 */
+  subscribeCuratedFeed(id: string) {
+    if (!state.curatedFeeds.includes(id)) state = { ...state, curatedFeeds: [...state.curatedFeeds, id] };
+    const docs = curatedFeedDocs(id);
+    const existing = new Set(state.articles.map((a) => a.id));
+    const incoming = docs.filter((d) => !existing.has(d.id));
+    if (incoming.length) state = { ...state, articles: [...incoming, ...state.articles] };
+    emit();
+    toast("已订阅，可以开始阅读");
+  },
+  unsubscribeCuratedFeed(id: string) {
+    state = { ...state, curatedFeeds: state.curatedFeeds.filter((f) => f !== id) };
+    emit();
+    toast("已取消订阅，已有短文保留");
+  },
   setSettings(patch: Partial<Settings>) {
     const settings = { ...state.settings, ...patch };
     state = { ...state, settings };
-    if (patch.remindTime !== undefined || patch.daily !== undefined) {
-      scheduleDailyReminder(settings.remindTime, settings.daily);
-    }
     if (patch.fsScale !== undefined) applyFsDom(patch.fsScale);
     emit();
-  },
-
-  /* Per-profile secure writes are serialized so an older keystroke cannot
-     overwrite a newer value. Browser preview keeps secrets in memory only. */
-  setApiKey(v: string) {
-    const next = v.trim();
-    const target = repository, identity = target?.identity ?? "guest";
-    state = { ...state, settings: { ...state.settings, apiKey: v, keyStored: false } };
-    emit();
-    if (!isTauri()) return;
-      void credentialWork(() => next ? invokeRaw<void>("secret_put", { key: profileSecret(identity, KEYCHAIN_APIKEY), value: next }) : invokeRaw<void>("secret_delete", { key: profileSecret(identity, KEYCHAIN_APIKEY) }))
-        .then(() => {
-          /* 输入又变了（旧请求晚到）→ 放弃本次标记，以最新输入为准 */
-          if (repository !== target || getState().settings.apiKey.trim() !== next) return;
-          state = { ...state, settings: { ...state.settings, keyStored: true } };
-          emit();
-        })
-        .catch((err: unknown) => {
-          if (repository !== target) return;
-          actions.pushDiag({
-            time: Date.now(),
-            kind: "keychain",
-            msg: `Key 存入钥匙串失败，仅本次会话可用，未持久保存：${err instanceof Error ? err.message : String(err)}`,
-          });
-        });
-  },
-
-  /* ---------- U-11：讯飞三件套唯一写入口（与模型 Key 同路径） ----------
-     真机：任一凭据非空即三件 secret_put 入钥匙串，成功后 voiceKeyStored=true（落盘置空）；
-     失败仅本次会话可用。浏览器预览不持久保存凭据。 */
-  setVoiceCreds(voiceAppId: string, voiceApiKey: string, voiceApiSecret: string) {
-    const target = repository, identity = target?.identity ?? "guest";
-    const next = [voiceAppId.trim(), voiceApiKey.trim(), voiceApiSecret.trim()];
-    state = { ...state, settings: { ...state.settings, voiceAppId, voiceApiKey, voiceApiSecret, voiceKeyStored: false } };
-    emit();
-    if (!isTauri()) return;
-      void credentialWork(async () => {
-        const keys = [KEYCHAIN_VOICE_APPID,KEYCHAIN_VOICE_KEY,KEYCHAIN_VOICE_SECRET];
-        for (let index=0;index<keys.length;index++) { const key = profileSecret(identity,keys[index]); if (next[index]) await invokeRaw<void>("secret_put", {key,value:next[index]}); else await invokeRaw<void>("secret_delete", {key}); }
-      })
-        .then(() => {
-          /* 输入又变了（旧请求晚到）→ 放弃本次标记，以最新输入为准 */
-          const cur = getState().settings;
-          if (repository !== target || cur.voiceAppId.trim() !== next[0] || cur.voiceApiKey.trim() !== next[1] || cur.voiceApiSecret.trim() !== next[2]) return;
-          state = { ...state, settings: { ...state.settings, voiceKeyStored: true } };
-          emit();
-        })
-        .catch((err: unknown) => {
-          if (repository !== target) return;
-          actions.pushDiag({
-            time: Date.now(),
-            kind: "keychain",
-            msg: `讯飞凭据存入钥匙串失败，仅本次会话可用，未持久保存：${err instanceof Error ? err.message : String(err)}`,
-          });
-        });
   },
 
   /* 收词：出处为真实参数（§6.3④，替代 spike 的 sourceArticleId:"trees" 硬编码） */
@@ -859,13 +916,21 @@ export const actions = {
       chunkType?: string;
       phonetic?: string;
       senses: DictSenses[];
+      example?: string;
       pattern?: string;
       trap?: string;
     },
     kind: "word" | "chunk",
     source?: { articleId: string; sentIdx: number },
   ) {
-    if (state.vocab.some((v) => v.word.toLowerCase() === entry.word.toLowerCase())) return;
+    const existing = state.vocab.find(v => v.word.trim().toLowerCase() === entry.word.trim().toLowerCase());
+    if (existing) {
+      if (entry.senses.length) {
+        state = { ...state, vocab: state.vocab.map(v => v.id === existing.id ? { ...v, senses: entry.senses, phonetic: entry.phonetic || v.phonetic, example: entry.example || v.example, updatedAt: Date.now() } : v) };
+        emit();
+      }
+      return;
+    }
     const w: VocabWord = {
       id: entry.word.toLowerCase().replace(/[^a-z0-9]+/g, "-") + "-" + Math.random().toString(36).slice(2, 6),
       word: entry.word,
@@ -873,6 +938,7 @@ export const actions = {
       chunkType: kind === "chunk" ? entry.chunkType : undefined,
       phonetic: entry.phonetic,
       senses: entry.senses.length ? entry.senses : [{ pos: "", cn: "（暂无释义，待下次查询补上）" }],
+      example: entry.example,
       pattern: entry.pattern,
       trap: entry.trap,
       sourceArticleId: source?.articleId || state.readingArticleId || "",
@@ -887,11 +953,15 @@ export const actions = {
     emit();
     /* U-19：收词触感（规格：收词=light；真机轻微单脉冲，浏览器 vibrate 静默失败） */
     haptic("light");
-    toast(`已收藏「${entry.word}」`, { action: "去看看", onAction: () => actions.setTab("vocab") });
+    /* 收藏 toast 文案与形态对齐原型 read-collect（无跳转链接，底部深色条） */
+    toast("已收藏，今天可以复习，也可以马上说一句");
   },
 
-  /* 删除 = 先从 UI 移除 + 快照入 trash，5s 后真正提交；撤销恢复（评审要点 7②） */
-  deleteWord(id: string) {
+  /* 删除 = 先从 UI 移除 + 快照入 trash，5s 后真正提交；撤销恢复（评审要点 7②）。
+     复检 r1（vault-word-undo，原型 v2-word-remove html:3114）：文案「词条已移除，可在生词本撤销」
+     只留 toast 的 ✓ 图标（不再在文本里重复 ✓）；opts.inlineUndo=从生词本列表移除，撤销由生词本
+     顶部撤销条承担，toast 不内嵌撤销钮；其余入口（词典卡词条页等看不到撤销条）保留 toast 撤销钮。 */
+  deleteWord(id: string, opts: { inlineUndo?: boolean } = {}) {
     const idx = state.vocab.findIndex((v) => v.id === id);
     if (idx < 0) return;
     const snap = state.vocab[idx];
@@ -899,7 +969,8 @@ export const actions = {
     state = { ...state, vocab: state.vocab.filter((v) => v.id !== id), trash: { kind: "vocab", index: idx, vocab: snap } };
     emit();
     startTrashTimer();
-    toast(`已移出生词本 · ${snap.word}`, { action: "撤销", onAction: () => actions.undoTrash() });
+    if (opts.inlineUndo) toast("词条已移除，可在生词本撤销");
+    else toast("词条已移除，可在生词本撤销", { action: "撤销", onAction: () => actions.undoTrash() });
   },
   deleteArticle(id: string) {
     const idx = state.articles.findIndex((a) => a.id === id);
@@ -1042,8 +1113,81 @@ export const actions = {
   },
 
   setProgress(articleId: string, sent: number) {
-    if ((state.progress[articleId] ?? -1) === sent) return;
-    state = { ...state, progress: { ...state.progress, [articleId]: sent }, articles: state.articles.map(a => a.id === articleId ? { ...a, lastReadAt: Date.now(), updatedAt: Date.now() } : a) };
+    const article = state.articles.find(a => a.id === articleId);
+    if (!article || !Number.isInteger(sent) || sent < 0 || sent >= article.sentences.length) return;
+    const now = Date.now();
+    if ((state.progress[articleId] ?? -1) === sent && article.lastReadAt && now - article.lastReadAt < 1000) return;
+    state = { ...state, progress: { ...state.progress, [articleId]: sent }, articles: state.articles.map(a => a.id === articleId ? { ...a, lastReadAt: now, updatedAt: now } : a) };
+    emit();
+  },
+  markRead(articleId: string, sent: number) {
+    const article = state.articles.find(a => a.id === articleId);
+    if (!article || !Number.isInteger(sent) || sent < 0 || sent >= article.sentences.length) return;
+    const readLog = bumpReadLog(state.readLog, articleId, sent);
+    if (readLog === state.readLog) return;
+    state = { ...state, readLog };
+    emit();
+  },
+  setCompleted(articleId: string, completed = true) {
+    if (!state.articles.some(a => a.id === articleId) || state.readingCompleted[articleId] === completed) return;
+    state = { ...state, readingCompleted: { ...state.readingCompleted, [articleId]: completed } };
+    emit();
+  },
+  cacheSentenceParse(articleId: string, sentIdx: number, en: string, result: SentenceParseContent) {
+    if (state.articles.find(a => a.id === articleId)?.sentences[sentIdx]?.en !== en) return;
+    state = { ...state, sentenceParseCache: { ...state.sentenceParseCache, [articleId]: { ...state.sentenceParseCache[articleId], [String(sentIdx)]: { en, result } } } };
+    emit();
+  },
+  /** 句级译文覆盖（reading-parity）：仅写本地 profile 的 sentenceZh 表，不动文章本体/云同步。 */
+  setSentenceZh(articleId: string, sentIdx: number, zh: string) {
+    const next = { ...(state.sentenceZh[articleId] || {}) };
+    next[String(sentIdx)] = zh;
+    state = { ...state, sentenceZh: { ...state.sentenceZh, [articleId]: next } };
+    emit();
+  },
+  /** 保存「我的场景」（speaking-parity）：校验由调用方完成后调用；同名场景不重复入列。 */
+  saveCustomScene(scene: { title: string; goal: string }) {
+    const title = scene.title.trim(), goal = scene.goal.trim();
+    if (!title || !goal) throw new Error("给场景起个名字，再写一句想说清楚的内容。");
+    if (state.customScenes.some(s => s.title === title)) return;
+    state = { ...state, customScenes: [{ id: `scene-${crypto.randomUUID()}`, title, goal, createdAt: Date.now() }, ...state.customScenes] };
+    emit();
+  },
+  /** 整书移出书架（reading-parity）：全部章节 archived=true、进度与收藏保留；
+   *  撤销走既有 5s toast 动作（不重建新撤销系统）。 */
+  archiveBook(bookId: string) {
+    const chapters = state.articles.filter(a => a.bookId === bookId && !a.archived);
+    if (!chapters.length) return;
+    const ids = new Set(chapters.map(a => a.id));
+    state = { ...state, articles: state.articles.map(a => ids.has(a.id) ? { ...a, archived: true, updatedAt: Date.now() } : a) };
+    emit();
+    toast(`已移出书架 · ${String(chapters[0].bookTitle || chapters[0].title)} · 阅读进度已保留`, {
+      action: "撤销",
+      onAction: () => {
+        state = { ...state, articles: state.articles.map(a => ids.has(a.id) ? { ...a, archived: false, updatedAt: Date.now() } : a) };
+        emit();
+      },
+    });
+  },
+  archiveArticle(articleId: string) { actions.deleteArticle(articleId); },
+  restoreArticle(articleId: string) {
+    state = { ...state, articles: state.articles.map(a => a.id === articleId ? { ...a, archived: false, updatedAt: Date.now() } : a) };
+    emit();
+  },
+  restoreBook(bookId: string) {
+    state = { ...state, articles: state.articles.map(a => a.bookId === bookId ? { ...a, archived: false, updatedAt: Date.now() } : a) };
+    emit();
+  },
+  renameArticle(articleId: string, title: string) {
+    const value = title.trim().slice(0, 160);
+    if (!value) throw new Error("请输入内容名称");
+    state = { ...state, articles: state.articles.map(a => a.id === articleId ? { ...a, title: value, updatedAt: Date.now() } : a) };
+    emit();
+  },
+  renameBook(bookId: string, title: string) {
+    const value = title.trim().slice(0, 160);
+    if (!value) throw new Error("请输入书名");
+    state = { ...state, articles: state.articles.map(a => a.bookId === bookId ? { ...a, bookTitle: value, updatedAt: Date.now() } : a) };
     emit();
   },
   /** 段级翻译回填（#35：导入文章 zh=null → 翻译管线逐句补齐）。 */
@@ -1109,23 +1253,6 @@ export const actions = {
     state = { ...state, diag: [...state.diag, e].slice(-30) };
     emit();
   },
-  showBanner() {
-    /* 「稍后」snooze：当晚（自然日口径）静默，次日恢复——不再纯 toast 假装 */
-    if (state.snoozedAt && todayKey(new Date(state.snoozedAt)) === todayKey()) return;
-    const st = reviewStats(state);
-    const body = st.due > 0 ? `${st.due} 个生词到期 · 约 ${st.minutes} 分钟清完` : "今天的复习已清完 · 明晚见";
-    state = { ...state, banner: { title: "今晚的复习提醒", body, at: Date.now() } };
-    emit();
-  },
-  /** 横幅「稍后」：关横幅 + 记录 snooze（当晚不再弹）。 */
-  snoozeBanner() {
-    state = { ...state, banner: null, snoozedAt: Date.now() };
-    emit();
-  },
-  closeBanner() {
-    state = { ...state, banner: null };
-    emit();
-  },
   /** 结束一轮完整复习：streak +1（当日全部清完时由调用方判定 due===0）。
       全库唯一累加点——hydrate 跨天只保留/清零、不再 +1（治双重累加）。 */
   finishReviewStreak() {
@@ -1167,15 +1294,18 @@ export interface ToastOpts {
   action?: string;
   onAction?: () => void;
   duration?: number;
+  /** 前缀图标（原型 toast(text, icon)：默认 check ✓；clock 用于「到时间了」类提示，html:1648,1750）。 */
+  icon?: "check" | "clock";
 }
-/* sheet 打开时 toast 上移让位，关闭时复位（验收 #4：不与 sheet 文字互相遮挡）。
-   U-22：让位量改走 --toast-lift（.toast.on 的 translateY 消费），复用 200ms transform 过渡，
-   不再直写 style.bottom 瞬移；sheet 的 offsetHeight 已含其安全区 padding，与 bottom 常量
-   96+12 相减抵消，无需读 env。 */
+const TOAST_ICON: Record<NonNullable<ToastOpts["icon"]>, string> = {
+  check: '<path d="M5 12.8l4.4 4.4L19 7.5"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2.2"/>',
+};
+/* toast 位置固定在底部（proto-parity-2026-11-01，sheet-lookup-collected：原型 toast 叠在
+   抽屉底部按钮上方，html:1039 .toast{bottom:90px}——不再随 sheet 上移让位）。 */
 function repositionToasts() {
-  const sheet = document.querySelector<HTMLElement>(".sheet.on");
   document.querySelectorAll<HTMLElement>(".toast").forEach((t) => {
-    t.style.setProperty("--toast-lift", sheet ? `${Math.round(84 - sheet.offsetHeight)}px` : "0px");
+    t.style.setProperty("--toast-lift", "0px");
   });
 }
 export function toast(msg: string, opts: ToastOpts = {}) {
@@ -1186,6 +1316,12 @@ export function toast(msg: string, opts: ToastOpts = {}) {
   t.setAttribute("role", "status");
   const span = document.createElement("span");
   span.textContent = msg;
+  /* ✓ 前缀图标（原型 .toast .ico 口径；reader-finish-only：深色 toast 左侧✓） */
+  const ico = document.createElement("span");
+  ico.className = "tico";
+  ico.setAttribute("aria-hidden", "true");
+  ico.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${TOAST_ICON[opts.icon ?? "check"]}</svg>`;
+  t.appendChild(ico);
   t.appendChild(span);
   if (opts.action) {
     const b = document.createElement("button");
@@ -1203,7 +1339,8 @@ export function toast(msg: string, opts: ToastOpts = {}) {
   document.body.appendChild(t);
   repositionToasts();
   requestAnimationFrame(() => t.classList.add("on"));
-  const dur = opts.duration ?? (opts.action ? 5000 : 2200);
+  /* 无动作 toast 默认 3.2s 自动消失（对齐原型 setTimeout(...,3200)；带动作仍 5s 撤销窗） */
+  const dur = opts.duration ?? (opts.action ? 5000 : 3200);
   tl.style.transition = "none";
   tl.style.transform = "scaleX(1)";
   void tl.offsetWidth;
@@ -1220,103 +1357,49 @@ export function hideToast() {
   if (toastTimer) clearTimeout(toastTimer);
 }
 
-/* ---------- TTS（云优先路由 gap g6：凭据齐全（真机）→ services/voice speakCloud 云 TTS，
-   失败降级 speechSynthesis 并报诊断；无凭据 → 本地 speechSynthesis 原路径，保留估时兜底双保险） ---------- */
-let voiceEn: SpeechSynthesisVoice | null = null;
-let voiceZh: SpeechSynthesisVoice | null = null;
-function pickVoice() {
-  if (!("speechSynthesis" in window)) return;
-  const vs = speechSynthesis.getVoices();
-  const en = vs.filter((v) => /^en(-|_)/i.test(v.lang));
-  voiceEn = en.find((v) => /Google US|Natural|Samantha|Zira/i.test(v.name)) || en[0] || null;
-  const zh = vs.filter((v) => /^zh(-|_)/i.test(v.lang));
-  voiceZh = zh[0] || null;
-}
-if ("speechSynthesis" in window) {
-  pickVoice();
-  speechSynthesis.onvoiceschanged = pickVoice;
-}
-/** spike S3a 观察点：onstart/onend 命中计数（我的 → spike 自检消费；云路径不经过 speechSynthesis，不计数）。 */
+/* ---------- 账号语音：登录后统一经过服务器 ---------- */
 export const ttsEvents = { start: 0, end: 0 };
-
-/** 云播报停止句柄（stopSpeak 中断云播报；done 结束后置空）。 */
 let cloudStopper: (() => void) | null = null;
-
-/** 本地 speechSynthesis 路径（onend + 估时兜底双保险，spike S3a 已验证）——
-    也是云 TTS 失败后的降级落点。 */
-function speakLocal(text: string, rate: number, onend: (() => void) | undefined, lang: "en" | "zh"): void {
-  if (!("speechSynthesis" in window)) {
-    onend?.();
-    return;
-  }
-  speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = lang === "zh" ? "zh-CN" : "en-US";
-  u.rate = rate;
-  const v = lang === "zh" ? voiceZh : voiceEn;
-  if (v) u.voice = v;
-  let settled = false;
-  const done = (via: string) => {
-    if (settled) return;
-    settled = true;
-    if (via === "fallback") console.warn(`[tts] onend 未触发，兜底接管: "${text.slice(0, 30)}…"`);
-    onend?.();
-  };
-  u.onstart = () => ttsEvents.start++;
-  u.onend = () => {
-    ttsEvents.end++;
-    done("onend");
-  };
-  u.onerror = () => done("error");
-  const perUnit = lang === "zh" ? 260 : 380;
-  const estMs = (text.split(/\s+|(?=[\u4e00-\u9fff])/).length * perUnit) / Math.max(0.5, rate) + 1200;
-  setTimeout(() => done("fallback"), estMs);
-  speechSynthesis.speak(u);
-}
-
-/** 云播报代数：speak 每次递增——旧句被打断后迟到的 done 一律按「已被取代」丢弃。 */
 let speakToken = 0;
 
-/** 朗读统一入口（签名/语义不变，内部云优先路由 gap g6）：
-    讯飞凭据齐（真机）→ speakCloud 云 TTS，成败与时长以 done→onend 为准，不做估时兜底；
-    云失败 → reportDiag 上报后降级本地 speechSynthesis（估时兜底仅在此路径生效）；
-    无凭据/浏览器 → 直接本地 speechSynthesis。
-    注：不走 voice.ts 的 speakWithFallback 而用契约内 speakCloud({stop,done})——
-    stopSpeak 需要云句柄才能中断在播音轨（speakWithFallback 返回 void 拿不到句柄）；
-    「云优先→失败降级+诊断」语义与其等价（其早期版本降级会回调 store.speak，委托即互调环）。 */
-export function speak(text: string, rate = 1, onend?: () => void, lang: "en" | "zh" = "en"): void {
-  if (repository?.identity !== "guest" && cloudAvailable()) {
-    const token = ++speakToken;
-    cloudStopper?.();
-    cloudStopper = null;
-    const h = speakCloud(text, undefined, rate);
-    cloudStopper = h.stop;
-    h.done
-      .then(() => {
-        /* 连续朗读打断旧句的竞态（治 state-3）：stop() 让旧 src 触发 onended、旧 done 以成功落定，
-           若不拦，旧回调会把新句的 cloudStopper 清空（stopSpeak 停不掉新句）并误触旧 onend
-           （跟读领读 phase 被翻回 idle）。token 不匹配 = 旧句已被取代，直接丢弃。 */
-        if (token !== speakToken) return;
-        cloudStopper = null;
-        onend?.();
-      })
-      .catch((err: unknown) => {
-        /* 被打断的旧合成迟到的失败：不降级重播旧文本（否则叠成双声） */
-        if (token !== speakToken) return;
-        const msg = err instanceof Error ? err.message : String(err);
-        reportDiag("tts", `云 TTS 失败，已降级系统朗读：${msg}`);
-        cloudStopper = null;
-        speakLocal(text, rate, onend, lang);
-      });
-    return;
-  }
-  speakLocal(text, rate, onend, lang);
-}
-export function stopSpeak() {
-  speakToken++; /* 已停止：在途云句迟到的 done/onend 一律视为被打断，不再回调 */
+export function speak(text: string, rate = 1, onend?: () => void, _lang: "en" | "zh" = "en", onerror?: () => void): void {
+  prepareAudioPlayback();
+  const token = ++speakToken;
   cloudStopper?.();
   cloudStopper = null;
-  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  const origin = repository, generation = cloudState().generation;
+  void (async () => {
+    try {
+      const ok = await ensureAccount({ articleId: state.readingArticleId || undefined, reason: "登录后使用朗读和示范语音，当前阅读位置会保留。" });
+      if (token !== speakToken) return;
+      if (!ok) { onerror?.(); return; }
+      const cloud = cloudState();
+      if (!cloud.account || repository?.identity !== cloud.account.id) { onerror?.(); return; }
+      // Only a completed guest login may carry this operation into another profile.
+      if (origin?.identity !== "guest" && (origin !== repository || generation !== cloud.generation)) { onerror?.(); return; }
+      const h = speakCloud(text, undefined, rate);
+      cloudStopper = h.stop;
+      ttsEvents.start++;
+      await h.done;
+      if (token !== speakToken) return;
+      cloudStopper = null;
+      ttsEvents.end++;
+      onend?.();
+    } catch (err) {
+      if (token !== speakToken) return;
+      cloudStopper = null;
+      if (err instanceof DOMException && err.name === "AbortError") { onerror?.(); return; }
+      const message = voiceErrorText(err);
+      reportDiag("tts", `朗读未完成：${message}`);
+      toast(message);
+      onerror?.();
+    }
+  })();
+}
+export function stopSpeak() {
+  speakToken++;
+  cloudStopper?.();
+  cloudStopper = null;
 }
 
 /* ---------- 首次主题/字号档落 DOM ---------- */
@@ -1328,5 +1411,5 @@ applyFsDom(state.settings.fsScale);
 actions.pushDiag({
   time: Date.now(),
   kind: "boot",
-  msg: `启动 · ${isTauri() ? "真机" : "浏览器"} · 朗读引擎 ${state.settings.ttsEngine}${state.settings.edgeVoice ? `（${state.settings.edgeVoice}）` : ""}`,
+  msg: `启动 · ${isTauri() ? "真机" : "浏览器"} · 账号语音`,
 });

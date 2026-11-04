@@ -65,13 +65,23 @@ struct ReaderPalette {
     let warnSoft: Color
     let errSoft: Color
     let surface2: Color
+    /// 主色描边（--accent-line）与「mod」角色标签色（--mod）。
+    let accentLine: Color
+    let mod: Color
     /// 投影参数（原型 --shadow-pill / --shadow-spatial 的主层近似）。
     let shadowPill: Color
     let shadowSpatial: Color
     let theme: ReaderTheme
+    /// 根皮肤（folio 仅 shelf/reading）：颜色矩阵只在 folio + light 一格改品牌绿。
+    let skin: ReaderSkin
 
+    /// 不带皮肤维度的色板 = base 皮肤（speak/vault 视图、主题预览块、既有单测）。
     static func palette(for theme: ReaderTheme) -> ReaderPalette {
-        let t = ReaderThemeTokens.tokens(for: theme)
+        palette(for: theme, skin: .base)
+    }
+
+    static func palette(for theme: ReaderTheme, skin: ReaderSkin) -> ReaderPalette {
+        let t = ReaderThemeTokens.tokens(for: theme, skin: skin)
         let dark = theme.isDark
         return ReaderPalette(
             background: Color(token: t.canvasBg),
@@ -112,10 +122,13 @@ struct ReaderPalette {
             warnSoft: Color(token: t.warnSoft),
             errSoft: Color(token: t.errSoft),
             surface2: Color(token: t.surface2),
+            accentLine: Color(token: t.accentLine),
+            mod: Color(token: t.mod),
             // 纸书/护眼：墨色 11%；深色：纯黑 60%（styles.css --shadow-pill 主层）。
             shadowPill: dark ? Color.black.opacity(0.6) : Color(token: t.ink1).opacity(0.11),
             shadowSpatial: dark ? Color.black.opacity(0.55) : Color(token: t.ink1).opacity(0.09),
-            theme: theme
+            theme: theme,
+            skin: skin
         )
     }
 }
@@ -205,4 +218,6 @@ enum ReaderIcons {
     /// 书架首页：目录 / 继续读。
     static let toc = "list.bullet"
     static let flame = "flame"
+    /// 订阅源（书架「英文资讯订阅」直达卡，Feather rss 的 SF 近似）。
+    static let rss = "dot.radiowaves.left.and.right"
 }

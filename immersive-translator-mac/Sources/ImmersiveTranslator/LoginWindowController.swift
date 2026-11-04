@@ -9,9 +9,11 @@ import SwiftUI
 // 错误文案唯一出口 authErrorText（ServerAuth.swift）；banned 阻断、
 // rate_limited 倒计时禁用不自动重试；已登录时显示兜底卡片直达账号设置。
 //
-// 视觉令牌取自 prototypes/windows-workbench-v08-2026-10-15.html：
-// 浅色 = warm-archival（暖纸 #F6F3EC + 赤陶 #C84B31 + 墨阶 + 发丝线），
-// 深色 = obsidian-sonic（#0E1014 + 橘赤 #E26D52）；衬线展示字体在 macOS 上
+// 视觉令牌：v0.12 品牌统一后 accent 系改取 Windows 墨绿品牌色系（styles.css
+// :28-35 浅 / :76-83 深，单一真源 Brand.swift——#1F6B57/#73C6AA 及 hover、
+// accentForeground 前景）；其余仍取自 prototypes/windows-workbench-v08-2026-10-15.html：
+// 浅色 = warm-archival（暖纸 #F6F3EC + 墨绿 + 墨阶 + 发丝线），
+// 深色 = obsidian-sonic（#0E1014 + 浅绿 #73C6AA）；衬线展示字体在 macOS 上
 // 由 system serif design 落到 Songti SC（CJK）/Times（拉丁）。
 // 控件骨架译为原生手感：系统窗口、Esc 关窗、回车提交、原生焦点环语义、
 // 按钮 100ms 按压反馈（damping 1.0 无过冲）、tab 切换 300ms 弹性。
@@ -35,6 +37,9 @@ private struct LoginTheme {
     let accent: Color
     let accentSoft: Color
     let accentHover: Color
+    /// 品牌前景（accent 实色底上的文字）：浅 = 白、深 = 深墨 #112A20。
+    /// 对齐 Windows --accent-foreground = --brand-foreground（styles.css:15/:32/:80）。
+    let accentForeground: Color
     let err: Color
     let errSoft: Color
 
@@ -49,9 +54,10 @@ private struct LoginTheme {
                 ink2: Color(red: 0xB9 / 255, green: 0xB5 / 255, blue: 0xAC / 255),
                 ink3: Color(red: 0x7E / 255, green: 0x7B / 255, blue: 0x73 / 255),
                 ink4: Color(red: 0x4D / 255, green: 0x4B / 255, blue: 0x45 / 255),
-                accent: Color(red: 0xE2 / 255, green: 0x6D / 255, blue: 0x52 / 255),
-                accentSoft: Color(red: 0xE2 / 255, green: 0x6D / 255, blue: 0x52 / 255).opacity(0.16),
-                accentHover: Color(red: 0xEA / 255, green: 0x82 / 255, blue: 0x66 / 255),
+                accent: Brand.color(Brand.accentDarkHex),
+                accentSoft: Brand.color(Brand.accentDarkHex).opacity(0.16),
+                accentHover: Brand.color(Brand.accentDarkHoverHex),
+                accentForeground: Brand.color(Brand.accentForegroundDarkHex),
                 err: Color(red: 0xF0 / 255, green: 0x68 / 255, blue: 0x68 / 255),
                 errSoft: Color(red: 0xF0 / 255, green: 0x68 / 255, blue: 0x68 / 255).opacity(0.16)
             )
@@ -64,9 +70,10 @@ private struct LoginTheme {
                 ink2: Color(red: 0x4A / 255, green: 0x47 / 255, blue: 0x40 / 255),
                 ink3: Color(red: 0x7A / 255, green: 0x75 / 255, blue: 0x6C / 255),
                 ink4: Color(red: 0xAC / 255, green: 0xA6 / 255, blue: 0x9B / 255),
-                accent: Color(red: 0xC8 / 255, green: 0x4B / 255, blue: 0x31 / 255),
-                accentSoft: Color(red: 0xC8 / 255, green: 0x4B / 255, blue: 0x31 / 255).opacity(0.11),
-                accentHover: Color(red: 0xB3 / 255, green: 0x43 / 255, blue: 0x2C / 255),
+                accent: Brand.color(Brand.accentLightHex),
+                accentSoft: Brand.color(Brand.accentLightHex).opacity(0.11),
+                accentHover: Brand.color(Brand.accentLightHoverHex),
+                accentForeground: .white,
                 err: Color(red: 0xB9 / 255, green: 0x1C / 255, blue: 0x1C / 255),
                 errSoft: Color(red: 0xB9 / 255, green: 0x1C / 255, blue: 0x1C / 255).opacity(0.10)
             )
@@ -270,7 +277,9 @@ private struct LoginView: View {
                     .fill(theme.accent)
                 Text("译")
                     .font(.system(size: 16, weight: .bold, design: .serif))
-                    .foregroundColor(.white)
+                    // 深色 accent 变浅绿 #73C6AA 后白字对比不足：改走品牌前景
+                    // （Windows --accent-foreground，深色 = 深墨 #112A20）。
+                    .foregroundColor(theme.accentForeground)
             }
             .frame(width: 30, height: 30)
             VStack(alignment: .leading, spacing: 3) {
@@ -803,7 +812,7 @@ private struct PrimaryActionButton: View {
                 if isBusy {
                     ProgressView()
                         .controlSize(.small)
-                        .tint(.white)
+                        .tint(theme.accentForeground)
                 }
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
@@ -811,7 +820,7 @@ private struct PrimaryActionButton: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 9)
         }
-        .buttonStyle(PressScaleButtonStyle(fill: hovering ? theme.accentHover : theme.accent, textColor: .white))
+        .buttonStyle(PressScaleButtonStyle(fill: hovering ? theme.accentHover : theme.accent, textColor: theme.accentForeground))
         .onHover { hovering = $0 && !isBusy }
     }
 }
@@ -1195,12 +1204,20 @@ private extension Array where Element == String {
 /// 「账号」分区（Windows settings_open_tab("account") 的对应物）。
 /// SET-5 新 IA 下消费端改释为「选中账号页签」——SettingsView 订阅 scrollRequestID
 /// 切换 activeSection；信号本身仍是「每次请求递增一次」的语义（既有单测覆盖）。
+/// redeemFocusRequestID 是语音页「兑换更多额度」的加强版信号：切账号分区后
+/// 滚动/聚焦兑换码卡（Windows Settings.openAccountRedeem 的 80ms 延迟定位）。
 @MainActor
 final class SettingsAccountNavigation: ObservableObject {
     @Published private(set) var scrollRequestID = 0
+    @Published private(set) var redeemFocusRequestID = 0
 
     func requestScrollToAccount() {
         scrollRequestID += 1
+    }
+
+    /// 语音页「兑换更多额度」：切账号分区 + 滚动/聚焦兑换码卡。
+    func requestScrollToAccountRedeem() {
+        redeemFocusRequestID += 1
     }
 }
 
@@ -1214,6 +1231,9 @@ struct AccountSectionView: View {
     /// 云端配置手动重拉结果。
     @State private var configMessage: AccountMessage?
     @State private var syncingConfig = false
+    /// 口语场景云同步（A0，三集合：场景库 + 对话记录 + 评测记录）状态。
+    @State private var scenarioSyncing = false
+    @State private var scenarioSyncMessage: AccountMessage?
 
     private struct AccountMessage: Equatable {
         let text: String
@@ -1228,15 +1248,23 @@ struct AccountSectionView: View {
             if let notice = authNoticeText(status.notice) {
                 messageBar(notice, style: .warn)
             }
-            Text(status.loggedIn
-                 ? "账号信息与登录状态"
-                 : "登录是可选项——翻译、阅读室与复习全部本地可用")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            // 页头副标题由设置窗 pagehead(.account) 承担（SettingsSection.pageSubtitle
+            // 静态逐字），这里不再渲染第二行——避免双标题（规格 settings.md §2.6 第 1 条）。
             if status.loggedIn, let user = status.user {
                 profileRow(user)
                 Divider()
                 detailRows(user)
+                Divider()
+                speakSyncCard
+                Divider()
+                // 兑换码卡（语音云契约 §三.10）：锚点 "account-redeem"，语音页
+                // 「兑换更多额度」跳转目标。
+                RedeemCardView(redeem: { [weak serverAuth] code in
+                    guard let serverAuth else {
+                        throw AuthError.local("unauthorized", "未登录")
+                    }
+                    return try await serverAuth.redeem(code: code)
+                })
                 Divider()
                 securityRow
             } else {
@@ -1271,7 +1299,7 @@ struct AccountSectionView: View {
     private func profileRow(_ user: AuthUser) -> some View {
         HStack(alignment: .center, spacing: 12) {
             ZStack {
-                Circle().fill(Color.accentColor)
+                Circle().fill(Brand.accent)
                 Text(Self.avatarGlyph(user))
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.white)
@@ -1286,8 +1314,8 @@ struct AccountSectionView: View {
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.accentColor.opacity(0.14)))
-                        .foregroundStyle(Color.accentColor)
+                        .background(Capsule().fill(Brand.accent.opacity(0.14)))
+                        .foregroundStyle(Brand.accent)
                 }
                 Text(user.email)
                     .font(.footnote)
@@ -1329,6 +1357,30 @@ struct AccountSectionView: View {
             if let configMessage {
                 // 云端配置拉取失败在 Windows 是 .msg-bar.err（红），成功是 ok（绿）。
                 messageBar(configMessage.text, style: configMessage.ok ? .ok : .error)
+            }
+        }
+    }
+
+    /// 口语场景云同步卡（Windows AccountSection.tsx:291-316 逐字）：一次同步
+    /// speak-scenarios / speak-sessions / speak-assessments 三集合并成一条
+    /// 汇总反馈（mergeSyncSummaries）。
+    private var speakSyncCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("口语场景云同步")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            fieldRow(
+                label: "跨设备同步自定义口语场景",
+                hint: "升级计划 A0：先拉取云端变更再推送本地改动；场景编辑器上线后将自动接入"
+            ) {
+                Button(scenarioSyncing ? "同步中…" : "立即同步") { handleSyncScenarios() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(scenarioSyncing)
+            }
+            if let scenarioSyncMessage {
+                // 成功 ok 绿 / 失败 err 红（Windows .msg-bar 同口径）。
+                messageBar(scenarioSyncMessage.text, style: scenarioSyncMessage.ok ? .ok : .error)
             }
         }
     }
@@ -1445,6 +1497,26 @@ struct AccountSectionView: View {
             } catch {
                 configMessage = AccountMessage(text: authErrorText(.local("unknown", "")).text, ok: false)
             }
+        }
+    }
+
+    /// 三个口语集合一起同步（场景库 + 对话记录 + 评测记录；syncNow 不抛错，
+    /// 未登录/网络失败在 summary.error 里），汇总成一句话展示
+    /// （Windows AccountSection.tsx:167-184 handleSyncScenarios）。
+    private func handleSyncScenarios() {
+        guard !scenarioSyncing else { return }
+        scenarioSyncing = true
+        scenarioSyncMessage = nil
+        Task { @MainActor in
+            defer { scenarioSyncing = false }
+            var summaries: [SyncSummary] = []
+            if let records = SpeakSyncCenter.shared.records {
+                for collection in ["speak-scenarios", speakSessionsCollection, speakAssessmentsCollection] {
+                    summaries.append(await records.engine.syncNow(collection))
+                }
+            }
+            let summary = mergeSyncSummaries(summaries)
+            scenarioSyncMessage = AccountMessage(text: syncSummaryText(summary), ok: summary.ok)
         }
     }
 

@@ -72,6 +72,56 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(ocrHotKeyShortcut.rawValue, forKey: Keys.ocrHotKeyShortcut) }
     }
 
+    // ---- 语音服务商偏好（对齐 Windows settingsStore.ts voicePrefs 三字段，契约 §三.2/§三.3）----
+    // 即时保存字段：didSet 直写 UserDefaults，不进 SettingsSaveSnapshot（对齐
+    // Windows stripVoicePrefs——点卡即落盘、不点亮保存条）；与 LLM providerId 解耦。
+
+    /// 语音服务商（gateway=沉浸云 / xfyun=讯飞 BYOK）。nil = 未存过，生效值由
+    /// 迁移推断决定（resolveInitialVoiceProvider，只展示不落盘）。
+    @Published var voiceProvider: VoiceProvider? {
+        didSet {
+            guard oldValue != voiceProvider else { return }
+            if let voiceProvider {
+                VoicePrefsStore.saveProvider(voiceProvider)
+            }
+        }
+    }
+
+    /// 云模式朗读音色（me/config ttsVoices 里的 id；nil = 未存过，用服务端默认音色）。
+    @Published var voiceGatewayVoice: String? {
+        didSet {
+            guard oldValue != voiceGatewayVoice else { return }
+            if let voiceGatewayVoice {
+                VoicePrefsStore.saveGatewayVoice(voiceGatewayVoice)
+            }
+        }
+    }
+
+    /// 云模式跟读打分本地开关（服务端 iseEnabled 之上的个人开关，缺省开）。
+    @Published var voiceGatewayIseEnabled: Bool {
+        didSet {
+            guard oldValue != voiceGatewayIseEnabled else { return }
+            VoicePrefsStore.saveIseEnabled(voiceGatewayIseEnabled)
+        }
+    }
+
+    /// 登录自动切云轻提示的触发序号（瞬态，不落盘、不进保存条快照）：登录成功瞬间
+    /// 真正发生了切换才递增，设置窗据此展示 4s 绿色提示条。
+    @Published private(set) var voiceAutoSwitchNoticeSerial = 0
+
+    /// 登录成功瞬间自动切云（对齐 Windows Settings.tsx:176-185）：已存值已是 gateway
+    /// 无感（返回 false）；否则即时落盘 gateway（didSet 写 UserDefaults，语音页卡片
+    /// 选中态随之切换）并递增提示序号。讯飞凭据原样保留、随时可切回。
+    /// 唯一调用点：AppDelegate 订阅 ServerAuthClient.loginSuccessSerial（交互式登录
+    /// 成功；启动静默续登录不触发）。
+    @discardableResult
+    func applyLoginVoiceAutoSwitch() -> Bool {
+        if voiceProvider == .gateway { return false }
+        voiceProvider = .gateway
+        voiceAutoSwitchNoticeSerial &+= 1
+        return true
+    }
+
     init() {
         // 用局部变量完成所有计算,避免在存储属性初始化前访问 self(didSet 会触发 self 访问)。
 
@@ -150,6 +200,9 @@ final class SettingsStore: ObservableObject {
         selectionHotKeyShortcut = Self.loadSelectionHotKeyShortcut()
         ocrHotKeyShortcut = Self.loadOCRHotKeyShortcut()
         readerHotKeyShortcut = Self.loadReaderHotKeyShortcut()
+        voiceProvider = VoicePrefsStore.loadProvider()
+        voiceGatewayVoice = VoicePrefsStore.loadGatewayVoice()
+        voiceGatewayIseEnabled = VoicePrefsStore.loadIseEnabled()
 
         // 最后赋值带 didSet 的存储属性(self 此时已完全初始化)
         providers = loadedProviders
@@ -347,6 +400,90 @@ final class SettingsStore: ObservableObject {
     }
 }
 
+// MARK: - 语音偏好存储与迁移推断（对齐 Windows settingsStore.ts voicePrefs 段）
+
+/// 语音服务商：gateway=沉浸云官方网关 / xfyun=自带讯飞凭据。
+enum VoiceProvider: String, Equatable {
+    case gateway
+    case xfyun
+}
+
+/// 语音偏好三字段的 UserDefaults 读写口（键独立、点选即写盘，对齐 Windows
+/// saveVoicePrefs「只合并这三个字段进已存 JSON」的隔离语义——Mac 用独立键
+/// 天然不触碰其余设置，也不带出任何明文密钥）。消费点（路由守卫/阅读室朗读/
+/// AppDelegate 登录自动切云）经本口直读，不经设置窗口表单态；defaults 注入
+/// 临时 suite 供单测。
+enum VoicePrefsStore {
+    static let providerKey = "voiceProvider"
+    static let gatewayVoiceKey = "voiceGatewayVoice"
+    static let gatewayIseEnabledKey = "voiceGatewayIseEnabled"
+
+    /// 已存的服务商；未存过/值非法返回 nil（走迁移推断）。
+    static func loadProvider(defaults: UserDefaults = .standard) -> VoiceProvider? {
+        guard let raw = defaults.string(forKey: providerKey) else { return nil }
+        return VoiceProvider(rawValue: raw)
+    }
+
+    static func saveProvider(_ provider: VoiceProvider, defaults: UserDefaults = .standard) {
+        defaults.set(provider.rawValue, forKey: providerKey)
+    }
+
+    /// 已存音色 id；未存过返回 nil（用服务端默认音色=列表第一项）。
+    static func loadGatewayVoice(defaults: UserDefaults = .standard) -> String? {
+        guard let raw = defaults.string(forKey: gatewayVoiceKey), !raw.isEmpty else { return nil }
+        return raw
+    }
+
+    static func saveGatewayVoice(_ voice: String, defaults: UserDefaults = .standard) {
+        defaults.set(voice, forKey: gatewayVoiceKey)
+    }
+
+    /// 跟读打分本地开关；未存过默认 true（服务端 iseEnabled 之上的个人开关）。
+    static func loadIseEnabled(defaults: UserDefaults = .standard) -> Bool {
+        // object(forKey:) 区分「从未写入」与显式 false。
+        defaults.object(forKey: gatewayIseEnabledKey) as? Bool ?? true
+    }
+
+    static func saveIseEnabled(_ enabled: Bool, defaults: UserDefaults = .standard) {
+        defaults.set(enabled, forKey: gatewayIseEnabledKey)
+    }
+}
+
+/// 三个讯飞凭据槽位的「已保存」状态（对齐 Windows xfyunCredentialPresence：
+/// 三槽位各自看 isComplete，不含 asr 回落 ise 主凭据的语义——高级覆盖用户
+/// 可以只配单独凭据不配主凭据，三个槽位分开算）。
+struct XfyunCredentialPresenceSnapshot: Equatable {
+    var iseMain: Bool
+    var ttsOwn: Bool
+    var asrOwn: Bool
+
+    /// 任一槽位已保存。
+    var hasAny: Bool { iseMain || ttsOwn || asrOwn }
+
+    /// 全空（迁移推断用）。
+    static let none = XfyunCredentialPresenceSnapshot(iseMain: false, ttsOwn: false, asrOwn: false)
+}
+
+/// 迁移推断（契约 §三.3，纯函数）：任一讯飞凭据存在 → 保持 xfyun（存量用户
+/// 零感知）；否则默认 gateway。
+func inferVoiceProvider(_ presence: XfyunCredentialPresenceSnapshot) -> VoiceProvider {
+    presence.hasAny ? .xfyun : .gateway
+}
+
+/// 语音页取生效服务商：已存值优先；未存过时按讯飞凭据存在性推断（§三.3）。
+/// 推断结果只作展示默认，不代写盘——首次用户点击时才落盘。
+/// presence 为惰性求值（@autoclosure）：已存值时不探测凭据（对齐 Windows「已存
+/// gateway / xfyun 时直接采用，不探测凭据」）。
+func resolveInitialVoiceProvider(
+    stored: VoiceProvider?,
+    presence: @autoclosure () -> XfyunCredentialPresenceSnapshot = XfyunCredentialsStore.shared.presenceSnapshot()
+) -> VoiceProvider {
+    if let stored {
+        return stored
+    }
+    return inferVoiceProvider(presence())
+}
+
 enum TranslationDirection: String, CaseIterable, Identifiable {
     case autoChineseEnglish
     case fixedTarget
@@ -356,7 +493,8 @@ enum TranslationDirection: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .autoChineseEnglish:
-            return "中英互译"
+            // Windows seg 按钮 907 逐字「自动识别」（原「中英互译」为旧版漂移）。
+            return "自动识别"
         case .fixedTarget:
             return "固定目标语言"
         }
@@ -365,9 +503,11 @@ enum TranslationDirection: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .autoChineseEnglish:
-            return "中文自动翻成英文，其他语言自动翻成简体中文。"
+            // Windows 914 auto 态 hint 逐字。
+            return "中文 → English，其他语言 → 简体中文"
         case .fixedTarget:
-            return "始终翻译到下面填写的目标语言。"
+            // Windows fixed 态 hint 逐字。
+            return "始终翻译为指定的目标语言"
         }
     }
 }
@@ -882,17 +1022,24 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var pageSubtitle: String {
         switch self {
         case .provider:
-            return "选择一个翻译服务商；每家的密钥分开保存，切换互不影响。"
+            // Windows Settings.tsx:578 逐字（原「选择一个翻译服务商；…」为旧版漂移）。
+            return "沉浸云登录即用；其他服务商使用你自己的 API Key，每家密钥分开保存、切换互不影响。"
         case .translation:
             return "目标语言与翻译浮窗的行为。"
         case .voice:
-            return "填一组讯飞凭据，跟读打分、云端朗读、口语识别三个服务共用；经 Keychain 加密存储。"
+            // 双态副标题（VoiceSettingsTab.tsx:196-199）：云开放态逐字；Mac 无
+            // 「官方云未开放」态（resolveBaseURL 恒有值，规格 §四差异 7），另一态
+            // 「填一组讯飞凭据，跟读打分、云端朗读、口语识别三个服务共用（需在讯飞
+            // 控制台为应用开通对应服务）。经 Keychain 加密存储。」不可达。
+            return "云端朗读、口语识别、跟读打分——登录沉浸云即用，无需申请任何密钥；也可使用自己的讯飞凭据。"
         case .glossary:
             return "固定译法。每行一条，翻译时随请求一并发送（最多前 \(GlossaryParser.promptMappingLimit) 条）。"
         case .hotkeys:
             return "任意界面下全局生效；改完即自动保存并重新注册。"
         case .account:
-            return "账号是可选项：登录后同步云端配置，不登录不影响本地功能。"
+            // Windows AccountSection.tsx 未登录态副标题逐字（规格 §2.6 第 1 条；
+            // Mac 页头为静态单句，已登录态差异见规格 §四.6）。
+            return "登录是可选项——翻译、阅读室与复习全部本地可用"
         case .about:
             return "版本更新、启动与引导。"
         }
@@ -970,6 +1117,24 @@ enum SettingsUpdatePhase: Equatable {
     case error
 }
 
+/// 设置窗分区直达请求（Windows settings_open_tab(tab) 的对应物：窗口尚未挂载时
+/// 请求挂起，SettingsView 订阅时立即取到〔@Published 订阅即发当前值〕；已挂载时
+/// 即时导航）。阅读抽屉「去语音页配置/登录」经 AppDelegate.openVoiceSettings 使用。
+@MainActor
+final class SettingsSectionRequest: ObservableObject {
+    static let shared = SettingsSectionRequest()
+    @Published private(set) var pending: SettingsSection?
+
+    func request(_ section: SettingsSection) {
+        pending = section
+    }
+
+    /// 消费方处理后清空（避免重开窗口时重复导航）。
+    func clear() {
+        pending = nil
+    }
+}
+
 final class SettingsWindowController: NSWindowController {
     private let settingsStore: SettingsStore
     /// 「账号」分区导航信号（菜单「账号登录」已登录时选中账号页签）。
@@ -993,7 +1158,12 @@ final class SettingsWindowController: NSWindowController {
             onReregisterHotKeys: onReregisterHotKeys,
             onInstallUpdate: onInstallUpdate
         )
-        let hosting = NSHostingController(rootView: view)
+        // 品牌统一（对齐 Windows v0.12 墨绿）：根视图注入 .tint 让系统控件
+        //（Toggle 开关/segmented Picker/borderedProminent 按钮/录制高亮）同步墨绿；
+        // 散点 Brand.accent 则在本文件内全部替换为 Brand.accent——SwiftUI 的
+        // .tint 不影响静态 Brand.accent（后者读系统强调色），机械替换不可省
+        //（规格 settings.md §2.1 第 2/3 步）；单一真源 Brand.swift。
+        let hosting = NSHostingController(rootView: view.tint(Brand.accent))
         let window = NSWindow(contentViewController: hosting)
         window.title = "沉浸口语 · 设置中心"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
@@ -1034,15 +1204,34 @@ final class SettingsWindowController: NSWindowController {
         show()
         accountNavigation.requestScrollToAccount()
     }
+
+    /// 语音页「兑换更多额度」：打开设置账号分区并滚动/聚焦兑换码卡
+    /// （Windows Settings.openAccountRedeem 的跨窗同款：切账号 tab 后 80ms
+    /// 按 id="account-redeem" scrollIntoView + focus）。
+    func showAccountRedeemSection() {
+        show()
+        accountNavigation.requestScrollToAccountRedeem()
+    }
 }
 
 struct SettingsView: View {
+    /// 快捷键三行的标题与 hint（Windows Settings.tsx:1150/1151/1161/1162/1171/1172
+    /// 逐字；分区视图与 SettingsSectionIATests 共用此单一来源）。
+    static let hotkeyRowSpecs: [(title: String, hint: String)] = [
+        ("翻译热键", "读取当前选中文字并弹出翻译浮窗"),
+        ("截图 OCR 热键", "进入截图模式，框选区域后自动识别并翻译"),
+        ("阅读室热键", "把选中的内容送进沉浸阅读室精读"),
+    ]
+
     @ObservedObject var settingsStore: SettingsStore
     let onShowOnboarding: () -> Void
     /// 账号登录态事件源（登录/登出/失效 @Published 驱动侧栏 chip 与账号分区）。
     @ObservedObject var serverAuth: ServerAuthClient
     @ObservedObject var accountNavigation: SettingsAccountNavigation
     let onOpenLogin: () -> Void
+    /// 语音页「兑换更多额度」80ms 回调里递增，经 Environment 驱动 RedeemCardView
+    /// 取焦（Windows `card.focus()` 对应物；与 scrollTo 同拍）。
+    @State private var redeemFocusTick = 0
     /// 设置改动且热键相对快照有变 → 整组重注册（REVIEW-01 后由自动保存确认触发；
     /// 语义仍对齐 Windows handleSave → reregisterHotkeys）。
     let onReregisterHotKeys: () -> Void
@@ -1072,6 +1261,16 @@ struct SettingsView: View {
     @State private var savedSnapshot: SettingsSaveSnapshot?
     @State private var autoSavedAck = false
     @State private var autoSavedAckTask: Task<Void, Never>?
+
+    // ---- 登录自动切云（语音云决策 1，对齐 Windows Settings.tsx:169-191）----
+    // 登录成功的瞬间自动把 voiceProvider 写为 gateway：即时落盘 + 语音页卡片选中态
+    // 随之切换 + 一条 4s 绿色轻提示；讯飞凭据原样保留、随时可切回。已是 gateway 无感；
+    // 启动静默续登录不算登录瞬间，不代切。切换动作在 AppDelegate（订阅交互式登录
+    // 成功序号 loginSuccessSerial，设置窗口从未打开过也能落盘，规格 §四差异 6；
+    // 触发口径与 Windows 实际运行行为的差异见 AppDelegate.observeLoginForVoiceSwitch），
+    // 这里只按 settingsStore.voiceAutoSwitchNoticeSerial 展示轻提示。
+    @State private var switchedCloudNotice = false
+    @State private var switchedCloudNoticeTask: Task<Void, Never>?
 
     // SET-9 危险区：恢复默认确认弹窗
     @State private var confirmResetDefaults = false
@@ -1107,13 +1306,48 @@ struct SettingsView: View {
                 breadcrumbTopbar
                 Divider()
 
-                ScrollView {
-                    sectionContent
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            // 登录自动切云轻提示（4s，Settings.tsx:567-572 同文案）。
+                            if switchedCloudNotice {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.green)
+                                    Text("已切换为沉浸云语音——讯飞凭据已保留，可在「语音」页随时切回")
+                                        .font(.footnote)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Spacer()
+                                }
+                                .padding(10)
+                                .background(Color.green.opacity(0.09), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .transition(.opacity)
+                            }
+                            sectionContent
+                        }
                         .padding(EdgeInsets(top: 25, leading: 26, bottom: 28, trailing: 30))
                         .frame(maxWidth: 720, alignment: .topLeading)
+                        // 兑换码卡取焦信号（RedeemCardView 观察；见下方 80ms 回调）。
+                        .environment(\.redeemFocusTick, redeemFocusTick)
+                    }
+                    // 切分区回顶（Windows useEffect: contentRef.scrollTop = 0）
+                    .id(activeSection)
+                    // 语音页「兑换更多额度」：切账号分区后 80ms 滚动 + 聚焦兑换码卡
+                    //（Windows Settings.openAccountRedeem :287-291 同语义：同一回调里
+                    // scrollIntoView + card.focus()；锚点 = RedeemCardView 的 "account-redeem"）。
+                    .onReceive(accountNavigation.$redeemFocusRequestID.dropFirst()) { _ in
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            activeSection = .account
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                proxy.scrollTo("account-redeem", anchor: .center)
+                            }
+                            redeemFocusTick += 1  // → RedeemCardView.cardFocused = true
+                        }
+                    }
                 }
-                // 切分区回顶（Windows useEffect: contentRef.scrollTop = 0）
-                .id(activeSection)
 
                 saveBar
             }
@@ -1222,6 +1456,16 @@ struct SettingsView: View {
         .onChange(of: settingsStore.providerDiagnosticRequestID) { _ in
             runRequestedProviderDiagnostic()
         }
+        .onChange(of: settingsStore.voiceAutoSwitchNoticeSerial) { _ in
+            // 登录成功瞬间已自动切云（AppDelegate 落盘）：顶部绿色轻提示 4s。
+            switchedCloudNotice = true
+            switchedCloudNoticeTask?.cancel()
+            switchedCloudNoticeTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                guard !Task.isCancelled else { return }
+                switchedCloudNotice = false
+            }
+        }
         .onAppear {
             runRequestedProviderDiagnostic()
             savedSnapshot = SettingsSaveSnapshot.capture(from: settingsStore)
@@ -1230,11 +1474,21 @@ struct SettingsView: View {
             cancelProviderDiagnosticTasks()
             updateTask?.cancel()
             autoSavedAckTask?.cancel()
+            switchedCloudNoticeTask?.cancel()
         }
         .onReceive(accountNavigation.$scrollRequestID.dropFirst()) { _ in
             // 菜单「账号登录」已登录：新 IA 下选中账号页签（原滚动锚点改释，SET-5）。
             withAnimation(.easeInOut(duration: 0.2)) {
                 activeSection = .account
+            }
+        }
+        .onReceive(SettingsSectionRequest.shared.$pending.compactMap { $0 }) { section in
+            // 分区直达（阅读抽屉「去语音页配置」→ 语音页；Windows settingsOpenTab("voice")）。
+            withAnimation(.easeInOut(duration: 0.2)) {
+                activeSection = section
+            }
+            DispatchQueue.main.async {
+                SettingsSectionRequest.shared.clear()
             }
         }
     }
@@ -1254,7 +1508,7 @@ struct SettingsView: View {
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
                             .fill(
                                 LinearGradient(
-                                    colors: [Color.accentColor, Color.accentColor.opacity(0.78)],
+                                    colors: [Brand.accent, Brand.accent.opacity(0.78)],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
                                 )
@@ -1336,7 +1590,7 @@ struct SettingsView: View {
                 Group {
                     if isActive {
                         RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                            .fill(Color.accentColor)
+                            .fill(Brand.accent)
                             .frame(width: 3, height: 16)
                     } else {
                         Color.clear.frame(width: 3, height: 16)
@@ -1358,10 +1612,10 @@ struct SettingsView: View {
             }
             .padding(.vertical, 8)
             .padding(.horizontal, 7)
-            .foregroundStyle(isActive ? Color.accentColor : Color.primary.opacity(0.78))
+            .foregroundStyle(isActive ? Brand.accent : Color.primary.opacity(0.78))
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isActive ? Color.accentColor.opacity(0.12) : Color.clear)
+                    .fill(isActive ? Brand.accent.opacity(0.12) : Color.clear)
             )
             .contentShape(Rectangle())
         }
@@ -1390,8 +1644,12 @@ struct SettingsView: View {
         return version.isEmpty ? "v…" : "v\(version)"
     }
 
-    /// Windows hasValidSettings 对应物：endpoint 非空，且（云接口已填 Key 或本地接口免 Key）。
+    /// Windows hasValidSettings 对应物（Settings.tsx:509-510）：沉浸云选中时必须
+    /// 已登录才算配置；其他 provider = endpoint 非空，且（已填 Key 或本地接口免 Key）。
     private var providerConfigured: Bool {
+        if isPlatformProviderSelected {
+            return serverAuth.status.loggedIn
+        }
         let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !endpoint.isEmpty else { return false }
         guard let url = providerEffectiveURL else { return false }
@@ -1429,21 +1687,33 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 18) {
             switch activeSection {
             case .provider:
-                pagehead(.provider, trailingMeta: currentProviderHint)
+                // Windows Settings.tsx:575-580 provider pagehead 无右侧 meta
+                // （trailing meta 仅术语表页有，见 .glossary 分支）。
+                pagehead(.provider)
                 providerSection
             case .translation:
                 pagehead(.translation)
                 translationSection
             case .voice:
                 pagehead(.voice)
-                XfyunVoiceSettingsSection()
+                VoiceSettingsTab(
+                    settingsStore: settingsStore,
+                    serverAuth: serverAuth,
+                    onOpenLogin: onOpenLogin,
+                    onOpenAccount: { accountNavigation.requestScrollToAccount() },
+                    onOpenRedeem: { accountNavigation.requestScrollToAccountRedeem() }
+                )
             case .glossary:
-                pagehead(.glossary)
+                // Windows pagehead 右侧 meta：{valid} 条有效（· 无法解析/超出 上限 才追加）。
+                pagehead(.glossary, trailingMeta: glossaryHeadMeta)
                 glossarySection
             case .hotkeys:
                 pagehead(.hotkeys)
                 hotkeysSection
             case .account:
+                // 页头（Windows AccountSection 有 set-pagehead：账号 + 双态副标题；
+                // Mac 取未登录态静态逐字，规格 §四.6）。AccountSectionView 内不再渲染副标题。
+                pagehead(.account)
                 AccountSectionView(serverAuth: serverAuth, onOpenLogin: onOpenLogin)
             case .about:
                 pagehead(.about)
@@ -1508,49 +1778,569 @@ struct SettingsView: View {
 
     // MARK: 各分区内容（控件全部沿用第一轮实现，只做 IA 归位）
 
-    /// 「模型服务」分区（provider-workspace：选择服务商 + 连接配置 + 接口诊断）。
+    /// 「模型服务」分区（Windows provider-workspace 双栏同构：左列 250pt 服务商
+    /// 选择〔官方云服务平台卡 + 自带 Key 服务商列表〕，右列连接配置〔状态 chip +
+    /// 账号/Key/模型块 + 测试动作 + 高级折叠〕）。
     private var providerSection: some View {
         VStack(alignment: .leading, spacing: 18) {
             providerOnboardingGuide
 
-            groupCard("选择服务商", hint: "切换时会保留各自的密钥与模型配置") {
-                providerSelector
+            HStack(alignment: .top, spacing: 18) {
+                providerSelectionColumn
+                    .frame(width: 250, alignment: .topLeading)
+
+                providerConfigurationColumn
+            }
+        }
+    }
+
+    /// 左列：官方云服务（沉浸云平台卡）+ 自带 API Key 的服务商列表 + 自定义（Mac 保留项）。
+    /// 结构对齐 Windows Settings.tsx:604-670 的 provider-selection radiogroup。
+    private var providerSelectionColumn: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            // 分组头：官方云服务（Windows settings-section-heading 逐字）
+            VStack(alignment: .leading, spacing: 3) {
+                Text("官方云服务")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("沉浸云账号登录即用，无需申请任何密钥")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            groupCard("连接配置", hint: settingsStore.activeProvider.displayName) {
-                labeledField("接口地址", text: Binding(
-                    get: { settingsStore.activeProvider.endpoint },
-                    set: { newValue in settingsStore.updateActiveProvider { $0.endpoint = newValue } }
-                ))
-                labeledField("模型", text: Binding(
-                    get: { settingsStore.activeProvider.model },
-                    set: { newValue in settingsStore.updateActiveProvider { $0.model = newValue } }
-                ))
-                // 模型候选下拉(内置 + 自定义历史) + 自定义输入入口
-                modelCandidatePicker
-                labeledField(apiKeyFieldTitle, text: $settingsStore.editingAPIKey, secure: true)
-                providerConfigurationSummary
-                storageMessage
+            platformProviderCard
+
+            // 分组头：自带 API Key 的服务商 + 右侧计数
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("自带 API Key 的服务商")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("使用你自己的密钥，加密保存在本机，切换互不影响")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Text("\(localBuiltinProviders.count) 个")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.top, 4)
+
+            VStack(spacing: 6) {
+                ForEach(localBuiltinProviders) { profile in
+                    providerItemRow(profile)
+                }
             }
 
-            groupCard("接口诊断", hint: "先测连通，再用真实请求验证 Key、模型与额度") {
-                if !providerPresetMessage.isEmpty {
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "checkmark.circle")
-                            .foregroundStyle(.green)
-                        Text(providerPresetMessage)
+            // 自定义 provider（Mac 保留能力，Windows 无此实体——规格 §四.11）
+            if !customProviders.isEmpty {
+                Text("自定义")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+                VStack(spacing: 6) {
+                    ForEach(customProviders) { profile in
+                        customProviderRow(profile)
+                    }
+                }
+            }
+
+            Button {
+                showAddCustomProvider = true
+            } label: {
+                Label("添加自定义提供商", systemImage: "plus")
+                    .font(.footnote)
+            }
+            .buttonStyle(.borderless)
+            .padding(.top, 2)
+        }
+        // Windows provider-selection 是 radiogroup aria-label「翻译服务商」。
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("翻译服务商")
+    }
+
+    /// 沉浸云平台大卡（Windows platform-card：mark 云 + 官方 chip + 统一管理描述 +
+    /// 登录态行；未登录附「登录沉浸云」主按钮——右列账号块简化收进平台卡，规格 §四.5）。
+    private var platformProviderCard: some View {
+        let selected = settingsStore.activeProviderID == ProviderProfile.platformProviderID
+        let loggedIn = serverAuth.status.loggedIn
+        return Button {
+            selectProvider(ProviderProfile.platformProviderID)
+        } label: {
+            HStack(alignment: .top, spacing: 9) {
+                Text("云")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Brand.accent)
+                    )
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text("沉浸云")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(.primary)
+                        providerChip("官方", tone: .ok)
+                    }
+                    Text("模型与额度由服务端统一管理，本机不保存任何密钥。")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(loggedIn ? Color.green : Color.orange)
+                            .frame(width: 6, height: 6)
+                        Text(loggedIn
+                             ? "已登录 \(serverAuth.status.user?.email ?? "")"
+                             : "未登录——选中后到右侧登录即可使用")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    if !loggedIn {
+                        Button("登录沉浸云") {
+                            onOpenLogin()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .padding(.top, 2)
+                    }
                 }
+                Spacer(minLength: 0)
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Brand.accent)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(selected ? Brand.accent.opacity(0.10) : Color.secondary.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(selected ? Brand.accent.opacity(0.5) : Color.primary.opacity(0.09), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("沉浸云")
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
 
-                Text(providerDiagnosticsText)
+    /// 服务商单选行（Windows ProviderItem 同构：品牌色徽标 + 名称 + keydot/本地 chip +
+    /// 模型胶囊 + 选中对勾）。
+    private func providerItemRow(_ profile: ProviderProfile) -> some View {
+        let isSelected = settingsStore.activeProviderID == profile.id
+        let hasKey = !(KeychainStore.apiKey(for: profile.id) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return Button {
+            selectProvider(profile.id)
+        } label: {
+            HStack(spacing: 8) {
+                Text(profile.mark ?? String(profile.displayName.prefix(1)))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Self.providerBrandColor(for: profile.id))
+                    .frame(width: 22, height: 22)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Self.providerBrandColor(for: profile.id).opacity(0.12))
+                    )
+                    .accessibilityHidden(true)
+                Text(profile.displayName)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                if profile.allowsEmptyAPIKey {
+                    // Ollama 免 Key → 「本地」chip（Windows Settings.tsx:1432-1434）。
+                    providerChip("本地", tone: .ok)
+                } else if hasKey {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 6, height: 6)
+                        .help("已保存此服务商的 API Key")
+                }
+                if !profile.model.isEmpty {
+                    Text(profile.model)
+                        .font(.system(size: 9.5, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.primary.opacity(0.05), in: Capsule())
+                }
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Brand.accent)
+                }
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(isSelected ? Brand.accent.opacity(0.10) : Color.secondary.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(isSelected ? Brand.accent.opacity(0.5) : Color.primary.opacity(0.08), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(profile.displayName)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        .help("切换到 \(profile.displayName)")
+    }
+
+    /// 状态/属性小胶囊（Windows chip：10.5pt semibold + 圆角底）。
+    private func providerChip(_ text: String, tone: ProviderChipTone) -> some View {
+        let (color, background): (Color, Color)
+        switch tone {
+        case .ok: (color, background) = (.green, Color.green.opacity(0.12))
+        case .warn: (color, background) = (.orange, Color.orange.opacity(0.14))
+        case .brand: (color, background) = (Brand.accent, Brand.accent.opacity(0.12))
+        }
+        return Text(text)
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(background, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+    }
+
+    /// 服务商品牌色（Windows brandColor map，Settings.tsx:1449-1460；缺省墨绿）。
+    private static func providerBrandColor(for id: String) -> Color {
+        switch id {
+        case "deepseek": return Color(red: 0x4d / 255, green: 0x6b / 255, blue: 0xfe / 255)
+        case "zhipu": return Color(red: 0x38 / 255, green: 0x59 / 255, blue: 0xff / 255)
+        case "dashscope": return Color(red: 0xff / 255, green: 0x6a / 255, blue: 0x00 / 255)
+        case "moonshot": return Color(red: 0x7b / 255, green: 0x5c / 255, blue: 0xff / 255)
+        case "openai": return Color(red: 0x10 / 255, green: 0xa3 / 255, blue: 0x7f / 255)
+        case "gemini": return Color(red: 0x42 / 255, green: 0x85 / 255, blue: 0xf4 / 255)
+        case "ollama": return Color(red: 0x8b / 255, green: 0x8d / 255, blue: 0x94 / 255)
+        default: return Brand.accent
+        }
+    }
+
+    /// 右列：连接配置（Windows provider-configuration：卡头状态 chip + 账号/Key/模型
+    /// 块 + 测试动作 + 高级折叠「接口地址与诊断」）。
+    private var providerConfigurationColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // 卡头（Windows settings-section-heading + 状态 chip）
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(isPlatformProviderSelected ? "沉浸云账号" : "连接配置")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text(settingsStore.activeProvider.displayName)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                providerConfigStatusChip
+            }
+            .padding(.bottom, 12)
+
+            if isPlatformProviderSelected {
+                platformAccountBlock
+            } else {
+                VStack(alignment: .leading, spacing: 11) {
+                    // 预设副文案（Windows provider-caption：选中预设的 hint 逐字）
+                    if let hint = settingsStore.activeProvider.hint {
+                        Text(hint)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    // API Key 块（Windows field-block：label + 状态 chip + 输入 + 取 Key 链接；
+                    // label 保留 Mac 双态标题，规格 §2.2.5 第 2 件 + §四.9）
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Text(apiKeyFieldTitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if !providerRequiresAPIKey {
+                                providerChip("本机无需 Key", tone: .ok)
+                            } else if !(KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "")
+                                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                providerChip("已保存", tone: .ok)
+                            } else {
+                                providerChip("未设置", tone: .warn)
+                            }
+                        }
+                        SecureField(apiKeyPlaceholder, text: $settingsStore.editingAPIKey)
+                            .textFieldStyle(.roundedBorder)
+                        storageMessage
+                        // 取 Key 链接（Windows key-link 逐字）：预设带 keyUrl 且非本机接口。
+                        if providerRequiresAPIKey, let keyURL = settingsStore.activeProvider.keyURL {
+                            keyURLLink(keyURL)
+                        }
+                    }
+
+                    // 模型块（Windows field-block 模型 + datalist 候选 + hint）
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("模型")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        modelCandidatePicker
+                        Text("下拉里是 \(settingsStore.activeProvider.displayName) 的常用模型，也可自由输入")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    // 动作行（Windows provider-actions：测试连接 / 测试中…；Mac 增补验证翻译请求）
+                    providerActionsRow
+
+                    // 高级折叠（Windows details.settings-advanced：接口地址与诊断）
+                    providerAdvancedDisclosure
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.primary.opacity(0.09), lineWidth: 1)
+        )
+    }
+
+    /// 右列卡头状态 chip（Windows 678-688：沉浸云 → 已登录/未登录；本机 → 本机服务；
+    /// 其他 → 密钥已保存/等待密钥）。
+    @ViewBuilder
+    private var providerConfigStatusChip: some View {
+        if isPlatformProviderSelected {
+            providerChip(serverAuth.status.loggedIn ? "已登录" : "未登录",
+                         tone: serverAuth.status.loggedIn ? .ok : .warn)
+        } else if !providerRequiresAPIKey {
+            providerChip("本机服务", tone: .ok)
+        } else {
+            providerChip(
+                !(KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "密钥已保存" : "等待密钥",
+                tone: !(KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .ok : .warn
+            )
+        }
+    }
+
+    /// 沉浸云账号块（Windows 696-740；登录按钮已收进平台卡，规格 §四.5）。
+    @ViewBuilder
+    private var platformAccountBlock: some View {
+        if serverAuth.status.loggedIn, let email = serverAuth.status.user?.email {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "person.crop.circle")
+                        .foregroundStyle(Brand.accent)
+                    Text(email)
+                        .font(.footnote.weight(.medium))
+                        .textSelection(.enabled)
+                }
+                Text("翻译请求自动携带账号令牌（到期自动续期），按账号额度计费；模型由服务端统一下发，无需配置。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Button("管理账号") {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        activeSection = .account
+                    }
+                }
+                .controlSize(.small)
+            }
+        } else {
+            // 未登录：右列只留 hint（「登录沉浸云」按钮在左列沉浸云平台卡内，
+            // 规格 §四.5；状态行「未登录——…」也在平台卡，不在此重复）。
+            Text("登录后即可使用：无需 API Key，模型由服务端下发，按账号额度计费。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 
-                providerConnectionDiagnosticRow
+    /// keyUrl 链接（Windows key-link 逐字：「↗ 前往 {displayName} 控制台获取 API Key」）。
+    private func keyURLLink(_ urlString: String) -> some View {
+        HStack(spacing: 4) {
+            if let url = URL(string: urlString) {
+                Link(destination: url) {
+                    Text("↗ 前往 \(settingsStore.activeProvider.displayName) 控制台获取 API Key")
+                        .font(.footnote)
+                }
+            }
+        }
+    }
+
+    /// 动作行：测试连接（Windows 809-817 同文案 测试连接/测试中…）+ Mac 增补验证翻译请求。
+    private var providerActionsRow: some View {
+        HStack(spacing: 8) {
+            Button(isTestingProviderConnection ? "测试中…" : "测试连接") {
+                runProviderConnectionDiagnostic()
+            }
+            .controlSize(.small)
+            .disabled(isTestingProviderConnection || isVerifyingProviderTranslation
+                      || settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+            Button(isVerifyingProviderTranslation ? "验证中..." : "验证翻译请求") {
+                runProviderTranslationVerification()
+            }
+            .controlSize(.small)
+            .disabled(isTestingProviderConnection || isVerifyingProviderTranslation || providerTranslationVerificationDisabled)
+
+            if isTestingProviderConnection || isVerifyingProviderTranslation {
+                Button("取消") {
+                    cancelProviderDiagnosticTasks()
+                    providerDiagnostic = ProviderConnectionDiagnostic(
+                        level: .warning,
+                        endpoint: settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
+                        message: "已取消当前 Provider 诊断。",
+                        kind: .cancelled,
+                        completedAt: Date()
+                    )
+                }
+                .controlSize(.small)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// 高级折叠（Windows details「高级：接口地址与诊断」）：诊断结果 + 脱敏 curl /
+    /// 诊断报告 / Mac 增补的日志与支持包辅助按钮。
+    @State private var providerAdvancedExpanded = false
+
+    private var providerAdvancedDisclosure: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            DisclosureGroup(isExpanded: $providerAdvancedExpanded) {
+                VStack(alignment: .leading, spacing: 10) {
+                    // 接口地址（Windows 高级区 label「接口地址（OpenAI 兼容）」）
+                    labeledField("接口地址（OpenAI 兼容）", text: Binding(
+                        get: { settingsStore.activeProvider.endpoint },
+                        set: { newValue in settingsStore.updateActiveProvider { $0.endpoint = newValue } }
+                    ))
+
+                    providerConfigurationSummary
+
+                    Text("地址会自动补全 /v1/chat/completions；支持任意 OpenAI 兼容接口。")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text(providerDiagnosticsText)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    providerDiagnosticMessageBlock
+
+                    HStack(spacing: 8) {
+                        Button("复制脱敏 curl") {
+                            copyProviderText(
+                                providerDiagnosticCurlCommand,
+                                message: "脱敏 curl 已复制到剪贴板"
+                            )
+                        }
+                        .controlSize(.small)
+                        .disabled(providerEffectiveURL == nil)
+                        .help("复制一个不包含真实 API Key 的 Chat Completions 复现命令")
+
+                        Button("生成诊断报告") {
+                            copyProviderText(
+                                providerDiagnosticReport,
+                                message: "诊断报告已复制（已脱敏，可安全分享）"
+                            )
+                        }
+                        .controlSize(.small)
+                        .disabled(providerDiagnostic.level == .idle)
+
+                        Button("复制支持包") {
+                            copyProviderText(
+                                providerDiagnosticSupportBundle,
+                                message: "已复制脱敏支持包"
+                            )
+                        }
+                        .controlSize(.small)
+                        .disabled(providerDiagnostic.level == .idle)
+                        .help("复制诊断报告、配置提示和不含真实 API Key 的 curl 命令")
+
+                        Button("复制日志路径") {
+                            copyProviderText(
+                                DiagnosticLogger.logFileURL().path,
+                                message: "已复制诊断日志路径"
+                            )
+                        }
+                        .controlSize(.small)
+
+                        Button("显示日志") {
+                            revealDiagnosticLog()
+                        }
+                        .controlSize(.small)
+
+                        Spacer(minLength: 0)
+                    }
+                }
+                .padding(.top, 8)
+            } label: {
+                Text("高级：接口地址与诊断")
+                    .font(.footnote.weight(.medium))
+            }
+        }
+    }
+
+    /// 诊断结果消息（原 providerConnectionDiagnosticRow 的消息区，折叠进高级区）。
+    private var providerDiagnosticMessageBlock: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(providerDiagnostic.message)
+                .font(.footnote)
+                .foregroundStyle(providerDiagnostic.level.color)
+                .fixedSize(horizontal: false, vertical: true)
+            if let metadata = providerDiagnosticMetadataText {
+                Text(metadata)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let nextStep = providerDiagnosticNextStepText {
+                HStack(alignment: .top, spacing: 5) {
+                    Image(systemName: "arrow.turn.down.right")
+                        .foregroundStyle(.secondary)
+                    Text("建议下一步：\(nextStep)")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.caption2)
+            }
+            Text("只测试接口连通性和首个响应耗时，不发送 API Key、原文或翻译请求正文；本地 HTTP 接口可直接测试。")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("“验证翻译请求”会发送一段很短的测试文本，用来检查 API Key、模型名、余额/限流和账号权限。")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !providerClipboardMessage.isEmpty {
+                Text(providerClipboardMessage)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !providerPresetMessage.isEmpty {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "checkmark.circle")
+                        .foregroundStyle(.green)
+                    Text(providerPresetMessage)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             }
         }
     }
@@ -1579,11 +2369,21 @@ struct SettingsView: View {
             }
 
             groupCard("输出行为", hint: "选择划词浮窗呈现结果的方式") {
-                Toggle("流式显示译文", isOn: $settingsStore.enableStreamingTranslation)
-                Toggle("词典卡片", isOn: $settingsStore.dictCardAuto)
-                Text("划选单个单词或短语时，浮窗自动切换为词典卡片（音标、多义项释义、例句）；关闭后一律整句翻译。")
+                // Windows 961/968 逐字：流式输出 / 词典卡片（hint 见下方两行）。
+                Toggle("流式输出", isOn: $settingsStore.enableStreamingTranslation)
+                Text("边翻译边显示；关闭则等全部完成再显示")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Toggle("词典卡片", isOn: $settingsStore.dictCardAuto)
+                Text("划选单个单词或短语时，浮窗自动切换为词典卡片（音标、多义项释义、例句）")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                // Mac 补充（Windows 无此说明；规格 §2.3 第 3 条：放次要行）。
+                Text("关闭词典卡片后一律整句翻译。")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -1637,10 +2437,10 @@ struct SettingsView: View {
             Spacer(minLength: 8)
             Text(settingsStore.translationDirection == .autoChineseEnglish ? "自动切换" : "固定目标")
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(Brand.accent)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+                .background(Capsule().fill(Brand.accent.opacity(0.12)))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -1669,7 +2469,7 @@ struct SettingsView: View {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .stroke(Color.primary.opacity(0.12), lineWidth: 1)
                 )
-            Text("例如：译文要自然口语化；技术名词保留英文；不要翻译产品名。")
+            Text("例如：使用自然口语化的风格；保留专有名词不翻译")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             customPromptPresetActions
@@ -1677,6 +2477,19 @@ struct SettingsView: View {
     }
 
     /// 「术语表」分区（glossary-workspace：编辑器 + 统计 + 维护动作）。
+    /// 术语表页头 meta（Windows glossStats 摘要：{valid} 条有效 · 无法解析 · 超上限）。
+    private var glossaryHeadMeta: String {
+        let summary = GlossarySummary.make(from: settingsStore.glossaryText)
+        var parts = ["\(summary.effectiveMappingCount) 条有效"]
+        if summary.ignoredLineCount > 0 {
+            parts.append("\(summary.ignoredLineCount) 行无法解析")
+        }
+        if summary.overflowMappingCount > 0 {
+            parts.append("超出 \(GlossaryParser.promptMappingLimit) 条 \(summary.overflowMappingCount) 条")
+        }
+        return parts.joined(separator: " · ")
+    }
+
     private var glossarySection: some View {
         VStack(alignment: .leading, spacing: 18) {
             groupCard("译法条目", hint: "一行一组原词与译法") {
@@ -1687,24 +2500,89 @@ struct SettingsView: View {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .stroke(Color.primary.opacity(0.12), lineWidth: 1)
                     )
-                Text("每行一个术语，例如：GDP = 国内生产总值。也支持 CSV/TSV 前两列、逗号/中文逗号或竖线分隔；表格里的后续备注列只本地忽略，不会随请求发送。空行、# 或 // 开头的备注、表头和无法识别的行也不会发送。")
-                    .font(.footnote)
+                // Windows 编辑器 placeholder 逐字并进说明首行（规格 §2.5 第 3 条），
+                // Mac 补充的分隔细节压到次要行。
+                Text("hello = 你好\nworld -> 世界\n# 注释行会被忽略\n\n支持 原词 = 译法、->、全角冒号，以及 CSV/TSV 前两列")
+                    .font(.footnote.monospaced())
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("也支持逗号/中文逗号或竖线分隔；表格里的后续备注列只本地忽略，不会随请求发送。空行、# 或 // 开头的备注、表头和无法识别的行也不会发送。")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
                 glossaryMaintenanceActions
             }
 
             groupCard("条目统计", hint: "每次翻译最多附带 \(GlossaryParser.promptMappingLimit) 条有效术语") {
+                glossaryUsageGuide
                 glossarySummaryView
             }
         }
     }
 
-    /// 「快捷键」分区（hotkey-list：三个录入卡 + 冲突/注册提示）。
+    /// 右侧 guide aside 对应块（Windows glossary-usage/glossary-format，1090-1120）：
+    /// 大数字 {valid} + / 80 条已启用 + 进度条 + 警告行 + 格式示例。
+    private var glossaryUsageGuide: some View {
+        let summary = GlossarySummary.make(from: settingsStore.glossaryText)
+        let valid = summary.effectiveMappingCount
+        let limit = GlossaryParser.promptMappingLimit
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text("\(valid)")
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .foregroundStyle(Brand.accent)
+                Text("/ \(limit) 条已启用")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            ProgressView(value: Double(min(valid, limit)), total: Double(limit))
+                .accessibilityLabel("术语表发送条数")
+                .accessibilityValue("\(min(valid, limit)) / \(limit)")
+            Text("每次翻译最多附带 \(limit) 条有效术语。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            if summary.ignoredLineCount > 0 {
+                Text("\(summary.ignoredLineCount) 行无法识别，请检查分隔符。")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+            }
+            if summary.overflowMappingCount > 0 {
+                Text("有 \(summary.overflowMappingCount) 条超出发送上限。")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: 3) {
+                Text("格式示例")
+                    .font(.footnote.weight(.semibold))
+                Text("原词 = 译法")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                Text("source → target")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                Text("也支持 CSV / TSV 的前两列，井号开头的行会忽略。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    /// 「快捷键」分区（Windows hotkey-list：三张 HotkeyField 卡 + 冲突/注册提示）。
+    /// 行标题与 hint 对齐 Windows 1150/1151/1161/1162/1171/1172 逐字；推荐 chips
+    /// 取 Mac 键族（HotKeyShortcut.recommendedAlternatives，规格 §四.10）。
     private var hotkeysSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             hotKeyRecorderRow(
-                title: "选中文本翻译",
+                title: Self.hotkeyRowSpecs[0].title,
+                hint: Self.hotkeyRowSpecs[0].hint,
                 shortcut: settingsStore.selectionHotKeyShortcut,
                 target: .selection
             ) { shortcut in
@@ -1712,7 +2590,8 @@ struct SettingsView: View {
             }
 
             hotKeyRecorderRow(
-                title: "截图 OCR 翻译",
+                title: Self.hotkeyRowSpecs[1].title,
+                hint: Self.hotkeyRowSpecs[1].hint,
                 shortcut: settingsStore.ocrHotKeyShortcut,
                 target: .ocr
             ) { shortcut in
@@ -1720,7 +2599,8 @@ struct SettingsView: View {
             }
 
             hotKeyRecorderRow(
-                title: "沉浸阅读室",
+                title: Self.hotkeyRowSpecs[2].title,
+                hint: Self.hotkeyRowSpecs[2].hint,
                 shortcut: settingsStore.readerHotKeyShortcut,
                 target: .reader
             ) { shortcut in
@@ -1751,7 +2631,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 「关于」分区（about-grid：应用更新 / 启动与引导 / 权限 / 危险区）。
+    /// 「关于」分区（about-grid：应用更新 / 启动与引导 / 权限 / 隐私政策 / 危险区）。
     private var aboutSection: some View {
         VStack(alignment: .leading, spacing: 18) {
             aboutUpdateCard
@@ -1782,6 +2662,9 @@ struct SettingsView: View {
                 }
             }
 
+            // Windows about-grid 末卡 PrivacyPolicyCard（e42018f）：危险区之前的最后一张内容卡。
+            aboutPrivacyCard
+
             dangerZone
         }
     }
@@ -1797,6 +2680,17 @@ struct SettingsView: View {
         if !accessibility { missing.append("辅助功能") }
         if !screen { missing.append("屏幕录制") }
         return "还差 \(missing.joined(separator: "、")) 权限：授权后如果热键没反应，重启一次这个工具即可。"
+    }
+
+    // MARK: 隐私政策卡（对齐 Windows PrivacyPolicyCard，Store 政策 10.5.1）
+
+    /// 「隐私政策」卡（about-privacy：默认收起只显示标题摘要，点开看全文；完全离线）。
+    /// 卡头走 groupCard；正文与展开按钮在 AboutPrivacyPolicyCardBody 里，披露状态挂在该子视图
+    /// 自身——切走「关于」分区即随视图销毁，回来重新默认收起，对齐 React 组件卸载语义。
+    private var aboutPrivacyCard: some View {
+        groupCard(PrivacyPolicyContent.cardTitle, hint: PrivacyPolicyContent.cardSubtitle) {
+            AboutPrivacyPolicyCardBody()
+        }
     }
 
     // MARK: SET-6 应用更新卡
@@ -1880,7 +2774,7 @@ struct SettingsView: View {
                         Capsule()
                             .fill(
                                 LinearGradient(
-                                    colors: [Color.accentColor, Color.accentColor.opacity(0.78)],
+                                    colors: [Brand.accent, Brand.accent.opacity(0.78)],
                                     startPoint: .leading,
                                     endPoint: .trailing
                                 )
@@ -2169,61 +3063,58 @@ struct SettingsView: View {
         return version.isEmpty ? "开发版（未打包）" : "v\(version)"
     }
 
+    /// 首次引导卡（Windows welcome-box Settings.tsx:582-602 三步版逐字；「知道了」
+    /// 写 UserDefaults onboardingDismissed 持久关闭；显示条件 = 未关闭 && 接口未配好）。
+    /// 保留偏差：第 ③ 步的组合键不照抄 Windows「Ctrl+Shift+Q」——热键值本身是
+    /// §四.10 承认的平台必然差异（Mac 缺省 ⌥Space 族，Settings.swift 恢复缺省
+    /// .optionSpace），文案若照抄会指向一个在 Mac 上不生效的键（文案与行为矛盾）。
+    /// 故 ③ 步键位引用 Mac 真实热键，其余逐字；§四.10 字面只授权推荐 chips 行，
+    /// 此处是同一授权在引用键位的文案上的必然后果，非独立文案漂移。
+    @ViewBuilder
     private var providerOnboardingGuide: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: providerRequiresAPIKey ? "cloud" : "desktopcomputer")
-                    .foregroundStyle(providerRequiresAPIKey ? .blue : .green)
-                    .frame(width: 18)
+        if showProviderWelcome {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("三步开始使用")
+                    .font(.system(size: 13, weight: .semibold))
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("先选接口类型，不必一上来就找 Key")
-                        .font(.subheadline.weight(.semibold))
-                    Text("内置三个云预设（DeepSeek、OpenAI、智谱），需要对应服务商的 API Key。想接其它服务商或本地 OpenAI 兼容服务，直接在下面填写接口地址和 Key 即可，本地兼容接口可不填真实 Key。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(providerOnboardingStatusText)
-                        .font(.footnote)
-                        .foregroundStyle(providerOnboardingStatusColor)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Text("① 选「沉浸云」登录即用；或选一个自带 Key 的服务商（国内直连推荐 DeepSeek 或 智谱 GLM）。")
+                    Text("② 自带 Key 的服务商需填入对应的 API Key（本地 Ollama 可留空）。")
+                    Text("③ 自带 Key 的服务商可点「测试连接」验证；选中任意文字按 \(settingsStore.selectionHotKeyShortcut.title) 即可翻译。")
                 }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                Button("知道了") {
+                    UserDefaults.standard.set(true, forKey: Self.providerOnboardingDismissedKey)
+                    providerWelcomeDismissed = true
+                }
+                .controlSize(.small)
             }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Brand.accent.opacity(0.25), lineWidth: 1)
+            )
         }
-        .padding(10)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(providerOnboardingStatusColor.opacity(0.25), lineWidth: 1)
-        )
+    }
+
+    /// 引导卡持久化键（对齐 Windows isOnboardingDismissed/setOnboardingDismissed）。
+    private static let providerOnboardingDismissedKey = "onboardingDismissed"
+
+    /// 「接口已配好」= Windows hasValidSettings 对应物（见 providerConfigured）。
+    @AppStorage(SettingsView.providerOnboardingDismissedKey)
+    private var providerWelcomeDismissed = false
+
+    /// welcome-box 显示条件（Windows Settings.tsx:582 showWelcome）：
+    /// 未点过「知道了」且接口未配好（沉浸云需已登录）。
+    private var showProviderWelcome: Bool {
+        !providerWelcomeDismissed && !providerConfigured
     }
 
     private var apiKeyFieldTitle: String {
         providerRequiresAPIKey ? "API Key（云接口需要）" : "API Key（本地接口可留空）"
-    }
-
-    private var providerOnboardingStatusText: String {
-        let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        if endpoint.isEmpty {
-            return "接口地址还没填：选一个内置云预设，或自己填写其它服务商 / 本地 OpenAI 兼容地址，再决定要不要填 API Key。"
-        }
-        if !providerRequiresAPIKey {
-            return "当前是本地接口：确认本地服务已启动并加载模型后，可以直接测试当前接口或验证短翻译。"
-        }
-        if (KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "当前是云接口且还没有 API Key：可以先测试入口连通性；真实翻译前需要填 Key。"
-        }
-        return "当前云接口已填写 API Key：建议先验证一次短翻译，确认模型、余额和权限都可用。"
-    }
-
-    private var providerOnboardingStatusColor: Color {
-        let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        if endpoint.isEmpty {
-            return .blue
-        }
-        if !providerRequiresAPIKey {
-            return .green
-        }
-        return (KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .blue : .green
     }
 
     private func labeledField(_ title: String, text: Binding<String>, secure: Bool = false) -> some View {
@@ -2351,10 +3242,18 @@ struct SettingsView: View {
     }
 
     private var providerEffectiveURLText: String {
+        let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         if let url = providerEffectiveURL {
-            return "实际请求地址：\(TranslationClient.redactedURLString(url.absoluteString))"
+            // 前缀逐字对齐 Windows Settings.tsx:834「实际请求：」。
+            return "实际请求：\(TranslationClient.redactedURLString(url.absoluteString))"
         }
-        return "实际请求地址：暂时无法解析，请填写完整接口地址。"
+        if endpoint.isEmpty {
+            // Windows 逐字：normalizeEndpointPreview 为空时显示「（未填写）」。
+            return "实际请求：（未填写）"
+        }
+        // Mac 增补分支：endpoint 非空但构造不出合法 URL（Windows 预览只做字符串
+        // 拼接、不会走到这里）；不模仿无效预览，直接给出可行动提示。
+        return "实际请求：暂时无法解析，请填写完整接口地址。"
     }
 
     private var providerEffectiveURL: URL? {
@@ -2513,132 +3412,6 @@ struct SettingsView: View {
             "served-model-name",
             "model-name"
         ].contains(normalized)
-    }
-
-    private var providerConnectionDiagnosticRow: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                Button(isTestingProviderConnection ? "测试中..." : "测试当前接口") {
-                    runProviderConnectionDiagnostic()
-                }
-                .controlSize(.small)
-                .disabled(isTestingProviderConnection || isVerifyingProviderTranslation || settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                Button(isVerifyingProviderTranslation ? "验证中..." : "验证翻译请求") {
-                    runProviderTranslationVerification()
-                }
-                .controlSize(.small)
-                .disabled(isTestingProviderConnection || isVerifyingProviderTranslation || providerTranslationVerificationDisabled)
-
-                if isTestingProviderConnection || isVerifyingProviderTranslation {
-                    Button("取消") {
-                        cancelProviderDiagnosticTasks()
-                        providerDiagnostic = ProviderConnectionDiagnostic(
-                            level: .warning,
-                            endpoint: settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
-                            message: "已取消当前 Provider 诊断。",
-                            kind: .cancelled,
-                            completedAt: Date()
-                        )
-                    }
-                    .controlSize(.small)
-                }
-
-                Button("复制诊断") {
-                    copyProviderText(
-                        providerDiagnosticReport,
-                        message: "已复制 Provider 诊断"
-                    )
-                }
-                .controlSize(.small)
-                .disabled(providerDiagnostic.level == .idle)
-
-                Button("复制支持包") {
-                    copyProviderText(
-                        providerDiagnosticSupportBundle,
-                        message: "已复制脱敏支持包"
-                    )
-                }
-                .controlSize(.small)
-                .disabled(providerDiagnostic.level == .idle)
-                .help("复制诊断报告、配置提示和不含真实 API Key 的 curl 命令")
-
-                Button("复制 curl") {
-                    copyProviderText(
-                        providerDiagnosticCurlCommand,
-                        message: "已复制安全 curl 命令"
-                    )
-                }
-                .controlSize(.small)
-                .disabled(providerEffectiveURL == nil)
-                .help("复制一个不包含真实 API Key 的 Chat Completions 复现命令")
-
-                Button("复制日志路径") {
-                    copyProviderText(
-                        DiagnosticLogger.logFileURL().path,
-                        message: "已复制诊断日志路径"
-                    )
-                }
-                .controlSize(.small)
-
-                Button("显示日志") {
-                    revealDiagnosticLog()
-                }
-                .controlSize(.small)
-
-                if isTestingProviderConnection || isVerifyingProviderTranslation {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.72)
-                        .frame(width: 18, height: 18)
-                }
-
-                Spacer(minLength: 0)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(providerDiagnostic.message)
-                    .font(.footnote)
-                    .foregroundStyle(providerDiagnostic.level.color)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let metadata = providerDiagnosticMetadataText {
-                    Text(metadata)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let nextStep = providerDiagnosticNextStepText {
-                    HStack(alignment: .top, spacing: 5) {
-                        Image(systemName: "arrow.turn.down.right")
-                            .foregroundStyle(.secondary)
-                        Text("建议下一步：\(nextStep)")
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .font(.caption2)
-                }
-                Text("只测试接口连通性和首个响应耗时，不发送 API Key、原文或翻译请求正文；本地 HTTP 接口可直接测试。")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("“验证翻译请求”会发送一段很短的测试文本，用来检查 API Key、模型名、余额/限流和账号权限。")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if !providerClipboardMessage.isEmpty {
-                    Text(providerClipboardMessage)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-        .padding(10)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(providerDiagnostic.level.color.opacity(providerDiagnostic.level == .idle ? 0.12 : 0.35), lineWidth: 1)
-        )
     }
 
     private var providerTranslationVerificationDisabled: Bool {
@@ -3262,6 +4035,12 @@ struct SettingsView: View {
             }
             .controlSize(.small)
 
+            // Windows 工具条第二钮（Settings.tsx:1056-1065 逐字）：读剪贴板文本并入编辑器。
+            Button("从剪贴板导入") {
+                importGlossaryFromClipboard()
+            }
+            .controlSize(.small)
+
             Button("导出") {
                 exportGlossaryText()
             }
@@ -3325,6 +4104,19 @@ struct SettingsView: View {
                 glossaryMaintenanceMessage = "导入失败：\(error.localizedDescription)"
             }
         }
+    }
+
+    /// 剪贴板导入合并（Windows importFromClipboard 对应物）：读 NSPasteboard 文本，
+    /// 非空则并入编辑器；成功提示与 Windows 逐字「已从剪贴板导入并合并」。
+    private func importGlossaryFromClipboard() {
+        guard let text = NSPasteboard.general.string(forType: .string)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+            glossaryMaintenanceMessage = "剪贴板没有可导入的文本"
+            return
+        }
+        let existing = settingsStore.glossaryText.trimmingCharacters(in: .whitespacesAndNewlines)
+        settingsStore.glossaryText = existing.isEmpty ? text : "\(existing)\n\(text)"
+        glossaryMaintenanceMessage = "已从剪贴板导入并合并"
     }
 
     private func exportGlossaryText() {
@@ -3689,7 +4481,7 @@ struct SettingsView: View {
         switch translationError {
         case .badResponse(let statusCode, _):
             return statusCode
-        case .invalidEndpoint, .missingAPIKey, .emptyTranslation, .invalidResponse:
+        case .invalidEndpoint, .missingAPIKey, .platformNotLoggedIn, .emptyTranslation, .invalidResponse:
             return nil
         }
     }
@@ -3951,70 +4743,31 @@ struct SettingsView: View {
             || host == "0.0.0.0"
     }
 
-    // 服务商选择区:三常驻卡片 + 自定义列表 + 添加按钮
-    private var providerSelector: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                ForEach(settingsStore.providers.filter { $0.isBuiltin }) { profile in
-                    builtinProviderCard(profile)
-                }
-            }
+    // 服务商选择派生数据（双栏 IA 左列/右列共用）
 
-            let customProviders = settingsStore.providers.filter { !$0.isBuiltin }
-            if !customProviders.isEmpty {
-                Text("自定义").font(.caption).foregroundStyle(.secondary)
-                VStack(spacing: 6) {
-                    ForEach(customProviders) { profile in
-                        customProviderRow(profile)
-                    }
-                }
-            }
-
-            Button {
-                showAddCustomProvider = true
-            } label: {
-                Label("添加自定义提供商", systemImage: "plus")
-                    .font(.footnote)
-            }
-            .buttonStyle(.borderless)
-        }
+    /// 左列「自带 API Key 的服务商」列表：内置且非平台（Windows localPresets）。
+    private var localBuiltinProviders: [ProviderProfile] {
+        settingsStore.providers.filter { $0.isBuiltin && $0.id != ProviderProfile.platformProviderID }
     }
 
-    private func builtinProviderCard(_ profile: ProviderProfile) -> some View {
-        let isSelected = settingsStore.activeProviderID == profile.id
+    /// 自定义 provider 列表（Mac 保留能力，规格 §四.11）。
+    private var customProviders: [ProviderProfile] {
+        settingsStore.providers.filter { !$0.isBuiltin }
+    }
 
-        return Button {
-            selectProvider(profile.id)
-        } label: {
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(profile.displayName)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Spacer()
-                    if isSelected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                    }
-                }
-                Text(profile.model)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.05))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(isSelected ? Color.accentColor.opacity(0.45) : Color.primary.opacity(0.10), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .help("切换到 \(profile.displayName)")
+    /// 当前选中的是否沉浸云平台 provider（Windows isPlatform 对应物）。
+    private var isPlatformProviderSelected: Bool {
+        settingsStore.activeProviderID == ProviderProfile.platformProviderID
+    }
+
+    /// API Key 输入框 placeholder（Windows 760-762 逐字：填入 {displayName} 的 API Key）。
+    private var apiKeyPlaceholder: String {
+        "填入 \(settingsStore.activeProvider.displayName) 的 API Key"
+    }
+
+    /// 当前预设的取 Key 控制台地址（渲染条件在 API Key 块里：需要 Key 且预设带 keyUrl）。
+    private var activePresetKeyURL: String? {
+        settingsStore.activeProvider.keyURL
     }
 
     private func customProviderRow(_ profile: ProviderProfile) -> some View {
@@ -4025,7 +4778,7 @@ struct SettingsView: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                        .foregroundStyle(isSelected ? Brand.accent : Color.secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(profile.displayName).font(.subheadline)
                         Text("\(profile.endpoint) · \(profile.model)")
@@ -4050,7 +4803,7 @@ struct SettingsView: View {
         .padding(8)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? Color.accentColor.opacity(0.08) : Color.clear)
+                .fill(isSelected ? Brand.accent.opacity(0.08) : Color.clear)
         )
     }
 
@@ -4137,9 +4890,9 @@ struct SettingsView: View {
 
     private var hotKeyConflictMessage: String? {
         let shortcuts: [(HotKeyShortcut, String)] = [
-            (settingsStore.selectionHotKeyShortcut, "选中文本翻译"),
-            (settingsStore.ocrHotKeyShortcut, "截图 OCR 翻译"),
-            (settingsStore.readerHotKeyShortcut, "沉浸阅读室")
+            (settingsStore.selectionHotKeyShortcut, "翻译热键"),
+            (settingsStore.ocrHotKeyShortcut, "截图 OCR 热键"),
+            (settingsStore.readerHotKeyShortcut, "阅读室热键")
         ]
         let duplicate = shortcuts.first { current in
             shortcuts.filter { $0.0 == current.0 }.count > 1
@@ -4150,6 +4903,7 @@ struct SettingsView: View {
 
     private func hotKeyRecorderRow(
         title: String,
+        hint: String,
         shortcut: HotKeyShortcut,
         target: HotKeyRecorderTarget,
         onRecord: @escaping (HotKeyShortcut) -> Void
@@ -4158,8 +4912,11 @@ struct SettingsView: View {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
+                        .font(.footnote.weight(.medium))
+                    Text(hint)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(shortcut.title)
                         .font(.system(size: 14, weight: .medium, design: .rounded))
                         .textSelection(.enabled)
@@ -4194,6 +4951,33 @@ struct SettingsView: View {
                 .help("恢复为 \(defaultHotKeyShortcut(for: target).title)")
             }
 
+            // 推荐组合 chips（Windows RECOMMENDED_HOTKEYS 推荐行对应物；点 chip 即写入。
+            // Mac 键族：Ctrl+Shift 系与系统/输入法冲突率高，取 HotKeyShortcut 内置
+            // 备选族 ⌥/⌃⌥/⌘⌥，规格 §四.10）。
+            HStack(spacing: 6) {
+                Text("推荐")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                // HotKeyShortcut 非 Hashable（无 ForEach id），按下标编 id。
+                ForEach(Array(recommendedHotKeyAlternatives(for: target).enumerated()), id: \.offset) { _, candidate in
+                    Button {
+                        onRecord(candidate)
+                        recordingHotKey = nil
+                        hotKeyRecorderMessage = "已设置 \(title)：\(candidate.title)。"
+                    } label: {
+                        Text(candidate.title)
+                            .font(.system(size: 11, design: .rounded))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Brand.accent.opacity(0.10), in: Capsule())
+                            .overlay(Capsule().stroke(Brand.accent.opacity(0.35), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Brand.accent)
+                    .help("把\(title)设为 \(candidate.title)")
+                }
+            }
+
             if let advisory = hotKeyAdvisoryMessage(for: shortcut, target: target) {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle")
@@ -4208,7 +4992,7 @@ struct SettingsView: View {
         .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(recordingHotKey == target ? Color.accentColor.opacity(0.65) : Color.primary.opacity(0.10), lineWidth: 1)
+                .stroke(recordingHotKey == target ? Brand.accent.opacity(0.65) : Color.primary.opacity(0.10), lineWidth: 1)
         )
         .background(
             HotKeyRecorderBridge(
@@ -4303,11 +5087,31 @@ struct SettingsView: View {
     private func otherHotKeyTitles(for target: HotKeyRecorderTarget) -> [String] {
         switch target {
         case .selection:
-            return ["截图 OCR 翻译", "沉浸阅读室"]
+            return ["截图 OCR 热键", "阅读室热键"]
         case .ocr:
-            return ["选中文本翻译", "沉浸阅读室"]
+            return ["翻译热键", "阅读室热键"]
         case .reader:
-            return ["选中文本翻译", "截图 OCR 翻译"]
+            return ["翻译热键", "截图 OCR 热键"]
+        }
+    }
+
+    /// 推荐组合（Windows RECOMMENDED_HOTKEYS 行的 Mac 键族对应物）：
+    /// 从 HotKeyShortcut.recommendedAlternatives 过滤掉当前行与其余两行的现值，
+    /// 取前三个，避免推一个必然冲突的键。
+    private func recommendedHotKeyAlternatives(for target: HotKeyRecorderTarget) -> [HotKeyShortcut] {
+        var excluded = otherHotKeyShortcuts(for: target)
+        excluded.append(currentHotKeyShortcut(for: target))
+        return HotKeyShortcut.recommendedAlternatives
+            .filter { !excluded.contains($0) }
+            .prefix(3)
+            .map { $0 }
+    }
+
+    private func currentHotKeyShortcut(for target: HotKeyRecorderTarget) -> HotKeyShortcut {
+        switch target {
+        case .selection: return settingsStore.selectionHotKeyShortcut
+        case .ocr: return settingsStore.ocrHotKeyShortcut
+        case .reader: return settingsStore.readerHotKeyShortcut
         }
     }
 
@@ -4315,6 +5119,13 @@ struct SettingsView: View {
         let suggestion = hotKeySuggestionText(excluding: shortcut, target: target)
         return shortcut.advisoryMessage(suggestion: suggestion)
     }
+}
+
+/// 服务商行/卡头状态小胶囊的色调（Windows chip / chip-green / chip-amber 对应物）。
+private enum ProviderChipTone {
+    case ok
+    case warn
+    case brand
 }
 
 private enum HotKeyRecorderTarget {
@@ -4446,5 +5257,89 @@ private struct SidebarVibrancyBackground: NSViewRepresentable {
 
     func updateNSView(_ view: NSVisualEffectView, context: Context) {
         // 材质/混合模式一次性设定；外观切换与减弱透明度由系统驱动，无需更新。
+    }
+}
+
+// MARK: - 关于页隐私政策卡（对齐 Windows PrivacyPolicyCard，Store 政策 10.5.1）
+
+/// 隐私政策卡卡体：默认收起只露按钮；点「查看完整政策」展开导语 + 六节全文 + 联系方式，
+/// 再点「收起」整段移除（条件渲染，非隐藏）。完全离线：无网络请求、不落盘。
+/// 披露状态挂在本视图自己的 @State 上（Windows 组件内 `useState(false)`）：
+/// - 切走「关于」分区 → 本视图随分区销毁，回来重新默认收起（≈ React 组件卸载）；
+/// - 关闭设置窗 → mac 设置窗只是 orderOut（isReleasedWhenClosed = false，宿主常驻），
+///   @State 不会自然清空，故监听宿主设置窗 willClose 显式复位，重开回默认收起。
+private struct AboutPrivacyPolicyCardBody: View {
+    /// 正文最大高度（Windows .about-privacy-body max-height: 260px，超出纵向滚动）。
+    private static let bodyMaxHeight: CGFloat = 260
+
+    @State private var disclosure = PrivacyPolicyDisclosure()
+    /// 正文实测高度。设置页外层是纵向 ScrollView（向下提议的高度为 nil），内层 ScrollView
+    /// 拿不到高度上限，故按实测内容高度取 min(实测, 260) 定高，复刻 CSS max-height 语义
+    ///（同 ReaderViews 书架 FolioContentHeightKey 做法）。初值取上限：全文在任何窗宽下都高于 260，免展开首帧跳高。
+    @State private var bodyContentHeight: CGFloat = AboutPrivacyPolicyCardBody.bodyMaxHeight
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if disclosure.isOpen {
+                policyBody
+            }
+            // about-release-actions：右对齐的次级小按钮（btn btn-secondary btn-sm）。
+            HStack(spacing: 7) {
+                Spacer(minLength: 0)
+                Button(disclosure.actionTitle) {
+                    disclosure.toggle()
+                }
+                .controlSize(.small)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { notification in
+            // 只认宿主设置窗；翻译浮窗、阅读室、设置内 sheet 等其它窗口关闭不影响。
+            guard (notification.object as? NSWindow)?.contentViewController is NSHostingController<SettingsView> else {
+                return
+            }
+            disclosure = PrivacyPolicyDisclosure()
+        }
+    }
+
+    /// 正文容器（.about-privacy-body：字号 12、行高约 1.7、段距 8、内边距 10/12、
+    /// 1px 描边、圆角 8、最大高 260 可滚动；节标题字重 600 + 全角冒号，正文同段内联续排）。
+    private var policyBody: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(PrivacyPolicyContent.intro)
+                ForEach(PrivacyPolicyContent.sections, id: \.title) { section in
+                    // <p><strong>{title}：</strong>{body}</p>（Text 的 + 拼接在 macOS 26 SDK 已弃用，改用插值）
+                    Text("\(Text(section.title + "：").fontWeight(.semibold))\(section.body)")
+                }
+                Text(PrivacyPolicyContent.contact)
+            }
+            .font(.system(size: 12))
+            .lineSpacing(6)
+            .fixedSize(horizontal: false, vertical: true)
+            // webview 里 <p> 可选中复制；联系方式同 Windows 只作文本，不做可点击链接。
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(key: PrivacyPolicyBodyHeightKey.self, value: geo.size.height)
+                }
+            )
+        }
+        .onPreferenceChange(PrivacyPolicyBodyHeightKey.self) { bodyContentHeight = $0 }
+        .frame(height: min(Self.bodyMaxHeight, max(1, bodyContentHeight)))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            // border: 1px solid rgba(148, 163, 184, 0.22)——Windows 原值直译，深浅色下同为淡灰蓝描边。
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color(red: 148 / 255, green: 163 / 255, blue: 184 / 255).opacity(0.22), lineWidth: 1)
+        )
+    }
+}
+
+private struct PrivacyPolicyBodyHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }

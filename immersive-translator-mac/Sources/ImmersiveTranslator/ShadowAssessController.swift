@@ -286,6 +286,13 @@ final class ShadowAssessController: NSObject, ObservableObject {
     private func handleResult(_ result: PronunciationResult, idx: Int, text: String) {
         state.result = result
         state.marks = mapWordsToText(text: text, words: result.words)
+        // 评测记录入云（speak-assessments，source=reader=阅读室跟读；仅真实 ISE
+        // 结果、被拒/异常不计入——对齐 Windows useShadowAssess.ts:172）。
+        if isCleanIseResult(result) {
+            SpeakSyncCenter.shared.records?.recordAssessmentSilently(
+                SpeakAssessmentInput(result: result, source: .reader, refText: text)
+            )
+        }
         let passScore = configProvider().passScore
         if isIsePass(result, passScore: passScore) {
             state.phase = .passed

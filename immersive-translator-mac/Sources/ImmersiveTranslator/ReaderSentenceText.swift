@@ -52,6 +52,10 @@ struct ReaderSentenceText: NSViewRepresentable {
     /// 意群回标色（从句靛蓝 / 其软底）；nil = 不启用回标通道。
     var clauseIndigoColor: NSColor?
     var clauseIndigoSoftColor: NSColor?
+    /// 随读抽查槽位（句内坐标）与 cell 配色；布局后回报附件 rect（覆盖层定位用）。
+    var clozeMarks: [ClozeRenderMark] = []
+    var clozeStyle: ClozeCellStyle?
+    var onClozeRects: (([String: CGRect]) -> Void)?
 
     func makeNSView(context: Context) -> ReaderTextView {
         let view = ReaderTextView(frame: .zero)
@@ -75,6 +79,9 @@ struct ReaderSentenceText: NSViewRepresentable {
         view.onChunkClick = { chunk in
             self.onChunkClick?(chunk)
         }
+        view.onClozeRects = { rects in
+            DispatchQueue.main.async { self.onClozeRects?(rects) }
+        }
         updateText(in: view)
         return view
     }
@@ -83,6 +90,9 @@ struct ReaderSentenceText: NSViewRepresentable {
         view.onSelection = { selection in self.onSelection(selection) }
         view.onWordClick = { word in self.onWordClick(word) }
         view.onChunkClick = { chunk in self.onChunkClick?(chunk) }
+        view.onClozeRects = { rects in
+            DispatchQueue.main.async { self.onClozeRects?(rects) }
+        }
         updateText(in: view)
     }
 
@@ -106,7 +116,11 @@ struct ReaderSentenceText: NSViewRepresentable {
             "\(font.fontName)|\(font.pointSize)|\(lineSpacing)|\(textColor)",
             marks.map { "\($0.start)-\($0.end)-\($0.kind == .known)" }.joined(separator: ";"),
             "\((assessMarks ?? []).count)",
-            clauseRange.map { "clause:\($0.location)-\($0.length)" } ?? "none"
+            clauseRange.map { "clause:\($0.location)-\($0.length)" } ?? "none",
+            clozeMarks.map {
+                "\($0.id):\($0.start)-\($0.end):\($0.verdict?.rawValue ?? "-"):\($0.input ?? ""):\($0.peeked ? 1 : 0)"
+            }.joined(separator: ";"),
+            clozeStyle.map { "\($0.ink1)|\($0.tapeBg)|\($0.accent)" } ?? ""
         ].joined(separator: "§")
         guard signature != view.renderSignature else { return }
         view.renderSignature = signature
@@ -124,6 +138,21 @@ struct ReaderSentenceText: NSViewRepresentable {
             ],
             range: full
         )
+        /// 收尾：挖空槽替换为附件（最后做，前面属性仍按句内坐标）→ 落入 storage。
+        func commit() {
+            if let clozeStyle, !clozeMarks.isEmpty {
+                view.splice = ClozeTextRendering.splice(into: attributed, marks: clozeMarks, style: clozeStyle)
+            } else {
+                view.splice = .identity
+            }
+            view.clozeMarks = clozeMarks
+            view.textWasManuallySet = false
+            storage.setAttributedString(attributed)
+            view.textWasManuallySet = true
+            view.needsLayout = true
+            view.invalidateIntrinsicContentSize()
+            view.reportClozeRectsIfNeeded()
+        }
         if let markRange = clauseRange,
            let indigo = clauseIndigoColor, let soft = clauseIndigoSoftColor {
             // 命中：整句只渲染这一个标记（优先级高于词块着色/跟读着色），
@@ -132,11 +161,7 @@ struct ReaderSentenceText: NSViewRepresentable {
             attributed.addAttribute(.underlineStyle, value: NSUnderlineStyle.thick.rawValue, range: markRange)
             attributed.addAttribute(.underlineColor, value: indigo, range: markRange)
             view.markedChunks = []
-            view.textWasManuallySet = false
-            storage.setAttributedString(attributed)
-            view.textWasManuallySet = true
-            view.needsLayout = true
-            view.invalidateIntrinsicContentSize()
+            commit()
             return
         }
         for mark in marks {
@@ -160,17 +185,16 @@ struct ReaderSentenceText: NSViewRepresentable {
             }
             attributed.addAttribute(.backgroundColor, value: bg, range: range)
         }
+        // 词块点击命中区按句内（原文）坐标存；命中判定时把渲染索引映回。
+        // 命中挖空槽的跨度不再是可点词块（该段渲染为槽位而非 chunk-hl）。
         view.markedChunks = marks.compactMap { mark in
             guard let chunk = mark.chunk else { return nil }
             let range = NSRange(location: mark.start, length: max(1, mark.end - mark.start))
             guard range.location + range.length <= full.length else { return nil }
+            if clozeMarks.contains(where: { $0.start == mark.start && $0.end == mark.end }) { return nil }
             return (range, chunk)
         }
-        view.textWasManuallySet = false
-        storage.setAttributedString(attributed)
-        view.textWasManuallySet = true
-        view.needsLayout = true
-        view.invalidateIntrinsicContentSize()
+        commit()
     }
 }
 
@@ -180,7 +204,13 @@ final class ReaderTextView: NSTextView {
     var onSelection: ((String) -> Void)?
     var onWordClick: ((String) -> Void)?
     var onChunkClick: ((SentenceChunk) -> Void)?
+    var onClozeRects: (([String: CGRect]) -> Void)?
+    /// 词块点击命中区（句内原文坐标）。
     var markedChunks: [(range: NSRange, chunk: SentenceChunk)] = []
+    /// 随读抽查槽位与 原文坐标 ↔ 渲染坐标 映射（无槽位时恒等）。
+    var clozeMarks: [ClozeRenderMark] = []
+    var splice: ClozeSplice = .identity
+    private var lastReportedClozeRects: [String: CGRect] = [:]
     /// setAttributedString 会清空选区并触发 selection 通知；置位期间不当作用户划选。
     var textWasManuallySet = true
     /// 上次渲染输入签名（内容/字号/颜色/跨度/意群命中）：相同则跳过重建，
@@ -223,7 +253,8 @@ final class ReaderTextView: NSTextView {
         let range = selectedRange
         if range.length > 0, let source = self.string as NSString?,
            range.location + range.length <= source.length {
-            let picked = source.substring(with: range)
+            // 划选跨过挖空附件字符时把 U+FFFC 剔掉（它不是正文）。
+            let picked = source.substring(with: range).replacingOccurrences(of: "\u{FFFC}", with: "")
             if !picked.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 onSelection?(picked)
                 super.mouseUp(with: event)
@@ -241,18 +272,46 @@ final class ReaderTextView: NSTextView {
         super.mouseUp(with: event)
     }
 
-    /// 点击命中词块标注范围 → 出即时卡。
+    /// 点击命中词块标注范围 → 出即时卡（渲染索引先映回句内原文坐标）。
     private func chunkAtMouseLocation(with event: NSEvent) -> SentenceChunk? {
         guard let layoutManager, let container = textContainer, !markedChunks.isEmpty else { return nil }
         let location = convert(event.locationInWindow, from: nil)
-        let index = layoutManager.characterIndex(
+        let rendered = layoutManager.characterIndex(
             for: location,
             in: container,
             fractionOfDistanceBetweenInsertionPoints: nil
         )
+        let index = splice.originalIndex(rendered)
         return markedChunks.first {
             index >= $0.range.location && index < NSMaxRange($0.range)
         }?.chunk
+    }
+
+    // MARK: 挖空槽附件 rect 回报（覆盖层定位）
+
+    override func layout() {
+        super.layout()
+        reportClozeRectsIfNeeded()
+    }
+
+    func reportClozeRectsIfNeeded() {
+        guard let layoutManager, let container = textContainer else { return }
+        var rects: [String: CGRect] = [:]
+        if !clozeMarks.isEmpty, container.size.width > 0 {
+            layoutManager.ensureLayout(for: container)
+            for mark in clozeMarks {
+                guard let replacement = splice.replacements.first(where: { $0.range == mark.range }) else { continue }
+                let loc = replacement.renderedLocation
+                guard loc < layoutManager.numberOfGlyphs else { continue }
+                let glyphRange = layoutManager.glyphRange(forCharacterRange: NSRange(location: loc, length: 1), actualCharacterRange: nil)
+                guard glyphRange.length > 0 else { continue }
+                rects[mark.id] = layoutManager.boundingRect(forGlyphRange: glyphRange, in: container)
+            }
+        }
+        if rects != lastReportedClozeRects {
+            lastReportedClozeRects = rects
+            onClozeRects?(rects)
+        }
     }
 
     private func wordAtMouseLocation(with event: NSEvent) -> String? {
@@ -350,6 +409,13 @@ struct ReaderProseText: NSViewRepresentable {
         }
     }
 
+    /// 一句在文本视图里的占位（视图本地坐标）：首行顶 / 末行底 / 末行句尾右缘。
+    struct SentenceRect: Equatable {
+        let minY: CGFloat
+        let maxY: CGFloat
+        let lastLineRight: CGFloat
+    }
+
     let pieces: [ProsePiece]
     let style: Style
     /// 词块/生词跨度（UTF-16 偏移已折算到拼接文本坐标系）。
@@ -369,6 +435,14 @@ struct ReaderProseText: NSViewRepresentable {
     let onClickSentence: (Int) -> Void
     /// 布局后回报各句 minY（视图本地坐标；滚动跟随用）。
     var onSentenceFrames: (([Int: CGFloat]) -> Void)?
+    /// 布局后回报各句末行 rect（视图本地坐标；译文浮层锚定用——Windows
+    /// `getClientRects()` 末行 rect 的 AppKit 等价物：末字形 glyph 的 bounding rect
+    /// 即末行内句尾的位置）。
+    var onSentenceRects: (([Int: ReaderProseText.SentenceRect]) -> Void)?
+    /// 随读抽查槽位（拼接坐标）与 cell 配色；布局后回报各槽附件 rect（覆盖层定位用）。
+    var clozeMarks: [ClozeRenderMark] = []
+    var clozeStyle: ClozeCellStyle?
+    var onClozeRects: (([String: CGRect]) -> Void)?
 
     /// 拼接文本（句间以空格相连，与行内流一致）。
     static func joinedText(of pieces: [ProsePiece]) -> String {
@@ -380,14 +454,16 @@ struct ReaderProseText: NSViewRepresentable {
         view.configureTextView()
         wire(view)
         view.apply(pieces: pieces, style: style, marks: marks, assessMarks: assessMarks,
-                   spotlight: spotlight, hoveredClause: hoveredClause, dropCap: dropCap)
+                   spotlight: spotlight, hoveredClause: hoveredClause, dropCap: dropCap,
+                   clozeMarks: clozeMarks, clozeStyle: clozeStyle)
         return view
     }
 
     func updateNSView(_ view: ProseFlowTextView, context: Context) {
         wire(view)
         view.apply(pieces: pieces, style: style, marks: marks, assessMarks: assessMarks,
-                   spotlight: spotlight, hoveredClause: hoveredClause, dropCap: dropCap)
+                   spotlight: spotlight, hoveredClause: hoveredClause, dropCap: dropCap,
+                   clozeMarks: clozeMarks, clozeStyle: clozeStyle)
     }
 
     private func wire(_ view: ProseFlowTextView) {
@@ -399,6 +475,12 @@ struct ReaderProseText: NSViewRepresentable {
         // 避免 Modifying state during view update。
         view.onSentenceFrames = { frames in
             DispatchQueue.main.async { onSentenceFrames?(frames) }
+        }
+        view.onSentenceRects = { rects in
+            DispatchQueue.main.async { onSentenceRects?(rects) }
+        }
+        view.onClozeRects = { rects in
+            DispatchQueue.main.async { onClozeRects?(rects) }
         }
     }
 
@@ -416,6 +498,8 @@ final class ProseFlowTextView: NSTextView {
     var onChunkClick: ((Int, SentenceChunk) -> Void)?
     var onClickSentence: ((Int) -> Void)?
     var onSentenceFrames: (([Int: CGFloat]) -> Void)?
+    var onSentenceRects: (([Int: ReaderProseText.SentenceRect]) -> Void)?
+    var onClozeRects: (([String: CGRect]) -> Void)?
 
     private var pieces: [ProsePiece] = []
     private var style: ReaderProseText.Style?
@@ -424,11 +508,18 @@ final class ProseFlowTextView: NSTextView {
     private var spotlight = false
     private var hoveredClause: String?
     private var dropCapEnabled = false
+    /// 随读抽查槽位（拼接坐标）与配色；splice = 原文坐标 ↔ 渲染坐标映射（无槽位时恒等）。
+    private var clozeMarks: [ClozeRenderMark] = []
+    private var clozeStyle: ClozeCellStyle?
+    private(set) var splice: ClozeSplice = .identity
     /// 专注模式悬停中的句（本地维护，恢复 0.78 时不经 SwiftUI 重排）。
     private var hoveredPieceIdx: Int?
+    /// 词块点击命中区（原文坐标；命中判定时把渲染索引映回原文）。
     private var chunkHits: [(range: NSRange, chunk: SentenceChunk, pieceIdx: Int)] = []
     private var renderSignature = ""
     private var lastReportedFrames: [Int: CGFloat] = [:]
+    private var lastReportedRects: [Int: ReaderProseText.SentenceRect] = [:]
+    private var lastReportedClozeRects: [String: CGRect] = [:]
     /// 按（渲染签名, 宽度）缓存的离屏测量高度；内容或宽度变了才重排。
     private var heightCache: (signature: String, width: CGFloat, height: CGFloat)?
 
@@ -484,7 +575,9 @@ final class ProseFlowTextView: NSTextView {
         assessMarks: [WordMark]?,
         spotlight: Bool,
         hoveredClause: String?,
-        dropCap: Bool
+        dropCap: Bool,
+        clozeMarks: [ClozeRenderMark] = [],
+        clozeStyle: ClozeCellStyle? = nil
     ) {
         let signature = [
             "\(ReaderProseText.joinedText(of: pieces))",
@@ -493,7 +586,11 @@ final class ProseFlowTextView: NSTextView {
             pieces.map { "\($0.idx):\($0.isCurrent ? 1 : 0)\($0.failed ? 1 : 0)" }.joined(separator: ","),
             "\(marks.count)|\(marks.map { "\($0.start)-\($0.end)-\($0.kind == .known)" }.joined(separator: ";"))",
             "\(assessMarks?.count ?? 0)",
-            "\(spotlight)", hoveredClause ?? "", "\(dropCap)"
+            "\(spotlight)", hoveredClause ?? "", "\(dropCap)",
+            clozeMarks.map {
+                "\($0.id):\($0.start)-\($0.end):\($0.verdict?.rawValue ?? "-"):\($0.input ?? ""):\($0.peeked ? 1 : 0)"
+            }.joined(separator: ";"),
+            clozeStyle.map { "\($0.ink1)|\($0.tapeBg)|\($0.accent)" } ?? ""
         ].joined(separator: "§")
         guard signature != renderSignature else { return }
         renderSignature = signature
@@ -504,6 +601,8 @@ final class ProseFlowTextView: NSTextView {
         self.spotlight = spotlight
         self.hoveredClause = hoveredClause
         self.dropCapEnabled = dropCap
+        self.clozeMarks = clozeMarks
+        self.clozeStyle = clozeStyle
         hoveredPieceIdx = nil
         rebuild()
     }
@@ -584,7 +683,9 @@ final class ProseFlowTextView: NSTextView {
             attributed.addAttribute(.underlineStyle, value: NSUnderlineStyle.patternDash.rawValue, range: range)
             attributed.addAttribute(.underlineColor, value: color, range: range)
             attributed.addAttribute(.cursor, value: NSCursor.pointingHand, range: range)
-            if let chunk = mark.chunk {
+            // 命中本句挖空槽的跨度不再是可点词块（Windows renderSpanSeg 该段渲染为槽位而非 chunk-hl）。
+            let isClozeSlot = clozeMarks.contains { $0.start == mark.start && $0.end == mark.end }
+            if let chunk = mark.chunk, !isClozeSlot {
                 chunkHits.append((range, chunk, owner?.idx ?? 0))
             }
         }
@@ -613,6 +714,13 @@ final class ProseFlowTextView: NSTextView {
             attributed.addAttribute(.obliqueness, value: 0.18, range: NSRange(location: 0, length: 1))
         }
 
+        // 随读抽查：槽位原文整段换成附件字符（最后做，前面全部属性仍按原文坐标施加）。
+        if let clozeStyle, !clozeMarks.isEmpty {
+            splice = ClozeTextRendering.splice(into: attributed, marks: clozeMarks, style: clozeStyle)
+        } else {
+            splice = .identity
+        }
+
         textStorage?.setAttributedString(attributed)
         needsLayout = true
         invalidateIntrinsicContentSize()
@@ -634,15 +742,16 @@ final class ProseFlowTextView: NSTextView {
         return covered
     }
 
-    // MARK: 句定位
+    // MARK: 句定位（charIndex 为原文坐标；渲染索引先经 splice.originalIndex 映回）
 
     private func pieceIdx(at charIndex: Int) -> Int? {
         pieces.last { $0.start <= charIndex }?.idx
     }
 
+    /// 某句在渲染串里的范围（原文范围经 splice 映射；无槽位时恒等）。
     private func range(ofPiece idx: Int) -> NSRange? {
         guard let piece = pieces.first(where: { $0.idx == idx }) else { return nil }
-        return NSRange(location: piece.start, length: (piece.en as NSString).length)
+        return splice.renderedRange(NSRange(location: piece.start, length: (piece.en as NSString).length))
     }
 
     // MARK: 交互
@@ -651,9 +760,10 @@ final class ProseFlowTextView: NSTextView {
         let selection = selectedRange
         let source = string as NSString
         if selection.length > 0, selection.location + selection.length <= source.length {
-            let picked = source.substring(with: selection)
+            // 划选跨过挖空附件字符时把 U+FFFC 剔掉（它不是正文）。
+            let picked = source.substring(with: selection).replacingOccurrences(of: "\u{FFFC}", with: "")
             if !picked.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                if let idx = pieceIdx(at: selection.location) {
+                if let idx = pieceIdx(at: splice.originalIndex(selection.location)) {
                     onSelection?(idx, picked)
                 }
                 super.mouseUp(with: event)
@@ -681,11 +791,12 @@ final class ProseFlowTextView: NSTextView {
     private func chunkAtMouseLocation(with event: NSEvent) -> (range: NSRange, chunk: SentenceChunk, pieceIdx: Int)? {
         guard let layoutManager, let container = textContainer, !chunkHits.isEmpty else { return nil }
         let location = convert(event.locationInWindow, from: nil)
-        let index = layoutManager.characterIndex(
+        let rendered = layoutManager.characterIndex(
             for: location,
             in: container,
             fractionOfDistanceBetweenInsertionPoints: nil
         )
+        let index = splice.originalIndex(rendered)
         return chunkHits.first {
             index >= $0.range.location && index < NSMaxRange($0.range)
         }
@@ -694,12 +805,12 @@ final class ProseFlowTextView: NSTextView {
     private func pieceIdxAtMouseLocation(with event: NSEvent) -> Int? {
         guard let layoutManager, let container = textContainer else { return nil }
         let location = convert(event.locationInWindow, from: nil)
-        let index = layoutManager.characterIndex(
+        let rendered = layoutManager.characterIndex(
             for: location,
             in: container,
             fractionOfDistanceBetweenInsertionPoints: nil
         )
-        return pieceIdx(at: index)
+        return pieceIdx(at: splice.originalIndex(rendered))
     }
 
     private func wordAtMouseLocation(with event: NSEvent) -> String? {
@@ -802,18 +913,52 @@ final class ProseFlowTextView: NSTextView {
         guard container.size.width > 0 else { return }
         layoutManager.ensureLayout(for: container)
         var frames: [Int: CGFloat] = [:]
+        var rects: [Int: ReaderProseText.SentenceRect] = [:]
         for piece in pieces {
             let charRange = NSRange(location: piece.start, length: max(1, (piece.en as NSString).length))
-            let glyphRange = layoutManager.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+            // 原文坐标 → 渲染坐标（挖空槽折叠后句长变短；无槽位时恒等）。
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: splice.renderedRange(charRange), actualCharacterRange: nil)
             guard glyphRange.length > 0 else { continue }
             let rect = layoutManager.lineFragmentRect(
                 forGlyphAt: glyphRange.location,
                 effectiveRange: nil
             )
             frames[piece.idx] = rect.minY
+            // 末行 rect：句尾最后一个 glyph 的 bounding rect——底边 = 末行底，右缘 = 句尾
+            //（Windows getClientRects() 末 rect 的 bottom/right 同义；不取整行 used rect，
+            // 否则下一句同行续排时右缘会跑到下一句去）。
+            let lastGlyph = max(glyphRange.location, NSMaxRange(glyphRange) - 1)
+            let lastRect = layoutManager.boundingRect(
+                forGlyphRange: NSRange(location: lastGlyph, length: 1),
+                in: container
+            )
+            rects[piece.idx] = ReaderProseText.SentenceRect(
+                minY: rect.minY,
+                maxY: lastRect.maxY,
+                lastLineRight: lastRect.maxX
+            )
         }
-        guard frames != lastReportedFrames else { return }
-        lastReportedFrames = frames
-        onSentenceFrames?(frames)
+        if frames != lastReportedFrames {
+            lastReportedFrames = frames
+            onSentenceFrames?(frames)
+        }
+        if rects != lastReportedRects {
+            lastReportedRects = rects
+            onSentenceRects?(rects)
+        }
+        // 挖空槽附件 rect（覆盖层定位：待答输入框 / 已答印章）。只报真正落了附件的槽位。
+        var clozeRects: [String: CGRect] = [:]
+        for mark in clozeMarks {
+            guard let replacement = splice.replacements.first(where: { $0.range == mark.range }) else { continue }
+            let renderedLoc = replacement.renderedLocation
+            guard renderedLoc < layoutManager.numberOfGlyphs else { continue }
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: NSRange(location: renderedLoc, length: 1), actualCharacterRange: nil)
+            guard glyphRange.length > 0 else { continue }
+            clozeRects[mark.id] = layoutManager.boundingRect(forGlyphRange: glyphRange, in: container)
+        }
+        if clozeRects != lastReportedClozeRects {
+            lastReportedClozeRects = clozeRects
+            onClozeRects?(clozeRects)
+        }
     }
 }

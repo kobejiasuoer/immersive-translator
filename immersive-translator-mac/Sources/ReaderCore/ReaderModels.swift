@@ -128,6 +128,8 @@ public struct SentencePair: Codable, Equatable {
     public var revealed: Bool?
     /// LLM 标注的词块（en 定稿后写入）。
     public var chunks: [SentenceChunk]?
+    /// 段落失败原因（按 HTTP 状态码定稿的中文文案；重试成功后清空）。
+    public var zhError: String?
 
     public init(
         idx: Int,
@@ -136,7 +138,8 @@ public struct SentencePair: Codable, Equatable {
         zh: String? = nil,
         zhState: SentenceZhState = .pending,
         revealed: Bool? = nil,
-        chunks: [SentenceChunk]? = nil
+        chunks: [SentenceChunk]? = nil,
+        zhError: String? = nil
     ) {
         self.idx = idx
         self.paragraphIdx = paragraphIdx
@@ -145,6 +148,7 @@ public struct SentencePair: Codable, Equatable {
         self.zhState = zhState
         self.revealed = revealed
         self.chunks = chunks
+        self.zhError = zhError
     }
 
     enum CodingKeys: String, CodingKey {
@@ -155,6 +159,7 @@ public struct SentencePair: Codable, Equatable {
         case zhState
         case revealed
         case chunks
+        case zhError
     }
 
     public init(from decoder: Decoder) throws {
@@ -166,6 +171,7 @@ public struct SentencePair: Codable, Equatable {
         zhState = try c.decodeIfPresent(SentenceZhState.self, forKey: .zhState) ?? .pending
         revealed = try c.decodeIfPresent(Bool.self, forKey: .revealed)
         chunks = try c.decodeIfPresent([SentenceChunk].self, forKey: .chunks)
+        zhError = try c.decodeIfPresent(String.self, forKey: .zhError)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -178,6 +184,7 @@ public struct SentencePair: Codable, Equatable {
         try c.encode(zhState, forKey: .zhState)
         try c.encodeIfPresent(revealed, forKey: .revealed)
         try c.encodeIfPresent(chunks, forKey: .chunks)
+        try c.encodeIfPresent(zhError, forKey: .zhError)
     }
 }
 
@@ -528,6 +535,16 @@ public struct RecallModeStat: Codable, Equatable {
         self.pass = pass
         self.wrong = wrong
         self.trap = trap
+    }
+
+    /// 缺键按 0（对齐 Windows reader_store.rs RecallModeStat 三字段 `#[serde(default)]`：
+    /// 学习接力 reduce_word 给新 mode 建行只写命中的桶，如 `{"pass":1}`，严格解码会
+    /// 让整个 reader_vocab.json 读失败）。
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pass = try c.decodeIfPresent(Int.self, forKey: .pass) ?? 0
+        wrong = try c.decodeIfPresent(Int.self, forKey: .wrong) ?? 0
+        trap = try c.decodeIfPresent(Int.self, forKey: .trap) ?? 0
     }
 }
 

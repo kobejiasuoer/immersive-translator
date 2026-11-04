@@ -97,6 +97,8 @@ public struct BookImportDraft: Equatable {
     public var radar: BookRadar
     public var totalWords: Int
     public var minutes: Int
+    /// 来源书目 id（发现页下载注入时携带；透传供 discover_import 埋点。本地导入缺省 nil）。
+    public var sourceBookId: String?
 
     public init(
         title: String,
@@ -105,7 +107,8 @@ public struct BookImportDraft: Equatable {
         chapters: [BookImportChapter],
         radar: BookRadar,
         totalWords: Int,
-        minutes: Int
+        minutes: Int,
+        sourceBookId: String? = nil
     ) {
         self.title = title
         self.author = author
@@ -114,7 +117,16 @@ public struct BookImportDraft: Equatable {
         self.radar = radar
         self.totalWords = totalWords
         self.minutes = minutes
+        self.sourceBookId = sourceBookId
     }
+}
+
+/// discover_import 埋点载荷分流（对齐 Windows bookImport.ts discoverImportProps）：
+/// 草稿带 sourceBookId（发现页下载入库）→ `{ bookId }`；本地导入缺省 → nil（不埋）。
+/// 绝不把「发起导入」当「下载入库成功」——调用点在入库成功 toast 之后。
+public func discoverImportProps(_ draft: BookImportDraft) -> [String: String]? {
+    guard let bookId = draft.sourceBookId, !bookId.isEmpty else { return nil }
+    return ["bookId": bookId]
 }
 
 // MARK: - 常量（对齐 bookImport.ts 顶部）
@@ -382,12 +394,14 @@ public func radarForText(_ text: String, wordlists: ExamWordlists) -> BookRadar 
 }
 
 /// 导入向导确认时交给应用层的入库草稿。章文本为空时返回 nil（不产空书）。
+/// sourceBookId 仅发现页下载注入路径传入（透传进草稿供 discover_import 埋点）。
 public func buildBookImportDraft(
     title: String,
     author: String? = nil,
     cover: String? = nil,
     chapters: [BookImportChapter],
-    wordlists: ExamWordlists
+    wordlists: ExamWordlists,
+    sourceBookId: String? = nil
 ) -> BookImportDraft? {
     let chosen = chapters.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     guard !chosen.isEmpty else { return nil }
@@ -400,7 +414,8 @@ public func buildBookImportDraft(
         chapters: chosen,
         radar: radarForText(fullText, wordlists: wordlists),
         totalWords: totalWords,
-        minutes: max(1, Int((Double(totalWords) / Double(bookWpm)).rounded()))
+        minutes: max(1, Int((Double(totalWords) / Double(bookWpm)).rounded())),
+        sourceBookId: sourceBookId
     )
 }
 

@@ -10,16 +10,44 @@ public struct FetchedArticle: Equatable {
     public var host: String
     public var title: String
     public var text: String
+    /// 正文超过 maxArticleChars 被整段截断时为 true（预览卡提示用户；对齐
+    /// web_extract.rs FetchedArticle.truncated / webExtract.ts `truncated?: boolean`）。
+    public var truncated: Bool
 
-    public init(url: String, host: String, title: String, text: String) {
+    public init(url: String, host: String, title: String, text: String, truncated: Bool = false) {
         self.url = url
         self.host = host
         self.title = title
         self.text = text
+        self.truncated = truncated
     }
 }
 
 public let webExtractMinArticleWords = 150
+
+/// 单篇正文长度上限（字符数，chars 口径，含段落间分隔符）：50_000 ≈ 1 万词/约 160 段；
+/// 配合 llm 桶 60/min 与客户端 429 自动退避，最坏耗时分钟级可控（web_extract.rs:15）。
+public let maxArticleChars = 50_000
+
+/// 整段保留截断（对齐 web_extract.rs cap_text_chars）：段落间 "\n\n" 分隔符计入预算
+/// （join 后总长严格 ≤ maxChars）；超限时在段落边界截断并标记 truncated；首段恒保留
+/// （宁多勿空，单段超限也原样返回且不标 truncated）。字符数按 Unicode 标量计
+/// （与 Rust `chars().count()` 同口径，而非 Swift 字素簇）。
+public func capTextChars(_ text: String, maxChars: Int) -> (text: String, truncated: Bool) {
+    let paras = text.components(separatedBy: "\n\n")
+    var kept: [String] = []
+    var total = 0
+    for (i, p) in paras.enumerated() {
+        let sep = i > 0 ? 2 : 0
+        let len = p.unicodeScalars.count + sep
+        if i > 0 && total + len > maxChars {
+            return (kept.joined(separator: "\n\n"), true)
+        }
+        total += len
+        kept.append(p)
+    }
+    return (kept.joined(separator: "\n\n"), false)
+}
 
 /// 预览/导入共用的正文提取（纯函数，可测）。正文词数门槛可注入（测试小夹具用小门槛）。
 public func extractArticle(
@@ -36,7 +64,11 @@ public func extractArticle(
             "只抓到 \(words) 个词的正文——这个页面可能是付费墙、需要登录或反爬限制。可以在网页里全选复制正文，用「粘贴文本」导入，内容是一样的。"
         ))
     }
-    return .success(FetchedArticle(url: finalURL, host: host, title: title, text: text))
+    // 门槛检查按原文全量词数（截断不影响付费墙判定），之后再做长度截断。
+    let capped = capTextChars(text, maxChars: maxArticleChars)
+    return .success(FetchedArticle(
+        url: finalURL, host: host, title: title, text: capped.text, truncated: capped.truncated
+    ))
 }
 
 public func hostOf(_ url: String) -> String {

@@ -805,6 +805,49 @@ final class ServerAuthConfigurationTests: XCTestCase {
             "坏 JSON → 回 dev 缺省"
         )
     }
+
+    /// 缺省 base 按构建类型取值（对齐 auth.rs:221-227）：debug→本地联调，
+    /// release→生产域名。生产值锁死，防手滑改常量。
+    func testDefaultBaseURLFollowsBuildKind() {
+        XCTAssertEqual(
+            ServerAuthConfiguration.defaultBaseURL(isDebugBuild: true),
+            ServerAuthConfiguration.devBaseURL,
+            "debug 构建 → 本地联调缺省"
+        )
+        XCTAssertEqual(
+            ServerAuthConfiguration.defaultBaseURL(isDebugBuild: false),
+            "https://www.prismspace.online",
+            "release 构建 → 生产缺省（镜像 auth.rs:153 PROD_BASE_URL）"
+        )
+    }
+
+    /// 公众开放开关与 Windows 当前值一致（auth.rs:159 PLATFORM_PUBLIC = true）。
+    func testPlatformPublicMatchesWindows() {
+        XCTAssertTrue(ServerAuthConfiguration.platformPublic, "镜像 auth.rs:159")
+    }
+
+    /// 无覆盖文件时回退到「按构建类型的缺省」——一致性断言，不绑死当前
+    /// 运行配置（swift test 为 debug 配置，即 devBaseURL，与既有
+    /// testEndpointOverrideWins 首断言互证）。
+    func testResolveBaseURLFallsBackToBuildDefault() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auth-endpoint-fallback-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        XCTAssertEqual(
+            ServerAuthConfiguration.resolveBaseURL(appSupportDirectory: dir),
+            ServerAuthConfiguration.defaultBaseURL(isDebugBuild: ServerAuthConfiguration.isDebugBuild),
+            "无覆盖文件 → 按构建类型取缺省"
+        )
+    }
+
+    /// 生产常量形状双保险：https 前缀且不以 `/` 结尾（URLSessionAuthTransport
+    /// 会 trim 尾斜杠，网关派生按 {base}/v1/chat/completions 拼接）。
+    func testProdBaseURLShape() {
+        XCTAssertTrue(ServerAuthConfiguration.prodBaseURL.hasPrefix("https://"), "生产 base 必须 https")
+        XCTAssertFalse(ServerAuthConfiguration.prodBaseURL.hasSuffix("/"), "生产 base 不以斜杠结尾")
+    }
 }
 
 // MARK: - JSON 转义
@@ -897,6 +940,130 @@ final class ServerAuthClientTests: XCTestCase {
         XCTAssertFalse(client.status.loggedIn)
         XCTAssertEqual(client.status.notice, .sessionKicked)
         XCTAssertNil(store.load(), "fatal 已清凭据")
+    }
+
+    /// 云同步 / 兑换传输入口 reject 致命鉴权 → 广播未登录 + 失效 notice（Windows
+    /// sync.rs:137-140 / redeem.rs:37-40 的 `Err(e) => { emit_fatal_if_needed; Err(e) }`
+    /// 对应物）：账号区失效状态条（D8）不因走同步/兑换路径触发清凭据而缺席。
+    func testSyncPullFatalBroadcastsLoggedOutNotice() async throws {
+        let (client, transport, store, dir) = makeClient { request in
+            XCTAssertTrue(request.path.hasPrefix("/v1/sync/speak-sessions/pull"), request.path)
+            return resp(401, errBody("token_invalid"))
+        }
+        defer { try? FileManager.default.removeItem(at: dir) }
+        store.preload(fixtureStored(accessExpiresAt: nowUnix() + 1000))
+
+        do {
+            _ = try await client.syncPull(collection: "speak-sessions", since: 0, limit: 500)
+            XCTFail("致命鉴权应 throw（非 2xx 之外的唯一 reject 口径）")
+        } catch let error as AuthError {
+            XCTAssertEqual(error.code, "token_invalid")
+        }
+        XCTAssertEqual(transport.count("/v1/auth/refresh"), 0, "token_invalid 绝不触发刷新")
+        XCTAssertNil(store.load(), "fatal 已清凭据")
+        XCTAssertFalse(client.status.loggedIn)
+        XCTAssertEqual(client.status.notice, .sessionExpired, "失效条载体：loggedIn=false + notice")
+    }
+
+    func testSyncPushFatalBroadcastsKicked() async throws {
+        let (client, _, store, dir) = makeClient { _ in
+            resp(401, errBody("token_reused"))
+        }
+        defer { try? FileManager.default.removeItem(at: dir) }
+        store.preload(fixtureStored(accessExpiresAt: nowUnix() + 1000))
+
+        do {
+            _ = try await client.syncPush(collection: "speak-assessments", entitiesJSON: "{\"entities\":[]}")
+            XCTFail("致命鉴权应 throw")
+        } catch let error as AuthError {
+            XCTAssertEqual(error.code, "token_reused")
+        }
+        XCTAssertFalse(client.status.loggedIn)
+        XCTAssertEqual(client.status.notice, .sessionKicked, "reused 全设备下线单列")
+    }
+
+    func testRedeemFatalBroadcastsLoggedOutNotice() async throws {
+        let (client, transport, store, dir) = makeClient { request in
+            XCTAssertEqual(request.path, "/v1/redeem")
+            return resp(401, errBody("token_invalid"))
+        }
+        defer { try? FileManager.default.removeItem(at: dir) }
+        store.preload(fixtureStored(accessExpiresAt: nowUnix() + 1000))
+
+        do {
+            _ = try await client.redeem(code: "AAAA-BBBB-CCCC-DDDD")
+            XCTFail("致命鉴权应 throw")
+        } catch let error as AuthError {
+            XCTAssertEqual(error.code, "token_invalid")
+        }
+        XCTAssertEqual(transport.count("/v1/redeem"), 1)
+        XCTAssertFalse(client.status.loggedIn)
+        XCTAssertEqual(client.status.notice, .sessionExpired)
+    }
+
+    /// 非致命 reject（网络错）与非 2xx 协议数据都不动登录态：只有致命三码才广播。
+    func testSyncNonFatalRejectAndProtocolErrorsLeaveStatusUntouched() async throws {
+        let (client, _, store, dir) = makeClient { request in
+            if request.path.hasPrefix("/v1/sync/speak-sessions/pull") {
+                throw URLError(.notConnectedToInternet)
+            }
+            return resp(409, "{\"error\":{\"code\":\"conflict\",\"details\":{\"conflicts\":[]}}}")
+        }
+        defer { try? FileManager.default.removeItem(at: dir) }
+        store.preload(fixtureStored(accessExpiresAt: nowUnix() + 1000))
+
+        do {
+            _ = try await client.syncPull(collection: "speak-sessions", since: 0, limit: 500)
+            XCTFail("网络错应 throw")
+        } catch let error as AuthError {
+            XCTAssertEqual(error.code, "network_error")
+        }
+        XCTAssertNil(client.status.notice, "网络错不是致命鉴权，不广播失效态")
+
+        let conflict = try await client.syncPush(collection: "speak-sessions", entitiesJSON: "{\"entities\":[]}")
+        XCTAssertEqual(conflict.status, 409, "非 2xx 是协议数据，原样带回不 reject")
+        XCTAssertNil(client.status.notice)
+        XCTAssertNotNil(store.load(), "协议错误不清凭据")
+    }
+
+    // MARK: 语音「登录成功瞬间自动切云」信号（loginSuccessSerial）
+
+    /// 启动静默续登录（预填→已登录）不算登录瞬间：loginSuccessSerial 不递增。
+    func testBootstrapSilentReloginDoesNotBumpLoginSuccessSerial() async throws {
+        let (client, _, store, dir) = makeClient { _ in
+            throw AuthError.local("network_error", "注入的离线")
+        }
+        defer { try? FileManager.default.removeItem(at: dir) }
+        store.preload(fixtureStored(accessExpiresAt: nowUnix() + 1000))
+
+        XCTAssertEqual(client.loginSuccessSerial, 0)
+        client.bootstrap()
+        try await waitUntil(timeout: 3) { client.status.loggedIn }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertTrue(client.status.loggedIn)
+        XCTAssertEqual(client.loginSuccessSerial, 0, "启动续登录 loggedOut→true 不是登录瞬间")
+    }
+
+    /// 交互式登录成功（验证码）递增 loginSuccessSerial；登出不递增。
+    func testInteractiveLoginBumpsLoginSuccessSerial() async throws {
+        let (client, _, _, dir) = makeClient { request in
+            switch request.path {
+            case "/v1/auth/otp/verify":
+                return resp(200, okLoginBody(access: "a1", refresh: "r1"))
+            case "/v1/me/config":
+                return resp(200, "{}")
+            case "/v1/auth/logout":
+                return resp(204, "")
+            default:
+                throw AuthError.local("unknown", "unexpected \(request.path)")
+            }
+        }
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        _ = try await client.verifyOTP(email: "u@test.local", code: "123456")
+        XCTAssertEqual(client.loginSuccessSerial, 1)
+        _ = try await client.logout()
+        XCTAssertEqual(client.loginSuccessSerial, 1, "登出不递增")
     }
 
     private func waitUntil(

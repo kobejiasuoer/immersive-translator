@@ -18,19 +18,26 @@ extension EnvironmentValues {
 
 // MARK: - 根视图
 
-/// 阅读室根（ReaderApp.tsx 的 .reader-root）：双光晕画布 + 顶部悬浮导航舞台 +
-/// 路由主体（书架首页 / 阅读 / 口语 / 复习 / 笔记）+ 播放条；书架浮层挂在根顶层。
+/// 阅读室根（ReaderApp.tsx 的 .reader-root）：双光晕画布 + 顶部三段外壳 +
+/// 路由主体（书架首页 / 阅读 / 口语 / 笔记与复习四态）+ 播放条；书架浮层挂在根顶层。
 struct ReaderRootView: View {
     @ObservedObject var vm: ReaderViewModel
 
+    /// 右栏透镜卡占位宽（Windows `--reading-side-w`：folio 皮肤默认 388px；Mac 透镜卡 340pt）。
+    static let readingSideWidth: CGFloat = 340
+
     var body: some View {
         let settings = vm.effectiveSettings
-        let palette = ReaderPalette.palette(for: settings.theme)
+        // 色板带根皮肤维度：folio（shelf/reading）+ light 走品牌绿颜色矩阵（reader.css:9262-9276）。
+        let palette = ReaderPalette.palette(for: settings.theme, skin: ReaderSkin(folding: vm.route.kind))
         // M-02：播放条不再占 VStack 通栏——改为底部悬浮胶囊（overlay），
         // 正文从胶囊两侧滚过（ReaderScroll 底部 84pt 安全留白）。
         let dockVisible = vm.route == .reading && !settings.zenMode
         // 短文结课条在场（与 ReadingStageView 的显示条件同源）时胶囊抬高避让。
         let finishBarVisible = vm.article != nil && vm.finishCard?.articleId == vm.article?.id
+        // dock 居中几何契约（reader.css:7155-7180 + 9249-9254）：胶囊精确居中于正文列
+        // 中轴 = (100% − 右栏占位)/2；专注模式 / 禅模式 / 无文章时右栏占位置 0。
+        let sideWidth = ReaderBodyView.sideColumnVisible(vm: vm) ? Self.readingSideWidth : 0
         ZStack(alignment: .topLeading) {
             VStack(spacing: 0) {
                 ReaderTopStageView(vm: vm)
@@ -58,13 +65,19 @@ struct ReaderRootView: View {
         }
         .animation(ReaderMotion.folio, value: vm.folioOpen)
         .background(ReaderCanvasBackground(palette: palette))
-        .overlay(alignment: .bottom) {
-            // 底部悬浮走带胶囊（原型 .floating-sonic-dock：bottom 18 / 居中 / 999 圆角
-            // 玻璃 + blur(24) + shadow-spatial + 顶内高光）；正文收尾条在场时抬高避让。
+        .overlay {
+            // 底部悬浮走带胶囊（.floating-sonic-dock：bottom 16 / 999 圆角玻璃 + blur +
+            // shadow-spatial）；left = (100% − side)/2 再 translateX(-50%) → 以 GeometryReader
+            // 算出中轴 x 后 position 居中；正文收尾条在场时抬高避让。
             if dockVisible {
-                PlayBarView(vm: vm)
-                    .padding(.bottom, finishBarVisible ? 68 : 18)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                GeometryReader { geo in
+                    PlayBarView(vm: vm)
+                        .position(
+                            x: (geo.size.width - sideWidth) / 2,
+                            y: geo.size.height - (finishBarVisible ? 68 : 16) - 25
+                        )
+                }
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
         .animation(ReaderMotion.folio, value: dockVisible)
@@ -76,7 +89,9 @@ struct ReaderRootView: View {
         .environment(\.readerPalette, palette)
         .environment(\.colorScheme, palette.colorScheme)
         .sheet(isPresented: $vm.importSheetShown) {
-            ReaderImportSheet(vm: vm)
+            // 每次重开都以 vm.importInitialTab 作初值（Windows ImportDialog 条件挂载 +
+            // useState(initialTab) 契约；书架发现三列 / 空卡的直达 tab 由此生效）。
+            ReaderImportSheet(vm: vm, initialTab: ReaderImportSheet.IntakeTab(importTab: vm.importInitialTab))
         }
         .sheet(isPresented: $vm.noteDialogShown) {
             ReaderNoteDialogView(vm: vm)
@@ -164,11 +179,29 @@ private struct FolioDismissScrim: View {
     }
 }
 
-// MARK: - 顶部悬浮导航舞台（v0.8 Phase 1，对齐 ReaderTopBar.tsx / reader.css:6313-6464）
+// MARK: - 顶部三段外壳（2026-10-26 外壳重构，对齐 ReaderTopBar.tsx / reader.css:9221-9410）
 
-/// 三胶囊舞台：左 brand-folio-pill（monogram「I」回书架 + 「书架 · 当前面名」浮层触发器）·
-/// 中 center-nav-island（阅读 / 口语 / 笔记与复习，vault 档角标 = 到期 + 未整理）·
-/// 右 right-controls-island（全文检索 / 主题循环 / 阅读设置）。
+/// 外壳胶囊皮肤（reader.css:9290-9302 全局毛玻璃 vs :9344-9352 folio 平面白）：
+/// 书架 / 阅读两视图挂 folio 皮肤——三段改为 `var(--surface)` 平面白胶囊（去 blur、
+/// 去边框、去投影）；口语 / 笔记与复习视图保留毛玻璃三段语义。单测对账用。
+enum ShellPillSkin: Equatable {
+    case flat
+    case glass
+
+    /// 根 div `data-skin="folio"` 仅 shelf/reading 两视图挂（ReaderApp.tsx:2330-2335）。
+    static func forRoute(_ route: ReaderViewModel.Route) -> ShellPillSkin {
+        switch route {
+        case .shelf, .reading: return .flat
+        case .speak, .vault: return .glass
+        }
+    }
+}
+
+/// 三段外壳：`<header class="floating-top-stage">` 内 grid `1fr auto 1fr`——
+/// 左 .shell-brand（monogram「I」回书架 + 书卷胶囊「书架 · 当前面名」浮层触发器）·
+/// 中 .shell-tabs（阅读 / 口语 / 笔记与复习，vault 档角标 = 到期 + 未整理，>0 才渲染）·
+/// 右 .shell-tools（全文检索 / 主题循环 / 阅读设置抽屉）。
+/// 专注复习态（vault + focus）隐藏中心导航岛（ReaderTopBar.tsx:45-47 focusMode）。
 struct ReaderTopStageView: View {
     @ObservedObject var vm: ReaderViewModel
     /// 舞台固定高度：上 14 + 胶囊 40 + 下 10（书架浮层 top:66 以此对位）。
@@ -180,16 +213,23 @@ struct ReaderTopStageView: View {
     @Namespace private var islandNamespace
 
     var body: some View {
-        let palette = ReaderPalette.palette(for: vm.effectiveSettings.theme)
+        let palette = ReaderPalette.palette(for: vm.effectiveSettings.theme, skin: ReaderSkin(folding: vm.route.kind))
+        let skin = ShellPillSkin.forRoute(vm.route)
+        // grid 1fr auto 1fr：左右两段各占一份弹性宽（左段 max-width 380，reader.css:9307），
+        // 中段按内容宽居中；focus 态中段整段不渲染。
         HStack(spacing: 16) {
-            brandPill(palette)
+            brandSegment(palette, skin: skin)
+                .frame(maxWidth: 380, alignment: .leading)
             Spacer(minLength: 8)
-            navIsland(palette)
+            if !vm.vaultFocusMode {
+                tabsSegment(palette, skin: skin)
+            }
             Spacer(minLength: 8)
-            rightIsland(palette)
+            toolsSegment(palette, skin: skin)
+                .frame(maxWidth: 380, alignment: .trailing)
         }
         // M-01：fullSizeContentView 后交通灯叠在画布左上（约占 x 0…70），
-        // 左胶囊 leading 留出 ~78pt 让位，三胶囊与交通灯同处一条顶带。
+        // 左段 leading 留出 ~78pt 让位，三段与交通灯同处一条顶带。
         .padding(.leading, 78)
         .padding(.trailing, 28)
         .padding(.top, 14)
@@ -201,12 +241,13 @@ struct ReaderTopStageView: View {
         .onTapGesture {
             if vm.folioOpen { vm.closeFolio() }
         }
+        .animation(ReaderMotion.islandTab, value: vm.vaultFocusMode)
         .zIndex(30)
     }
 
-    // MARK: 左：品牌书卷胶囊
+    // MARK: 左：.shell-brand（monogram 印章 + 书卷胶囊）
 
-    private func brandPill(_ palette: ReaderPalette) -> some View {
+    private func brandSegment(_ palette: ReaderPalette, skin: ShellPillSkin) -> some View {
         HStack(spacing: 10) {
             Button {
                 vm.openShelf()
@@ -233,38 +274,39 @@ struct ReaderTopStageView: View {
         .padding(.leading, 6)
         .padding(.trailing, 12)
         .padding(.vertical, 5)
-        .modifier(GlassPillStyle(palette: palette))
+        .modifier(ShellPillStyle(palette: palette, skin: skin))
     }
 
-    // MARK: 中：毛玻璃导航岛
+    // MARK: 中：.shell-tabs（aria-label「主导航」）
 
-    private func navIsland(_ palette: ReaderPalette) -> some View {
+    private func tabsSegment(_ palette: ReaderPalette, skin: ShellPillSkin) -> some View {
         HStack(spacing: 4) {
             IslandTabButton(
                 surface: .reading, icon: ReaderIcons.navReading, badge: 0,
                 active: vm.islandSurface == .reading, palette: palette, namespace: islandNamespace,
-                help: "阅读：书架首页与当前文章"
+                help: nil
             ) { vm.navigate(to: .reading) }
             IslandTabButton(
                 surface: .speak, icon: ReaderIcons.navSpeak, badge: 0,
                 active: vm.islandSurface == .speak, palette: palette, namespace: islandNamespace,
-                help: "口语陪练：场景对话开口说"
+                help: nil
             ) { vm.navigate(to: .speak) }
             IslandTabButton(
                 surface: .vault, icon: ReaderIcons.navVault, badge: vm.vaultBadge,
                 active: vm.islandSurface == .vault, palette: palette, namespace: islandNamespace,
-                help: "生词复习与笔记都在这一档（角标 = 到期 + 未整理）"
+                help: "生词复习与笔记都在这一档"
             ) { vm.navigate(to: .vault) }
         }
         .padding(4)
-        .modifier(GlassPillStyle(palette: palette))
+        .modifier(ShellPillStyle(palette: palette, skin: skin))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("主导航")
+        .transition(.opacity.combined(with: .scale(scale: 0.96)))
     }
 
-    // MARK: 右：控制胶囊
+    // MARK: 右：.shell-tools（检索 / 主题 / 设置）
 
-    private func rightIsland(_ palette: ReaderPalette) -> some View {
+    private func toolsSegment(_ palette: ReaderPalette, skin: ShellPillSkin) -> some View {
         HStack(spacing: 6) {
             if searchActive {
                 TextField("在本文中检索…", text: $searchText)
@@ -277,13 +319,22 @@ struct ReaderTopStageView: View {
                     .frame(height: 26)
                     .background(Capsule().fill(palette.glassElevated))
                     .overlay(Capsule().strokeBorder(palette.glassBorderStrong, lineWidth: 1))
+                    .accessibilityLabel("在本文中检索")
                     .onSubmit {
+                        // Enter → onSearch(q.trim())：跳首个命中句 + toast（vm.searchInArticle）。
                         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !q.isEmpty { vm.searchInArticle(q) }
                     }
                     .onExitCommand {
+                        // Esc 关闭并清空（ReaderTopBar.tsx:163-166）。
                         searchActive = false
                         searchText = ""
+                    }
+                    .onChange(of: searchFocused) { focused in
+                        // 空输入 blur 即收起（ReaderTopBar.tsx:168-170）。
+                        if !focused, searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            searchActive = false
+                        }
                     }
                     .transition(.opacity.combined(with: .move(edge: .trailing)))
             }
@@ -292,31 +343,55 @@ struct ReaderTopStageView: View {
                 withAnimation(ReaderMotion.hover) { searchActive.toggle() }
                 if searchActive { searchFocused = true } else { searchText = "" }
             }
+            .accessibilityLabel("全文检索")
             GhostPillButton(
                 text: "主题：\(vm.effectiveSettings.theme.label)",
                 palette: palette,
-                help: "主题：\(vm.effectiveSettings.theme.label)（点击切换：纸书 → 深色 → 护眼 → 纯黑）"
+                help: "主题：\(vm.effectiveSettings.theme.label)（点击切换）"
             ) {
                 vm.closeFolio()
-                // 350ms 弹性换肤：整棵视图树里颜色一起渐变（原型 --ease-spring）。
+                // THEME_CYCLE light → dark → sepia → oled 循环；350ms 弹性换肤整棵视图树
+                // 颜色一起渐变（原型 --ease-spring），四主题切换不闪白。
                 withAnimation(ReaderMotion.skin) {
                     vm.patchSettings { $0.theme = $0.theme.next }
                 }
             }
+            .accessibilityLabel("切换主题，当前\(vm.effectiveSettings.theme.label)（点击切换）")
             GhostPillButton(icon: ReaderIcons.gear, active: vm.settingsDrawerShown, palette: palette, help: "阅读设置") {
                 vm.closeFolio()
                 vm.settingsDrawerShown = true
             }
+            .accessibilityLabel("阅读设置")
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
-        .modifier(GlassPillStyle(palette: palette))
+        .modifier(ShellPillStyle(palette: palette, skin: skin))
     }
 }
 
-/// 毛玻璃胶囊（.brand-folio-pill / .center-nav-island / .right-controls-island 共用）：
+/// 外壳三段容器（.shell-brand / .shell-tabs / .shell-tools 共用）：
+/// - glass：999px 圆角 `--glass-pill` 底 + 系统材质（≈ backdrop-filter: blur(20px)）+
+///   `--glass-border` 发丝边 + 顶部内高光 + 双层投影（reader.css:9290-9302）；
+/// - flat：folio 皮肤改平面白胶囊——`var(--surface)` 实底、去 blur、去投影、去边框
+///  （reader.css:9344-9352）。
+struct ShellPillStyle: ViewModifier {
+    let palette: ReaderPalette
+    let skin: ShellPillSkin
+
+    func body(content: Content) -> some View {
+        switch skin {
+        case .flat:
+            content
+                .background(Capsule().fill(palette.surface))
+        case .glass:
+            content.modifier(GlassPillStyle(palette: palette))
+        }
+    }
+}
+
+/// 毛玻璃胶囊（非 folio 视图的外壳三段 + 书架页分段 seg 共用）：
 /// 玻璃底色 + 系统材质 + 发丝边 + 顶部内高光 + 双层投影（--shadow-pill）。
-private struct GlassPillStyle: ViewModifier {
+struct GlassPillStyle: ViewModifier {
     let palette: ReaderPalette
 
     func body(content: Content) -> some View {
@@ -445,6 +520,7 @@ private struct FolioTriggerButton: View {
 
 /// 导航岛单档（.island-tab）：当前档深色胶囊 + 画布色文字 + 图标；角标走 accent-soft，
 /// 激活档角标反转为 accent 实底白字。高亮胶囊在三档之间 200ms 弹性滑移。
+/// help 对齐 Windows title：只有 vault 档有（「生词复习与笔记都在这一档」），其余 nil。
 private struct IslandTabButton: View {
     let surface: IslandSurface
     let icon: String
@@ -452,7 +528,7 @@ private struct IslandTabButton: View {
     let active: Bool
     let palette: ReaderPalette
     let namespace: Namespace.ID
-    let help: String
+    let help: String?
     let action: () -> Void
     @State private var hover = false
 
@@ -493,7 +569,7 @@ private struct IslandTabButton: View {
         .onHover { h in
             withAnimation(ReaderMotion.hover) { hover = h }
         }
-        .help(help)
+        .help(help ?? "")
         .accessibilityAddTraits(active ? [.isSelected] : [])
     }
 }
@@ -830,8 +906,14 @@ struct ReaderBodyView: View {
     /// 「减弱动态效果」：切档退化 120ms 纯淡入（REVIEW-04，apple-design §14）。
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// 窄窗断点（量整窗宽，含透镜卡占位）：≤1080px 书脊列隐藏，不挤压正文。
-    static let spineBreakpoint: CGFloat = 1080
+    /// 右栏透镜卡是否占位（dock 居中契约共用）：阅读档有文章、非禅模式、非专注模式
+    ///（Windows 专注模式经 `.reader-root[data-side-hidden]` 把 `--reading-side-w` 置 0，
+    /// 收起右侧解析面板；ReadingView.tsx:359-375）。
+    @MainActor
+    static func sideColumnVisible(vm: ReaderViewModel) -> Bool {
+        let settings = vm.effectiveSettings
+        return vm.route == .reading && vm.article != nil && !settings.zenMode && !settings.spotlightEnabled
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -847,25 +929,24 @@ struct ReaderBodyView: View {
                         .transition(.opacity)
                 case .reading:
                     HStack(alignment: .top, spacing: 0) {
-                        ReadingStageView(vm: vm, spineVisible: geo.size.width > Self.spineBreakpoint)
+                        ReadingStageView(vm: vm)
                         // v0.8 透镜卡常驻右栏（句子解析 / 查词双 Tab，DictColumn.tsx
-                        // spatial-lens-card）；无文章或禅模式（隐藏侧栏）不占位。
-                        if vm.article != nil, !vm.effectiveSettings.zenMode {
+                        // spatial-lens-card）；无文章 / 禅模式 / 专注模式不占位。
+                        if Self.sideColumnVisible(vm: vm) {
                             DictColumnView(vm: vm)
-                                .frame(width: 340)
+                                .frame(width: ReaderRootView.readingSideWidth)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .transition(.opacity)
-                case .review, .notes:
-                    // 「笔记与复习」三合一容器（v0.8 VaultPage）：review/notes 两条
-                    // 兼容路由共用（openReview 落挑战档 / openNotes 落 md 档），
-                    // 顶栏三档玩法 + 右侧内化看板同屏并存。
+                case .vault:
+                    // 「笔记与复习」四态容器（2026-10-26 改版 VaultPage）：
+                    // home / notes / focus / export 由 vm.vaultPlayMode 分派。
                     ReaderVaultView(vm: vm)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .transition(.opacity)
                 case .speak:
-                    SpeakView(vm: vm, controller: vm.speak)
+                    SpeakView(vm: vm, controller: vm.speak, catalog: ScenarioCatalogService.shared)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .transition(.opacity)
                 }
@@ -881,11 +962,12 @@ struct ReaderBodyView: View {
     }
 }
 
-// MARK: - 整页书架（首页；对齐 Windows ShelfPage.tsx）
+// MARK: - 整页书架（首页；2026-10-26 书架页重构，对齐 Windows ShelfPage.tsx）
 
-/// 书架首页：头部（书架 + 书/短文分段 + 数量 + 导入）· 书卡网格（封面 / 章进度 /
-/// 断点直达 / 目录 / 删除）· 短文行（标题 / 百分比）· 底部今日卡（阅读目标环 +
-/// 复习进度）。口语陪练 / 生词复习入口在顶部导航岛，不再在书架重复留按钮。
+/// 书架首页：页头（书架 + 「书 · N / 短文 · M」分段 + 导入）· 书 tab（最近读的书
+/// 主卡 + 其余书紧凑行 + 统计卡 + 发现三列直达导入）· 短文 tab（搜索 / 筛选 /
+/// 「排序：最近阅读」+ 继续阅读/已读完分组 + 同 sourceUrl 合并撤销）。
+/// 口语陪练 / 笔记与复习入口在顶部外壳三段，不在书架重复留按钮。
 struct ShelfHomeView: View {
     @ObservedObject var vm: ReaderViewModel
     /// 阅读目标配置（ReviewTouchpointManager.config.readGoalMin；提醒设置组同源）。
@@ -897,20 +979,33 @@ struct ShelfHomeView: View {
     }
 
     @State private var tab: Tab = .books
+    // ---- 短文 tab 本地工具态（纯 UI，不落盘；ShelfPage.tsx:196-221 同款）----
+    @State private var query = ""
+    @State private var filter: ShelfArticleFilter = .all
+    /// 已撤销合并的 sourceUrl（撤销后该 URL 的重复条目全部展开）。
+    @State private var unmergedUrls: Set<String> = []
+    /// more 菜单打开的行 id（同时至多一个）。
+    @State private var moreMenuId: String?
+    /// 短文覆盖（进 shelf 视图才拉全文懒算，id → 覆盖统计；Windows articleCoverage）。
+    @State private var coverage: [String: CoverageStats] = [:]
+
+    /// 考试目标（localStorage intake-exam-goal 同源；IntakeService 单一真源）。
+    private var examGoal: ExamGoal { IntakeService.shared.examGoal }
+    private var goalLabel: String { examGoal.label }
+
+    /// 短文管线：搜索 → 筛选 → 排序 → sourceUrl 合并 → 状态分组。
+    private var shorts: ShelfShorts {
+        buildShelfShorts(articles: vm.articleList, query: query, filter: filter, unmergedUrls: unmergedUrls)
+    }
+
+    /// 书 tab 排序：最近阅读的书为主卡，其余紧凑行（ShelfPage.tsx:224-229）。
+    private var sortedBooks: [BookMeta] { shelfSortedBooks(vm.bookList) }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                head
+            VStack(alignment: .leading, spacing: 22) {
+                pageHead
                 if tab == .books { booksSection } else { articlesSection }
-                ShelfTodayCard(
-                    reviewedToday: vm.stats.reviewedToday,
-                    dueNow: vm.stats.dueNow,
-                    streak: vm.stats.streak,
-                    readSecondsToday: vm.readSecondsToday,
-                    goalMin: touchpoint.config.readGoalMin,
-                    onGoReview: { vm.openReview() }
-                )
             }
             .padding(.horizontal, 40)
             .padding(.top, 20)
@@ -919,45 +1014,52 @@ struct ShelfHomeView: View {
             .frame(maxWidth: .infinity)
             .animation(ReaderMotion.islandTab, value: tab)
         }
-        .onAppear {
-            // 只有短文没有书：默认落在短文页，别让用户面对一个空 tab。
-            if tab == .books, vm.bookList.isEmpty, !vm.articleList.isEmpty {
-                tab = .articles
-            }
+        .onAppear { lazyComputeCoverage() }
+        .onChange(of: vm.articleList) { _ in lazyComputeCoverage() }
+    }
+
+    /// 覆盖懒算：只有进书架页才拉全文 sourceCache 跑 coverageForText
+    ///（对齐 ReaderApp.tsx:2216-2219 shelf 进入时算 + articleList 变化重算）。
+    private func lazyComputeCoverage() {
+        let goal = examGoal
+        let wordlists = IntakeService.shared.wordlists
+        for summary in vm.articleList where coverage[summary.id] == nil {
+            let article = vm.sourceCache[summary.id]
+                ?? ((try? vm.store.getArticle(id: summary.id)) ?? nil)
+            guard let article else { continue }
+            let text = article.sentences.map(\.en).joined(separator: " ")
+            coverage[summary.id] = coverageForText(
+                text,
+                goal: goal,
+                vocab: vm.vocabWords,
+                wordlists: wordlists
+            )
         }
     }
 
-    // MARK: 头部
+    // MARK: 页头（ShelfPage.tsx:387-415：标题 + 带数量分段 + 导入主按钮）
 
-    private var countText: String {
-        if tab == .books {
-            let words = vm.bookList.reduce(0) { n, b in n + b.chapters.reduce(0) { m, c in m + c.wordCount } }
-            return vm.bookList.isEmpty ? "还没有书" : "\(vm.bookList.count) 本书 · \(words.formatted()) 词"
-        }
-        return vm.articleList.isEmpty ? "还没有短文" : "\(vm.articleList.count) 篇短文"
-    }
-
-    private var head: some View {
+    private var pageHead: some View {
         HStack(alignment: .firstTextBaseline, spacing: 16) {
             Text("书架")
                 .font(readerDisplayFont(30))
                 .foregroundColor(palette.text)
             HStack(spacing: 3) {
-                ShelfSegTab(label: "书", active: tab == .books, palette: palette) {
+                ShelfSegTab(label: "书 · \(vm.bookList.count)", active: tab == .books, palette: palette) {
                     tab = .books
                 }
-                ShelfSegTab(label: "短文", active: tab == .articles, palette: palette) {
+                ShelfSegTab(label: "短文 · \(vm.articleList.count)", active: tab == .articles, palette: palette) {
                     tab = .articles
                 }
             }
             .padding(3)
             .modifier(GlassPillStyle(palette: palette))
-            Text(countText)
-                .font(.system(size: 12))
-                .foregroundColor(palette.textTertiary)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("书架内容切换")
             Spacer(minLength: 12)
             Button {
-                vm.importSheetShown = true
+                // 缺省调 openImport() = 文库 tab（ShelfPage.tsx:409）。
+                vm.openImport()
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: ReaderIcons.plus).font(.system(size: 11, weight: .semibold))
@@ -970,31 +1072,39 @@ struct ShelfHomeView: View {
                 .shadow(color: palette.accentGlow, radius: 8, y: 3)
             }
             .buttonStyle(.plain)
-            .help("导入向导 · 新增 EPUB 长书 / 短文")
+            .help("导入阅读内容（内置文库 / 文件 / 链接 / 粘贴）")
         }
     }
 
-    // MARK: 书卡网格
+    // MARK: 书 tab（主卡 + 紧凑行 + 统计卡 + 发现三列）
 
     @ViewBuilder
     private var booksSection: some View {
-        if vm.bookList.isEmpty {
-            ShelfEmptyCard(
-                icon: ReaderIcons.book,
-                title: "导入整本 EPUB",
-                subtitle: "自动分章 · 断点续读 · 生词进复习闭环；也可以先读内置文库的短篇",
-                palette: palette
-            ) {
-                vm.importSheetShown = true
-            }
-        } else {
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 330, maximum: 540), spacing: 16)],
-                alignment: .leading,
-                spacing: 16
-            ) {
-                ForEach(vm.bookList) { book in
+        HStack(alignment: .top, spacing: 20) {
+            VStack(alignment: .leading, spacing: 14) {
+                if let featured = sortedBooks.first {
                     ShelfBookCard(
+                        book: featured,
+                        goalLabel: goalLabel,
+                        radarCount: radarCount(of: featured),
+                        palette: palette,
+                        onContinue: { vm.openBookAt(bookId: featured.id) },
+                        onOpenToc: { vm.openBookToc(bookId: featured.id) },
+                        onDelete: { vm.deleteBook(bookId: featured.id) }
+                    )
+                } else {
+                    ShelfEmptyCard(
+                        icon: ReaderIcons.book,
+                        title: "还没有书",
+                        subtitle: "导入整本 EPUB：自动分章 · 断点续读 · 生词进复习闭环；也可以先读内置文库的短篇",
+                        palette: palette
+                    ) {
+                        // 无书空卡直达 epub tab（ShelfPage.tsx:500）。
+                        vm.openImport(tab: ReaderImportTab.epub.rawValue)
+                    }
+                }
+                ForEach(sortedBooks.dropFirst()) { book in
+                    ShelfMiniBookRow(
                         book: book,
                         palette: palette,
                         onContinue: { vm.openBookAt(bookId: book.id) },
@@ -1003,10 +1113,35 @@ struct ShelfHomeView: View {
                     )
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            ShelfStatCard(
+                readMinutesToday: Int((vm.readSecondsToday / 60).rounded()),
+                readGoalMin: touchpoint.config.readGoalMin,
+                reviewedToday: vm.stats.reviewedToday,
+                dueNow: vm.stats.dueNow,
+                streak: vm.stats.streak,
+                palette: palette,
+                onGoReview: { vm.openReview() }
+            )
+            .frame(width: 300)
+        }
+        shelfSectionTitle("发现更多可读内容")
+        ShelfDiscoverRow(palette: palette) { tab in
+            vm.openImport(tab: tab)
         }
     }
 
-    // MARK: 短文列表
+    /// 选书雷达该考试目标的覆盖数。
+    private func radarCount(of book: BookMeta) -> Int {
+        switch examGoal {
+        case .kaoyan: return book.radar.kaoyan
+        case .cet4: return book.radar.cet4
+        case .cet6: return book.radar.cet6
+        }
+    }
+
+    // MARK: 短文 tab
 
     @ViewBuilder
     private var articlesSection: some View {
@@ -1017,33 +1152,165 @@ struct ShelfHomeView: View {
                 subtitle: "内置文库 · 网页链接 · Word / PDF · 粘贴文本",
                 palette: palette
             ) {
-                vm.importSheetShown = true
+                vm.openImport()  // 短文空卡缺省文库 tab（ShelfPage.tsx:669）
             }
         } else {
-            VStack(spacing: 0) {
-                ForEach(Array(vm.articleList.enumerated()), id: \.element.id) { idx, summary in
-                    ShelfArticleRow(
-                        summary: summary,
-                        palette: palette,
-                        onSelect: { vm.openArticle(id: summary.id) },
-                        onDelete: { vm.deleteArticle(id: summary.id) }
-                    )
-                    if idx < vm.articleList.count - 1 {
-                        Rectangle()
-                            .fill(palette.glassBorder)
-                            .frame(height: 1)
-                            .padding(.leading, 14)
+            VStack(alignment: .leading, spacing: 12) {
+                toolsRow
+                let s = shorts
+                if s.reading.isEmpty && s.done.isEmpty {
+                    // 无结果：搜索中给 query，否则给筛选（ShelfPage.tsx:722-725）。
+                    Text(s.searching ? "没有匹配「\(query.trimmingCharacters(in: .whitespacesAndNewlines))」的短文" : "这个筛选下暂无短文")
+                        .font(.system(size: 12.5))
+                        .foregroundColor(palette.textTertiary)
+                        .padding(.vertical, 28)
+                        .frame(maxWidth: .infinity)
+                } else {
+                    if !s.reading.isEmpty {
+                        sectionGroupTitle("继续阅读 · \(s.reading.count)")
+                        shelfList(s.reading)
+                        mergedHint(count: s.mergedReadingCount, urls: s.mergedReadingUrls)
+                    }
+                    if !s.done.isEmpty {
+                        sectionGroupTitle("已读完 · \(s.done.count)")
+                        shelfList(s.done)
+                        mergedHint(count: s.mergedDoneCount, urls: s.mergedDoneUrls)
                     }
                 }
             }
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(palette.glassSurface.opacity(0.5)))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(palette.glassBorder, lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
+    }
+
+    /// 工具行：搜索（标题，含译名）/ 状态筛选 chips / 排序标签。
+    private var toolsRow: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 6) {
+                Image(systemName: ReaderIcons.search)
+                    .font(.system(size: 11))
+                    .foregroundColor(palette.textTertiary)
+                TextField("搜索标题", text: $query)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundColor(palette.text)
+                    .frame(width: 180)
+                    .accessibilityLabel("搜索短文标题")
+                if !query.isEmpty {
+                    Button {
+                        query = ""
+                    } label: {
+                        Image(systemName: ReaderIcons.close)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(palette.textTertiary)
+                            .frame(width: 16, height: 16)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("清空搜索")
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(Capsule().fill(palette.glassSurface.opacity(0.7)))
+            .overlay(Capsule().strokeBorder(palette.glassBorder, lineWidth: 1))
+
+            HStack(spacing: 6) {
+                ForEach(ShelfArticleFilter.allCases, id: \.self) { f in
+                    Button {
+                        filter = f
+                    } label: {
+                        Text(f.label)
+                            .font(.system(size: 11.5, weight: filter == f ? .semibold : .medium))
+                            .foregroundColor(filter == f ? palette.onInk : palette.textSecondary)
+                            .padding(.horizontal, 10)
+                            .frame(height: 24)
+                            .background(Capsule().fill(filter == f ? palette.text : palette.glassSurface.opacity(0.7)))
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(f.label)
+                    .accessibilityAddTraits(filter == f ? [.isSelected] : [])
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("按状态筛选")
+
+            Spacer(minLength: 8)
+            HStack(spacing: 3) {
+                Text("排序：最近阅读")
+                    .font(.system(size: 11.5))
+                    .foregroundColor(palette.textTertiary)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(palette.textTertiary)
+            }
+            .help("当前排序：最近阅读")
+        }
+    }
+
+    /// 组尾「已合并 N 条重复内容 + 撤销」（ShelfPage.tsx:734-751）。
+    @ViewBuilder
+    private func mergedHint(count: Int, urls: [String]) -> some View {
+        if count > 0 {
+            HStack(spacing: 8) {
+                Text("已合并 \(count) 条重复内容")
+                    .font(.system(size: 11.5))
+                    .foregroundColor(palette.textTertiary)
+                Button("撤销") {
+                    unmerge(urls)
+                }
+                .font(.system(size: 11.5, weight: .semibold))
+                .buttonStyle(.link)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func unmerge(_ urls: [String]) {
+        unmergedUrls.formUnion(urls)
+    }
+
+    private func sectionGroupTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(palette.textSecondary)
+    }
+
+    private func shelfSectionTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(palette.textSecondary)
+            .padding(.top, 6)
+    }
+
+    private func shelfList(_ items: [ArticleSummary]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(items) { summary in
+                ShelfShortRow(
+                    summary: summary,
+                    books: vm.bookList,
+                    goalLabel: goalLabel,
+                    coverage: coverage[summary.id],
+                    palette: palette,
+                    menuOpen: moreMenuId == summary.id,
+                    onSelect: { vm.openArticle(id: summary.id) },
+                    onToggleMenu: {
+                        moreMenuId = moreMenuId == summary.id ? nil : summary.id
+                    },
+                    onCloseMenu: { moreMenuId = nil },
+                    onDelete: { vm.deleteArticle(id: summary.id) }
+                )
+                Rectangle()
+                    .fill(palette.glassBorder)
+                    .frame(height: 1)
+                    .padding(.leading, 14)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(palette.glassSurface.opacity(0.5)))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(palette.glassBorder, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
-/// 头部分段小 tab（书 / 短文）。
+/// 头部分段小 tab（书 · N / 短文 · M）。
 private struct ShelfSegTab: View {
     let label: String
     let active: Bool
@@ -1065,7 +1332,7 @@ private struct ShelfSegTab: View {
     }
 }
 
-/// 书架空态卡（.shelf-empty）：虚线框邀请导入。
+/// 书架空态卡（.shelf-emptycard）：虚线框邀请导入。
 private struct ShelfEmptyCard: View {
     let icon: String
     let title: String
@@ -1112,11 +1379,12 @@ private struct ShelfEmptyCard: View {
     }
 }
 
-/// 书卡（.bookcard）：封面 + 标题 / 作者 · 章数 + 词量·时长 chips + 进度条 +
-/// 「继续读 第 N 章 · 第 M 句」/「查看目录」 + 悬停删除。整卡点按 = 查看目录
-///（Windows 同款：进入书目录再挑章）。
+/// 书架主卡（.shelf-bookcard，最近阅读的书）：封面 / EPUB 占位 + 标题作者 +
+/// 元信息（N 章 · 词数 · 时长）+ 选书雷达 tag + 进度条 + 断点直达 / 目录 / 删除。
 private struct ShelfBookCard: View {
     let book: BookMeta
+    let goalLabel: String
+    let radarCount: Int
     let palette: ReaderPalette
     let onContinue: () -> Void
     let onOpenToc: () -> Void
@@ -1124,11 +1392,8 @@ private struct ShelfBookCard: View {
     @State private var hover = false
 
     var body: some View {
-        let chapterIdx = bookChapterIndexOf(book: book, chapterId: book.progress.chapterId)
-        let percent = Int(bookOverallPercent(book: book).rounded())
-        let words = book.chapters.reduce(0) { $0 + $1.wordCount }
-        let minutes = max(1, Int((Double(words) / 135).rounded()))
-        let started = book.progress.percent > 0 || chapterIdx > 0
+        let facts = shelfBookFacts(book)
+        let sentence = book.progress.sentenceIdx
         HStack(alignment: .top, spacing: 16) {
             ZStack(alignment: .bottom) {
                 Group {
@@ -1138,22 +1403,21 @@ private struct ShelfBookCard: View {
                             .aspectRatio(contentMode: .fill)
                     } else {
                         VStack(spacing: 4) {
+                            Text("EPUB")
+                                .font(.system(size: 8.5, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.7))
                             Spacer()
-                            Text(String(book.title.prefix(1)).uppercased())
-                                .font(readerDisplayFont(28))
-                                .foregroundColor(.white.opacity(0.92))
                             Text(book.title)
-                                .font(.system(size: 8.5))
-                                .foregroundColor(.white.opacity(0.75))
-                                .lineLimit(2)
+                                .font(readerDisplayFont(13))
+                                .foregroundColor(.white.opacity(0.92))
+                                .lineLimit(3)
                                 .multilineTextAlignment(.center)
                             Text(book.author ?? "")
                                 .font(.system(size: 7.5))
                                 .foregroundColor(.white.opacity(0.6))
                                 .lineLimit(1)
-                            Spacer(minLength: 0)
                         }
-                        .padding(.horizontal, 4)
+                        .padding(8)
                     }
                 }
                 .frame(width: 76, height: 108)
@@ -1167,7 +1431,7 @@ private struct ShelfBookCard: View {
                     )
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                if percent >= 100 {
+                if facts.percent >= 100 {
                     Text("已读完 ✓")
                         .font(.system(size: 9.5, weight: .semibold))
                         .foregroundColor(.white)
@@ -1183,21 +1447,32 @@ private struct ShelfBookCard: View {
                     .foregroundColor(palette.text)
                     .lineLimit(2)
                     .help(book.title)
-                Text("\(book.author ?? "未知作者") · 共 \(book.chapters.count) 章")
+                Text(book.author ?? "未知作者")
                     .font(.system(size: 12))
                     .foregroundColor(palette.textTertiary)
+                // 元信息一行化（ShelfPage.tsx:448-449）：N 章 · 词数 · 约 X 小时/分钟。
                 HStack(spacing: 6) {
-                    ShelfChip(text: "\(book.chapters.count) 章", palette: palette)
-                    ShelfChip(text: "\(words.formatted()) 词", palette: palette)
-                    ShelfChip(text: minutes >= 60 ? String(format: "约 %.1f 小时", Double(minutes) / 60) : "约 \(minutes) 分钟", palette: palette)
+                    Text("\(book.chapters.count) 章 · \(facts.words.formatted()) 词 · 约 \(shelfFormatDuration(minutes: facts.minutes))")
+                        .font(.system(size: 11))
+                        .foregroundColor(palette.textTertiary)
+                    if radarCount > 0 {
+                        Text("\(goalLabel) · 大纲词 \(radarCount.formatted())")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundColor(palette.tapeInk)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2.5)
+                            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(palette.tapeBg))
+                            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(palette.tapeBorder, lineWidth: 1))
+                            .help("选书雷达：该考试目标的大纲词覆盖数")
+                    }
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        Text("\(percent)%")
+                        Text("\(facts.percent)%")
                             .font(.system(size: 12.5, weight: .bold))
                             .monospacedDigit()
                             .foregroundColor(palette.text)
-                        Text(percent >= 100 ? "已读完" : (started ? "已读至第 \(chapterIdx + 1) / \(book.chapters.count) 章" : "尚未开始"))
+                        Text(facts.percent >= 100 ? "已读完" : (facts.started ? "第 \(facts.chapterIdx + 1) / \(book.chapters.count) 章" : "尚未开始"))
                             .font(.system(size: 11))
                             .foregroundColor(palette.textTertiary)
                     }
@@ -1206,8 +1481,8 @@ private struct ShelfBookCard: View {
                             Capsule().fill(palette.glassBorderStrong)
                             Capsule()
                                 .fill(palette.accent)
-                                .frame(width: max(0, geo.size.width * CGFloat(percent) / 100))
-                                .animation(.easeOut(duration: 0.4), value: percent)
+                                .frame(width: max(0, geo.size.width * CGFloat(facts.percent) / 100))
+                                .animation(.easeOut(duration: 0.4), value: facts.percent)
                         }
                     }
                     .frame(height: 3)
@@ -1217,7 +1492,7 @@ private struct ShelfBookCard: View {
                     Button(action: onContinue) {
                         HStack(spacing: 5) {
                             Image(systemName: ReaderIcons.play).font(.system(size: 9, weight: .bold))
-                            Text(started ? "继续读 第 \(chapterIdx + 1) 章 · 第 \(book.progress.sentenceIdx + 1) 句" : "开始阅读")
+                            Text(facts.started ? "继续读 · 第 \(facts.chapterIdx + 1) 章第 \(sentence + 1) 句" : "开始阅读")
                                 .font(.system(size: 11.5, weight: .semibold))
                         }
                         .foregroundColor(.white)
@@ -1226,14 +1501,26 @@ private struct ShelfBookCard: View {
                         .background(Capsule().fill(palette.accent))
                     }
                     .buttonStyle(.plain)
-                    .help("直达这本书的断点章")
-                    GhostPillButton(text: "查看目录", palette: palette, help: "本书目录：各章词数与生词数，点章即跳") {
+                    .help(facts.started ? "回到第 \(facts.chapterIdx + 1) 章第 \(sentence + 1) 句" : "从第 1 章开始读这本书")
+                    Button {
                         onOpenToc()
+                    } label: {
+                        Text("目录")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundColor(palette.text)
+                            .padding(.horizontal, 11)
+                            .frame(height: 26)
+                            .background(Capsule().strokeBorder(palette.glassBorderStrong, lineWidth: 1))
                     }
-                    if book.radar.kaoyan > 0 {
-                        ShelfChip(text: "考研 · 大纲词 \(book.radar.kaoyan.formatted())", palette: palette)
-                            .help("选书雷达：考研大纲词覆盖数")
+                    .buttonStyle(.plain)
+                    .help("查看目录")
+                    // 删除 icon 常显（ShelfPage.tsx:485-493 `.shelf-book-del` 无条件渲染，
+                    // reader.css:10516 margin-left:auto 靠右；色 text-3，悬停 surface-2 底）。
+                    Spacer(minLength: 0)
+                    ShelfIconButton(systemName: ReaderIcons.trash, palette: palette, destructive: true) {
+                        confirmDelete()
                     }
+                    .help("移出书架（生词本不受影响）")
                 }
             }
             Spacer(minLength: 0)
@@ -1248,19 +1535,119 @@ private struct ShelfBookCard: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(hover ? palette.glassBorderStrong : palette.glassBorder, lineWidth: 1)
         )
-        .overlay(alignment: .topTrailing) {
-            if hover {
-                FolioDeleteButton(palette: palette, help: "移出书架（生词本不受影响）") {
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onHover { h in
+            withAnimation(ReaderMotion.hover) { hover = h }
+        }
+    }
+
+    private func confirmDelete() {
+        // 删除书二次确认（ShelfPage.tsx:169-174 文案逐字；NSAlert 异步等价）。
+        let alert = NSAlert()
+        alert.messageText = "删除《\(book.title)》？"
+        alert.informativeText = "将删除全部 \(book.chapters.count) 章内容与这本书的阅读进度，不可恢复；生词本不受影响。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        if alert.runModal() == .alertFirstButtonReturn {
+            onDelete()
+        }
+    }
+}
+
+/// 其余书紧凑行（.shelf-minirow）：缩略封面 / 书名首字母占位 + 书名 +
+/// 「N 章 · pct%[ · 第 x 章 | · 已读完]」+ 继续读 / 目录 / 删除三 icon；整行点击开目录。
+private struct ShelfMiniBookRow: View {
+    let book: BookMeta
+    let palette: ReaderPalette
+    let onContinue: () -> Void
+    let onOpenToc: () -> Void
+    let onDelete: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        let facts = shelfBookFacts(book)
+        HStack(spacing: 10) {
+            ZStack {
+                if let cover = BookCoverImage.image(fromDataURL: book.cover) {
+                    Image(nsImage: cover)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    Text(String(book.title.prefix(1)).uppercased())
+                        .font(.system(size: 11, weight: .bold, design: .serif))
+                        .foregroundColor(.white.opacity(0.9))
+                }
+            }
+            .frame(width: 28, height: 38)
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color(hue: 0.08, saturation: 0.42, brightness: 0.62),
+                        Color(hue: 0.02, saturation: 0.38, brightness: 0.48)
+                    ],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+
+            Text(book.title)
+                .font(.system(size: 12.5, design: .serif))
+                .foregroundColor(palette.text)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(book.title)
+            Spacer(minLength: 8)
+            Text(miniMeta(facts))
+                .font(.system(size: 11))
+                .monospacedDigit()
+                .foregroundColor(palette.textTertiary)
+            HStack(spacing: 2) {
+                miniIcon(icon: ReaderIcons.play, help: facts.started ? "继续读 · 第 \(facts.chapterIdx + 1) 章第 \(book.progress.sentenceIdx + 1) 句" : "开始阅读") {
+                    onContinue()
+                }
+                miniIcon(icon: ReaderIcons.toc, help: "查看目录") {
+                    onOpenToc()
+                }
+                miniIcon(icon: ReaderIcons.trash, help: "移出书架（生词本不受影响）", tint: hover ? palette.err : palette.ink4) {
                     confirmDelete()
                 }
-                .padding(10)
             }
         }
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(hover ? palette.glassSurface.opacity(0.6) : Color.clear)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onTapGesture(perform: onOpenToc)
         .onHover { h in
             withAnimation(ReaderMotion.hover) { hover = h }
         }
+        .help("查看目录")
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+    }
+
+    /// `{N} 章 · {pct}%` + 进行中「 · 第 x 章」/ 读完「 · 已读完」（ShelfPage.tsx:536-539）。
+    private func miniMeta(_ facts: ShelfBookFacts) -> String {
+        var text = "\(book.chapters.count) 章 · \(facts.percent)%"
+        if facts.percent > 0 && facts.percent < 100 { text += " · 第 \(facts.chapterIdx + 1) 章" }
+        if facts.percent >= 100 { text += " · 已读完" }
+        return text
+    }
+
+    private func miniIcon(icon: String, help: String, tint: Color? = nil, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundColor(tint ?? palette.textTertiary)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(hover ? palette.glassBorder : Color.clear))
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private func confirmDelete() {
@@ -1276,56 +1663,344 @@ private struct ShelfBookCard: View {
     }
 }
 
-/// 短文行（.artrow）：级别 chip + 标题 / 中文副题 + 百分比 + 悬停删除；发丝线分隔。
-private struct ShelfArticleRow: View {
-    let summary: ArticleSummary
+/// 书架圆形 icon 钮（reader.css:10494-10515 `.shelf-iconbtn`）：28pt 圆、透明底、text-3 色；
+/// 悬停 surface-2 底 + text-1（`.del` 悬停 err-soft 底 + err）。常显，不依赖卡片悬停。
+private struct ShelfIconButton: View {
+    let systemName: String
     let palette: ReaderPalette
+    var destructive = false
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(hover ? (destructive ? palette.err : palette.text) : palette.textTertiary)
+                .frame(width: 28, height: 28)
+                .background(
+                    Circle().fill(hover ? (destructive ? palette.errSoft : palette.surface2) : Color.clear)
+                )
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { h in
+            withAnimation(ReaderMotion.hover) { hover = h }
+        }
+    }
+}
+
+/// 统计卡（.shelf-statcard）：今日阅读环 / 今日复习（到期数 + 开始复习）/ 连续天数。
+private struct ShelfStatCard: View {
+    let readMinutesToday: Int
+    let readGoalMin: Int
+    let reviewedToday: Int
+    let dueNow: Int
+    let streak: Int
+    let palette: ReaderPalette
+    let onGoReview: () -> Void
+
+    private var goalOn: Bool { readGoalMin > 0 }
+    private var readMin: Int { max(0, readMinutesToday) }
+    private var ringRatio: Double { goalOn ? min(1, Double(readMin) / Double(readGoalMin)) : 0 }
+    private var todayTotal: Int { reviewedToday + dueNow }
+    private var reviewPct: Int {
+        todayTotal > 0 ? Int((Double(reviewedToday) / Double(max(1, todayTotal)) * 100).rounded()) : 0
+    }
+    /// streak 为 0 时的鼓励语门槛：目标开启用目标值，否则 10 分钟（ShelfPage.tsx:237）。
+    private var streakGoalMin: Int { goalOn ? readGoalMin : 10 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // 今日阅读（ShelfPage.tsx:581-604）
+            VStack(alignment: .leading, spacing: 8) {
+                Text("今日阅读")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(palette.textTertiary)
+                HStack(spacing: 10) {
+                    ZStack {
+                        Circle().stroke(palette.glassBorderStrong, lineWidth: 4)
+                        Circle()
+                            .trim(from: 0, to: ringRatio)
+                            .stroke(goalOn && readMin >= readGoalMin ? palette.sonicTeal : palette.accent, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                            .animation(ReaderMotion.islandTab, value: ringRatio)
+                        Text(goalOn ? "\(readMin)/\(readGoalMin)" : "\(readMin)′")
+                            .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                            .monospacedDigit()
+                            .foregroundColor(palette.text)
+                    }
+                    .frame(width: 52, height: 52)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(readHeadline)
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundColor(palette.text)
+                        Text(readSubline)
+                            .font(.system(size: 11))
+                            .foregroundColor(palette.textTertiary)
+                    }
+                }
+            }
+            .accessibilityElement(children: .combine)
+
+            // 今日复习（ShelfPage.tsx:605-628）
+            VStack(alignment: .leading, spacing: 6) {
+                Text("今日复习")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(palette.textTertiary)
+                Text(dueNow > 0 ? "\(dueNow) 张到期" : (todayTotal > 0 ? "今日到期已清空" : "今天没有到期生词"))
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundColor(palette.text)
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(palette.glassBorderStrong)
+                        Capsule()
+                            .fill(palette.accent)
+                            .frame(width: max(0, geo.size.width * CGFloat(reviewPct) / 100))
+                            .animation(ReaderMotion.islandTab, value: reviewPct)
+                    }
+                }
+                .frame(height: 4)
+                // 无到期词时点了只会进空队列，像「点了没反应」——禁用并把原因写进
+                // title，让用户知道该等明天或先去加生词（ShelfPage.tsx:615-624）。
+                Button {
+                    onGoReview()
+                } label: {
+                    Text("开始复习")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .frame(height: 26)
+                        .frame(maxWidth: .infinity)
+                        .background(Capsule().fill(dueNow > 0 ? palette.accent : palette.ink4))
+                }
+                .buttonStyle(.plain)
+                .disabled(dueNow == 0)
+                .help(dueNow > 0
+                    ? "去复习 \(dueNow) 个到期生词"
+                    : (todayTotal > 0
+                        ? "今天的到期已清空，明天再来"
+                        : "暂无到期生词。先在阅读里查词收藏，明天会出现在这里"))
+                .padding(.top, 4)
+            }
+            .accessibilityElement(children: .combine)
+
+            // 连续天数（ShelfPage.tsx:629-638）：streak>0 火焰 + 天数；0 给鼓励语。
+            if streak > 0 {
+                HStack(spacing: 4) {
+                    Image(systemName: ReaderIcons.flame).font(.system(size: 11))
+                    Text("连续阅读 \(streak) 天").monospacedDigit()
+                }
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundColor(palette.warn)
+            } else {
+                Text("读满 \(streakGoalMin) 分钟，开启你的连续阅读")
+                    .font(.system(size: 11))
+                    .foregroundColor(palette.textTertiary)
+            }
+        }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(palette.glassSurface.opacity(0.55)))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(palette.glassBorder, lineWidth: 1))
+    }
+
+    private var readHeadline: String {
+        if goalOn {
+            return readMin >= readGoalMin ? "目标已达成" : "还差 \(readGoalMin - readMin) 分钟"
+        }
+        return "已读 \(readMin) 分钟"
+    }
+
+    private var readSubline: String {
+        if goalOn {
+            return readMin >= readGoalMin ? "明天继续保持" : "达成今日目标"
+        }
+        return "可在阅读设置里定每日阅读目标"
+    }
+}
+
+/// 发现三列（.shelf-disc，ShelfPage.tsx:642-666）：三个导入直达入口。
+/// discover（发现书库）/ feed（资讯订阅）tab 内容依赖资讯订阅领域——Mac 未落地前
+/// 该两列点击进缺省文库 tab 且不报错（规格 §4 范围依赖）。
+private struct ShelfDiscoverRow: View {
+    let palette: ReaderPalette
+    let onOpen: (String) -> Void
+    @State private var hoverTab: String?
+
+    private struct DiscCard {
+        let icon: String
+        let title: String
+        let subtitle: String
+        let tab: String
+    }
+
+    private let cards: [DiscCard] = [
+        DiscCard(icon: ReaderIcons.navReading, title: "精选经典", subtitle: "按难度和考纲词表挑选公版名著与短篇", tab: ReaderImportTab.discover.rawValue),
+        DiscCard(icon: ReaderIcons.rss, title: "英文资讯订阅", subtitle: "订阅常用新闻源，每天自动收到可读短文", tab: ReaderImportTab.feed.rawValue),
+        DiscCard(icon: ReaderIcons.plus, title: "导入自己的内容", subtitle: "网址、文件或粘贴文本，自动拆句并翻译", tab: ReaderImportTab.lib.rawValue),
+    ]
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            ForEach(cards, id: \.tab) { card in
+                Button {
+                    onOpen(card.tab)
+                } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Image(systemName: card.icon)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(palette.accent)
+                            .frame(width: 30, height: 30)
+                            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.accentSoft))
+                        Text(card.title)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(palette.text)
+                        Text(card.subtitle)
+                            .font(.system(size: 11.5))
+                            .foregroundColor(palette.textTertiary)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(hoverTab == card.tab ? palette.glassSurface : palette.glassSurface.opacity(0.5))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(hoverTab == card.tab ? palette.glassBorderStrong : palette.glassBorder, lineWidth: 1)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .onHover { h in
+                    withAnimation(ReaderMotion.hover) { hoverTab = h ? card.tab : nil }
+                }
+            }
+        }
+    }
+}
+
+/// 短文统一行（.shelf-item，ShelfPage.tsx:314-381）：进度环（✓）+ 标题 +
+/// 「译名 · 来源」合并行 + 一行元信息 + more 菜单（唯一项「删除这篇短文」）。
+private struct ShelfShortRow: View {
+    let summary: ArticleSummary
+    let books: [BookMeta]
+    let goalLabel: String
+    let coverage: CoverageStats?
+    let palette: ReaderPalette
+    let menuOpen: Bool
     let onSelect: () -> Void
+    let onToggleMenu: () -> Void
+    let onCloseMenu: () -> Void
     let onDelete: () -> Void
     @State private var hover = false
 
     var body: some View {
         let article = summary.article
+        let done = article.progress.percent >= 100
+        let minutes = shelfEstimateMinutes(wordCount: article.wordCount)
         HStack(spacing: 12) {
-            if let level = article.level, !level.isEmpty {
-                ShelfChip(text: level, palette: palette)
-            }
+            progressRing(percent: article.progress.percent, done: done)
             VStack(alignment: .leading, spacing: 2) {
                 Text(article.title)
-                    .font(.system(size: 14, design: .serif))
+                    .font(.system(size: 13.5, design: .serif))
                     .foregroundColor(palette.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .help(article.title)
-                if let titleCn = article.titleCn, !titleCn.isEmpty {
-                    Text(titleCn)
-                        .font(.system(size: 11.5))
-                        .foregroundColor(palette.textTertiary)
-                        .lineLimit(1)
-                }
+                // 原型「译名 · 来源」合并（L438）：有译名也不丢来源落款。
+                Text(article.titleCn.map { "\($0) · \(source)" } ?? source)
+                    .font(.system(size: 11))
+                    .foregroundColor(palette.textTertiary)
+                    .lineLimit(1)
             }
             Spacer(minLength: 12)
-            Text("\(Int(article.progress.percent.rounded()))%")
-                .font(.system(size: 12.5))
-                .monospacedDigit()
-                .foregroundColor(palette.textTertiary)
-            if hover {
-                FolioDeleteButton(palette: palette, help: "删除文章（生词本不受影响）") {
-                    confirmDelete()
+            HStack(spacing: 8) {
+                if let level = article.level, !level.isEmpty {
+                    Text(level)
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundColor(palette.tapeInk)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(palette.tapeBg))
+                }
+                Text("约 \(shelfFormatDuration(minutes: minutes))")
+                    .font(.system(size: 11))
+                    .foregroundColor(palette.textTertiary)
+                if let cov = coverage {
+                    Text("\(goalLabel)词 \(cov.total.formatted())")
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(palette.textTertiary)
+                        .help("\(goalLabel)大纲词命中 \(cov.total) 个")
                 }
             }
+            moreMenu
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(hover || menuOpen ? palette.glassBorder.opacity(0.35) : Color.clear)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .onHover { h in
             withAnimation(ReaderMotion.hover) { hover = h }
         }
+        .help("打开这篇短文")
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private var source: String {
+        shelfSourceLabel(article: summary.article, books: books)
+    }
+
+    /// conic 进度环的等价物：Circle().trim；读完加 ✓（ShelfPage.tsx:331-333）。
+    private func progressRing(percent: Double, done: Bool) -> some View {
+        let ratio = min(1, max(0, percent / 100))
+        return ZStack {
+            Circle().stroke(palette.glassBorderStrong, lineWidth: 2.5)
+            Circle()
+                .trim(from: 0, to: ratio)
+                .stroke(done ? palette.sonicTeal : palette.accent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            if done {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundColor(palette.sonicTeal)
+            }
+        }
+        .frame(width: 26, height: 26)
+        .accessibilityHidden(true)
+    }
+
+    /// more 菜单（竖三点，role=menu，唯一项「删除这篇短文」带 confirm）。
+    private var moreMenu: some View {
+        Menu {
+            Button {
+                onCloseMenu()
+                confirmDelete()
+            } label: {
+                Label("删除这篇短文", systemImage: ReaderIcons.trash)
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(palette.textTertiary)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(menuOpen || hover ? palette.glassBorder : Color.clear))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("更多操作")
+        .accessibilityLabel("更多操作")
     }
 
     private func confirmDelete() {
+        // 删除短文确认（ShelfPage.tsx:369 文案逐字；NSAlert 等价 window.confirm）。
         let alert = NSAlert()
         alert.messageText = "删除《\(summary.article.title)》？"
         alert.informativeText = "这篇短文将从书架移除；生词本不受影响。"
@@ -1338,260 +2013,190 @@ private struct ShelfArticleRow: View {
     }
 }
 
-/// 胶带风 chip（--tape-* 令牌）：级别 / 词量 / 雷达徽标。
-private struct ShelfChip: View {
-    let text: String
-    let palette: ReaderPalette
+// MARK: - 阅读舞台（2026-10-26 阅读页白卡重构，对齐 ReadingView.tsx）
 
-    var body: some View {
-        Text(text)
-            .font(.system(size: 11))
-            .foregroundColor(palette.tapeInk)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2.5)
-            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(palette.tapeBg))
-            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(palette.tapeBorder, lineWidth: 1))
-            .fixedSize()
-    }
-}
-
-/// 书架底部今日卡（.todaycard）：阅读目标环 + 今日已读/连续天数 + 今日复习进度与「继续复习」。
-private struct ShelfTodayCard: View {
-    let reviewedToday: Int
-    let dueNow: Int
-    let streak: Int
-    let readSecondsToday: Double
-    let goalMin: Int
-    let onGoReview: () -> Void
-    @Environment(\.readerPalette) private var palette
-
-    private var todayTotal: Int { reviewedToday + dueNow }
-    private var readMinutes: Int { max(0, Int((readSecondsToday / 60).rounded())) }
-    private var goalRatio: Double { goalMin > 0 ? min(1, Double(readMinutes) / Double(goalMin)) : 0 }
-    private var reviewRatio: Double { todayTotal > 0 ? Double(reviewedToday) / Double(todayTotal) : 0 }
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 20) {
-            // 阅读目标环（今日已读 M / N 分钟）
-            ZStack {
-                Circle().stroke(palette.glassBorderStrong, lineWidth: 4)
-                Circle()
-                    .trim(from: 0, to: goalRatio)
-                    .stroke(goalRatio >= 1 ? palette.sonicTeal : palette.accent, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .animation(ReaderMotion.islandTab, value: goalRatio)
-                Text(goalMin > 0 ? "\(readMinutes)/\(goalMin)" : "\(readMinutes)′")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .monospacedDigit()
-                    .foregroundColor(palette.text)
-            }
-            .frame(width: 56, height: 56)
-            .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("今日已读 \(readMinutes) \(goalMin > 0 ? "/ \(goalMin)" : "") 分钟")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(palette.text)
-                Text(
-                    goalMin > 0
-                        ? (readMinutes >= goalMin ? "阅读目标已达成 ✓ · 明天继续保持" : "阅读目标还差 \(goalMin - readMinutes) 分钟达成")
-                        : "可在阅读设置里定每日阅读目标"
-                )
-                .font(.system(size: 11))
-                .foregroundColor(palette.textTertiary)
-                HStack(spacing: 4) {
-                    Image(systemName: ReaderIcons.flame).font(.system(size: 11))
-                    Text("连续阅读 \(streak) 天").monospacedDigit()
-                }
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(palette.warn)
-            }
-
-            Spacer(minLength: 12)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("今日复习 \(reviewedToday) / \(todayTotal)")
-                    .font(.system(size: 13, weight: .semibold))
-                    .monospacedDigit()
-                    .foregroundColor(palette.text)
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(palette.glassBorderStrong)
-                        Capsule()
-                            .fill(palette.accent)
-                            .frame(width: max(0, geo.size.width * reviewRatio))
-                            .animation(ReaderMotion.islandTab, value: reviewRatio)
-                    }
-                }
-                .frame(width: 220, height: 4)
-                Text(dueNow > 0 ? "还差 \(dueNow) 个清空今天到期" : (todayTotal > 0 ? "今天的到期已清空 ✓" : "今天没有到期生词"))
-                    .font(.system(size: 11))
-                    .foregroundColor(palette.textTertiary)
-                // 无到期词时点了只会进空队列，像「点了没反应」——禁用并写明原因。
-                Button {
-                    onGoReview()
-                } label: {
-                    Text(dueNow > 0 ? "继续复习" : "今日已清空")
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .frame(height: 26)
-                        .background(Capsule().fill(dueNow > 0 ? palette.accent : palette.ink4))
-                }
-                .buttonStyle(.plain)
-                .disabled(dueNow == 0)
-                .help(dueNow > 0 ? "去复习 \(dueNow) 个到期生词" : (todayTotal > 0 ? "今天的到期已清空，明天再来" : "暂无到期生词。先在阅读里查词收藏，明天会出现在这里"))
-                .padding(.top, 2)
-            }
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(palette.glassSurface.opacity(0.55)))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(palette.glassBorder, lineWidth: 1))
-        .accessibilityElement(children: .combine)
-    }
-}
-
-// MARK: - 阅读舞台
-
+/// 白卡主栏：`.reading-toolbar` 控件收口（meta / 遮罩开关+计数 / 目录 chip /
+/// 阅读设置 chip + 设置浮层）+ `.reading-scrollpane`（左缘进度轨 + 居中 640pt 正文列：
+/// 续读胶囊、刊头、prose 英文流 / parallel 双栏）+ 译文浮层（锚定当前句末行下方）。
+/// 短文结课条常驻底部直到关闭。
 struct ReadingStageView: View {
     @ObservedObject var vm: ReaderViewModel
-    /// 书脊列可见性（ReaderBodyView 按整窗宽度算好传入）。
-    var spineVisible: Bool
     @State private var editingIdx: Int?
     @State private var editDraft = ""
-
-    var body: some View {
-        HStack(spacing: 0) {
-            if spineVisible, let article = vm.article {
-                EditorialSpineColumn(
-                    article: article,
-                    book: vm.currentBook,
-                    activeIdx: vm.activeSentenceIdx
-                )
-                .frame(width: 56)
-            }
-            VStack(spacing: 0) {
-                if let article = vm.article {
-                    ReaderScroll(article: article, vm: vm, editingIdx: $editingIdx, editDraft: $editDraft)
-                    // 短文结课条：读完后的本篇收获快照，常驻底部直到关闭。
-                    if let finish = vm.finishCard, article.id == finish.articleId {
-                        Divider().opacity(0.5)
-                        ReaderFinishBarView(vm: vm, summary: finish)
-                    }
-                } else {
-                    EmptyStateView {
-                        vm.importSheetShown = true
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity)
-        }
-    }
-}
-
-// MARK: - 书脊列（v0.8 画报版式，reader.css:6722-6761）
-
-/// 正文左侧书脊列：超大当前句码（44px 斜体 · 墨 18%）+「当前句」小注 +
-/// 竖排书名/文章标题 + 全书进度百分比（与顶部墨线同源 article.progress.percent）。
-private struct EditorialSpineColumn: View {
-    let article: Article
-    let book: BookMeta?
-    let activeIdx: Int
-    @Environment(\.readerPalette) private var palette
-
-    private var spineLabel: String {
-        if let book {
-            return "\(book.title) · CHAPTER \(bookChapterIndexOf(book: book, chapterId: article.id) + 1)"
-        }
-        return article.title
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(String(format: "%02d", min(activeIdx + 1, 99)))
-                    .font(readerDisplayFont(44).italic())
-                    .monospacedDigit()
-                    .foregroundColor(palette.text.opacity(0.18))
-                Text("当前句")
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundColor(palette.textTertiary)
-            }
-            Spacer(minLength: 16)
-            verticalLabel
-            Spacer(minLength: 16)
-            Text("\(Int(article.progress.percent.rounded()))%")
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .monospacedDigit()
-                .foregroundColor(palette.accent)
-        }
-        .padding(.top, 20)
-        .padding(.bottom, 12)
-        .accessibilityHidden(true)
-    }
-
-    /// 竖排书脊（writing-mode: vertical-rl + rotate(180deg) 的原生等价物：
-    /// 整段逆时针 90°，自下而上读；40% 高度封顶溢出截断）。
-    private var verticalLabel: some View {
-        GeometryReader { geo in
-            let maxLength = geo.size.height * 0.4
-            let label = spineLabel.uppercased()
-            // 等宽 10.5pt ≈ 6.3pt/字符：预算内截断（overflow: hidden 同语义）。
-            let budget = max(4, Int(maxLength / 6.3))
-            let clipped = label.count > budget ? String(label.prefix(budget - 1)) + "…" : label
-            Text(clipped)
-                .font(.system(size: 10.5, design: .monospaced))
-                .tracking(1.2)
-                .foregroundColor(palette.textTertiary)
-                .fixedSize()
-                .frame(width: geo.size.height, height: geo.size.width)
-                .rotationEffect(.degrees(-90))
-                .position(
-                    x: geo.size.width / 2,
-                    y: geo.size.height - min(maxLength, geo.size.height) / 2
-                )
-        }
-        .help(spineLabel)
-    }
-}
-
-private struct RowFramesKey: PreferenceKey {
-    typealias Value = [Int: CGFloat]
-
-    static var defaultValue: [Int: CGFloat] = [:]
-
-    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
-        value.merge(nextValue()) { _, new in new }
-    }
-}
-
-private struct ReaderScroll: View {
-    let article: Article
-    @ObservedObject var vm: ReaderViewModel
-    @Binding var editingIdx: Int?
-    @Binding var editDraft: String
-    @Environment(\.readerPalette) private var palette
-    @State private var containerHeight: CGFloat = 600
+    /// 段落排版下的本地句卡开关（原型「句卡」，无持久字段）。
+    @State private var sentCards = false
+    /// 续读胶囊隐藏（换文复位）。
+    @State private var resumeHidden = false
+    /// 当前句末行 rect（正文内容坐标系；译文浮层锚定）。
+    @State private var popAnchors: [Int: PopAnchor] = [:]
 
     private var settings: ReaderSettings { vm.effectiveSettings }
+    /// 阅读设置浮层开关（ReadingView.tsx settingsOpen）：挂在 vm 上以接入统一 Esc 链。
+    private var settingsOpen: Bool { vm.readingSettingsPopShown }
 
-    /// 生效版式：仅中文时明确回落对照行（prose 英文流被隐藏后只剩折叠卡，
-    /// 不可读）；其余按 spreadLayout（缺省 prose）。
+    var body: some View {
+        if let article = vm.article {
+            VStack(spacing: 0) {
+                ReadingToolbarView(
+                    vm: vm,
+                    settingsOpen: $vm.readingSettingsPopShown,
+                    sentCards: $sentCards
+                )
+                readingPane(article: article)
+                if let finish = vm.finishCard, article.id == finish.articleId {
+                    Divider().opacity(0.5)
+                    ReaderFinishBarView(vm: vm, summary: finish)
+                }
+            }
+            .animation(ReaderMotion.hover, value: settingsOpen)
+            .overlay {
+                // 阅读设置浮层：点浮层外关闭（浮层内与触发 chip 的点击不吃，
+                // ReadingView.tsx:406-415 pointerdown 外点关闭的等价物）。
+                if settingsOpen {
+                    ZStack(alignment: .topTrailing) {
+                        Color.black.opacity(0.001)
+                            .contentShape(Rectangle())
+                            .onTapGesture { vm.readingSettingsPopShown = false }
+                        ReadingSettingsPopover(vm: vm, sentCards: $sentCards)
+                        .padding(.top, 6)
+                        .padding(.trailing, 40)
+                    }
+                    .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topTrailing)))
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                // 随读抽查胶带小条层（.cloze-toast-layer：left 64 / bottom 20，aria-live=polite）。
+                ClozeToastLayer(toasts: vm.clozeToasts)
+                    .padding(.leading, 64)
+                    .padding(.bottom, 20)
+                    .allowsHitTesting(false)
+            }
+            .onChange(of: article.id) { _ in
+                // 换文复位（ReadingView.tsx:168）：续读胶囊回到该篇自己的断点。
+                resumeHidden = false
+                editingIdx = nil
+                popAnchors = [:]
+            }
+        } else {
+            EmptyStateView {
+                vm.openImport()
+            }
+        }
+    }
+
+    // MARK: 正文滚动区（左缘进度轨 + 居中 640pt 列 + 译文浮层）
+
+    private func readingPane(article: Article) -> some View {
+        GeometryReader { outer in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    ZStack(alignment: .topLeading) {
+                        // 左缘进度轨（aria-hidden；rail-pct / rail-track / rail-label）。
+                        ReadingRailView(article: article, vm: vm)
+                            .frame(width: 64, alignment: .top)
+                            .frame(maxHeight: .infinity, alignment: .top)
+                            .padding(.top, 12)
+                        // 居中 640pt 正文列。
+                        readingCol(article: article)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .coordinateSpace(name: "readingContent")
+                }
+                .coordinateSpace(name: "readerScroll")
+                .onPreferenceChange(RowFramesKey.self) { frames in
+                    adoptViewportFrames(frames, containerHeight: outer.size.height)
+                }
+                .onPreferenceChange(PopAnchorKey.self) { anchors in
+                    // 浮层锚点随排版（末行 rect）更新；取当前句即可。
+                    popAnchors = anchors
+                }
+                .onChange(of: vm.activeSentenceIdx) { idx in
+                    proxy.scrollTo(scrollAnchor(for: idx, article: article), anchor: .center)
+                }
+                .onChange(of: vm.searchMatchIdx) { idx in
+                    guard let idx else { return }
+                    proxy.scrollTo(scrollAnchor(for: idx, article: article), anchor: .center)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func readingCol(article: Article) -> some View {
+        let total = article.sentences.count
+        let resumeIdx = article.progress.sentenceIdx
+        let showResume = resumeIdx > 0 && resumeIdx < total && vm.translating == nil && !resumeHidden
+        VStack(alignment: .leading, spacing: 0) {
+            if showResume {
+                ResumeCapsuleView(
+                    resumeIdx: resumeIdx,
+                    palette: palette,
+                    onGo: {
+                        resumeHidden = true
+                        vm.jumpTo(idx: resumeIdx)
+                    },
+                    onClose: { resumeHidden = true }
+                )
+                .padding(.bottom, 14)
+            }
+            ReadingHeadView(article: article, vm: vm)
+            if layout == .prose {
+                ProseBodyView(article: article, vm: vm, sentCards: sentCards)
+                    .id("prose-body")
+            } else {
+                ArticleRows(article: article, vm: vm, editingIdx: $editingIdx, editDraft: $editDraft)
+            }
+            if vm.showFinishAction {
+                finishActionRow
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 10)
+        // M-02：底部悬浮走带胶囊（bottom 16 + 胶囊高约 50）→ 正文安全留白 84。
+        .padding(.bottom, settings.zenMode ? 60 : 84)
+        .frame(width: readingColWidth)
+        .frame(maxWidth: .infinity)
+        .background(
+            // 译文浮层：脱离文档流锚在当前句末行下方（同 Windows .translation-pop
+            // 绝对定位语义——放在列内容上，随内容滚动）。
+            Color.clear.overlay(alignment: .topLeading) {
+                if layout == .prose, let anchor = popAnchors[vm.activeSentenceIdx],
+                   let sentence = article.sentences[safe: vm.activeSentenceIdx] {
+                    TranslationPopView(
+                        vm: vm,
+                        pair: sentence,
+                        editing: editingIdx == sentence.idx,
+                        editDraft: $editDraft,
+                        arrowX: anchor.arrowX(colWidth: readingColWidth),
+                        onStartEdit: {
+                            editDraft = sentence.zh ?? ""
+                            editingIdx = sentence.idx
+                        },
+                        onCancelEdit: { editingIdx = nil },
+                        onCommitEdit: {
+                            let text = editDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                            editingIdx = nil
+                            if !text.isEmpty { vm.editTranslation(idx: sentence.idx, zh: text) }
+                        }
+                    )
+                    .offset(x: 24, y: anchor.maxY + 10)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+        )
+        .animation(ReaderMotion.hover, value: popAnchors[vm.activeSentenceIdx])
+    }
+
+    @Environment(\.readerPalette) private var palette
+
+    /// 生效版式：仅中文时明确回落对照行（prose 英文流被隐藏后不可读）；
+    /// 其余按 spreadLayout（缺省 prose）。
     private var layout: SpreadLayout {
         settings.contrastMode == .zh ? .parallel : settings.effectiveSpreadLayout
     }
 
-    /// 滚到哪读到哪：视口上三分之一高度处的那一句为「当前句」。
-    private func adoptViewportFrames(_ frames: [Int: CGFloat]) {
-        let line = containerHeight / 3
-        let above = frames.filter { $0.value <= line }
-        let candidate = above.keys.max() ?? frames.keys.min()
-        guard let idx = candidate else { return }
-        DispatchQueue.main.async {
-            vm.viewportMoved(to: idx)
-        }
-    }
+    /// 正文列宽：640pt（Windows .reading-col），窄窗回落可用宽 − 进度轨。
+    private var readingColWidth: CGFloat { 640 }
 
     /// 正文末「读完本篇/本章」按钮（纯手动阅读路径）：与自然播完走同一落点。
     private var finishActionRow: some View {
@@ -1605,64 +2210,65 @@ private struct ReaderScroll: View {
                 .foregroundColor(palette.textTertiary)
         }
         .padding(.top, 20)
-        .padding(.horizontal, 24)
-        .frame(maxWidth: 760, alignment: .leading)
     }
 
-    var body: some View {
-        GeometryReader { outer in
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        if settings.maskTranslation {
-                            MaskBarView(vm: vm)
-                        }
-                        ArticleHeader(article: article, vm: vm)
-                        if layout == .prose {
-                            ProseBodyView(article: article, vm: vm, editingIdx: $editingIdx, editDraft: $editDraft)
-                        } else {
-                            ArticleRows(
-                                article: article,
-                                vm: vm,
-                                editingIdx: $editingIdx,
-                                editDraft: $editDraft
-                            )
-                        }
-                        if vm.showFinishAction {
-                            finishActionRow
-                        }
-                    }
-                    .padding(.top, 18)
-                    // M-02：底部悬浮走带胶囊（bottom 18 + 胶囊高约 50）→ 正文
-                    // 安全留白 84（原型 .spatial-stage padding-bottom: 84）。
-                    .padding(.bottom, settings.zenMode ? 60 : 84)
-                }
-                .coordinateSpace(name: "readerScroll")
-                .onPreferenceChange(RowFramesKey.self) { frames in
-                    adoptViewportFrames(frames)
-                }
-                .onChange(of: vm.activeSentenceIdx) { idx in
-                    proxy.scrollTo(scrollAnchor(for: idx), anchor: .center)
-                }
-                .onChange(of: vm.searchMatchIdx) { idx in
-                    guard let idx else { return }
-                    proxy.scrollTo(scrollAnchor(for: idx), anchor: .center)
-                }
-            }
-            .onAppear { containerHeight = outer.size.height }
-            .onChange(of: outer.size.height) { containerHeight = $0 }
+    /// 滚到哪读到哪：视口上三分之一高度处的那一句为「当前句」。
+    private func adoptViewportFrames(_ frames: [Int: CGFloat], containerHeight: CGFloat) {
+        let line = containerHeight / 3
+        let above = frames.filter { $0.value <= line }
+        let candidate = above.keys.max() ?? frames.keys.min()
+        guard let idx = candidate else { return }
+        DispatchQueue.main.async {
+            vm.viewportMoved(to: idx)
         }
     }
 
-    /// 滚动锚点：对照行 = 句行 id；prose = 折叠卡（跟着当前句走，
-    /// 居中的同时把译文卡一并带进视口）。
-    private func scrollAnchor(for idx: Int) -> AnyHashable {
-        layout == .prose ? AnyHashable("prose-fold") : AnyHashable(idx)
+    /// 滚动锚点：对照行 = 句行 id；prose = 所在段块（句卡模式 = 该句卡）。
+    private func scrollAnchor(for idx: Int, article: Article) -> AnyHashable {
+        if layout == .parallel { return AnyHashable(idx) }
+        if sentCards { return AnyHashable("prose-sent-\(idx)") }
+        return AnyHashable("prose-para-\(article.sentences[safe: idx]?.paragraphIdx ?? 0)")
     }
 }
 
-/// 句对行列表（独立结构体，减轻主 body 的类型推断负担）。
-private struct ArticleRows: View {
+/// 译文浮层的锚点（正文内容坐标系）：末行底 + 末行句尾右缘（列内）。
+struct PopAnchor: Equatable {
+    let minY: CGFloat
+    let maxY: CGFloat
+    /// 末行句尾在列内的 x（含列 24pt 内边距折算）。
+    let rightInCol: CGFloat
+
+    /// 箭头 x：末行右缘 − 24(col padding) − 20(箭头半宽)，clamp 到
+    /// [16, col宽 − 48 − 44] 不溢出（ReadingView.tsx:310-312 同式）。
+    func arrowX(colWidth: CGFloat) -> CGFloat {
+        let ax = rightInCol - 24 - 20
+        return min(max(ax, 16), max(16, colWidth - 48 - 44))
+    }
+}
+
+/// 滚动跟随的句 minY 回报键（滚动面板坐标系）。
+private struct RowFramesKey: PreferenceKey {
+    typealias Value = [Int: CGFloat]
+
+    static var defaultValue: [Int: CGFloat] = [:]
+
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+/// 译文浮层锚点回报键（正文内容坐标系：句末行 rect）。
+struct PopAnchorKey: PreferenceKey {
+    static var defaultValue: [Int: PopAnchor] = [:]
+
+    static func reduce(value: inout [Int: PopAnchor], nextValue: () -> [Int: PopAnchor]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+/// 句对行列表（独立结构体，减轻主 body 的类型推断负担）。对照排版（.parallel-spread-row）：
+/// 段首行 paragraph-start、当前句 is-current、失败 failed；行点击定位。
+struct ArticleRows: View {
     let article: Article
     @ObservedObject var vm: ReaderViewModel
     @Binding var editingIdx: Int?
@@ -1715,193 +2321,133 @@ private struct ArticleRows: View {
     }
 }
 
-// MARK: - 遮罩条
-
-struct MaskBarView: View {
+/// 工具栏收口（.reading-toolbar，ReadingView.tsx:836-899）：左 meta（书·章·词数·
+/// 分钟·level·翻译/词块标注 chip）+ 遮罩开关组 + 目录 chip + 阅读设置 chip。
+struct ReadingToolbarView: View {
     @ObservedObject var vm: ReaderViewModel
+    @Binding var settingsOpen: Bool
+    @Binding var sentCards: Bool
     @Environment(\.readerPalette) private var palette
 
     var body: some View {
-        let sentences = vm.article?.sentences ?? []
+        let article = vm.article
+        let sentences = article?.sentences ?? []
+        let maskOn = vm.effectiveSettings.maskTranslation
         let peek = vm.peekAll
-        let maskable = sentences.filter { $0.zh != nil }.count
-        let revealed = sentences.filter { $0.zh != nil && ($0.revealed == true || peek) }.count
-        HStack(spacing: 10) {
-            Image(systemName: ReaderIcons.eyeOff)
-                .font(.system(size: 11))
-                .foregroundColor(palette.accent)
-            Text("译文遮罩")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(palette.text)
-            Text("\(revealed) / \(maskable) 已揭开")
-                .font(.system(size: 12))
-                .foregroundColor(palette.textSecondary)
-            Text("点单句揭开 / 再点遮住 · 按住 H 临时显示全部")
-                .font(.system(size: 11))
-                .foregroundColor(palette.textTertiary)
-            Spacer()
-            if revealed < maskable {
-                Button("全部揭开") { vm.revealAll() }
-                    .controlSize(.small)
-            }
-            if revealed > 0 {
-                Button("全部遮住") { vm.maskAll() }
-                    .controlSize(.small)
-            }
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 8)
-        .background(palette.accent.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 24)
-        .padding(.bottom, 8)
-        .frame(maxWidth: 760)
-    }
-}
-
-// MARK: - 刊头（v0.8 画报版式：元信息行 + 行内三开关 + display 标题 + 中文副题）
-
-struct ArticleHeader: View {
-    let article: Article
-    @ObservedObject var vm: ReaderViewModel
-    @Environment(\.readerPalette) private var palette
-
-    /// 约 N 分钟读完：wordCount/200 四舍五入、至少 1（ReadingView.tsx:249）。
-    private var readMinutes: Int {
-        max(1, Int((Double(article.wordCount) / 200).rounded()))
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            mastheadMeta
-            Text(article.title)
-                .font(readerDisplayFont(54))
-                .tracking(-1.3)
-                .lineSpacing(2)
-                .minimumScaleFactor(0.55)
-                .lineLimit(4)
-                .foregroundColor(palette.text)
-                .padding(.bottom, 10)
-            mastheadCnSub
-        }
-        .padding(.horizontal, 24)
-        .frame(maxWidth: 760, alignment: .leading)
-    }
-
-    // MARK: 元信息行 + 三开关
-
-    private var mastheadMeta: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            metaLine
-            mastheadSwitches
-        }
-        .padding(.bottom, 12)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(palette.glassBorderStrong).frame(height: 1)
-        }
-        .padding(.bottom, 22)
-    }
-
-    private var metaLine: some View {
-        HStack(spacing: 10) {
-            if let bookId = article.bookId, let book = vm.bookList.first(where: { $0.id == bookId }) {
-                Text("CHAPTER \(bookChapterIndexOf(book: book, chapterId: article.id) + 1)")
+        let maskable = maskOn ? sentences.filter { $0.zh != nil }.count : 0
+        let revealed = maskOn ? sentences.filter { $0.zh != nil && ($0.revealed == true || peek) }.count : 0
+        let readMinutes = article.map { max(1, Int((Double($0.wordCount) / 200).rounded())) } ?? 1
+        return HStack(spacing: 12) {
+            // 左 meta（书章 / 短文共用一行；ReadingView.tsx:837-840）：
+            // `{book.title} · 第 {x}/{N} 章 · {words} 词 · 约 {m} 分钟`（短文无书前缀）。
+            if let article {
+                let bookPrefix: String = {
+                    guard let bookId = article.bookId,
+                          let book = vm.bookList.first(where: { $0.id == bookId }) else { return "" }
+                    return "\(book.title) · 第 \(bookChapterIndexOf(book: book, chapterId: article.id) + 1)/\(book.chapters.count) 章 · "
+                }()
+                Text("\(bookPrefix)\(article.wordCount.formatted()) 词 · 约 \(readMinutes) 分钟")
                     .font(.system(size: 11, design: .monospaced))
+                    .monospacedDigit()
                     .foregroundColor(palette.textTertiary)
+                    .lineLimit(1)
             }
-            Text("\(article.wordCount) 词 · 约 \(readMinutes) 分钟读完")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(palette.textTertiary)
-            if let level = article.level, !level.isEmpty {
+            if let level = article?.level, !level.isEmpty {
                 Text(level)
                     .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundColor(Color(nsColor: .systemBlue))
+                    .foregroundColor(palette.textTertiary)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
-                    .background(Color(nsColor: .systemBlue).opacity(0.12))
-                    .clipShape(Capsule())
-                    .help("分级阅读级别")
+                    .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(palette.tapeBg))
             }
             if let translating = vm.translating {
-                progressChip("翻译中 \(translating.done)/\(translating.total) 段")
+                statusChip("翻译中 \(translating.done)/\(translating.total) 段")
             }
             if vm.translating == nil, let chunking = vm.chunking {
-                progressChip("词块标注中 \(chunking.done)/\(chunking.total) 批")
+                statusChip("词块标注中 \(chunking.done)/\(chunking.total) 批")
             }
-            let resumeIdx = article.progress.sentenceIdx
-            if resumeIdx > 0, resumeIdx < article.sentences.count, vm.translating == nil {
-                Button("上次读到第 \(resumeIdx + 1) 句 · 点击继续") {
-                    vm.jumpTo(idx: resumeIdx)
+            Spacer(minLength: 8)
+            // 遮罩控件组（ReadingView.tsx:853-876）
+            HStack(spacing: 8) {
+                Toggle("", isOn: Binding(
+                    get: { vm.effectiveSettings.maskTranslation },
+                    set: { value in vm.patchSettings { $0.maskTranslation = value } }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .accessibilityLabel("译文遮罩")
+                Text("译文遮罩")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(palette.text)
+                Text(maskOn ? "已揭开 \(revealed) / \(maskable) 句" : "译文常显")
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundColor(palette.textTertiary)
+                if maskOn, revealed < maskable {
+                    Button("全部揭开") { vm.revealAll() }
+                        .controlSize(.small)
                 }
-                .buttonStyle(.link)
-                .font(.system(size: 11))
+                if maskOn, revealed > 0 {
+                    Button("全部遮住") { vm.maskAll() }
+                        .controlSize(.small)
+                }
             }
+            .help("遮住译文先读原文，需要时再点开；按住 H 临时全显")
+            // 随读抽查战绩（ReadingView.tsx:877-881，quizOn 且有槽位时）：
+            // `抽查 {hit} 命中 · {close} 接近 · {trap} 陷阱 · 剩 {todo}`。
+            if vm.clozeQuizOn, !vm.clozeSlots.isEmpty {
+                Text(clozeMeterText(vm.clozeTallyNow))
+                    .font(.system(size: 11, design: .monospaced))
+                    .monospacedDigit()
+                    .foregroundColor(palette.textTertiary)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .help("随读抽查战绩：命中 · 接近 · 陷阱 · 待答")
+                    .accessibilityLabel("随读抽查战绩")
+            }
+            // 目录 chip（书章才有；ReadingView.tsx:882-887）
             if vm.currentBook != nil {
                 Button {
                     vm.bookTocShown = true
                 } label: {
-                    Label("目录", systemImage: "list.bullet")
-                        .font(.system(size: 10.5, weight: .medium))
+                    Label("目录", systemImage: ReaderIcons.toc)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(palette.textSecondary)
+                        .padding(.horizontal, 10)
+                        .frame(height: 24)
+                        .background(Capsule().strokeBorder(palette.glassBorderStrong, lineWidth: 1))
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help("本书目录：各章词数与已收藏生词数，点章即跳")
+                .buttonStyle(.plain)
+                .help("章节目录")
             }
+            // 阅读设置 chip（ReadingView.tsx:888-898）
+            Button {
+                settingsOpen.toggle()
+            } label: {
+                Label("阅读设置", systemImage: ReaderIcons.gear)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(settingsOpen ? palette.accent : palette.textSecondary)
+                    .padding(.horizontal, 10)
+                    .frame(height: 24)
+                    .background(
+                        Capsule().fill(settingsOpen ? palette.accentSoft : Color.clear)
+                    )
+                    .overlay(Capsule().strokeBorder(palette.glassBorderStrong, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .help("排版 / 字号 / 专注 / 短语虚线 / 随读抽查都收在这里")
+            .accessibilityLabel("阅读设置")
+            .accessibilityAddTraits(settingsOpen ? [.isSelected] : [])
         }
-        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 8)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(palette.glassBorder.opacity(0.5)).frame(height: 1)
+        }
     }
 
-    /// 刊头行内三开关：专注模式 / 排版 / 译文显隐（ReadingView.tsx:572-594）。
-    private var mastheadSwitches: some View {
-        let settings = vm.effectiveSettings
-        let spotlight = settings.spotlightEnabled
-        let spread = settings.effectiveSpreadLayout
-        return HStack(spacing: 14) {
-            TextActionButton(text: "专注模式：\(spotlight ? "开" : "关")", palette: palette, help: "开启后非当前句变淡，注意力聚焦当前句") {
-                vm.patchSettings { $0.spotlightMode = !($0.spotlightMode ?? false) }
-            }
-            TextActionButton(text: "排版：\(spread.label)", palette: palette, help: "段落 = 行内英文流 + 当前句行间译文；双语对照 = 逐句双栏") {
-                vm.patchSettings { $0.spreadLayout = ($0.spreadLayout ?? .prose).next }
-            }
-            TextActionButton(text: "译文：\(settings.maskTranslation ? "隐藏" : "显示")", palette: palette, help: "遮住译文先读原文，需要时再点开") {
-                vm.patchSettings { $0.maskTranslation = !$0.maskTranslation }
-            }
-        }
-    }
-
-    // MARK: 中文副题
-
-    @ViewBuilder
-    private var mastheadCnSub: some View {
-        HStack(alignment: .firstTextBaseline) {
-            if let titleCn = article.titleCn {
-                Text(titleCn)
-                    .font(readerFont(16, .regular, pair: vm.effectiveSettings.fontPair))
-                    .foregroundColor(palette.textSecondary)
-            } else if article.titleCnState == .failed {
-                HStack(spacing: 8) {
-                    Text("标题翻译失败")
-                        .font(.system(size: 13))
-                        .foregroundColor(palette.err)
-                    Button("重试") { vm.retryTitle() }
-                        .buttonStyle(.link)
-                        .font(.system(size: 13))
-                }
-            } else if vm.translating != nil {
-                SkeletonLine(width: 220)
-                    .padding(.vertical, 4)
-            }
-            Spacer(minLength: 12)
-            if vm.currentBook != nil {
-                TextActionButton(text: "围绕本章练口语 →", palette: palette, help: "带着本章内容去口语陪练") {
-                    vm.practiceSentence(idx: vm.activeSentenceIdx)
-                }
-            }
-        }
-        .padding(.bottom, 28)
-    }
-
-    private func progressChip(_ text: String) -> some View {
+    private func statusChip(_ text: String) -> some View {
         Text(text)
             .font(.system(size: 11, weight: .medium))
             .foregroundColor(palette.warn)
@@ -1909,6 +2455,370 @@ struct ArticleHeader: View {
             .padding(.vertical, 2)
             .background(palette.warn.opacity(0.12))
             .clipShape(Capsule())
+    }
+}
+
+/// 阅读设置浮层（.reading-settings-pop，ReadingView.tsx:902-1004）：排版 seg /
+/// 句卡 / 字号步进 / 短语虚线 / 专注模式 / 随读抽查 / 主题只读，七项逐字。
+/// Windows 浮层只有 `role="dialog" aria-label="阅读设置"`，无可见标题行与关闭钮——
+/// 关闭靠点浮层外（ReadingStageView 的遮罩层）、再点触发 chip 或 Esc。
+struct ReadingSettingsPopover: View {
+    @ObservedObject var vm: ReaderViewModel
+    @Binding var sentCards: Bool
+    @Environment(\.readerPalette) private var palette
+
+    private var settings: ReaderSettings { vm.effectiveSettings }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // 排版（段落 / 对照）
+            optionRow(label: "排版") {
+                HStack(spacing: 2) {
+                    segButton("段落", active: settings.effectiveSpreadLayout == .prose,
+                              help: "段落 = 行内英文流 + 当前句译文浮层") {
+                        vm.patchSettings { $0.spreadLayout = .prose }
+                    }
+                    segButton("对照", active: settings.effectiveSpreadLayout == .parallel,
+                              help: "双语对照 = 逐句双栏") {
+                        vm.patchSettings { $0.spreadLayout = .parallel }
+                    }
+                }
+                .padding(2)
+                .background(Capsule().fill(palette.background))
+                .overlay(Capsule().strokeBorder(palette.glassBorder, lineWidth: 1))
+            }
+            // 句卡（仅段落排版可用；本地态不落盘）
+            optionRow(label: "句卡", help: "段落排版下把每句拆成独立句卡（只影响本窗口，不落盘）") {
+                Toggle("", isOn: $sentCards)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                    .disabled(settings.effectiveSpreadLayout != .prose)
+                    .accessibilityLabel("句卡")
+            }
+            // 字号 14–24 步进
+            optionRow(label: "字号") {
+                HStack(spacing: 8) {
+                    Button {
+                        vm.patchSettings { $0.fontSize = max(readerFontSizeMin, $0.fontSize - 1) }
+                    } label: {
+                        Text("−").frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(settings.fontSize <= readerFontSizeMin)
+                    .accessibilityLabel("减小字号")
+                    Text("\(settings.fontSize)")
+                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        .foregroundColor(palette.text)
+                        .frame(minWidth: 20)
+                    Button {
+                        vm.patchSettings { $0.fontSize = min(readerFontSizeMax, $0.fontSize + 1) }
+                    } label: {
+                        Text("+").frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(settings.fontSize >= readerFontSizeMax)
+                    .accessibilityLabel("增大字号")
+                }
+                .background(Capsule().strokeBorder(palette.glassBorderStrong, lineWidth: 1))
+            }
+            // 短语虚线
+            optionRow(label: "短语虚线", help: "词块/生词在正文里用虚线标记，点击看释义并可收藏") {
+                Toggle("", isOn: Binding(
+                    get: { settings.chunkHighlight },
+                    set: { value in vm.patchSettings { $0.chunkHighlight = value } }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .accessibilityLabel("短语虚线")
+            }
+            // 专注模式
+            optionRow(label: "专注模式", help: "非当前句变淡 + 收起右侧解析面板，注意力聚焦当前句") {
+                Toggle("", isOn: Binding(
+                    get: { settings.spotlightEnabled },
+                    set: { value in vm.patchSettings { $0.spotlightMode = value } }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .accessibilityLabel("专注模式")
+            }
+            // 随读抽查
+            optionRow(label: "随读抽查", help: "已读句的词块/生词变行内填空：Enter 判分 · ? 首字母提示 · 按住 H 显影。只考读过的句子，本地判分不耗流量") {
+                Toggle("", isOn: Binding(
+                    get: { settings.spotQuizEnabled },
+                    set: { value in vm.patchSettings { $0.spotQuizMode = value } }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .accessibilityLabel("随读抽查")
+            }
+            // 主题只读行
+            optionRow(label: "主题") {
+                Text(settings.theme.label)
+                    .font(.system(size: 12))
+                    .foregroundColor(palette.textSecondary)
+            }
+        }
+        .padding(14)
+        .frame(width: 300)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(palette.glassElevated)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        )
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(palette.glassBorderStrong, lineWidth: 1))
+        .shadow(color: palette.shadowSpatial, radius: 14, y: 6)
+        // `role="dialog" aria-label="阅读设置"`：无可见标题，只给辅助功能命名。
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("阅读设置")
+    }
+
+    @ViewBuilder
+    private func optionRow<Content: View>(
+        label: String,
+        help: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundColor(palette.text)
+                .frame(width: 64, alignment: .leading)
+            content()
+            Spacer(minLength: 0)
+        }
+        .help(help ?? "")
+    }
+
+    private func segButton(_ title: String, active: Bool, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11.5, weight: active ? .semibold : .medium))
+                .foregroundColor(active ? palette.text : palette.textTertiary)
+                .padding(.horizontal, 12)
+                .frame(height: 22)
+                .background {
+                    if active {
+                        Capsule()
+                            .fill(palette.glassElevated)
+                            .shadow(color: Color.black.opacity(0.08), radius: 3, y: 1)
+                    }
+                }
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+}
+
+/// 左缘进度轨（.reading-rail，ReadingView.tsx:1021-1029）：百分比数字 + 竖轨填充 +
+/// label（书章 CHAPTER N / 短文文章标题）。口径 = 光标句/总句（与 dock 同源）。
+struct ReadingRailView: View {
+    let article: Article
+    @ObservedObject var vm: ReaderViewModel
+    @Environment(\.readerPalette) private var palette
+
+    var body: some View {
+        let total = article.sentences.count
+        let percent = readingRailPercent(activeIdx: vm.activeSentenceIdx, total: total)
+        let chapterIdx: Int? = article.bookId.flatMap { bookId in
+            vm.bookList.first(where: { $0.id == bookId }).map {
+                bookChapterIndexOf(book: $0, chapterId: article.id)
+            }
+        }
+        VStack(spacing: 8) {
+            Text("\(percent)%")
+                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                .monospacedDigit()
+                .foregroundColor(palette.textTertiary)
+            GeometryReader { geo in
+                ZStack(alignment: .top) {
+                    Capsule().fill(palette.glassBorderStrong)
+                    Capsule()
+                        .fill(palette.accent)
+                        .frame(height: max(0, geo.size.height * CGFloat(percent) / 100))
+                        .animation(ReaderMotion.islandTab, value: percent)
+                }
+            }
+            .frame(width: 3)
+            .frame(maxHeight: .infinity)
+            Text(readingRailLabel(chapterIdx: chapterIdx, articleTitle: article.title))
+                .font(.system(size: 10, design: .monospaced))
+                .tracking(1)
+                .foregroundColor(palette.textTertiary)
+                .lineLimit(3)
+                .multilineTextAlignment(.center)
+                .frame(width: 56)
+                .help(article.title)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// 续读胶囊（.resume-capsule，ReadingView.tsx:1032-1059）：上次读到 第 N 句 +
+/// 「回到那里」+ 关闭（只是隐藏提示，断点仍在）；换文复位；翻译中不显示。
+struct ResumeCapsuleView: View {
+    let resumeIdx: Int
+    let palette: ReaderPalette
+    let onGo: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "bookmark")
+                .font(.system(size: 11))
+                .foregroundColor(palette.accent)
+            Text("上次读到")
+                .font(.system(size: 12))
+                .foregroundColor(palette.textSecondary)
+            Text("第 \(resumeIdx + 1) 句")
+                .font(.system(size: 12, weight: .semibold))
+                .monospacedDigit()
+                .foregroundColor(palette.text)
+            Button("回到那里", action: onGo)
+                .font(.system(size: 11.5, weight: .semibold))
+                .buttonStyle(.link)
+                .help("回到上次读到的句子")
+            Button {
+                onClose()
+            } label: {
+                Image(systemName: ReaderIcons.close)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(palette.textTertiary)
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("关闭续读提示")
+            .help("只是隐藏提示，断点仍在")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Capsule().fill(palette.glassElevated))
+        .overlay(Capsule().strokeBorder(palette.glassBorderStrong, lineWidth: 1))
+        .shadow(color: palette.shadowPill, radius: 8, y: 3)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// 刊头（.reading-head，ReadingView.tsx:1061-1101）：书章 eyebrow `CHAPTER N ·
+/// 书名大写` + 32pt 标题 + 中文副题三态（titleCn / 失败+重试 / 骨架）+
+/// 「围绕本章练口语」按钮（仅书章）。
+struct ReadingHeadView: View {
+    let article: Article
+    @ObservedObject var vm: ReaderViewModel
+    @Environment(\.readerPalette) private var palette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let book = currentBook {
+                Text("CHAPTER \(bookChapterIndexOf(book: book, chapterId: article.id) + 1) · \(book.title.uppercased())")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .tracking(1.5)
+                    .foregroundColor(palette.textTertiary)
+                    .padding(.bottom, 8)
+            }
+            Text(article.title)
+                .font(readerDisplayFont(32))
+                .lineSpacing(2)
+                .minimumScaleFactor(0.7)
+                .lineLimit(3)
+                .foregroundColor(palette.text)
+                .padding(.bottom, 6)
+            subtitleRow
+        }
+        .padding(.bottom, 22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var currentBook: BookMeta? {
+        guard let bookId = article.bookId else { return nil }
+        return vm.bookList.first(where: { $0.id == bookId })
+    }
+
+    private var subtitleRow: some View {
+        HStack(alignment: .firstTextBaseline) {
+            if let titleCn = article.titleCn {
+                Text(titleCn)
+                    .font(readerFont(15, .regular, pair: vm.effectiveSettings.fontPair))
+                    .foregroundColor(palette.textSecondary)
+            } else if article.titleCnState == .failed {
+                ReaderTitleFailedRow(vm: vm)
+            } else if vm.translating != nil {
+                SkeletonLine(width: 220)
+                    .padding(.vertical, 4)
+            }
+            Spacer(minLength: 12)
+            if currentBook != nil {
+                Button {
+                    vm.practiceChapter(idx: vm.activeSentenceIdx)
+                } label: {
+                    Label("围绕本章练口语", systemImage: "mic")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundColor(palette.text)
+                        .padding(.horizontal, 11)
+                        .frame(height: 26)
+                        .background(Capsule().strokeBorder(palette.glassBorderStrong, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .help("带着本章内容去口语陪练")
+            }
+        }
+        .padding(.top, 4)
+    }
+}
+
+/// 段落失败行（对照行 failedBody 与行间折叠卡共用）：主文案 + 原因小字 +
+/// 重试按钮。对齐 ReadingView.tsx pair-failed-row 两分支逐字相同的实现
+///（文案/字号/透明度一致；zhError 缺省时不渲染小字，与旧行为完全一致）。
+///（internal：失败行渲染单测直接构造本行断言 zhError 小字。）
+struct ReaderFailedRow: View {
+    @ObservedObject var vm: ReaderViewModel
+    let pair: SentencePair
+    @Environment(\.readerPalette) private var palette
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("本段翻译失败")
+                .font(.system(size: 12))
+                .foregroundColor(palette.err)
+            if let zhError = pair.zhError {
+                // 失败原因小字（错误色 11pt、0.8 透明度）。
+                Text(zhError)
+                    .font(.system(size: 11))
+                    .foregroundColor(palette.err.opacity(0.8))
+            }
+            Button("重试本段") { vm.retryParagraph(pair.paragraphIdx) }
+                .buttonStyle(.link)
+                .font(.system(size: 12))
+        }
+    }
+}
+
+/// 标题失败行（刊头中文副题用）：主文案 + 全角括号原因（瞬态，不落盘）+
+/// 重试按钮。对齐 ReadingView.tsx:1071-1081。
+///（internal：标题失败行渲染单测直接构造。）
+struct ReaderTitleFailedRow: View {
+    @ObservedObject var vm: ReaderViewModel
+    @Environment(\.readerPalette) private var palette
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("标题翻译失败")
+                .font(.system(size: 13))
+                .foregroundColor(palette.err)
+            if let titleCnError = vm.titleCnError {
+                // 失败原因（全角括号包裹、0.85 透明度；重启后只剩主文案）。
+                Text("（\(titleCnError)）")
+                    .font(.system(size: 13))
+                    .foregroundColor(palette.err.opacity(0.85))
+            }
+            Button("重试") { vm.retryTitle() }
+                .buttonStyle(.link)
+                .font(.system(size: 13))
+        }
     }
 }
 
@@ -1970,6 +2880,8 @@ struct SentenceRowView: View {
 
     @Environment(\.readerPalette) private var palette
     @State private var hoverCN = false
+    /// 随读抽查槽位附件 rect（句行本地坐标；输入框 / 印章覆盖层定位）。
+    @State private var clozeRects: [String: CGRect] = [:]
 
     var body: some View {
         let settings = vm.effectiveSettings
@@ -1983,7 +2895,6 @@ struct SentenceRowView: View {
         let showCN = settings.contrastMode != .en
 
         HStack(alignment: .top, spacing: 10) {
-            numberButton
             VStack(alignment: .leading, spacing: 4) {
                 if showEN {
                     sentenceEN(settings: settings)
@@ -2006,12 +2917,23 @@ struct SentenceRowView: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(isSearchMatch ? palette.warn.opacity(0.5) : Color.clear, lineWidth: 1.5)
         )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            // 整行点击定位（ReadingView.tsx:1140 parallel-spread-row onClick）。
+            vm.jumpTo(idx: pair.idx)
+        }
+        .help("点击定位到这一句")
     }
 
     private func rowActions(editing: Bool, showEdit: Bool) -> some View {
         VStack(spacing: 6) {
             Button {
-                vm.speakSentence(pair.idx)
+                // 播放中点当前句 = 停止；否则只读这一句读完自动停（ReadingView.tsx:717-727）。
+                if vm.playbackPlaying && isActive {
+                    vm.stopPlayback()
+                } else {
+                    vm.speakSentenceOnce(pair.idx)
+                }
             } label: {
                 Image(systemName: ReaderIcons.speaker)
                     .font(.system(size: 11))
@@ -2019,7 +2941,9 @@ struct SentenceRowView: View {
                     .frame(width: 20, height: 20)
             }
             .buttonStyle(.plain)
-            .help(isActive ? "朗读当前句" : "朗读这一句")
+            .help(vm.playbackPlaying && isActive
+                ? "停止朗读（Space / 播放条的 ⏸ 也可以）"
+                : "朗读这一句（读完自动停，不会连读下去）")
             if showEdit, pair.zh != nil, pair.zhState != .pending, !editing {
                 Button {
                     onStartEdit()
@@ -2033,21 +2957,6 @@ struct SentenceRowView: View {
                 .help("手改译文")
             }
         }
-    }
-
-    private var numberButton: some View {
-        Button {
-            vm.jumpTo(idx: pair.idx)
-        } label: {
-            Text("\(pair.idx + 1)")
-                .font(.system(size: 10.5, weight: .medium).monospacedDigit())
-                .foregroundColor(isActive ? palette.accent : palette.textTertiary)
-                .frame(minWidth: 22, minHeight: 18)
-                .background(isActive ? palette.accent.opacity(0.12) : Color.clear)
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .help("第 \(pair.idx + 1) 句 · 点击定位")
     }
 
     /// 词块/生词再现跨度（开关只影响参与合并的候选）。
@@ -2072,6 +2981,8 @@ struct SentenceRowView: View {
         let nsFont = readerNSFont(CGFloat(settings.fontSize), pair: settings.fontPair)
         let lineTarget = (CGFloat(settings.fontSize) / 19.0) * 29 * CGFloat(settings.lineHeight)
         let lineSpacing = max(0, lineTarget - nsFont.pointSize * 1.25)
+        // 本句挖空槽（对照行通道；句内坐标）。
+        let clozeMarks = [vm.clozeRenderMark(sentenceIdx: pair.idx, offset: 0)].compactMap { $0 }
         return ReaderSentenceText(
             text: pair.en,
             font: nsFont,
@@ -2087,8 +2998,23 @@ struct SentenceRowView: View {
             // 透镜卡意群悬停回标（对照行通道；命中本句时整句只渲染这一个标记）。
             hoveredClause: vm.hoveredClause,
             clauseIndigoColor: NSColor(palette.clauseIndigo),
-            clauseIndigoSoftColor: NSColor(palette.clauseIndigoSoft)
+            clauseIndigoSoftColor: NSColor(palette.clauseIndigoSoft),
+            clozeMarks: clozeMarks,
+            clozeStyle: clozeMarks.isEmpty ? nil : clozeCellStyle(font: nsFont, palette: palette),
+            onClozeRects: { rects in clozeRects = rects }
         )
+        .overlay(alignment: .topLeading) {
+            if !clozeMarks.isEmpty {
+                ClozeOverlayLayer(
+                    vm: vm,
+                    marks: clozeMarks,
+                    rects: clozeRects,
+                    slots: Dictionary(uniqueKeysWithValues: vm.clozeSlots.values.map { ($0.id, $0) }),
+                    fontSize: CGFloat(settings.fontSize),
+                    palette: palette
+                )
+            }
+        }
         .frame(maxWidth: 680, alignment: .leading)
         .help("单击查词，划选查短语；蓝色虚线为词块，点按看释义")
     }
@@ -2181,14 +3107,7 @@ struct SentenceRowView: View {
     }
 
     private func failedBody() -> some View {
-        HStack(spacing: 10) {
-            Text("本段翻译失败")
-                .font(.system(size: 12))
-                .foregroundColor(palette.err)
-            Button("重试本段") { vm.retryParagraph(pair.paragraphIdx) }
-                .buttonStyle(.link)
-                .font(.system(size: 12))
-        }
+        ReaderFailedRow(vm: vm, pair: pair)
     }
 
     private func editorBody(cnFont: Font) -> some View {
@@ -2216,18 +3135,18 @@ struct SentenceRowView: View {
     }
 }
 
-// MARK: - 画报正文（v0.8 prose 模式：段落英文流 + 当前句行间折叠卡）
+// MARK: - 画报正文（prose：段落英文流 + 当前句译文浮层；2026-10-26 白卡重构）
 
-/// 段落英文流：按 paragraphIdx 分段，段内句子在同一个文本块里连续排版；
-/// 当前句所在段落被折叠卡从流中剖开（block 级卡 ≈ Windows display:block
-/// 的 interlinear-fold），切句后折叠卡跟随移动。段间以细行距分组。
+/// 段落英文流：按 paragraphIdx 分段，段内句子在同一个文本块里连续排版，句间补空格；
+/// 当前句的译文由列内浮层（TranslationPopView）承载，不再拆段落。句卡开启时每句
+/// 拆成独立句卡（本地态不落盘，Windows sent-cards 同语义）。首段首字母下沉。
 private struct ProseBodyView: View {
     let article: Article
     @ObservedObject var vm: ReaderViewModel
-    @Binding var editingIdx: Int?
-    @Binding var editDraft: String
+    var sentCards: Bool = false
     @Environment(\.readerPalette) private var palette
 
+    /// 正文按 paragraphIdx 分组（ReadingView.tsx:217-225 同口径）。
     private var paragraphs: [[SentencePair]] {
         var groups: [[SentencePair]] = []
         for sentence in article.sentences {
@@ -2242,55 +3161,52 @@ private struct ProseBodyView: View {
 
     var body: some View {
         let spotlight = vm.effectiveSettings.spotlightEnabled
-        VStack(alignment: .leading, spacing: 9) {
-            ForEach(paragraphs, id: \.first?.idx) { para in
-                paragraphBlocks(para, spotlight: spotlight)
+        if sentCards {
+            // 句卡：每句一个独立小卡（只影响本窗口，不落盘）。
+            LazyVStack(alignment: .leading, spacing: 8) {
+                ForEach(article.sentences, id: \.idx) { sentence in
+                    sentenceCard(sentence, spotlight: spotlight)
+                        .id("prose-sent-\(sentence.idx)")
+                }
+            }
+            .padding(.bottom, 8)
+        } else {
+            VStack(alignment: .leading, spacing: 9) {
+                ForEach(paragraphs, id: \.first?.idx) { para in
+                    ProseBlockView(
+                        pieces: makePieces(para),
+                        article: article,
+                        vm: vm,
+                        spotlight: spotlight,
+                        isFirstBlock: para.first?.idx == article.sentences.first?.idx
+                    )
+                    .id("prose-para-\(para.first?.paragraphIdx ?? 0)")
+                }
             }
         }
-        .padding(.horizontal, 24)
-        .frame(maxWidth: 760, alignment: .leading)
     }
 
-    @ViewBuilder
-    private func paragraphBlocks(_ para: [SentencePair], spotlight: Bool) -> some View {
-        let split = para.firstIndex { $0.idx == vm.activeSentenceIdx }
-        let head = split.map { Array(para[...$0]) } ?? para
+    private func sentenceCard(_ sentence: SentencePair, spotlight: Bool) -> some View {
         ProseBlockView(
-            pieces: makePieces(head),
+            pieces: makePieces([sentence]),
             article: article,
             vm: vm,
             spotlight: spotlight,
-            isFirstBlock: head.first?.idx == article.sentences.first?.idx
+            isFirstBlock: sentence.idx == article.sentences.first?.idx
         )
-        if let split {
-            let current = para[split]
-            InterlinearFoldCard(
-                vm: vm,
-                pair: current,
-                editing: editingIdx == current.idx,
-                editDraft: $editDraft,
-                onStartEdit: {
-                    editDraft = current.zh ?? ""
-                    editingIdx = current.idx
-                },
-                onCancelEdit: { editingIdx = nil },
-                onCommitEdit: {
-                    let text = editDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    editingIdx = nil
-                    if !text.isEmpty { vm.editTranslation(idx: current.idx, zh: text) }
-                }
-            )
-            .id("prose-fold")
-            if split + 1 < para.count {
-                ProseBlockView(
-                    pieces: makePieces(Array(para[(split + 1)...])),
-                    article: article,
-                    vm: vm,
-                    spotlight: spotlight,
-                    isFirstBlock: false
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(palette.glassSurface.opacity(0.5))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(
+                    sentence.idx == vm.activeSentenceIdx ? palette.accent.opacity(0.4) : palette.glassBorder,
+                    lineWidth: 1
                 )
-            }
-        }
+        )
     }
 
     /// 句 → 拼接坐标：句间以一个空格相连（行内流）。
@@ -2311,7 +3227,8 @@ private struct ProseBodyView: View {
 }
 
 /// 段落流的一块（ReaderProseText 的 SwiftUI 包装）：
-/// 词块/生词跨度、跟读着色折算到拼接坐标；句子 minY 回报给滚动跟随。
+/// 词块/生词跨度、跟读着色折算到拼接坐标；句子 minY 回报给滚动跟随，
+/// 末行 rect 回报给译文浮层锚定。
 private struct ProseBlockView: View {
     let pieces: [ProsePiece]
     let article: Article
@@ -2320,6 +3237,9 @@ private struct ProseBlockView: View {
     let isFirstBlock: Bool
     @Environment(\.readerPalette) private var palette
     @State private var localFrames: [Int: CGFloat] = [:]
+    @State private var localRects: [Int: ReaderProseText.SentenceRect] = [:]
+    /// 随读抽查槽位附件 rect（块本地坐标；输入框 / 印章覆盖层定位）。
+    @State private var localClozeRects: [String: CGRect] = [:]
 
     /// 首字下沉的 64px 衬线展示字（.drop-cap italic）。
     private static let dropCapFont: NSFont = {
@@ -2336,6 +3256,7 @@ private struct ProseBlockView: View {
         // 画报行高 ≈ 常规行高 × 1.2（reader.css prose-sentence line-height 注释）。
         let lineTarget = (CGFloat(settings.fontSize) / 19.0) * 34 * CGFloat(settings.lineHeight)
         let lineSpacing = max(0, lineTarget - nsFont.pointSize * 1.2)
+        let clozeMarks = clozeMarks
         ReaderProseText(
             pieces: pieces,
             style: ReaderProseText.Style(
@@ -2360,16 +3281,51 @@ private struct ProseBlockView: View {
             onWordClick: { idx, word in vm.lookup(query: word, sentenceIdx: idx) },
             onChunkClick: { idx, chunk in vm.openChunkCard(chunk: chunk, sentenceIdx: idx) },
             onClickSentence: { idx in vm.jumpTo(idx: idx) },
-            onSentenceFrames: { frames in localFrames = frames }
+            onSentenceFrames: { frames in localFrames = frames },
+            onSentenceRects: { rects in localRects = rects },
+            clozeMarks: clozeMarks,
+            clozeStyle: clozeMarks.isEmpty ? nil : clozeCellStyle(font: nsFont, palette: palette),
+            onClozeRects: { rects in localClozeRects = rects }
         )
-        .background(
-            GeometryReader { geo in
-                Color.clear.preference(
-                    key: RowFramesKey.self,
-                    value: localFrames.mapValues { $0 + geo.frame(in: .named("readerScroll")).minY }
+        .overlay(alignment: .topLeading) {
+            // 随读抽查覆盖层：待答槽行内输入 + ? 提示 / 已答槽印章（ReadingView.tsx:520-593）。
+            if !clozeMarks.isEmpty {
+                ClozeOverlayLayer(
+                    vm: vm,
+                    marks: clozeMarks,
+                    rects: localClozeRects,
+                    slots: Dictionary(uniqueKeysWithValues: vm.clozeSlots.values.map { ($0.id, $0) }),
+                    fontSize: CGFloat(settings.fontSize),
+                    palette: palette
                 )
             }
+        }
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .preference(
+                        key: RowFramesKey.self,
+                        value: localFrames.mapValues { $0 + geo.frame(in: .named("readerScroll")).minY }
+                    )
+                    .preference(
+                        key: PopAnchorKey.self,
+                        value: localRects.mapValues { rect in
+                            // 折算到「正文内容」坐标系（content 坐标随滚动不动，
+                            // 浮层因此贴着内容走）；右缘含列 24pt 内边距。
+                            PopAnchor(
+                                minY: geo.frame(in: .named("readingContent")).minY + rect.minY,
+                                maxY: geo.frame(in: .named("readingContent")).minY + rect.maxY,
+                                rightInCol: rect.lastLineRight + 24
+                            )
+                        }
+                    )
+            }
         )
+    }
+
+    /// 本块各句的挖空槽（拼接坐标；开关关闭 / 未读句无槽 → 空集，正文零残留）。
+    private var clozeMarks: [ClozeRenderMark] {
+        pieces.compactMap { vm.clozeRenderMark(sentenceIdx: $0.idx, offset: $0.start) }
     }
 
     /// 词块/生词再现跨度（拼接坐标）。
@@ -2407,23 +3363,27 @@ private struct ProseBlockView: View {
     }
 }
 
-/// 行间折叠卡（.interlinear-fold）：当前句的译文 + 四动作操作条。
-private struct InterlinearFoldCard: View {
+/// 译文浮层（.translation-pop，ReadingView.tsx:746-824）：锚定当前句末行下方、
+/// 脱离文档流。编辑中 → 手改译文编辑器；段失败 → 失败行；遮罩中 → veil 按钮；
+/// 常规 → 译文（点按回遮）+ 操作行（朗读本句 / 用这句练口语 / 编辑译文 +
+/// 遮罩开时「按住 H 看译文」）。句子解析入口唯一化在右侧面板，浮层不重复。
+struct TranslationPopView: View {
     @ObservedObject var vm: ReaderViewModel
     let pair: SentencePair
     let editing: Bool
     @Binding var editDraft: String
+    var arrowX: CGFloat = 16
     let onStartEdit: () -> Void
     let onCancelEdit: () -> Void
     let onCommitEdit: () -> Void
     @Environment(\.readerPalette) private var palette
+    @State private var hover = false
 
     var body: some View {
         let settings = vm.effectiveSettings
         let maskOn = settings.maskTranslation
-        // 仅英文：折叠卡的译文展示隐藏（状态行与操作条保留）。
-        let hideZh = settings.contrastMode == .en
-        let foldMasked = maskOn && pair.zh != nil && pair.zhState != .failed && !editing
+        let isActive = pair.idx == vm.activeSentenceIdx
+        let masked = maskOn && pair.zh != nil && pair.zhState != .failed && !editing
             && !(pair.revealed == true || vm.peekAll)
         VStack(alignment: .leading, spacing: 8) {
             if editing {
@@ -2434,95 +3394,150 @@ private struct InterlinearFoldCard: View {
                     onCommit: onCommitEdit
                 )
             } else if pair.zhState == .failed {
-                HStack(spacing: 10) {
-                    Text("本段翻译失败")
-                        .font(.system(size: 12))
-                        .foregroundColor(palette.err)
-                    Button("重试本段") { vm.retryParagraph(pair.paragraphIdx) }
-                        .buttonStyle(.link)
-                        .font(.system(size: 12))
+                ReaderFailedRow(vm: vm, pair: pair)
+            } else if masked {
+                Button {
+                    vm.reveal(pair.idx)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: ReaderIcons.eyeOff).font(.system(size: 12))
+                        Text("点击显示译文")
+                            .font(.system(size: 12.5, weight: .medium))
+                    }
+                    .foregroundColor(palette.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
                 }
-            } else if !hideZh {
-                zhBody(maskOn: maskOn, foldMasked: foldMasked)
+                .buttonStyle(.plain)
+                .help("点按显示这一句的译文")
+            } else {
+                zhBody(maskOn: maskOn)
+                actionsRow(maskOn: maskOn, isActive: isActive)
             }
-            Rectangle().fill(palette.glassBorder).frame(height: 1)
-            actionsRow
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 16)
         .padding(.vertical, 12)
+        .frame(width: 464, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(palette.glassSurface)
+                .fill(palette.glassElevated)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(palette.glassBorderStrong, lineWidth: 1)
         )
-        .shadow(color: palette.shadowPill, radius: 10, y: 4)
-        .padding(.top, 12)
-        .padding(.bottom, 22)
-        .transition(.opacity.combined(with: .move(edge: .top)))
+        .overlay(alignment: .top) {
+            // 箭头：末行下方 10pt 处指向句尾（x 由 PopAnchor.arrowX 折算）。
+            Triangle()
+                .fill(palette.glassElevated)
+                .frame(width: 16, height: 8)
+                .overlay(
+                    Triangle()
+                        .stroke(palette.glassBorderStrong, lineWidth: 1)
+                        .padding(0.5)
+                )
+                .offset(x: arrowX - 232, y: -7)
+        }
+        .shadow(color: palette.shadowSpatial, radius: 16, y: 8)
     }
 
     @ViewBuilder
-    private func zhBody(maskOn: Bool, foldMasked: Bool) -> some View {
+    private func zhBody(maskOn: Bool) -> some View {
         let cnFont = readerFont(14, pair: vm.effectiveSettings.fontPair)
-        if let zh = pair.zh, pair.zhState != .pending {
-            Text(zh)
-                .font(cnFont)
-                .foregroundColor(palette.textSecondary)
-                .lineSpacing(5)
-                .blur(radius: foldMasked ? 5 : 0)
-                .opacity(foldMasked ? 0.8 : 1)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    guard maskOn else { return }
-                    if foldMasked { vm.reveal(pair.idx) } else { vm.mask(pair.idx) }
+        Group {
+            if pair.zhState == .pending {
+                if let zh = pair.zh {
+                    Text(zh)
+                        .font(cnFont)
+                        .foregroundColor(palette.textSecondary.opacity(0.75))
+                        .lineSpacing(4)
+                } else if vm.translating != nil {
+                    SkeletonLine(width: 160)
+                } else {
+                    Text("译文待生成")
+                        .font(.system(size: 12))
+                        .foregroundColor(palette.textTertiary)
                 }
-                .help(maskOn ? (foldMasked ? "点按显示译文" : "点按重新遮住") : "")
-        } else if pair.zhState == .pending {
-            if let zh = pair.zh {
+            } else if let zh = pair.zh {
                 Text(zh)
                     .font(cnFont)
-                    .foregroundColor(palette.textSecondary.opacity(0.75))
-                    .lineSpacing(5)
-            } else if vm.translating != nil {
-                SkeletonLine(width: 160)
-            } else {
-                Text("译文待生成")
-                    .font(.system(size: 12))
-                    .foregroundColor(palette.textTertiary)
+                    .foregroundColor(palette.textSecondary)
+                    .lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        guard maskOn else { return }
+                        // 遮罩开时点按回遮（ReadingView.tsx:776-780）。
+                        vm.mask(pair.idx)
+                    }
+                    .help(maskOn ? "点按重新遮住" : "")
             }
         }
     }
 
-    /// 操作条四动作：朗读本句（读完自动停）/ 句子解析 / 用这句练口语 → / 编辑译文。
-    private var actionsRow: some View {
-        HStack(spacing: 16) {
-            TextActionButton(text: "朗读本句", icon: ReaderIcons.speaker, palette: palette, help: speakHelp) {
-                vm.speakSentenceOnce(pair.idx)
-            }
-            TextActionButton(text: "句子解析", palette: palette, help: "在右侧解析这句的主干与结构") {
-                vm.openXray(idx: pair.idx)
-            }
-            TextActionButton(text: "用这句练口语 →", icon: "mic", palette: palette, help: "带着这句去口语陪练") {
-                vm.practiceSentence(idx: pair.idx)
-            }
-            if pair.zh != nil, pair.zhState != .pending, !editing {
-                TextActionButton(text: "编辑译文", icon: ReaderIcons.edit, palette: palette, help: "手改译文") {
-                    onStartEdit()
+    private func actionsRow(maskOn: Bool, isActive: Bool) -> some View {
+        HStack(spacing: 14) {
+            Button {
+                if vm.playbackPlaying && isActive {
+                    vm.stopPlayback()
+                } else {
+                    vm.speakSentenceOnce(pair.idx)
                 }
+            } label: {
+                Label("朗读本句", systemImage: ReaderIcons.speaker)
+                    .font(.system(size: 11.5))
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(palette.textSecondary)
+            .help(vm.playbackPlaying && isActive
+                ? "停止朗读（Space / 播放条的 ⏸ 也可以）"
+                : "朗读这一句（读完自动停，不会连读下去）")
+            Button {
+                vm.practiceSentence(idx: pair.idx)
+            } label: {
+                Label("用这句练口语", systemImage: "mic")
+                    .font(.system(size: 11.5))
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(palette.textSecondary)
+            .help("带着这句去口语陪练")
+            if pair.zh != nil, pair.zhState != .pending, !editing {
+                Button(action: onStartEdit) {
+                    Label("编辑译文", systemImage: ReaderIcons.edit)
+                        .font(.system(size: 11.5))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(palette.textSecondary)
+                .help("手改译文")
+            }
+            if maskOn {
+                HStack(spacing: 3) {
+                    Text("按住")
+                    Text("H").font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .background(palette.glassBorder)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                    Text("看译文")
+                }
+                .font(.system(size: 11))
+                .foregroundColor(palette.textTertiary)
             }
             Spacer(minLength: 0)
         }
-        .font(.system(size: 12))
     }
+}
 
-    private var speakHelp: String {
-        vm.playbackPlaying && pair.idx == vm.activeSentenceIdx
-            ? "停止朗读（Space / 播放条的 ⏸ 也可以）"
-            : "朗读这一句（读完自动停，不会连读下去）"
+/// 浮层箭头小三角（形状无关内容）。
+private struct Triangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.midX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        p.closeSubpath()
+        return p
     }
 }
 
@@ -2568,19 +3583,30 @@ struct EmptyStateView: View {
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: ReaderIcons.book)
-                .font(.system(size: 26))
+                .font(.system(size: 22))
                 .foregroundColor(palette.accent)
-            Text("把文章搬进阅读室")
+            Text("从一篇短文开始")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(palette.text)
-            Text("在任意应用选中文字 → 浮窗弹出 → 点「发送到阅读室」；或直接粘贴导入。")
+            // 引导文逐字对齐 ReadingView.tsx:1254-1258（快捷键 Mac 用 ⌘⇧R）。
+            (
+                Text("挑一篇感兴趣的英文读进来——逐句精读，查过的词自动进生词本，隔天到期复习。内置分级文库不需要自己找材料。也可以在任意应用里选中文字，点浮窗上的「发送到阅读室」，或按 ")
+                + Text("⌘").fontWeight(.semibold)
+                + Text("+")
+                + Text("⇧").fontWeight(.semibold)
+                + Text("+")
+                + Text("R").fontWeight(.semibold)
+                + Text("。")
+            )
                 .font(.system(size: 12.5))
                 .foregroundColor(palette.textSecondary)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 380)
-            Button("粘贴导入文章", action: onImport)
+                .lineSpacing(4)
+                .frame(maxWidth: 400)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("添加阅读内容", action: onImport)
                 .controlSize(.regular)
-                .padding(.top, 6)
+                .padding(.top, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -3119,6 +4145,12 @@ struct ReaderSettingsDrawer: View {
     @Environment(\.readerPalette) private var palette
     /// 系统输入设备列表（onAppear 时枚举一次，对齐 Windows 挂载时 listMicDevices）。
     @State private var micDevices: [(uid: String, name: String)] = []
+    /// 语音页生效服务商（云音色来源）；nil = 读取中（对齐 SettingsDrawer.tsx:95）。
+    @State private var drawerVoiceProvider: VoiceProvider?
+    /// 沉浸云真实登录态（App 层镜像，AppAuthStatusCenter；nil = 读取中）；
+    /// 来源是 gateway 不代表已登录。
+    @ObservedObject private var authCenter = AppAuthStatusCenter.shared
+    private var gatewayLoggedIn: Bool? { authCenter.status?.loggedIn }
 
     var body: some View {
         let settings = vm.effectiveSettings
@@ -3194,36 +4226,23 @@ struct ReaderSettingsDrawer: View {
                             HStack {
                                 rowLabel("引擎")
                                 Picker("引擎", selection: Binding(
-                                    get: { settings.ttsProvider },
+                                    get: {
+                                        // 旧 xfyun 值 UI 上并入「云音色」档高亮
+                                        //（SettingsDrawer.tsx:446-447）；点选写 cloud。
+                                        settings.ttsProvider == .xfyun ? TtsProvider.cloud : settings.ttsProvider
+                                    },
                                     set: { value in vm.patchSettings { $0.ttsProvider = value } }
                                 )) {
-                                    ForEach(TtsProvider.allCases, id: \.self) { provider in
-                                        Text(provider.label).tag(provider)
-                                    }
+                                    Text("Edge 在线").tag(TtsProvider.edge)
+                                    Text("云音色").tag(TtsProvider.cloud)
+                                    Text("系统语音").tag(TtsProvider.local)
                                 }
                                 .labelsHidden()
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
-                            .help("Edge 在线 = 微软神经音色（免费、无需凭据，默认）；讯飞在线 = 云音色需凭据；本地 = 系统语音（离线可用）")
-                            if settings.ttsProvider == .xfyun {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    if !XfyunCredentialsStore.shared.isComplete(.tts) {
-                                        HStack(spacing: 5) {
-                                            Image(systemName: "exclamationmark.triangle.fill")
-                                                .font(.system(size: 10))
-                                                .foregroundColor(palette.warn)
-                                            Text("讯飞合成凭据未配置，朗读将回落系统语音")
-                                                .font(.system(size: 10.5))
-                                                .foregroundColor(palette.warn)
-                                        }
-                                    }
-                                    cloudVoiceField(label: "中文音色", text: settings.cloudVoice, placeholder: "xiaoyan") { value in
-                                        vm.patchSettings { $0.cloudVoice = value }
-                                    }
-                                    cloudVoiceField(label: "英文音色", text: settings.cloudVoiceEn, placeholder: "catherine") { value in
-                                        vm.patchSettings { $0.cloudVoiceEn = value }
-                                    }
-                                }
+                            .help("Edge 在线 = 微软神经音色（免费、无需凭据，默认）；云音色 = 跟随语音页所选服务商（沉浸云或讯飞）；本地 = 系统语音（离线可用）")
+                            if settings.ttsProvider == .cloud || settings.ttsProvider == .xfyun {
+                                cloudVoiceSourceRows(settings: settings)
                             } else if settings.ttsProvider == .edge {
                                 VStack(alignment: .leading, spacing: 6) {
                                     edgeVoiceField(label: "中文音色", text: settings.edgeVoiceZh, placeholder: EdgeTts.defaultVoice) { value in
@@ -3340,6 +4359,8 @@ struct ReaderSettingsDrawer: View {
         .onAppear {
             // 挂载时枚举一次系统输入设备（仅 CoreAudio 枚举，不触发麦克风权限弹窗）。
             micDevices = MicRecorder.availableMicDevices().map { (uid: $0.uid, name: $0.name) }
+            // 语音页生效服务商（云音色档来源）：已存值优先，否则按讯飞凭据迁移推断。
+            drawerVoiceProvider = resolveInitialVoiceProvider(stored: VoicePrefsStore.loadProvider())
         }
     }
 
@@ -3380,6 +4401,93 @@ struct ReaderSettingsDrawer: View {
 
     @State private var voiceCatalog: [ReaderVoiceInfo] = []
 
+
+    // MARK: - 云音色档来源行（对齐 Windows SettingsDrawer.tsx:509-611 文案逐字）
+
+    /// 云音色档的分支行：gateway（音色来源/服务说明/去语音页配置）或 xfyun
+    /// （vcn 两输入 + 凭据状态 + 设置按钮）。抽屉内不重复配置网关音色。
+    @ViewBuilder
+    private func cloudVoiceSourceRows(settings: ReaderSettings) -> some View {
+        if drawerVoiceProvider == nil {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    rowLabel("音色来源")
+                    Spacer()
+                    Text("读取中…")
+                        .font(.system(size: 11.5))
+                        .foregroundColor(palette.textSecondary)
+                }
+                .help("正在读取语音页服务商")
+            }
+        } else if drawerVoiceProvider == .gateway {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    rowLabel("音色来源")
+                    Spacer()
+                    Text(gatewayLoginText)
+                        .font(.system(size: 11.5))
+                        .foregroundColor(gatewayLoggedIn == true ? palette.accent : palette.textSecondary)
+                }
+                .help("云音色来源跟随语音页所选服务商；这里不重复配置音色")
+                HStack {
+                    rowLabel("服务说明")
+                    Spacer()
+                    Text(gatewayServiceText)
+                        .font(.system(size: 11.5))
+                        .foregroundColor(palette.textSecondary)
+                    Button(gatewayLoggedIn == false ? "去语音页登录" : "去语音页配置") {
+                        openVoiceSettingsTab()
+                    }
+                    .controlSize(.small)
+                    .buttonStyle(.bordered)
+                    .help(gatewayLoggedIn == false ? "打开设置 → 语音页登录沉浸云" : "打开设置 → 语音页配置音色")
+                }
+                .help("沉浸云按句流式合成，首个分片到达即开始播放；音色在语音页选择后即时生效")
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                cloudVoiceField(label: "云音色·中文", text: settings.cloudVoice, placeholder: "xiaoyan") { value in
+                    vm.patchSettings { $0.cloudVoice = value }
+                }
+                .help("讯飞中文发音人（vcn）：中文句用它读；完整列表在讯飞控制台「语音合成」可试听，未授权音色会提示 11200。已播句子进缓存（内存+磁盘），重听不耗每日次数")
+                cloudVoiceField(label: "云音色·英文", text: settings.cloudVoiceEn, placeholder: "catherine") { value in
+                    vm.patchSettings { $0.cloudVoiceEn = value }
+                }
+                .help("讯飞英文发音人（vcn）：英文句用它读，跟读示范不再由中文音色代劳；留空沿用中文音色")
+                HStack {
+                    rowLabel("合成凭据")
+                    Spacer()
+                    Text(XfyunCredentialsStore.shared.isComplete(.tts) ? "已配置 ✓" : "未配置")
+                        .font(.system(size: 11.5))
+                        .foregroundColor(XfyunCredentialsStore.shared.isComplete(.tts) ? palette.accent : palette.textSecondary)
+                    Button("设置") {
+                        (NSApp.delegate as? AppDelegate)?.openSettingsFromReader()
+                    }
+                    .controlSize(.small)
+                    .buttonStyle(.bordered)
+                }
+                .help("讯飞凭据（评测/合成/听写）在主窗口 设置 → 语音 里集中配置")
+            }
+        }
+    }
+
+    /// 音色来源行的登录态文案（对齐 SettingsDrawer.tsx:523-528）。
+    private var gatewayLoginText: String {
+        if gatewayLoggedIn == nil { return "沉浸云语音 · 正在读取登录状态…" }
+        return gatewayLoggedIn! ? "沉浸云语音 · 已登录" : "沉浸云语音 · 未登录"
+    }
+
+    /// 服务说明行文案（对齐 SettingsDrawer.tsx:536-540）。
+    private var gatewayServiceText: String {
+        if gatewayLoggedIn == nil { return "正在读取登录状态…" }
+        return gatewayLoggedIn! ? "音色在语音页选择，此处不重复配置" : "当前未登录，播放会临时使用 Edge 朗读"
+    }
+
+    /// 「去语音页配置/登录」：打开设置窗并直达「语音」分区
+    /// （Windows settingsOpenTab("voice") 的 Mac 对应物）。
+    private func openVoiceSettingsTab() {
+        (NSApp.delegate as? AppDelegate)?.openVoiceSettings()
+    }
 
     private func cloudVoiceField(label: String, text: String, placeholder: String, onCommit: @escaping (String) -> Void) -> some View {
         HStack {
