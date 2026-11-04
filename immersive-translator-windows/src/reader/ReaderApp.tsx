@@ -119,6 +119,7 @@ import { speakListSessions } from "../lib/speakStore";
 import type { SpeakSession } from "../core/speakLogic";
 import { VocabNoteDialog } from "./VocabNoteDialog";
 import { ImportDialog, type ImportMeta } from "./ImportDialog";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { usePlayback } from "./usePlayback";
 import { useShadowAssess } from "./useShadowAssess";
 import { mapWordsToText } from "../core/pronunciation";
@@ -2009,20 +2010,30 @@ export function ReaderApp() {
     [activeNoteFile, openNote],
   );
 
+  /** 待删除笔记（文件路径；null = 确认弹窗关闭）。 */
+  const [pendingNoteDelete, setPendingNoteDelete] = useState<string | null>(null);
+
   const deleteNote = useCallback(
     (file: string) => {
-      if (!window.confirm("删除这篇笔记？删除后不可恢复。")) return;
-      void noteDelete(file)
-        .then(async (removed) => {
-          if (!removed) return;
-          setActiveNote((cur) => (cur?.meta.file === file ? null : cur));
-          await refreshNotes();
-          showToast("已删除笔记");
-        })
-        .catch((error) => console.error("[reader] delete note failed", error));
+      // 先弹应用内确认（ConfirmDialog），确认后再真正删除。
+      setPendingNoteDelete(file);
     },
-    [refreshNotes, showToast],
+    [],
   );
+
+  const confirmDeleteNote = useCallback(() => {
+    const file = pendingNoteDelete;
+    setPendingNoteDelete(null);
+    if (file === null) return;
+    void noteDelete(file)
+      .then(async (removed) => {
+        if (!removed) return;
+        setActiveNote((cur) => (cur?.meta.file === file ? null : cur));
+        await refreshNotes();
+        showToast("已删除笔记");
+      })
+      .catch((error) => console.error("[reader] delete note failed", error));
+  }, [pendingNoteDelete, refreshNotes, showToast]);
 
   /** 生成弹窗「在笔记库打开」：切到笔记库并打开刚存的这篇。 */
   const openSavedNote = useCallback(
@@ -2787,6 +2798,15 @@ export function ReaderApp() {
           onClose={() => setTocBookId(null)}
         />
       )}
+
+      <ConfirmDialog
+        open={pendingNoteDelete !== null}
+        title="删除这篇笔记"
+        message="删除这篇笔记？删除后不可恢复。"
+        confirmText="删除"
+        onConfirm={confirmDeleteNote}
+        onCancel={() => setPendingNoteDelete(null)}
+      />
 
       {chapterEnd && (
         <div
