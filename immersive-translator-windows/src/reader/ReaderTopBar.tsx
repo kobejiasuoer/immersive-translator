@@ -10,7 +10,7 @@
  * PlayBar 只通过 onOpenViewMenu 回调触发。
  */
 
-import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import {
   IconBookOpen,
   IconCheck,
@@ -45,6 +45,8 @@ interface Props {
   onToggleFolio: () => void;
   /** 专注复习态（仅 vault+focus）：隐藏中心导航岛，对齐原型 focus 态。 */
   focusMode?: boolean;
+  /** 主窗口检查到新版本时显示；空值不占据顶栏空间。 */
+  updateNotice?: ReactNode;
 }
 
 const THEME_OPTIONS: { value: ReaderTheme; label: string; description: string; surface: string; ink: string }[] = [
@@ -199,6 +201,7 @@ export function ReaderTopBar({
   onNavigate,
   onToggleFolio,
   focusMode = false,
+  updateNotice,
 }: Props) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -277,6 +280,7 @@ export function ReaderTopBar({
       </nav>
 
       <div className="shell-tools">
+        {updateNotice}
         {searchOpen && (
           <input
             ref={searchInputRef}

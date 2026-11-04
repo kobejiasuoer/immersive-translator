@@ -44,9 +44,12 @@ import {
 import {
   checkForUpdate,
   downloadAndInstall,
+  isStorePackaged,
+  type UpdateInfo,
   type UpdateProgress,
   type UpdateStage,
 } from "../lib/updater";
+import { readKnownUpdate, subscribeUpdateInfo } from "../lib/updateNoticeStore";
 import { buildSanitizedCurl, buildDiagnosticReport } from "../core/errorMessageFormatter";
 import { glossaryStats, dedupAndNormalize, mergeGlossary } from "../core/glossaryParser";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
@@ -367,38 +370,81 @@ export function Settings() {
   const [updateMsg, setUpdateMsg] = useState<string | null>(null);
   const [updateProgress, setUpdateProgress] = useState<number | undefined>(undefined);
   const [updateAvailable, setUpdateAvailable] = useState<{ version: string } | null>(null);
+  const updateBusyRef = useRef(false);
+
+  function applyUpdateInfo(info: UpdateInfo) {
+    setUpdateProgress(undefined);
+    if (info.hasUpdate && info.newVersion) {
+      setUpdateAvailable({ version: info.newVersion });
+      setUpdateMsg(`发现新版本 v${info.newVersion}（当前 v${info.currentVersion}）`);
+      setUpdateStage("idle");
+    } else {
+      setUpdateAvailable(null);
+      setUpdateMsg(`已是最新版本 v${info.currentVersion}`);
+      setUpdateStage("done");
+    }
+  }
+
+  // 设置窗口预建后保持挂载，缓存 + storage 事件让“查看更新”直达可升级状态。
+  useEffect(() => {
+    if (!appVersion) return;
+    let active = true;
+    let authorized = false;
+    function receive(info: UpdateInfo) {
+      if (active && authorized && !updateBusyRef.current && info.currentVersion === appVersion) {
+        applyUpdateInfo(info);
+      }
+    }
+    const unsubscribe = subscribeUpdateInfo(receive);
+    void isStorePackaged().then((storePackaged) => {
+      if (!active || storePackaged) return;
+      authorized = true;
+      const known = readKnownUpdate(appVersion);
+      if (known) receive(known);
+    }).catch(() => {
+      // 后台同步失败不打扰其他设置；手动检查仍显示实际错误。
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [appVersion]);
 
   async function handleCheckUpdate() {
+    if (updateBusyRef.current) return;
+    updateBusyRef.current = true;
     setUpdateStage("checking");
     setUpdateMsg("正在检查更新…");
+    setUpdateProgress(undefined);
     setUpdateAvailable(null);
     try {
       const info = await checkForUpdate();
-      if (info.hasUpdate) {
-        setUpdateAvailable({ version: info.newVersion! });
-        setUpdateMsg(`发现新版本 v${info.newVersion}（当前 v${info.currentVersion}）`);
-        setUpdateStage("idle");
-      } else {
-        setUpdateMsg(`已是最新版本 v${info.currentVersion}`);
-        setUpdateStage("done");
-      }
+      applyUpdateInfo(info);
     } catch (e) {
       setUpdateMsg(String(e));
       setUpdateStage("error");
+    } finally {
+      updateBusyRef.current = false;
     }
   }
 
   async function handleDownloadUpdate() {
+    if (updateBusyRef.current) return;
+    updateBusyRef.current = true;
+    setUpdateProgress(undefined);
     const onProgress = (p: UpdateProgress) => {
       setUpdateStage(p.stage);
       setUpdateMsg(p.message);
       setUpdateProgress(p.progress);
+      if (p.stage === "done") setUpdateAvailable(null);
     };
     try {
       await downloadAndInstall(onProgress);
     } catch (e) {
       setUpdateMsg(`更新失败：${e}`);
       setUpdateStage("error");
+    } finally {
+      updateBusyRef.current = false;
     }
   }
 
@@ -1220,13 +1266,13 @@ export function Settings() {
                 <div className="settings-section-heading">
                   <div>
                     <h3>应用更新</h3>
-                    <p>下载后自动校验签名再安装</p>
+                    <p>有新版本会主动提醒；下载后校验签名，安装后重启</p>
                   </div>
                   <code className="version-code">v{appVersion || "…"}</code>
                 </div>
                 <div className="about-release-actions">
                   {updateAvailable && updateStage !== "downloading" && updateStage !== "installing" && (
-                    <button className="btn btn-primary btn-sm" onClick={() => void handleDownloadUpdate()}>
+                    <button className="btn btn-primary btn-sm" disabled={updateStage === "checking"} onClick={() => void handleDownloadUpdate()}>
                       <IconDownload size={13} />
                       升级到 v{updateAvailable.version}
                     </button>
