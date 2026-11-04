@@ -121,7 +121,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
         c.transcribeProvider = { _ in try await asr.wait() }
         c.chatProvider = { _, _, _ in chatCalls.n += 1; return "EN: never\nZH: 不应到达" }
 
-        c.start(scenario: .ordering, difficulty: .medium)
+        c.start(scenario: "ordering", difficulty: .medium)
         let sessionA = try XCTUnwrap(c.session?.id)
         c.simulateRecordedUtteranceForTesting(samples: loud)
         XCTAssertEqual(c.phase, .transcribing)
@@ -132,7 +132,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
         c.backToEntry()
         XCTAssertNil(c.session)
         XCTAssertEqual(c.phase, .entry)
-        c.start(scenario: .travel, difficulty: .easy)
+        c.start(scenario: "travel", difficulty: .easy)
         let sessionB = try XCTUnwrap(c.session?.id)
         XCTAssertNotEqual(sessionA, sessionB)
         XCTAssertGreaterThan(c.currentEpoch, epochDuringAsr, "backToEntry/start 都应自增纪元")
@@ -159,12 +159,12 @@ final class SpeakViewControllerRaceTests: XCTestCase {
         let asr = Gate<String>()
         c.transcribeProvider = { _ in try await asr.wait() }
 
-        c.start(scenario: .smalltalk, difficulty: .medium)
+        c.start(scenario: "smalltalk", difficulty: .medium)
         c.simulateRecordedUtteranceForTesting(samples: loud)
         await waitWaiters(asr, 1, "旧轮 ASR 挂起")
 
         let other = SpeakSession(
-            id: "other-session", scenario: .interview, difficulty: .hard,
+            id: "other-session", scenario: "interview", difficulty: .hard,
             turns: [
                 SpeakTurn(role: .assistant, text: "Tell me about yourself.", at: 1),
                 SpeakTurn(role: .user, text: "I am a developer.", at: 2),
@@ -199,7 +199,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
             return try await chat.wait()
         }
 
-        c.start(scenario: .ordering, difficulty: .medium)
+        c.start(scenario: "ordering", difficulty: .medium)
         c.simulateRecordedUtteranceForTesting(samples: loud)
         await waitUntil("进入 thinking") { c.phase == .thinking }
         XCTAssertEqual(c.session?.turns.count, 2, "开场白 + 用户轮")
@@ -215,7 +215,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
 
         // 切场景 + 开新会话，旧 LLM 仍在途
         c.backToEntry()
-        c.start(scenario: .travel, difficulty: .easy)
+        c.start(scenario: "travel", difficulty: .easy)
         let sessionB = try XCTUnwrap(c.session?.id)
 
         await chat.open("EN: Stale reply from the old scene.\nZH: 旧\nBETTER: x\nTIP: y")
@@ -246,7 +246,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
             return try await chat.wait()
         }
 
-        c.start(scenario: .smalltalk, difficulty: .medium)
+        c.start(scenario: "smalltalk", difficulty: .medium)
         c.simulateRecordedUtteranceForTesting(samples: loud)
         await waitUntil("回复 1 在途") { c.phase == .thinking && probe.chatInputs.count == 1 }
         await waitWaiters(chat, 1, "回复 1 挂起")
@@ -285,7 +285,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
         c.transcribeProvider = { _ in "Hello there" }
         c.chatProvider = { _, _, _ in try await chat.wait() }
 
-        c.start(scenario: .travel, difficulty: .medium)
+        c.start(scenario: "travel", difficulty: .medium)
         c.simulateRecordedUtteranceForTesting(samples: loud)
         await waitUntil("进入 thinking") { c.phase == .thinking }
         await waitWaiters(chat, 1, "LLM 挂起")
@@ -314,7 +314,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
         let (c, probe) = makeController()
         let asrCalls = Counter()
         c.transcribeProvider = { _ in asrCalls.n += 1; return "should not be called" }
-        c.start(scenario: .smalltalk, difficulty: .medium)
+        c.start(scenario: "smalltalk", difficulty: .medium)
         await waitUntil("开场白播完回 idle") { c.phase == .idleTurn }
 
         // 开过口但静音
@@ -342,12 +342,52 @@ final class SpeakViewControllerRaceTests: XCTestCase {
         let chatCalls = Counter()
         c.transcribeProvider = { _ in "   " }
         c.chatProvider = { _, _, _ in chatCalls.n += 1; return "" }
-        c.start(scenario: .ordering, difficulty: .medium)
+        c.start(scenario: "ordering", difficulty: .medium)
         c.simulateRecordedUtteranceForTesting(samples: loud)
         await waitUntil("空识别回 idle") { c.phase == .idleTurn && !probe.toasts.isEmpty }
         XCTAssertEqual(probe.toasts.last, "没识别出内容，再试一次（尽量用完整的英语句子）")
         XCTAssertEqual(c.session?.turns.count, 1)
         XCTAssertEqual(chatCalls.n, 0)
+    }
+
+    // MARK: - 保存失败可见反馈（SpeakView.tsx:457 persist .catch → onToast）
+
+    /// 会话落盘失败（本地文件损坏）→ toast「练习保存失败：{message}」；会话内存态
+    /// 照常推进、不进 error（Windows persist 的 catch 只 toast 不阻断对话）。
+    @MainActor
+    func testSaveFailureToastsWithMessageAndKeepsSession() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("speak-save-fail-\(UUID().uuidString)", isDirectory: true)
+        tmpDirs.append(dir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // 预置损坏的会话文件：SpeakStore.load 抛「口语陪练会话数据损坏」
+        try "{not json".write(
+            to: dir.appendingPathComponent("reader_speak_sessions.json"), atomically: true, encoding: .utf8
+        )
+        let c = SpeakViewController(store: SpeakStore(baseDirectory: dir), speech: .silent)
+        let probe = Probe()
+        c.attach(SpeakViewController.Dependencies(
+            vocabWords: { [] },
+            gradeSpokenVocab: { _ in },
+            toast: { probe.toasts.append($0) }
+        ))
+
+        c.start(scenario: "ordering", difficulty: .medium)
+
+        XCTAssertEqual(probe.toasts, ["练习保存失败：口语陪练会话数据损坏"])
+        XCTAssertNotNil(c.session, "保存失败不丢内存态会话")
+        // start 后进开场白播报（.speaking，静音 sink 亦走该相位）；关键是不进 error。
+        if case .error(let text) = c.phase {
+            XCTFail("保存失败不得进 error 相位（Windows persist 的 catch 只 toast）：\(text)")
+        }
+    }
+
+    /// 正常落盘零 toast（回归：persistSession 只在失败时发声）。
+    @MainActor
+    func testSuccessfulSaveEmitsNoToast() async throws {
+        let (c, probe) = makeController()
+        c.start(scenario: "ordering", difficulty: .medium)
+        XCTAssertTrue(probe.toasts.isEmpty)
     }
 
     // MARK: - 在途 ISE × 切场景 / 同会话迟到
@@ -361,14 +401,14 @@ final class SpeakViewControllerRaceTests: XCTestCase {
         c.chatProvider = { _, _, _ in "EN: Hi!\nZH: 嗨" }
         c.assessProvider = { _, _ in try await ise.wait() }
 
-        c.start(scenario: .smalltalk, difficulty: .medium)
+        c.start(scenario: "smalltalk", difficulty: .medium)
         let sessionA = try XCTUnwrap(c.session?.id)
         c.simulateRecordedUtteranceForTesting(samples: loud)
         await waitUntil("A 完成一轮") { c.session?.turns.count == 3 }
         await waitWaiters(ise, 1, "ISE 挂起")
 
         c.backToEntry()
-        c.start(scenario: .travel, difficulty: .easy)
+        c.start(scenario: "travel", difficulty: .easy)
         let sessionB = try XCTUnwrap(c.session?.id)
 
         await ise.open(iseFixture(total: 4.4))
@@ -397,7 +437,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
         c.chatProvider = { _, _, _ in "EN: Go on.\nZH: 继续" }
         c.assessProvider = { _, _ in try await ise.wait() }
 
-        c.start(scenario: .smalltalk, difficulty: .medium)
+        c.start(scenario: "smalltalk", difficulty: .medium)
         c.simulateRecordedUtteranceForTesting(samples: loud)
         await waitUntil("第一轮完成") { c.session?.turns.count == 3 }
         await waitWaiters(ise, 1, "ISE 1 挂起")
@@ -425,7 +465,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
     func testStartWithContextUsesInterpolatedOpener() async throws {
         let (c, _) = makeController()
         let ctx: SpeakSessionContext = .book(bookTitle: "Dune", chapterArticleId: "a1", chapterIdx: 2, excerpt: ["The spice must flow."])
-        c.start(scenario: .smalltalk, difficulty: .easy, context: ctx)
+        c.start(scenario: "smalltalk", difficulty: .easy, context: ctx)
         XCTAssertEqual(c.session?.context, ctx)
         let opener = speakContextOpener(ctx)
         XCTAssertEqual(c.session?.turns.first?.text, opener.text)
@@ -506,7 +546,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
         let (c, _) = makeController()
         let assessCalls = Counter()
         c.assessProvider = { _, _ in assessCalls.n += 1; return self.iseResult(total: 5) }
-        c.start(scenario: .smalltalk, difficulty: .medium)
+        c.start(scenario: "smalltalk", difficulty: .medium)
         await waitUntil("开场白播完回 idle") { c.phase == .idleTurn }
 
         c.simulateShadowRecordForTesting(samples: silence)
@@ -529,7 +569,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
     func testShadowRejectedResultShowsRejectedCardAndKeepsPcm() async throws {
         let (c, _) = makeController()
         c.assessProvider = { _, _ in self.iseResult(total: 1.2, isRejected: true) }
-        c.start(scenario: .ordering, difficulty: .medium)
+        c.start(scenario: "ordering", difficulty: .medium)
         await waitUntil("回 idle") { c.phase == .idleTurn }
 
         c.simulateShadowRecordForTesting(samples: loud)
@@ -558,7 +598,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
             defer { idx.n += 1 }
             return self.iseResult(total: 2, exceptInfo: codes[min(idx.n, codes.count - 1)])
         }
-        c.start(scenario: .travel, difficulty: .easy)
+        c.start(scenario: "travel", difficulty: .easy)
         await waitUntil("回 idle") { c.phase == .idleTurn }
 
         c.simulateShadowRecordForTesting(samples: loud)
@@ -580,7 +620,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
         struct Boom: LocalizedError { var errorDescription: String? { "语音评测超时（20s 无结果）" } }
         let (c, _) = makeController()
         c.assessProvider = { _, _ in throw Boom() }
-        c.start(scenario: .interview, difficulty: .hard)
+        c.start(scenario: "interview", difficulty: .hard)
         await waitUntil("回 idle") { c.phase == .idleTurn }
 
         c.simulateShadowRecordForTesting(samples: loud)
@@ -603,7 +643,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
             defer { idx.n += 1 }
             return self.iseResult(total: totals[min(idx.n, totals.count - 1)])
         }
-        c.start(scenario: .smalltalk, difficulty: .medium)
+        c.start(scenario: "smalltalk", difficulty: .medium)
         await waitUntil("回 idle") { c.phase == .idleTurn }
         let target = try XCTUnwrap(lastAssistantText(c.session!.turns))
 
@@ -637,7 +677,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
     func testHearShadowMineStopsSpeechAndNeedsPcm() async throws {
         let (c, _, speech) = makeProbedController()
         c.assessProvider = { _, _ in self.iseResult(total: 4.5) }
-        c.start(scenario: .smalltalk, difficulty: .medium)
+        c.start(scenario: "smalltalk", difficulty: .medium)
         // 开场白在播（探针不自动完成）；start → cancelInFlight 本身会 stop 一次，取其后为基线
         XCTAssertEqual(c.phase, .speaking)
         XCTAssertEqual(speech.spoken.count, 1)
@@ -665,7 +705,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
     @MainActor
     func testHearShadowModelReplaysWithGenerationGuard() async throws {
         let (c, _, speech) = makeProbedController()
-        c.start(scenario: .ordering, difficulty: .medium)
+        c.start(scenario: "ordering", difficulty: .medium)
         let opener = try XCTUnwrap(c.session?.turns.first?.text)
         // 放行开场白
         speech.pending.removeFirst()()
@@ -696,7 +736,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
             drillActive: { drillShown }
         ))
         c.assessProvider = { _, _ in self.iseResult(total: 4.5) }
-        c.start(scenario: .smalltalk, difficulty: .medium)
+        c.start(scenario: "smalltalk", difficulty: .medium)
         speech.pending.removeFirst()()
         await waitUntil("回 idle") { c.phase == .idleTurn }
         c.simulateShadowRecordForTesting(samples: loud)
@@ -734,7 +774,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
         c.transcribeProvider = { _ in "Hello there" }
         c.chatProvider = { _, _, _ in "EN: Hi!\nZH: 嗨" }
         c.assessProvider = { _, _ in self.iseResult(total: 1, isRejected: true) }
-        c.start(scenario: .smalltalk, difficulty: .medium)
+        c.start(scenario: "smalltalk", difficulty: .medium)
         await waitUntil("回 idle") { c.phase == .idleTurn }
 
         c.simulateShadowRecordForTesting(samples: loud)
@@ -753,7 +793,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
         c.backToEntry()
         XCTAssertNil(c.shadowFailure)
         XCTAssertNil(c.lastShadowPcm)
-        c.start(scenario: .travel, difficulty: .easy)
+        c.start(scenario: "travel", difficulty: .easy)
         XCTAssertNil(c.shadowFailure)
     }
 
@@ -763,14 +803,14 @@ final class SpeakViewControllerRaceTests: XCTestCase {
         let (c, _) = makeController()
         let ise = Gate<PronunciationResult>()
         c.assessProvider = { _, _ in try await ise.wait() }
-        c.start(scenario: .smalltalk, difficulty: .medium)
+        c.start(scenario: "smalltalk", difficulty: .medium)
         await waitUntil("回 idle") { c.phase == .idleTurn }
         c.simulateShadowRecordForTesting(samples: loud)
         XCTAssertEqual(c.phase, .shadowAssessing)
         await waitWaiters(ise, 1, "跟读评测挂起")
 
         c.backToEntry()
-        c.start(scenario: .ordering, difficulty: .medium)
+        c.start(scenario: "ordering", difficulty: .medium)
         let sessionB = try XCTUnwrap(c.session?.id)
 
         await ise.open(iseResult(total: 4.6))
@@ -786,7 +826,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
     @MainActor
     func testSpeakWordSlowUsesSlowChannelOutsideStateMachine() async throws {
         let (c, _, speech) = makeProbedController()
-        c.start(scenario: .smalltalk, difficulty: .medium)
+        c.start(scenario: "smalltalk", difficulty: .medium)
         speech.pending.removeFirst()()
         await waitUntil("回 idle") { c.phase == .idleTurn }
         c.speakWordSlow("thought")
@@ -804,7 +844,7 @@ final class SpeakViewControllerRaceTests: XCTestCase {
     func testSpeechFollowsConfiguredTtsProviderPerCall() async throws {
         let (c, _, speech) = makeProbedController()
         // 未接线 ttsProvider：缺省 .xfyun（HEAD 基线行为）
-        c.start(scenario: .smalltalk, difficulty: .medium)
+        c.start(scenario: "smalltalk", difficulty: .medium)
         XCTAssertEqual(speech.spokenProviders, [.xfyun])
         speech.pending.removeFirst()()
         await waitUntil("回 idle") { c.phase == .idleTurn }

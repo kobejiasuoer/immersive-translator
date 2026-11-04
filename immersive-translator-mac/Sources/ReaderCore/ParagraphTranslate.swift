@@ -121,3 +121,23 @@ public func buildTitleTranslateSystemPrompt(target: String) -> String {
         "只输出译文本身，不要解释、不要引号、不要保留原文。"
     ].joined(separator: "\n")
 }
+
+// ---- 429 自动退避（阅读室段级管线专用）----
+
+/// 单次退避等待时长（毫秒）：固定 20s（服务端 Retry-After 本轮不接线）。
+public let translateBackoffWaitMs = 20_000
+/// 每段最多自动重试次数（不含首次尝试）。
+public let translateMaxGroupRetries = 1
+/// 整篇自动退避等待总次数上限（最坏 +2 分钟）。
+public let translateMaxRunBackoffs = 6
+
+/// 决定是否对该段做一次 429 自动退避重试；返回等待毫秒数，nil = 不重试。
+/// 判定只用结构化 HTTP 状态码，绝不匹配响应文本；每段最多重试 1 次，
+/// 整篇退避总次数封顶，防止限流期间无限空转。
+/// 对齐 src/core/paragraphTranslate.ts planTranslateRetry。
+public func planTranslateRetry(httpStatus: Int?, groupRetries: Int, runBackoffs: Int) -> Int? {
+    if httpStatus != 429 { return nil }
+    if groupRetries >= translateMaxGroupRetries { return nil }
+    if runBackoffs >= translateMaxRunBackoffs { return nil }
+    return translateBackoffWaitMs
+}

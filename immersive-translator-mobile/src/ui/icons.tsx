@@ -27,6 +27,7 @@ const P: Record<string, string> = {
   right: '<path d="M9.5 5.5 16 12l-6.5 6.5"/>',
   left: '<path d="M14.5 5.5 8 12l6.5 6.5"/>',
   eye: '<path d="M2.8 12S6.2 5.9 12 5.9 21.2 12 21.2 12 17.8 18.1 12 18.1 2.8 12 2.8 12Z"/><circle cx="12" cy="12" r="2.9"/>',
+  translate: '<path d="M4 5h9M8.5 3v2c0 4.1-1.8 6.7-4.5 8.4M5.5 8.7c1 1.8 2.6 3.2 4.7 4.1M13 20h7M16.5 12.5 12.5 21M14.8 16.2h3.4"/>',
   eyeoff: '<path d="M4 4l16 16"/><path d="M9.9 5.2A9.5 9.5 0 0 1 12 5c5.8 0 9.2 7 9.2 7a16 16 0 0 1-2.6 3.5M6.3 6.9A15 15 0 0 0 2.8 12s3.4 7 9.2 7a9 9 0 0 0 3.8-.8"/><path d="M9.9 9.9a2.9 2.9 0 0 0 4.2 4.2"/>',
   undo: '<path d="M8.5 6.5 4.5 10l4 3.5"/><path d="M4.5 10h9.2a5 5 0 0 1 0 10H9"/>',
   kbd: '<rect x="3" y="6.5" width="18" height="11.5" rx="2"/><path d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M7.5 14.4h9"/>',
@@ -44,6 +45,25 @@ const P: Record<string, string> = {
   trash: '<path d="M5 6.5h14M9.5 6.5V4.8c0-.7.6-1.3 1.3-1.3h2.4c.7 0 1.3.6 1.3 1.3v1.7M7 6.5l.8 12.2c.1.9.8 1.6 1.7 1.6h5c.9 0 1.6-.7 1.7-1.6L17 6.5"/><path d="M10.2 10v6M13.8 10v6"/>',
   copy: '<rect x="8.5" y="8.5" width="11" height="11" rx="1.8"/><path d="M5.5 14.5h-.7a1.3 1.3 0 0 1-1.3-1.3V4.8a1.3 1.3 0 0 1 1.3-1.3h8.4a1.3 1.3 0 0 1 1.3 1.3v.7"/>',
   chevr: '<path d="M9.5 5.5 16 12l-6.5 6.5"/>',
+  /* onboarding 域补齐（原型 mobile-accepted-2026-10-29.html defs 同源）：方向卡 win/target、
+     登录说明 lock/sync、表单错误 ⓘ info；bookopen 为原型 i-book（摊开书页），
+     与既有 book（笔记本形，多处域在用）并存不互改 */
+  bookopen: '<path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2zM22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/>',
+  win: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/>',
+  lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  sync: '<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 13a8 8 0 0 0 14.3 4.9L20 16M4 4v4h4M20 20v-4h-4"/>',
+  info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',
+  /* reading 域补齐（原型 i-bulb/i-phone/i-rss 同源）：引导条灯泡、接力来源手机、资讯订阅 rss */
+  bulb: '<path d="M9.2 17.5h5.6M10.4 20.5h3.2"/><path d="M12 3.5a6 6 0 0 1 3.5 10.9c-.7.5-1.1 1.3-1.1 2.1v1h-4.8v-1c0-.8-.4-1.6-1.1-2.1A6 6 0 0 1 12 3.5Z"/>',
+  phone: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 18.5h3"/>',
+  rss: '<circle cx="5.5" cy="18.5" r="1.5" fill="currentColor" stroke="none"/><path d="M4 10.5a9.5 9.5 0 0 1 9.5 9.5M4 4.5A15.5 15.5 0 0 1 19.5 20"/>',
+  /* account 域补齐（原型 i-bell/i-clock 同源）：账号抽屉学习提醒行、离线状态卡 */
+  bell: '<path d="M18.5 15.5H5.5c1.2-1.3 1.8-2.4 1.8-4.6 0-3 2-5.4 4.7-5.4s4.7 2.4 4.7 5.4c0 2.2.6 3.3 1.8 4.6Z"/><path d="M10 18.5a2 2 0 0 0 4 0"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2.2"/>',
+  /* reading 域补齐（原型 i-list/i-pen 同源）：阅读页头目录钮、句子抽屉修改译文钮 */
+  list: '<path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>',
+  pen: '<path d="m4 20 4-1L19 8l-3-3L5 16Z"/>',
   none: "",
 };
 

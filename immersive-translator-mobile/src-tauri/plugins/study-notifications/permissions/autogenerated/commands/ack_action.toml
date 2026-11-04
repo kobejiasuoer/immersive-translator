@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-ack-action"
+description = "Enables the ack_action command without any pre-configured scope."
+commands.allow = ["ack_action"]
+
+[[permission]]
+identifier = "deny-ack-action"
+description = "Denies the ack_action command without any pre-configured scope."
+commands.deny = ["ack_action"]

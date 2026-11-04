@@ -532,6 +532,46 @@ final class BookImportTests: XCTestCase {
         ))
     }
 
+    // MARK: - 发现页入库草稿（sourceBookId 透传 + discoverImportProps 分流）
+
+    func testBuildBookImportDraftPassesSourceBookId() {
+        let draft = buildBookImportDraft(
+            title: "A Book",
+            chapters: [BookImportChapter(title: "c1", text: "Children study and run.")],
+            wordlists: wordlists,
+            sourceBookId: "alice"
+        )
+        XCTAssertEqual(draft?.sourceBookId, "alice")
+        // 缺省 nil（既有本地导入调用点零变化）。
+        let plain = buildBookImportDraft(
+            title: "A Book",
+            chapters: [BookImportChapter(title: "c1", text: "Children study and run.")],
+            wordlists: wordlists
+        )
+        XCTAssertNil(plain?.sourceBookId)
+        // init 缺省 nil（向后兼容）。
+        let manual = BookImportDraft(
+            title: "T", chapters: [], radar: BookRadar(kaoyan: 0, cet4: 0, cet6: 0),
+            totalWords: 0, minutes: 1
+        )
+        XCTAssertNil(manual.sourceBookId)
+    }
+
+    func testDiscoverImportPropsBranches() {
+        // 带 sourceBookId（发现页下载入库）→ { bookId }。
+        var draft = BookImportDraft(
+            title: "T", chapters: [], radar: BookRadar(kaoyan: 0, cet4: 0, cet6: 0),
+            totalWords: 0, minutes: 1, sourceBookId: "the-art-of-war-2"
+        )
+        XCTAssertEqual(discoverImportProps(draft), ["bookId": "the-art-of-war-2"])
+        // 缺省（本地导入）→ nil，不埋 discover_import。
+        draft.sourceBookId = nil
+        XCTAssertNil(discoverImportProps(draft))
+        // 空串按无来源处理。
+        draft.sourceBookId = ""
+        XCTAssertNil(discoverImportProps(draft))
+    }
+
     // MARK: - 书级模型（schema 对齐 + 旧文件兼容）
 
     private func bookMetaFixture() -> BookMeta {

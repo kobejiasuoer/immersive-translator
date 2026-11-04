@@ -16,6 +16,24 @@ import XfyunCore
 /// 跟读子流程（SPEAK-7/13）：收麦 → 评分前体检 → ISE → 干净结果回写 attempts（报告卡
 /// 从落盘派生）/ 四类异常可行动卡（shadowFailure）；本次录音 PCM 留存供「听我的录音」；
 /// 报告卡动作（听领读/听我的录音/再跟读/只练差词）先停播报且与主麦克风、差词抽屉互斥。
+/// 场景体系（A1/A2）：场景 id 为裸 String（内置/官方 off_/用户 usr_），用户场景的
+/// keyPhrases 经 appendScenarioTargetsToPrompt 追加进系统提示（空 targets 时逐字不变）。
+/// 听力模式（先听后看，22743ac）：偏好存 UserDefaults；未揭开的 assistant 轮由视图遮罩，
+/// 新开局从开场白重新遮起、重开历史全揭、答完一句自动揭上一条、「看原文」手动揭（幂等）。
+
+/// 听力模式偏好（机器本地偏好，不进 schema）：对齐 Windows readerSettingsStore.ts:85-101
+/// ——key `immersive-translator-speak-listen-mode`，值 "1"/"0"，读取失败/缺省 false。
+enum SpeakListenModePreference {
+    static let key = "immersive-translator-speak-listen-mode"
+
+    static func load(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.string(forKey: key) == "1"
+    }
+
+    static func save(_ on: Bool, _ defaults: UserDefaults = .standard) {
+        defaults.set(on ? "1" : "0", forKey: key)
+    }
+}
 
 @MainActor
 final class SpeakViewController: ObservableObject {
@@ -56,6 +74,8 @@ final class SpeakViewController: ObservableObject {
         /// ReaderApp.tsx:1974 慢速示范同一 dispatcher）。每次调用时解析，改设置即时生效。
         /// 缺省 `.xfyun` 为基线行为（SpeakView 接线为 vm.effectiveSettings.ttsProvider）。
         var ttsProvider: () -> TtsProvider = { .xfyun }
+        /// 埋点出口（缺省本地 JSONL；测试注入旁路观察）。事件名/字段逐字对齐 Windows analytics.ts。
+        var track: (TelemetryEvent) -> Void = { ReaderTelemetry.track($0) }
     }
 
     /// 播报通道：缺省 LeadSpeaker；测试注入 `.silent`，避免单测出声、不依赖合成引擎时序。
@@ -92,6 +112,13 @@ final class SpeakViewController: ObservableObject {
     /// 替代原先一行 errorBanner；新一轮跟读、新 assistant 回复、换场景时清空
     ///（对齐 Windows setShadow(SHADOW_IDLE) 的各处）。
     @Published private(set) var shadowFailure: ShadowFailureCard?
+    /// 听力模式（先听后看）：开 = 未揭开的 AI 轮英文/中文提示遮罩，答完或点「看原文」
+    /// 才显示；偏好记 UserDefaults（SpeakListenModePreference），跨会话保留。
+    @Published private(set) var listenMode: Bool
+    /// 听力模式下已揭开的 assistant 轮下标（逐轮记忆；换会话/新开时重置）。
+    @Published private(set) var revealedTurnIndices: Set<Int> = []
+    /// 听力模式偏好的存储（测试注入独立 suite；缺省 standard）。
+    private let defaults: UserDefaults
     /// 最近一次跟读的录音 PCM（16k 单声道 Float32；报告卡「听我的录音」回放）。
     /// 非 @Published：与 ShadowAssessController.lastAttemptPcm 同理，不进相等比较。
     /// 留存发生在被拒检查之前（对齐 Windows shadowPcmRef，SpeakView.tsx:755-756）；
@@ -129,9 +156,20 @@ final class SpeakViewController: ObservableObject {
     /// - Parameters:
     ///   - store: 会话落盘（测试传临时目录的 SpeakStore）。
     ///   - speech: 播报通道（缺省 LeadSpeaker；测试传 `.silent`）。
-    init(store: SpeakStore = SpeakStore(), speech: SpeechSink? = nil) {
+    ///   - defaults: 听力模式偏好存储（测试传独立 suite）。
+    init(store: SpeakStore = SpeakStore(learning: LearningStore.shared), speech: SpeechSink? = nil, defaults: UserDefaults = .standard) {
         self.store = store
         self.speech = speech ?? .lead(LeadSpeaker())
+        self.defaults = defaults
+        self.listenMode = SpeakListenModePreference.load(defaults)
+        // 云同步写穿接线（AppDelegate 启动时 SpeakSyncCenter 已配置）：保存路径
+        // 经 SpeakStore 入队 speak-sessions（零网络）；未接线（单测）保持纯本地。
+        store.syncOutbox = SpeakSyncCenter.shared.records
+        // 富会话 JSON 超 64KB 单条云同步上限：明确提示（不阻断保存，完整记录
+        // 保留本机；对齐 Windows persist 的 oversize toast）。
+        store.onOversizeForSync = { [weak self] _ in
+            self?.deps.toast("完整练习已保存在本机，已超过单条云同步上限；请另开一组继续练习")
+        }
     }
 
     /// 接线外部依赖（供数/过关/提示）。
@@ -144,8 +182,40 @@ final class SpeakViewController: ObservableObject {
 
     // MARK: - 入口
 
+    /// 最近会话 = 本地富会话 + 云端精简记录合并（对齐 Windows SpeakView 挂载：
+    /// 本地 ≥ 云端保留本地富会话超集、云端严格新用云端版、并集 updatedAt 倒序；
+    /// 展示取前 5，入口页再截前 3）。
     func refreshRecent() {
-        recentSessions = (try? store.listSessions()) ?? []
+        let local = (try? store.listSessions()) ?? []
+        let records = SpeakSyncCenter.shared.records?.listSessionRecords() ?? []
+        recentSessions = Array(speakMergeSessionsWithRecords(local: local, records: records).prefix(5))
+    }
+
+    /// 会话落盘（Windows SpeakView.tsx:447-458 `persist` 对应物）：本地保存 +
+    /// 写穿 outbox 由 SpeakStore.saveSession 完成；失败不吞——toast
+    /// 「练习保存失败：{message}」（:457 `.catch(error=>onToast(...))` 逐字），
+    /// 会话内存态照常推进，不阻断对话。超限提示走 store.onOversizeForSync。
+    private func persistSession(_ session: SpeakSession) {
+        do {
+            try store.saveSession(session)
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            deps.toast("练习保存失败：\(message)")
+        }
+    }
+
+    /// 入口页挂载静默同步（对齐 Windows SpeakView.tsx:369-386）：合并展示后
+    /// 静默双向同步两个记录集合；任一集合 appliedRemote > 0（云端有新记录
+    /// 落地）则重拉云端记录刷新一次。未登录零网络（syncSpeakRecordsSilently
+    /// 内部短路）。同步静默，失败不打扰。
+    func syncRecordsOnEntry() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let summaries = await SpeakSyncCenter.shared.records?.syncSpeakRecordsSilently() ?? []
+            if summaries.contains(where: { $0.appliedRemote > 0 }) {
+                self.refreshRecent()
+            }
+        }
     }
 
     /// 开新会话；context 非 nil 时是语境会话（book/vocab），开场白换插值版本。
@@ -160,10 +230,15 @@ final class SpeakViewController: ObservableObject {
             s.turns[0] = SpeakTurn(role: .assistant, text: opener.text, hintZh: opener.hintZh, at: now)
         }
         session = s
-        _ = try? store.saveSession(s)
+        persistSession(s)
         refreshRecent()
         phase = .idleTurn
+        // 听力模式：开场白先只听，遮罩从这一轮重新开始（对齐 SpeakView.tsx:494）
+        revealedTurnIndices = []
         speakAssistant(text: s.turns[0].text)
+        // 埋点：新会话开始。scenarioSource 取场景真实来源（A1 官方/用户场景；
+        // 查不到的场景回退内置，source 天然是 builtin）——对齐 SpeakView.tsx:498-501。
+        deps.track(.speakSessionStart(scenarioId: scenario, scenarioSource: scenarioOf(scenario).source))
     }
 
     func resume(_ s: SpeakSession) {
@@ -172,6 +247,8 @@ final class SpeakViewController: ObservableObject {
         resetShadowState()
         session = s
         phase = .idleTurn
+        // 听力模式：整段都是历史，原文全部可见，不再遮（对齐 SpeakView.tsx:519-524）
+        revealedTurnIndices = Set(s.turns.indices.filter { s.turns[$0].role == .assistant })
     }
 
     /// pendingSpeak 消费端（SPEAK-14，对齐 SpeakView.tsx:617-638 的挂载消费）：
@@ -183,7 +260,7 @@ final class SpeakViewController: ObservableObject {
     func start(pending intent: PendingSpeakIntent, context: SpeakSessionContext) -> Bool {
         if lastConsumedPendingIntentID == intent.id { return false }
         lastConsumedPendingIntentID = intent.id
-        start(scenario: .smalltalk, difficulty: .medium, context: context)
+        start(scenario: "smalltalk", difficulty: .medium, context: context)
         return true
     }
 
@@ -197,6 +274,25 @@ final class SpeakViewController: ObservableObject {
         session = nil
         phase = .entry
         refreshRecent()
+    }
+
+    // MARK: - 听力模式（先听后看）
+
+    /// 切换听力模式并持久化偏好；即时生效但**已揭开的保持不动**（revealTurn 幂等）。
+    func toggleListenMode() {
+        listenMode.toggle()
+        SpeakListenModePreference.save(listenMode, defaults)
+    }
+
+    /// 揭开某一轮的原文（「看原文」按钮 / 答完自动揭共用；已揭开的保持不动）。
+    func revealTurn(_ idx: Int) {
+        guard !revealedTurnIndices.contains(idx) else { return }
+        revealedTurnIndices.insert(idx)
+    }
+
+    /// 某一轮是否被听力模式遮罩（只对 assistant 轮有意义；关掉听力模式一律不遮）。
+    func isTurnVeiled(_ idx: Int) -> Bool {
+        listenMode && !revealedTurnIndices.contains(idx)
     }
 
     /// 跟读子状态清场（异常卡 / 录音留存 / 回放），对齐 Windows start/resume/backToHub
@@ -412,8 +508,14 @@ final class SpeakViewController: ObservableObject {
         s.turns.append(SpeakTurn(role: .user, text: text, at: now))
         s.updatedAt = now
         session = s
-        _ = try? store.saveSession(s)
+        persistSession(s)
         refreshRecent()
+
+        // 听力模式：你已答完这一问，最近一句 AI 原文自动揭开（先听→先说→再对照；
+        // 对齐 SpeakView.tsx:701-707）
+        if let lastAssistant = s.turns.indices.last(where: { s.turns[$0].role == .assistant }) {
+            revealTurn(lastAssistant)
+        }
 
         // 命中语境目标词 → 自动按 easy 档完成 SRS（同词只记一次）
         gradeNewTargetHits(userText: text, turnsBefore: Array(s.turns.dropLast()))
@@ -460,6 +562,13 @@ final class SpeakViewController: ObservableObject {
                 await MainActor.run {
                     guard let self, self.session?.id == sessionId else { return }
                     guard !result.isRejected, result.exceptInfo == nil else { return }  // 异常不计入（同跟读语义）
+                    // 评测记录入云（speak-assessments，source=coach；仅分数与逐词
+                    // 精简，音频不上云）——对齐 Windows SpeakView.tsx:753-759。
+                    SpeakSyncCenter.shared.records?.recordAssessmentSilently(
+                        SpeakAssessmentInput(
+                            result: result, source: .coach, refText: userText, sessionId: sessionId
+                        )
+                    )
                     self.applyPron(result, toUserTurnAt: turnAt)
                 }
             } catch {
@@ -476,7 +585,7 @@ final class SpeakViewController: ObservableObject {
         s.turns[idx].pron = shadowAttemptFrom(result, at: now)
         s.updatedAt = now
         session = s
-        _ = try? store.saveSession(s)
+        persistSession(s)
         refreshRecent()
     }
 
@@ -486,7 +595,13 @@ final class SpeakViewController: ObservableObject {
         streaming = StreamingReply()
         let targets = speakContextTargets(context: s.context, vocabWords: deps.vocabWords())
             .map { SpeakContextTarget(word: $0.word.word, zh: $0.zh) }
-        let system = buildSpeakSystemPrompt(s.scenario, s.difficulty, context: s.context, targets: targets)
+        // 用户场景的 keyPhrases 注入系统提示（A2）：调用侧拼接——空 targets 时
+        // appendScenarioTargetsToPrompt 原样返回，内置/语境会话的 prompt 逐字不变
+        // （语境 targets 与场景短语天然互斥：语境会话场景恒为 smalltalk）。
+        let system = appendScenarioTargetsToPrompt(
+            buildSpeakSystemPrompt(s.scenario, s.difficulty, context: s.context, targets: targets),
+            userScenarioTargets(s.scenario)
+        )
         // 输入排除本轮已入记录的 user 轮（末句由 userText 单独拼入，只出现一次）
         let priorTurns = s.turns.last?.role == .user ? Array(s.turns.dropLast()) : s.turns
         let input = buildSpeakUserInput(priorTurns, s.turns.last?.text ?? "")
@@ -496,6 +611,8 @@ final class SpeakViewController: ObservableObject {
                 let raw = try await self.chatProvider(system, input) { delta in
                     Task { @MainActor [weak self] in
                         guard let self, self.phase == .thinking else { return }
+                        // 听力模式下不流式上屏回复原文，避免抢在 TTS 前被看到（SpeakView.tsx:1872-1879）
+                        guard !self.listenMode else { return }
                         let parsed = parseAssistantReply(delta)
                         self.streaming = StreamingReply(en: parsed.en, zh: parsed.zh)
                     }
@@ -518,7 +635,7 @@ final class SpeakViewController: ObservableObject {
                     cur.turns.append(SpeakTurn(role: .assistant, text: parsed.en, hintZh: parsed.zh.isEmpty ? nil : parsed.zh, at: now))
                     cur.updatedAt = now
                     self.session = cur
-                    _ = try? self.store.saveSession(cur)
+                    self.persistSession(cur)
                     self.refreshRecent()
                     self.streaming = StreamingReply()
                     self.phase = .idleTurn
@@ -548,7 +665,7 @@ final class SpeakViewController: ObservableObject {
         )
         s.updatedAt = now
         session = s
-        _ = try? store.saveSession(s)
+        persistSession(s)
     }
 
     /// 跳过回复：掐掉在途 LLM 请求（纪元自增使迟到结果作废），给可见反馈。
@@ -600,6 +717,12 @@ final class SpeakViewController: ObservableObject {
     func speakWord(_ word: String) {
         guard !word.isEmpty else { return }
         speech.speak(word, 1, deps.ttsProvider()) {}
+    }
+
+    /// 练习接力「听 TTS 示范」（Windows speakEn：整句播报一次，不进对话状态机）。
+    func speakRelayReference(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        speech.speak(text, 1, deps.ttsProvider()) {}
     }
 
     /// 播报中插话（点击开麦可打断 TTS）。
@@ -744,6 +867,13 @@ final class SpeakViewController: ObservableObject {
                         self.shadowFailure = card
                     } else {
                         self.shadowFailure = nil
+                        // 评测记录入云（speak-assessments，source=coach 跟读；对齐
+                        // Windows SpeakView.tsx:1102-1108——sessionId 可缺省）。
+                        SpeakSyncCenter.shared.records?.recordAssessmentSilently(
+                            SpeakAssessmentInput(
+                                result: result, source: .coach, refText: text, sessionId: sessionId
+                            )
+                        )
                         self.applyShadowScore(result)
                     }
                     self.phase = .idleTurn
@@ -830,7 +960,7 @@ final class SpeakViewController: ObservableObject {
         s.turns[idx].shadowScore = result.total
         s.updatedAt = now
         session = s
-        _ = try? store.saveSession(s)
+        persistSession(s)
     }
 
     /// XfyunCore 评测结果 → 落盘 ShadowAttempt（pron 与跟读 attempts 共用）。

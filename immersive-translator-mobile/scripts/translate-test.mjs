@@ -3,164 +3,112 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Module, { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-
 const require = createRequire(import.meta.url), ts = require('typescript');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const sourceFile = path.join(root, 'src/services/translate.ts');
-const compiled = ts.transpileModule(fs.readFileSync(sourceFile, 'utf8').replaceAll('import.meta.env', '({DEV:false})'), {
+const files = { translate: 'src/services/translate.ts', parse: 'src/components/reading/sentenceParse.ts' };
+const compiled = Object.fromEntries(Object.entries(files).map(([name, file]) => [name, ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-}).outputText;
+}).outputText]));
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const tests = [], test = (name, run) => tests.push([name, run]);
-
-function runtime({ native = true, profile = 'u1', listenGate, invokeResult = async () => 'done', cloudResult = async () => 'done', ensureResult = async () => true } = {}) {
-  let repository = { identity: profile };
-  let cloud = { account: profile === 'guest' ? null : { id: profile }, generation: 1 };
-  const state = { readingArticleId: null, settings: { apiKey: native ? 'key-u1' : '', baseUrl: '', model: '', provider: 'openai', dir: 'en-zh', style: 'faithful', stream: true }, glossary: [{ a: 'source', b: 'original' }] };
-  const listeners = [], calls = [], cloudCalls = [], events = [];
+function runtime({ profile = 'u1', cloudResult = async () => 'done', ensureResult = async () => true } = {}) {
+  let repository = { identity: profile }, cloud = { account: profile === 'guest' ? null : { id: profile }, generation: 1 };
+  // A saved credential must never open a supplier route, including for guests.
+  const state = { readingArticleId: 'source-article', settings: { apiKey: 'legacy-secret', baseUrl: 'https://legacy-provider.invalid', model: 'legacy-model', provider: 'openai', dir: 'e2c', style: 'faith', stream: true }, glossary: [{ a: 'source', b: 'original' }] };
+  const cloudCalls = [], loginCalls = [], events = [];
   const handlers = { onFirst: () => events.push(['first']), onDelta: value => events.push(['delta', value]), onDone: value => events.push(['done', value]), onFail: value => events.push(['fail', value]) };
-  const invoke = async (cmd, args) => { calls.push({ cmd, args }); return invokeResult(cmd, args); };
-  const mod = new Module(sourceFile); mod.filename = sourceFile;
-  mod.require = name => {
-    if (name === './cloud') return { cloudState: () => cloud, cloudChat: async (...args) => { cloudCalls.push(args); return cloudResult(...args); } };
-    if (name === './authGate') return { ensureAccount: args => ensureResult(args) };
-    if (name === '../store') return { activeRepository: () => repository, getState: () => state };
-    if (name === '../core/glossary') return { readGlossary: () => state.glossary };
-    if (name === './device') return { isTauri: () => native, invokeRaw: invoke, invoke };
-    if (name === '@tauri-apps/api/event') return { listen: async (name, handler) => {
-      const listener = { name, handler, closed: false }; listeners.push(listener);
-      if (listenGate) await listenGate.promise;
-      return () => { listener.closed = true; };
-    } };
-    return require(name);
-  };
-  mod._compile(compiled, sourceFile);
+  function load(name) {
+    const file = path.join(root, files[name]), mod = new Module(file); mod.filename = file;
+    mod.require = dependency => {
+      if (dependency.endsWith('/cloud')) return { cloudState: () => cloud, cloudChat: async (...args) => { cloudCalls.push(args); return cloudResult(...args); } };
+      if (dependency.endsWith('/authGate')) return { ensureAccount: args => { loginCalls.push(args); return ensureResult(args); } };
+      if (dependency.endsWith('/store')) return { activeRepository: () => repository, getState: () => state };
+      if (dependency.endsWith('/core/glossary')) return { readGlossary: () => state.glossary };
+      if (dependency.endsWith('/device') || dependency.startsWith('@tauri-apps/')) throw Error('Mobile learning services must not import direct native/provider APIs');
+      return require(dependency);
+    };
+    mod._compile(compiled[name], file); return mod.exports;
+  }
   return {
-    service: mod.exports, handlers, state, listeners, calls, cloudCalls, events,
+    service: load('translate'), parser: load('parse'), handlers, state, cloudCalls, loginCalls, events,
     switchProfile(identity, changeAccount = true) { repository = { identity }; if (changeAccount) cloud = { account: identity === 'guest' ? null : { id: identity }, generation: cloud.generation + 1 }; },
-    emit(name, reqId, text) { listeners.filter(item => item.name === name && !item.closed).forEach(item => item.handler({ payload: { reqId, text } })); },
+    changeGeneration() { cloud = { ...cloud, generation: cloud.generation + 1 }; },
   };
 }
-
 for (const kind of ['translate', 'chat']) {
   const begin = rt => kind === 'translate' ? rt.service.startTranslate('private text', rt.handlers) : rt.service.chatStream('system', [{ role: 'user', content: 'private text' }], rt.handlers);
-  const command = kind === 'translate' ? 'translate_text' : 'llm_chat';
-  const channel = kind === 'translate' ? 'translate-delta' : 'chat-delta';
-  const abort = kind === 'translate' ? 'translate_abort' : 'llm_abort';
-  test(kind + ': immediate stop prevents listener and native request', async () => {
-    const rt = runtime(), handle = begin(rt); handle.stop(); await tick();
-    assert.equal(rt.calls.length, 0); assert.equal(rt.listeners.length, 0); assert.deepEqual(rt.events, []);
+  test(kind + ': legacy credentials never bypass account server', async () => {
+    const rt = runtime(); begin(rt); await tick(); assert.equal(rt.cloudCalls.length, 1); assert.equal(rt.loginCalls.length, 1);
+    assert.equal(rt.cloudCalls[0][1][0].content, 'private text'); assert(!JSON.stringify(rt.cloudCalls).includes('legacy-secret')); assert(rt.events.some(e => e[0] === 'done'));
   });
-  test(kind + ': stopping while listen awaits closes late listener without invoking', async () => {
-    const gate = deferred(), rt = runtime({ listenGate: gate }), handle = begin(rt); await tick();
-    assert.equal(rt.listeners.length, 1); handle.stop(); gate.resolve(); await tick();
-    assert.equal(rt.calls.length, 0); assert.equal(rt.listeners[0].closed, true); assert.deepEqual(rt.events, []);
+  test(kind + ': immediate stop prevents request', async () => {
+    const rt = runtime(), handle = begin(rt); handle.stop(); await tick(); assert.equal(rt.cloudCalls.length, 0); assert.deepEqual(rt.events, []);
   });
-  test(kind + ': profile switch while listen awaits never sends old text with new key', async () => {
-    const gate = deferred(), rt = runtime({ listenGate: gate }); begin(rt); await tick();
-    rt.switchProfile('u2'); rt.state.settings.apiKey = 'key-u2'; gate.resolve(); await tick();
-    assert.equal(rt.calls.length, 0); assert.equal(rt.listeners[0].closed, true); assert.deepEqual(rt.events, []);
+  test(kind + ': guest with legacy key cannot submit before login', async () => {
+    const login = deferred(), rt = runtime({ profile: 'guest', ensureResult: () => login.promise }); begin(rt); await tick(); assert.equal(rt.cloudCalls.length, 0);
+    login.resolve(false); await tick(); assert.equal(rt.cloudCalls.length, 0); assert(rt.events.some(e => e[0] === 'fail' && e[1].includes('已取消登录')));
   });
-  test(kind + ': request keeps original config and suppresses late output after switch', async () => {
-    const request = deferred(), rt = runtime({ invokeResult: () => request.promise }); const handle = begin(rt); await tick();
-    const call = rt.calls.find(item => item.cmd === command); assert(call);
-    rt.state.settings.apiKey = 'edited'; rt.state.glossary[0].b = 'edited';
-    assert.equal(call.args.cfg.apiKey, 'key-u1'); assert.equal(call.args.cfg.glossary[0].b, 'original');
-    rt.emit(channel, call.args.reqId, 'current'); assert(rt.events.some(event => event[0] === 'delta'));
-    rt.events.length = 0; rt.switchProfile('u2'); rt.emit(channel, call.args.reqId, 'stale'); handle.stop();
-    request.resolve('stale done'); await tick();
-    assert.deepEqual(rt.events, []); assert.equal(rt.listeners[0].closed, true);
-    assert.equal(rt.calls.find(item => item.cmd === abort)?.args.reqId, call.args.reqId);
+  test(kind + ': completed guest login resumes original request once', async () => {
+    const login = deferred(), rt = runtime({ profile: 'guest', ensureResult: () => login.promise }); begin(rt); assert.equal(rt.cloudCalls.length, 0);
+    rt.switchProfile('u1'); login.resolve(true); await tick(); assert.equal(rt.cloudCalls.length, 1); assert.equal(rt.cloudCalls[0][1][0].content, 'private text'); assert(rt.events.some(e => e[0] === 'done'));
   });
-  test(kind + ': stop cancels active native request once and suppresses partial completion', async () => {
-    const request = deferred(), rt = runtime({ invokeResult: cmd => cmd === command ? request.promise : null }); const handle = begin(rt); await tick();
-    handle.stop(); handle.stop(); request.resolve('partial'); await tick();
-    assert.equal(rt.calls.filter(item => item.cmd === abort).length, 1); assert.deepEqual(rt.events, []); assert(rt.listeners[0].closed);
-    assert.equal(rt.calls.find(item => item.cmd === abort).args.reqId, rt.calls.find(item => item.cmd === command).args.reqId);
+  test(kind + ': stop during login prevents chargeable request', async () => {
+    const login = deferred(), rt = runtime({ profile: 'guest', ensureResult: () => login.promise }), handle = begin(rt); handle.stop(); rt.switchProfile('u1'); login.resolve(true); await tick();
+    assert.equal(rt.cloudCalls.length, 0); assert.deepEqual(rt.events, []);
   });
-  test(kind + ': completed handle cannot abort a later native request', async () => {
-    const rt = runtime(), handle = begin(rt); await tick(); handle.stop(); await tick();
-    assert(rt.events.some(event => event[0] === 'done')); assert.equal(rt.calls.filter(item => item.cmd === abort).length, 0);
+  test(kind + ': unrelated account switch during login never sends old text', async () => {
+    const login = deferred(), rt = runtime({ ensureResult: () => login.promise }); begin(rt); rt.switchProfile('u2'); login.resolve(true); await tick(); assert.equal(rt.cloudCalls.length, 0); assert.deepEqual(rt.events, []);
   });
-  test(kind + ': concurrent streams cancel using their own request IDs', async () => {
-    const pending = new Map(), rt = runtime({ invokeResult: (cmd, args) => {
-      if (cmd === command) { const wait = deferred(); pending.set(args.reqId, wait); return wait.promise; }
-      if (cmd === abort) pending.get(args.reqId)?.resolve('cancelled partial');
-      return null;
-    } });
-    const other = [], first = begin(rt);
-    const secondHandlers = { onFirst() {}, onDelta: value => other.push(['delta', value]), onDone: value => other.push(['done', value]), onFail: value => other.push(['fail', value]) };
-    const second = kind === 'translate' ? rt.service.startTranslate('second', secondHandlers) : rt.service.chatStream('system', [{ role: 'user', content: 'second' }], secondHandlers);
-    await tick(); const calls = rt.calls.filter(item => item.cmd === command); assert.equal(calls.length, 2);
-    first.stop(); await tick(); assert.deepEqual(rt.events, []); assert.equal(rt.calls.find(item => item.cmd === abort).args.reqId, calls[0].args.reqId);
-    rt.emit(channel, calls[1].args.reqId, 'second delta'); pending.get(calls[1].args.reqId).resolve('second done'); await tick();
-    assert(other.some(event => event[0] === 'done' && event[1] === 'second done')); second.stop();
-    assert.equal(rt.calls.filter(item => item.cmd === abort).length, 1);
+  test(kind + ': cloud account/profile mismatch blocks submission', async () => {
+    const rt = runtime(); rt.switchProfile('other-profile', false); begin(rt); await tick(); assert.equal(rt.cloudCalls.length, 0); assert.deepEqual(rt.events, []);
+  });
+  test(kind + ': stop aborts active signal and suppresses late answer', async () => {
+    const request = deferred(), rt = runtime({ cloudResult: () => request.promise }), handle = begin(rt); await tick(); handle.stop(); handle.stop(); assert(rt.cloudCalls[0][2].aborted); request.resolve('partial'); await tick(); assert.deepEqual(rt.events, []);
+  });
+  test(kind + ': account switch suppresses late response', async () => {
+    const request = deferred(), rt = runtime({ cloudResult: () => request.promise }); begin(rt); await tick(); rt.switchProfile('u2'); request.resolve('private old answer'); await tick(); assert.deepEqual(rt.events, []);
+  });
+  test(kind + ': switching away and back still invalidates output', async () => {
+    const request = deferred(), rt = runtime({ cloudResult: () => request.promise }); begin(rt); await tick(); rt.switchProfile('u2', false); rt.switchProfile('u1', false); request.resolve('stale'); await tick(); assert.deepEqual(rt.events, []);
+  });
+  test(kind + ': session generation change invalidates output', async () => {
+    const request = deferred(), rt = runtime({ cloudResult: () => request.promise }); begin(rt); await tick(); rt.changeGeneration(); request.resolve('stale'); await tick(); assert.deepEqual(rt.events, []);
+  });
+  test(kind + ': callback profile switch suppresses subsequent callbacks', async () => {
+    const rt = runtime(); if (kind === 'translate') rt.handlers.onFirst = () => { rt.events.push(['first']); rt.switchProfile('u2'); }; else rt.handlers.onDelta = value => { rt.events.push(['delta', value]); rt.switchProfile('u2'); };
+    begin(rt); await tick(); assert.equal(rt.events.length, 1); assert(!rt.events.some(e => e[0] === 'done'));
+  });
+  test(kind + ': concurrent requests cancel independently', async () => {
+    const requests = [], rt = runtime({ cloudResult: () => { const wait = deferred(); requests.push(wait); return wait.promise; } }); const first = begin(rt), second = begin(rt); await tick();
+    first.stop(); assert(rt.cloudCalls[0][2].aborted); assert(!rt.cloudCalls[1][2].aborted); requests[0].resolve('cancelled'); requests[1].resolve('second'); await tick(); assert.deepEqual(rt.events.filter(e => e[0] === 'done'), [['done', 'second']]); second.stop();
   });
 }
-
-test('official translate permits guest login then ignores later account switch', async () => {
-  const login = deferred(), request = deferred(), rt = runtime({ native: false, profile: 'guest', ensureResult: () => login.promise, cloudResult: () => request.promise });
-  rt.service.startTranslate('guest text', rt.handlers); assert.equal(rt.cloudCalls.length, 0);
-  rt.switchProfile('u1'); login.resolve(true); await tick(); assert.equal(rt.cloudCalls.length, 1);
-  rt.switchProfile('u2'); request.resolve('old account translation'); await tick(); assert.deepEqual(rt.events, []);
+test('translation preserves direction, style, glossary captured before login', async () => {
+  const login = deferred(), rt = runtime({ profile: 'guest', ensureResult: () => login.promise }); rt.state.settings.dir = 'c2e'; rt.service.startTranslate('原文', rt.handlers);
+  rt.state.settings.dir = 'auto'; rt.state.settings.style = 'eleg'; rt.state.glossary[0].b = 'edited'; rt.switchProfile('u1'); login.resolve(true); await tick();
+  const system = rt.cloudCalls[0][0]; assert(system.includes('中文翻译成英文')); assert(system.includes('严格忠实原文')); assert(system.includes('source→original')); assert(!system.includes('source→edited')); assert.equal(rt.loginCalls[0].articleId, 'source-article');
 });
-test('official translate stop during login prevents chargeable request', async () => {
-  const login = deferred(), rt = runtime({ native: false, profile: 'guest', ensureResult: () => login.promise });
-  const handle = rt.service.startTranslate('guest text', rt.handlers); handle.stop(); rt.switchProfile('u1'); login.resolve(true); await tick();
-  assert.equal(rt.cloudCalls.length, 0); assert.deepEqual(rt.events, []);
+test('chat snapshots messages and filters duplicate system entry', async () => {
+  const login = deferred(), rt = runtime({ profile: 'guest', ensureResult: () => login.promise }), messages = [{ role: 'system', content: 'duplicate' }, { role: 'user', content: 'original' }];
+  rt.service.chatStream('system', messages, rt.handlers); messages[1].content = 'edited'; rt.switchProfile('u1'); login.resolve(true); await tick(); assert.deepEqual(rt.cloudCalls[0][1], [{ role: 'user', content: 'original' }]);
 });
-test('official chat permits login, snapshots messages, and checks each completion callback', async () => {
-  const login = deferred(), request = deferred(), rt = runtime({ native: false, profile: 'guest', ensureResult: () => login.promise, cloudResult: () => request.promise });
-  const messages = [{ role: 'user', content: 'original' }];
-  rt.handlers.onDelta = value => { rt.events.push(['delta', value]); rt.switchProfile('u2'); };
-  rt.service.chatStream('system', messages, rt.handlers); messages[0].content = 'new profile text';
-  rt.switchProfile('u1'); login.resolve(true); await tick(); assert.equal(rt.cloudCalls[0][1][0].content, 'original');
-  request.resolve('answer'); await tick(); assert.deepEqual(rt.events, [['delta', 'answer']]);
+test('llmConfigured requires matched account profile and ignores saved key', () => {
+  const rt = runtime({ profile: 'guest' }); assert.equal(rt.service.llmConfigured(), false); rt.switchProfile('u1'); assert.equal(rt.service.llmConfigured(), true); rt.switchProfile('u2', false); assert.equal(rt.service.llmConfigured(), false);
 });
-test('official chat rejects unrelated account switch while login promise resolves', async () => {
-  const login = deferred(), rt = runtime({ native: false, ensureResult: () => login.promise });
-  rt.service.chatStream('system', [{ role: 'user', content: 'u1 private' }], rt.handlers);
-  rt.switchProfile('u2'); login.resolve(true); await tick(); assert.equal(rt.cloudCalls.length, 0); assert.deepEqual(rt.events, []);
-});
-test('lookupWord rejects native dictionary result from an old repository', async () => {
-  const request = deferred(), rt = runtime({ invokeResult: () => request.promise }); const flight = rt.service.lookupWord('private');
-  rt.switchProfile('u2'); request.resolve({ defs: [{ pos: 'n', cn: '旧释义' }] }); await assert.rejects(flight, error => error.name === 'AbortError');
-});
-test('lookupWord permits guest login then rejects a late cloud dictionary result', async () => {
-  const login = deferred(), request = deferred(), rt = runtime({ native: false, profile: 'guest', ensureResult: () => login.promise, cloudResult: () => request.promise });
-  const flight = rt.service.lookupWord('private'); rt.switchProfile('u1'); login.resolve(true); await tick(); assert.equal(rt.cloudCalls.length, 1);
-  rt.switchProfile('u2'); request.resolve('{"defs":[{"pos":"n","cn":"旧释义"}]}'); await assert.rejects(flight, error => error.name === 'AbortError');
-});
-test('lookupWord returns valid cloud dictionary for the same account', async () => {
-  const rt = runtime({ native: false, cloudResult: async () => '{"defs":[{"pos":"n","cn":"释义"}],"ex":"An example."}' });
-  assert.deepEqual(await rt.service.lookupWord('word'), { defs: [{ pos: 'n', cn: '释义' }], ex: 'An example.' });
-});
-test('lookupWord native cancellation uses its own request ID and never returns cancelled fallback', async () => {
-  const request = deferred(), rt = runtime({ invokeResult: cmd => cmd === 'dict_lookup' ? request.promise : null }), controller = new AbortController();
-  const flight = rt.service.lookupWord('word', controller.signal); controller.abort(); request.resolve(null);
-  await assert.rejects(flight, error => error.name === 'AbortError');
-  const lookup = rt.calls.find(item => item.cmd === 'dict_lookup'), abort = rt.calls.find(item => item.cmd === 'dict_abort');
-  assert(lookup.args.reqId); assert.equal(abort.args.reqId, lookup.args.reqId);
-});
-test('lookupWord pre-aborted signal never invokes a dictionary service', async () => {
-  const rt = runtime(), controller = new AbortController(); controller.abort();
-  await assert.rejects(rt.service.lookupWord('word', controller.signal), error => error.name === 'AbortError'); assert.equal(rt.calls.length, 0);
-});
-test('lookupWord official cancellation during login never sends text to cloud', async () => {
-  const login = deferred(), rt = runtime({ native: false, profile: 'guest', ensureResult: () => login.promise }), controller = new AbortController();
-  const flight = rt.service.lookupWord('word', controller.signal); controller.abort(); rt.switchProfile('u1'); login.resolve(true);
-  await assert.rejects(flight, error => error.name === 'AbortError'); assert.equal(rt.cloudCalls.length, 0);
-});
-test('switching away and back to the same account still invalidates native output', async () => {
-  const request = deferred(), rt = runtime({ invokeResult: () => request.promise }); rt.service.startTranslate('private', rt.handlers); await tick();
-  rt.switchProfile('u2', false); rt.switchProfile('u1', false); request.resolve('stale'); await tick(); assert.deepEqual(rt.events, []);
-});
-
+const dictJson = '{"defs":[{"pos":"n","cn":"释义"}],"ex":"An example."}';
+const parseJson = '{"zh":"我们学习英语。","trunk":"We learn English.","parts":[{"label":"主语","text":"We"},{"label":"谓语","text":"learn"}]}';
+for (const kind of ['dictionary', 'sentence parse']) {
+  const call = (rt, signal) => kind === 'dictionary' ? rt.service.lookupWord('word', signal) : rt.parser.parseSentence('We learn English.', signal), response = kind === 'dictionary' ? dictJson : parseJson;
+  test(kind + ': saved credentials still use account server', async () => { const rt = runtime({ cloudResult: async () => response }); assert(await call(rt)); assert.equal(rt.cloudCalls.length, 1); assert.equal(rt.loginCalls.length, 1); assert(!JSON.stringify(rt.cloudCalls).includes('legacy-secret')); });
+  test(kind + ': guest login resumes and accepts valid response', async () => { const login = deferred(), rt = runtime({ profile: 'guest', ensureResult: () => login.promise, cloudResult: async () => response }), flight = call(rt); assert.equal(rt.cloudCalls.length, 0); rt.switchProfile('u1'); login.resolve(true); assert(await flight); assert.equal(rt.cloudCalls.length, 1); });
+  test(kind + ': guest cancellation never submits text', async () => { const rt = runtime({ profile: 'guest', ensureResult: async () => false }); await assert.rejects(call(rt), /已取消登录/); assert.equal(rt.cloudCalls.length, 0); });
+  test(kind + ': pre-aborted signal never requests login or server', async () => { const rt = runtime(), controller = new AbortController(); controller.abort(); await assert.rejects(call(rt, controller.signal), e => e.name === 'AbortError'); assert.equal(rt.cloudCalls.length, 0); assert.equal(rt.loginCalls.length, 0); });
+  test(kind + ': cancel during login never submits text', async () => { const login = deferred(), rt = runtime({ profile: 'guest', ensureResult: () => login.promise }), controller = new AbortController(), flight = call(rt, controller.signal); controller.abort(); rt.switchProfile('u1'); login.resolve(true); await assert.rejects(flight, e => e.name === 'AbortError'); assert.equal(rt.cloudCalls.length, 0); });
+  test(kind + ': old-account response discarded after profile switch', async () => { const request = deferred(), rt = runtime({ cloudResult: () => request.promise }), flight = call(rt); await tick(); rt.switchProfile('u2'); request.resolve(response); await assert.rejects(flight, e => e.name === 'AbortError'); });
+  test(kind + ': malformed response never becomes learning data', async () => { const rt = runtime({ cloudResult: async () => 'not json' }); await assert.rejects(call(rt), /格式异常/); });
+  test(kind + ': incomplete response is rejected', async () => { const rt = runtime({ cloudResult: async () => '{}' }); await assert.rejects(call(rt), /不完整/); });
+}
 let passed = 0;
-for (const [name, run] of tests) {
-  try { await run(); console.log('PASS ' + name); passed++; }
-  catch (error) { console.error('FAIL ' + name, error); process.exitCode = 1; }
-}
-console.log(passed + '/' + tests.length + ' translate lifecycle tests passed');
+for (const [name, run] of tests) { try { await run(); console.log('PASS ' + name); passed++; } catch (error) { console.error('FAIL ' + name, error); process.exitCode = 1; } }
+console.log(passed + '/' + tests.length + ' account-server learning lifecycle tests passed');

@@ -104,6 +104,79 @@ struct HotKeyShortcut: Equatable, Hashable, RawRepresentable {
         (modifierLabels + [keyLabel]).joined(separator: " + ")
     }
 
+    /// 菜单原生快捷键显示：keyEquivalent 字符 + 修饰键掩码（NSMenuItem.keyEquivalent /
+    /// keyEquivalentModifierMask 直填，右对齐、菜单等宽字形渲染）。不可映射的 keyLabel
+    /// 返回 nil，调用方回落「标题内嵌 hint」。
+    /// 仅作菜单内显示/触发；全局热键仍由 Carbon RegisterEventHotKey 负责，二者互不替代。
+    func menuKeyEquivalent() -> (character: String, modifiers: NSEvent.ModifierFlags)? {
+        guard let character = Self.menuKeyCharacter(for: keyLabel) else { return nil }
+        var flags: NSEvent.ModifierFlags = []
+        // Carbon 修饰键位（与 modifierLabels 的读取位一致）→ NSEvent 掩码。
+        if modifiers & UInt32(cmdKey) != 0 {
+            flags.insert(.command)
+        }
+        if modifiers & UInt32(controlKey) != 0 {
+            flags.insert(.control)
+        }
+        if modifiers & UInt32(optionKey) != 0 {
+            flags.insert(.option)
+        }
+        if modifiers & UInt32(shiftKey) != 0 {
+            flags.insert(.shift)
+        }
+        return (character, flags)
+    }
+
+    /// keyLabel → NSMenuItem.keyEquivalent 字符：
+    /// - 单字母/数字（大小写不敏感；录制时已 uppercased，见 keyLabel(keyCode:fallback:)）
+    ///   → 小写字符（大写会让 AppKit 隐式补 ⇧ 渲染）；
+    /// - 命名键 → AppKit 功能键 Unicode 标量（NSF1FunctionKey 0xF704 起、方向键 0xF700-0xF703、
+    ///   Forward Delete 0xF728 等，与规格 tray.md §2.1-3 映射表一致）；
+    /// - 其余（多词非功能键 label 等）→ nil。
+    private static func menuKeyCharacter(for keyLabel: String) -> String? {
+        switch keyLabel {
+        case "Space":
+            return " "
+        case "Return":
+            return "\r"
+        case "Tab":
+            return "\t"
+        // kVK_Delete 是退格键；菜单 keyEquivalent 惯例用 0x7F（NSDeleteCharacter）。
+        case "Delete":
+            return "\u{7F}"
+        case "Forward Delete":
+            return Self.functionKeyCharacter(NSDeleteFunctionKey)
+        case "Left Arrow":
+            return Self.functionKeyCharacter(NSLeftArrowFunctionKey)
+        case "Right Arrow":
+            return Self.functionKeyCharacter(NSRightArrowFunctionKey)
+        case "Up Arrow":
+            return Self.functionKeyCharacter(NSUpArrowFunctionKey)
+        case "Down Arrow":
+            return Self.functionKeyCharacter(NSDownArrowFunctionKey)
+        default:
+            // F1~F12（含两位数的 F10-F12）→ NSF1FunctionKey(0xF704) + n-1 的连续功能键标量。
+            if keyLabel.hasPrefix("F"),
+               let index = Int(keyLabel.dropFirst()), (1...12).contains(index) {
+                return Self.functionKeyCharacter(NSF1FunctionKey + index - 1)
+            }
+            guard keyLabel.count == 1 else { return nil }
+            let lowered = keyLabel.lowercased()
+            guard let scalar = lowered.unicodeScalars.first, scalar.isASCII,
+                  (48...57).contains(scalar.value) || (97...122).contains(scalar.value) else {
+                return nil
+            }
+            return lowered
+        }
+    }
+
+    /// AppKit 功能键 Int 常量 → 单字符字符串（常量恒在 Unicode BMP 内，越界只可能
+    /// 来自调用方传错，返回 nil 兜底）。
+    private static func functionKeyCharacter(_ code: Int) -> String? {
+        guard let scalar = UnicodeScalar(code) else { return nil }
+        return String(scalar)
+    }
+
     static let optionSpace = HotKeyShortcut(
         keyCode: UInt32(kVK_Space),
         modifiers: UInt32(optionKey),

@@ -89,60 +89,6 @@ export function haptic(kind: "light" | "success"): void {
   }
 }
 
-/* ---------- 本地通知（#28 调用点；真机走 plugin-notification，浏览器仅记录） ---------- */
-
-/** 每日提醒通知 id（定值，先 cancel 再 schedule 保证不重复投递）。 */
-export const REMINDER_NOTIFICATION_ID = 1001;
-
-/** 失败 toast（动态 import 规避 store↔device 静态环）。 */
-async function diagToast(msg: string): Promise<void> {
-  try {
-    const { toast } = await import("../store");
-    toast(msg);
-  } catch {
-    console.warn(`[notify] ${msg}`);
-  }
-}
-
-/**
- * 每日复习提醒。真机：requestPermission → cancel(1001) → sendNotification
- * （Schedule.interval({hour,minute}) 每日重复，d.ts 口径：未设字段匹配任意日期）。
- * 失败 toast 如实（不再静默 console.warn）。浏览器分支不投递系统通知。
- */
-export async function scheduleDailyReminder(time: string, enabled: boolean): Promise<void> {
-  if (isTauri()) {
-    try {
-      const m = await import("@tauri-apps/plugin-notification");
-      if (enabled) {
-        let granted = await m.isPermissionGranted();
-        if (!granted) granted = (await m.requestPermission()) === "granted";
-        if (!granted) {
-          await diagToast("通知权限未开启，每日提醒无法投递（可在系统设置中打开）");
-          return;
-        }
-      }
-      await m.cancel([REMINDER_NOTIFICATION_ID]);
-      if (enabled) {
-        const hm = /^(\d{1,2}):(\d{1,2})$/.exec(time.trim());
-        if (!hm) {
-          await diagToast(`提醒时间格式无效：${time}`);
-          return;
-        }
-        m.sendNotification({
-          id: REMINDER_NOTIFICATION_ID,
-          title: "今晚的复习提醒",
-          body: "到点清生词，睡前过一遍",
-          schedule: m.Schedule.interval({ hour: Number(hm[1]), minute: Number(hm[2]) }),
-        });
-      }
-    } catch (err) {
-      await diagToast(`每日提醒设置失败：${errMsg(err)}`);
-    }
-    return;
-  }
-  console.info(`[notify] 每日提醒 ${enabled ? "开启" : "关闭"} @ ${time}（浏览器演示态：不投递系统通知）`);
-}
-
 /* ---------- 麦克风电平（陪练/直译/跟读共用；拒绝授权 → null 走模拟电平） ---------- */
 export interface MicLevel {
   level: () => number;

@@ -1,12 +1,14 @@
 /**
- * 复习队列构建（smart 路由 #51）：词块 → 完形/听写，单词 → 识别；
+ * 复习队列构建（smart 路由 #51）：词块 → 完形/听写，单词 → 识别；每轮最多 1 张开口卡（vault-review-parity）；
  * 素材缺失（出处句不含词条）降级识别卡。判分/SRS 内核 = core/judge、core/srs（§6.2 勿重写）。
  */
 import { norm } from "./judge";
 import { CLOZE_FALLBACK } from "./demo";
 import type { Article, VocabWord } from "./types";
 
-export type CardMode = "recognition" | "cloze" | "dictation";
+/** spoken = 开口使用卡（vault-review-parity）：录音试说 + 人工三档自评（forgot/hard/easy），
+ *  无自动判分；复习事件 mode 记 "spoken"（reviewEvents.mode 本就是自由字符串，不改协议）。 */
+export type CardMode = "recognition" | "cloze" | "dictation" | "spoken";
 
 export interface ReviewCard {
   id: string;
@@ -118,6 +120,22 @@ export function buildReviewQueue(vocab: VocabWord[], articles: Article[]): Revie
     if (sent) {
       out[i] = { ...c, mode: "dictation", answer: sent.en, pre: undefined, post: undefined, hint: sent.zh || c.hint };
       placed++;
+    }
+  }
+  /* 开口使用（vault-review-parity）：第 3 张完形改开口卡，每轮最多 1 张、需有出处句
+     （核对用法要用原句）。刻意不取第 1 张——单卡/双卡轮次保持原有形态，
+     单词识别与完形的既有判分流程不受影响。 */
+  let spokenPlaced = 0;
+  let clozeSeen2 = 0;
+  for (let i = 0; i < out.length && spokenPlaced < 1; i++) {
+    const c = out[i];
+    if (c.mode !== "cloze") continue;
+    clozeSeen2++;
+    if (clozeSeen2 !== 3) continue;
+    const sent = c.articleId ? findSentence(articles, c.articleId, c.sentIdx) : undefined;
+    if (sent) {
+      out[i] = { ...c, mode: "spoken", pre: undefined, post: undefined };
+      spokenPlaced++;
     }
   }
   return out;

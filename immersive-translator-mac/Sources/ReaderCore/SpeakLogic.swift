@@ -7,63 +7,219 @@ import Foundation
 
 public let speakSchemaVersion = 1
 
-public enum SpeakScenarioId: String, Codable, Equatable, CaseIterable {
-    case ordering
-    case interview
-    case travel
-    case smalltalk
-}
+/// 场景 id：内置沿用 "ordering"|"interview"|"travel"|"smalltalk"；官方 "off_" 前缀；
+/// 用户 "usr_" 前缀（usr_<uuid>）。A1（契约 v1.2.0）起放开为 String，旧会话 JSON
+/// 与存储/契约零破坏（4 个内置 id 仍是合法值）。对齐 Windows speakLogic.ts:18。
+public typealias SpeakScenarioId = String
 
-public enum SpeakDifficulty: String, Codable, Equatable, CaseIterable {
+public enum SpeakDifficulty: String, Codable, Equatable, CaseIterable, Sendable {
     case easy
     case medium
     case hard
 }
 
-public struct SpeakScenario: Equatable, Identifiable {
-    public var id: SpeakScenarioId
-    public var label: String
-    public var emoji: String
-    /// LLM 的场景角色设定（你扮演…）。
-    public var brief: String
+/// 场景来源（与 Windows analytics.ts 的 ScenarioSource 字面量一致）。
+public enum SpeakScenarioSource: String, Codable, Equatable, CaseIterable, Sendable {
+    case builtin
+    case official
+    case user
+}
+
+/// 场景分类（契约 $defs/scenarioCategory）。
+public enum SpeakScenarioCategory: String, Codable, Equatable, CaseIterable, Sendable {
+    case daily
+    case travel
+    case workplace
+    case academic
+    case custom
+}
+
+/// 内置 4 场景统一的迁移基准 updatedAt（Unix 毫秒；= Windows `Date.UTC(2026, 0, 1)`
+/// = 2026-01-01T00:00:00Z；测试逐字基线断言用）。
+public let builtinScenarioUpdatedAt: Int64 = 1_767_225_600_000
+
+/// 口语场景（contracts/speak-scenario.schema.json $defs/speakScenario 的 Swift 镜像）。
+/// A1 迁移：label→title、brief 并入 aiRole、新增 source/category/updatedAt，
+/// 4 个内置场景文案逐字搬运（system prompt 与开场白输出不变）。
+/// 可选字段缺省不写入 JSON（与 Windows 编辑器「空值不写入」同口径），读侧宽容
+/// （decodeIfPresent，沿用本文件 SpeakTurn 的手法）。
+public struct SpeakScenario: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var source: SpeakScenarioSource
+    /// 场景名（原 label 逐字迁移）。
+    public var title: String
+    public var emoji: String?
+    public var category: SpeakScenarioCategory
+    /// LLM 的场景角色设定（你扮演…；原 brief 逐字并入，≤300 字）。
+    public var aiRole: String
+    /// 用户角色设定（≤200 字）。
+    public var userRole: String?
+    /// 本场景的练习目标（≤200 字）。
+    public var goal: String?
+    /// 关键表达（≤8 条；用户场景的会话目标词由 ScenarioForge 消费）。
+    public var keyPhrases: [String]?
     /// 开场白（AI 第一轮，避免用户先开口冷启动）。
     public var opener: String
-    public var openerZh: String
+    /// 开场白中文提示。
+    public var openerZh: String?
+    public var defaultDifficulty: SpeakDifficulty?
+    /// Unix 毫秒。
+    public var updatedAt: Int64
 
-    public init(id: SpeakScenarioId, label: String, emoji: String, brief: String, opener: String, openerZh: String) {
+    public init(
+        id: String,
+        source: SpeakScenarioSource,
+        title: String,
+        emoji: String? = nil,
+        category: SpeakScenarioCategory,
+        aiRole: String,
+        userRole: String? = nil,
+        goal: String? = nil,
+        keyPhrases: [String]? = nil,
+        opener: String,
+        openerZh: String? = nil,
+        defaultDifficulty: SpeakDifficulty? = nil,
+        updatedAt: Int64
+    ) {
         self.id = id
-        self.label = label
+        self.source = source
+        self.title = title
         self.emoji = emoji
-        self.brief = brief
+        self.category = category
+        self.aiRole = aiRole
+        self.userRole = userRole
+        self.goal = goal
+        self.keyPhrases = keyPhrases
         self.opener = opener
         self.openerZh = openerZh
+        self.defaultDifficulty = defaultDifficulty
+        self.updatedAt = updatedAt
     }
+
+    enum CodingKeys: String, CodingKey {
+        case id, source, title, emoji, category, aiRole, userRole, goal, keyPhrases
+        case opener, openerZh, defaultDifficulty, updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        source = try c.decode(SpeakScenarioSource.self, forKey: .source)
+        title = try c.decode(String.self, forKey: .title)
+        emoji = try c.decodeIfPresent(String.self, forKey: .emoji)
+        category = try c.decode(SpeakScenarioCategory.self, forKey: .category)
+        aiRole = try c.decode(String.self, forKey: .aiRole)
+        userRole = try c.decodeIfPresent(String.self, forKey: .userRole)
+        goal = try c.decodeIfPresent(String.self, forKey: .goal)
+        keyPhrases = try c.decodeIfPresent([String].self, forKey: .keyPhrases)
+        opener = try c.decode(String.self, forKey: .opener)
+        openerZh = try c.decodeIfPresent(String.self, forKey: .openerZh)
+        defaultDifficulty = try c.decodeIfPresent(SpeakDifficulty.self, forKey: .defaultDifficulty)
+        // updatedAt 契约为整数毫秒；读侧与 Windows `typeof === "number"` 同样宽容小数形态。
+        if let ms = try? c.decode(Int64.self, forKey: .updatedAt) {
+            updatedAt = ms
+        } else {
+            updatedAt = Int64(try c.decode(Double.self, forKey: .updatedAt))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(source, forKey: .source)
+        try c.encode(title, forKey: .title)
+        try c.encodeIfPresent(emoji, forKey: .emoji)
+        try c.encode(category, forKey: .category)
+        try c.encode(aiRole, forKey: .aiRole)
+        try c.encodeIfPresent(userRole, forKey: .userRole)
+        try c.encodeIfPresent(goal, forKey: .goal)
+        try c.encodeIfPresent(keyPhrases, forKey: .keyPhrases)
+        try c.encode(opener, forKey: .opener)
+        try c.encodeIfPresent(openerZh, forKey: .openerZh)
+        try c.encodeIfPresent(defaultDifficulty, forKey: .defaultDifficulty)
+        try c.encode(updatedAt, forKey: .updatedAt)
+    }
+
+    /// 从 JSON 对象（缓存文件 / 同步实体 payload 的 JSONSerialization 形态）宽容读取：
+    /// 先过 isSpeakScenarioLike 必填校验，可选字段类型不符按缺省处理。
+    public init?(jsonObject: Any?) {
+        guard isSpeakScenarioLike(jsonObject), let dict = jsonObject as? [String: Any] else { return nil }
+        guard let source = SpeakScenarioSource(rawValue: dict["source"] as? String ?? ""),
+              let category = SpeakScenarioCategory(rawValue: dict["category"] as? String ?? ""),
+              let updatedAt = speakJSONNumber(dict["updatedAt"]) else { return nil }
+        self.init(
+            id: dict["id"] as? String ?? "",
+            source: source,
+            title: dict["title"] as? String ?? "",
+            emoji: dict["emoji"] as? String,
+            category: category,
+            aiRole: dict["aiRole"] as? String ?? "",
+            userRole: dict["userRole"] as? String,
+            goal: dict["goal"] as? String,
+            keyPhrases: (dict["keyPhrases"] as? [Any]).map { $0.compactMap { $0 as? String } },
+            opener: dict["opener"] as? String ?? "",
+            openerZh: dict["openerZh"] as? String,
+            defaultDifficulty: (dict["defaultDifficulty"] as? String).flatMap(SpeakDifficulty.init(rawValue:)),
+            updatedAt: Int64(updatedAt)
+        )
+    }
+
+    /// 场景 → JSON 对象（同步实体 payload / 缓存写入用；camelCase 键，可选字段 nil 不写）。
+    public func jsonObject() -> [String: Any] {
+        var out: [String: Any] = [
+            "id": id,
+            "source": source.rawValue,
+            "title": title,
+            "category": category.rawValue,
+            "aiRole": aiRole,
+            "opener": opener,
+            "updatedAt": updatedAt,
+        ]
+        if let emoji { out["emoji"] = emoji }
+        if let userRole { out["userRole"] = userRole }
+        if let goal { out["goal"] = goal }
+        if let keyPhrases { out["keyPhrases"] = keyPhrases }
+        if let openerZh { out["openerZh"] = openerZh }
+        if let defaultDifficulty { out["defaultDifficulty"] = defaultDifficulty.rawValue }
+        return out
+    }
+}
+
+/// JSON 数字提取（严格排除布尔，对齐 JS `typeof v === "number"`）。
+private func speakJSONNumber(_ value: Any?) -> Double? {
+    guard let number = value as? NSNumber else { return nil }
+    if number === kCFBooleanTrue || number === kCFBooleanFalse { return nil }
+    return number.doubleValue
 }
 
 public let speakScenarios: [SpeakScenario] = [
     SpeakScenario(
-        id: .ordering, label: "点餐", emoji: "🍜",
-        brief: "在英语餐厅点餐，你扮演友善的服务员，帮用户完成点单、推荐菜品、确认订单",
+        id: "ordering", source: .builtin, title: "点餐", emoji: "🍜", category: .daily,
+        aiRole: "在英语餐厅点餐，你扮演友善的服务员，帮用户完成点单、推荐菜品、确认订单",
         opener: "Hi there! Welcome in. What can I get started for you today?",
-        openerZh: "你好，欢迎光临！今天想吃点什么？（试着说：I'd like… / Can I have…）"
+        openerZh: "你好，欢迎光临！今天想吃点什么？（试着说：I'd like… / Can I have…）",
+        updatedAt: builtinScenarioUpdatedAt
     ),
     SpeakScenario(
-        id: .interview, label: "面试", emoji: "💼",
-        brief: "英文面试模拟，你扮演温和的面试官，围绕自我介绍、经历、优缺点提问，一次只问一个问题",
+        id: "interview", source: .builtin, title: "面试", emoji: "💼", category: .workplace,
+        aiRole: "英文面试模拟，你扮演温和的面试官，围绕自我介绍、经历、优缺点提问，一次只问一个问题",
         opener: "Good morning, thanks for coming in. Could you start by telling me a little about yourself?",
-        openerZh: "早上好，先做个自我介绍吧。（提示：I'm currently… / I used to work…）"
+        openerZh: "早上好，先做个自我介绍吧。（提示：I'm currently… / I used to work…）",
+        updatedAt: builtinScenarioUpdatedAt
     ),
     SpeakScenario(
-        id: .travel, label: "旅行", emoji: "✈️",
-        brief: "旅行场景（机场、酒店、问路、购物），你扮演当地工作人员或热心路人",
+        id: "travel", source: .builtin, title: "旅行", emoji: "✈️", category: .travel,
+        aiRole: "旅行场景（机场、酒店、问路、购物），你扮演当地工作人员或热心路人",
         opener: "Good afternoon! You look a little lost — is there anything I can help you with?",
-        openerZh: "下午好！看你想问路？（提示：Excuse me, how can I get to…）"
+        openerZh: "下午好！看你想问路？（提示：Excuse me, how can I get to…）",
+        updatedAt: builtinScenarioUpdatedAt
     ),
     SpeakScenario(
-        id: .smalltalk, label: "寒暄", emoji: "☕️",
-        brief: "朋友间日常寒暄闲聊（天气、周末、近况、兴趣），你扮演老朋友，语气轻松",
+        id: "smalltalk", source: .builtin, title: "寒暄", emoji: "☕️", category: .daily,
+        aiRole: "朋友间日常寒暄闲聊（天气、周末、近况、兴趣），你扮演老朋友，语气轻松",
         opener: "Hey! Long time no see. How has your week been going?",
-        openerZh: "嘿，好久不见！这周过得怎么样？（提示：Pretty good, I… / Not bad, just…）"
+        openerZh: "嘿，好久不见！这周过得怎么样？（提示：Pretty good, I… / Not bad, just…）",
+        updatedAt: builtinScenarioUpdatedAt
     ),
 ]
 
@@ -79,8 +235,116 @@ public let speakDifficulties: [SpeakDifficultyInfo] = [
     SpeakDifficultyInfo(id: .hard, label: "进阶", note: "表达丰富地道，可以自然追问细节，接近母语者"),
 ]
 
+// MARK: - 场景合并注册表（A1：官方目录 + 用户自建场景的内存载体，仅内存不落盘）
+
+/// 运行时形状守卫（缓存/同步来的 JSON 进门校验；对齐 Windows isSpeakScenarioLike）：
+/// 非空 string id + source 三枚举 + 非空 title + category 五枚举 + 非空 aiRole +
+/// 非空 opener + number updatedAt；可选字段不校验（宽容读取），不按
+/// maxLength/maxItems 拒收（限长是写入端约束）。
+public func isSpeakScenarioLike(_ value: Any?) -> Bool {
+    guard let sc = value as? [String: Any] else { return false }
+    guard let id = sc["id"] as? String, !id.isEmpty else { return false }
+    guard let source = sc["source"] as? String, SpeakScenarioSource(rawValue: source) != nil else { return false }
+    guard let title = sc["title"] as? String, !title.isEmpty else { return false }
+    guard let category = sc["category"] as? String, SpeakScenarioCategory(rawValue: category) != nil else { return false }
+    guard let aiRole = sc["aiRole"] as? String, !aiRole.isEmpty else { return false }
+    guard let opener = sc["opener"] as? String, !opener.isEmpty else { return false }
+    guard speakJSONNumber(sc["updatedAt"]) != nil else { return false }
+    return true
+}
+
+/// 类型化场景的必填非空校验（注册表入桶前的同一道门：枚举字段已由类型保证，
+/// 只剩 id/title/aiRole/opener 的 minLength 1）。
+public func isSpeakScenarioLike(_ scenario: SpeakScenario) -> Bool {
+    !scenario.id.isEmpty && !scenario.title.isEmpty && !scenario.aiRole.isEmpty && !scenario.opener.isEmpty
+}
+
+/// 内置 id 集合：官方/用户桶与内置撞车的项直接丢弃（防目录脏数据带 ordering
+/// 进来导致入口网格重复渲染；id 前缀 off_/usr_ 天然不撞，规则纯防御）。
+let builtinScenarioIds: Set<String> = Set(speakScenarios.map(\.id))
+
+/// 两个仅内存的桶（官方 / 用户），Windows 模块级 Map 的对应物：注册序保持
+///（= 缓存文件序 = 服务端目录序 / = sync store 实体序），桶内同 id 保留先出现者。
+/// 串行锁：preload/refresh 在任务里写、SwiftUI 在主线程读。
+final class SpeakScenarioRegistry: @unchecked Sendable {
+    static let shared = SpeakScenarioRegistry()
+
+    private let lock = NSLock()
+    private var official: [SpeakScenario] = []
+    private var user: [SpeakScenario] = []
+
+    /// 全量替换一个桶：逐项 isSpeakScenarioLike 过滤 + 内置撞车过滤 + 桶内同 id 保留先出现者。
+    private static func replaceBucket(_ list: [SpeakScenario]) -> [SpeakScenario] {
+        var seen = Set<String>()
+        var out: [SpeakScenario] = []
+        for sc in list {
+            guard isSpeakScenarioLike(sc) else { continue }
+            if builtinScenarioIds.contains(sc.id) { continue }
+            if seen.contains(sc.id) { continue }
+            seen.insert(sc.id)
+            out.append(sc)
+        }
+        return out
+    }
+
+    func registerOfficial(_ list: [SpeakScenario]) {
+        lock.lock()
+        defer { lock.unlock() }
+        official = Self.replaceBucket(list)
+    }
+
+    func registerUser(_ list: [SpeakScenario]) {
+        lock.lock()
+        defer { lock.unlock() }
+        user = Self.replaceBucket(list)
+    }
+
+    func listOfficial() -> [SpeakScenario] {
+        lock.lock()
+        defer { lock.unlock() }
+        return official
+    }
+
+    func listUser() -> [SpeakScenario] {
+        lock.lock()
+        defer { lock.unlock() }
+        return user
+    }
+
+    func lookup(_ id: String) -> SpeakScenario? {
+        lock.lock()
+        defer { lock.unlock() }
+        return official.first { $0.id == id } ?? user.first { $0.id == id }
+    }
+}
+
+/// 全量替换官方场景桶（ScenarioCatalogService 装载缓存/拉取结果用）。
+public func registerOfficialScenarios(_ list: [SpeakScenario]) {
+    SpeakScenarioRegistry.shared.registerOfficial(list)
+}
+
+/// 全量替换用户场景桶（A0 同步来的 speak-scenarios 实体 payload）。
+public func registerUserScenarios(_ list: [SpeakScenario]) {
+    SpeakScenarioRegistry.shared.registerUser(list)
+}
+
+/// 官方桶注册序快照（「官方场景库」分组渲染用；=缓存文件序=服务端目录序）。
+public func listOfficialScenarios() -> [SpeakScenario] {
+    SpeakScenarioRegistry.shared.listOfficial()
+}
+
+/// 用户桶注册序快照（「我的场景」分组渲染用；=sync store 实体序）。
+public func listUserScenarios() -> [SpeakScenario] {
+    SpeakScenarioRegistry.shared.listUser()
+}
+
+/// 按 id 查场景（三桶合并查找）：内置（代码常量，永远就绪）→ 官方桶 → 用户桶 →
+/// 兜底第一个内置场景（与既有 ?? speakScenarios[0] 行为一致，未知 id 的旧会话
+/// resume 不崩）。
 public func scenarioOf(_ id: SpeakScenarioId) -> SpeakScenario {
-    speakScenarios.first { $0.id == id } ?? speakScenarios[0]
+    speakScenarios.first { $0.id == id }
+        ?? SpeakScenarioRegistry.shared.lookup(id)
+        ?? speakScenarios[0]
 }
 
 public func difficultyOf(_ id: SpeakDifficulty) -> SpeakDifficultyInfo {
@@ -332,8 +596,8 @@ public struct ShadowPhone: Codable, Equatable, Sendable {
 }
 
 /// 会话语境（v0.8 场景中心，contracts speakSessionContext）：book=聊刚读的
-/// 章节，vocab=生词造句闯关。场景枚举 SpeakScenarioId 保持四值不动，新场景
-/// 由这个可选字段承载，老会话无 context 原样可读。
+/// 章节，vocab=生词造句闯关。A1 起 SpeakScenarioId 已放开为 String（官方/用户
+/// 场景可作会话场景），语境仍由这个可选字段承载，老会话无 context 原样可读。
 public enum SpeakSessionContext: Equatable, Sendable {
     /// 聊刚读的章节。
     case book(bookTitle: String, chapterArticleId: String, chapterIdx: Int, excerpt: [String])
@@ -427,7 +691,9 @@ public struct SpeakSession: Codable, Equatable, Identifiable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
-        scenario = try c.decode(SpeakScenarioId.self, forKey: .scenario)
+        // 裸 String（旧四值 JSON 天然兼容；off_/usr_ 未知 id 不再让整库 decode 失败，
+        // 对齐 Windows speak_store.rs `pub scenario: String`）。
+        scenario = try c.decode(String.self, forKey: .scenario)
         difficulty = try c.decode(SpeakDifficulty.self, forKey: .difficulty)
         turns = try c.decode([SpeakTurn].self, forKey: .turns)
         createdAt = try c.decode(Int64.self, forKey: .createdAt)
@@ -556,30 +822,60 @@ public func speakSceneTitle(_ session: SpeakSession) -> String {
     }
 }
 
-/// 日常场景卡的展示标题（原型定稿直白中文；对齐 SCENARIO_CARDS）。
+/// 日常场景卡的展示标题（原型定稿直白中文；对齐 SCENARIO_CARDS）。内置 id 直取
+/// 本地卡文案（输出与旧版逐字一致）；off_/usr_ 未知 id 走合并查找——目录未装载/
+/// 已删的场景短暂显示「自定义场景」，装载后重渲染显真名，绝不崩（对齐 Windows
+/// SpeakView.tsx sceneTitleOf）。
 public func speakScenarioCardTitle(_ id: SpeakScenarioId) -> String {
     switch id {
-    case .interview: return "英文面试"
-    case .ordering: return "餐厅点餐"
-    case .travel: return "旅行问路与入住"
-    case .smalltalk: return "日常闲聊寒暄"
+    case "interview": return "英文面试"
+    case "ordering": return "餐厅点餐"
+    case "travel": return "旅行问路与入住"
+    case "smalltalk": return "日常闲聊寒暄"
+    default:
+        let sc = scenarioOf(id)
+        return sc.id == id ? sc.title : "自定义场景"
     }
 }
 
 /// 日常场景卡的展示顺序（原型：面试 → 点餐 → 旅行 → 寒暄）。
-public let speakScenarioCardOrder: [SpeakScenarioId] = [.interview, .ordering, .travel, .smalltalk]
+public let speakScenarioCardOrder: [SpeakScenarioId] = ["interview", "ordering", "travel", "smalltalk"]
 
 /// 日常场景卡的展示文案（标签/标题/描述，非演示数据）。
 public func speakScenarioCardDesc(_ id: SpeakScenarioId) -> String {
     switch id {
-    case .interview:
+    case "interview":
         return "扮演温和的面试官，围绕自我介绍、项目经历、优缺点逐轮提问并帮你润色回答。"
-    case .ordering:
+    case "ordering":
         return "在英文餐厅点单、询问今日特色菜、表达忌口偏好与结账沟通。"
-    case .travel:
+    case "travel":
         return "涵盖机场值机、酒店前台办理入住、在陌生城市向当地人问路。"
-    case .smalltalk:
+    case "smalltalk":
         return "像老朋友一样聊聊这周过得怎么样、周末计划、天气或最近看的一本书。"
+    default:
+        return scenarioOf(id).aiRole
+    }
+}
+
+/// 日常场景卡 tag 位的短标签（原型 SCENARIO_CARDS.tag）。
+public func speakScenarioCardTag(_ id: SpeakScenarioId) -> String {
+    switch id {
+    case "interview": return "职场高频"
+    case "ordering": return "生活实用"
+    case "travel": return "出行必备"
+    case "smalltalk": return "轻松开口"
+    default: return speakScenarioCategoryTag(scenarioOf(id).category)
+    }
+}
+
+/// 官方/用户场景卡 tag 位的分类词（对齐 Windows CATEGORY_TAG_ZH）。
+public func speakScenarioCategoryTag(_ category: SpeakScenarioCategory) -> String {
+    switch category {
+    case .daily: return "日常"
+    case .travel: return "旅行"
+    case .workplace: return "职场"
+    case .academic: return "学术"
+    case .custom: return "自定义"
     }
 }
 
@@ -596,7 +892,7 @@ public func buildSpeakSystemPrompt(
     let sc = scenarioOf(scenario)
     let diff = difficultyOf(difficulty)
     var lines = [
-        "你是用户的英语口语陪练伙伴。场景：\(sc.brief)。难度：\(diff.note)。",
+        "你是用户的英语口语陪练伙伴。场景：\(sc.aiRole)。难度：\(diff.note)。",
     ]
     let targetList = (targets ?? []).map { "\($0.word)（\($0.zh)）" }.joined(separator: "、")
     switch context {

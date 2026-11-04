@@ -38,7 +38,13 @@ struct TtsErrorInfo: Equatable {
 /// errorDescription（XfyunCore 全部错误的用户文案都放在这里），再拼
 /// String(describing:) 兜底——保留 case 名与关联值里的码值（如 closed(401)），
 /// 让 401/403 这类数字码也能参与匹配。
+/// 例外：网关流式播放错误（GatewayStreamPlaybackError）对应 Windows 网关引擎里的
+/// `new Error(reason)`，按 Windows toText 的 `${name}: ${message}` 口径归一成
+/// 「Error: 原因」——不拼 Swift 类型名（类型名里的 Playback 会误中「play」系统类）。
 private func ttsErrorText(_ raw: Error) -> String {
+    if let playback = raw as? GatewayStreamPlaybackError {
+        return "Error: \(playback.reason)"
+    }
     var parts: [String] = []
     if let localized = raw as? LocalizedError, let desc = localized.errorDescription, !desc.isEmpty {
         parts.append(desc)

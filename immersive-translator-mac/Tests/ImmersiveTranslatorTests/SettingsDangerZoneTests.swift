@@ -51,8 +51,9 @@ final class SettingsDangerZoneTests: XCTestCase {
     // MARK: - SET-9 全字段回默认
 
     func testResetToDefaultsRestoresFactoryValuesAndClearsProviderKeys() {
-        let scope = DefaultsRestoreScope(keys: Self.settingsStoreKeys)
+        let scope = DefaultsRestoreScope(keys: Self.settingsStoreKeys + Self.legacyProviderKeys)
         defer { scope.restore() }
+        Self.zeroSettingsDefaults()
 
         _ = KeychainStore.deleteAllProviderAPIKeySlots()
         let store = SettingsStore()
@@ -110,8 +111,12 @@ final class SettingsDangerZoneTests: XCTestCase {
     // MARK: - SET-5 保存条语义（脏检测 + 热键重注册闸门）
 
     func testSaveSnapshotDirtyDetectionAndHotKeyReregistrationGate() {
-        let scope = DefaultsRestoreScope(keys: Self.settingsStoreKeys)
+        let scope = DefaultsRestoreScope(keys: Self.settingsStoreKeys + Self.legacyProviderKeys)
         defer { scope.restore() }
+        // 用例前归零再建快照：测试进程域（com.apple.dt.xctest.tool）可能残留历史运行未还原的
+        // 脏值（如术语表已是「hello = 你好」），若不清掉，SettingsStore() 生来即脏，
+        // 下面「改术语表 → 判脏」会变成空操作而永久失败。
+        Self.zeroSettingsDefaults()
 
         _ = KeychainStore.deleteAllProviderAPIKeySlots()
         let store = SettingsStore()
@@ -182,6 +187,22 @@ final class SettingsDangerZoneTests: XCTestCase {
         "selectionHotKeyPreset",
         "ocrHotKeyPreset"
     ]
+
+    /// 旧版单 provider 配置键（ProviderMigration 迁移源 "endpoint" / "model"）。残留旧值会让
+    /// SettingsStore() 迁移出随机 UUID 的「导入的提供商」，归零与还原都要带上。
+    private static let legacyProviderKeys: [String] = [
+        ProviderMigration.legacyEndpointKey,
+        ProviderMigration.legacyModelKey
+    ]
+
+    /// 用例前归零：清掉 SettingsStore 读写的全部键与旧版迁移源，让 SettingsStore() 从出厂默认构造，
+    /// 不受进程域里历史残留影响（须在 DefaultsRestoreScope 建立之后调用，离开时原样还原）。
+    /// 迁移完成标记 didMigrateProvidersV1/V2 不清：缺省时迁移在无旧 endpoint 的基线上是确定性空操作并幂等补旗。
+    private static func zeroSettingsDefaults() {
+        for key in settingsStoreKeys + legacyProviderKeys {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
 
     /// 记录进入用例前的取值，离开时原样恢复（nil = 删除），避免污染同进程其它用例。
     private struct DefaultsRestoreScope {

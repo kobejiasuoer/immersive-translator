@@ -85,6 +85,9 @@ final class QuickReviewViewModel: ObservableObject {
         var baseSrs: VocabSrsState
         var revealed = false
         var graded: ReviewGrade?
+        /// 首评提交的不可变评分事件 id（改评传 supersedesEventId，
+        /// 对齐 Windows QuickReviewApp gradeEventIds 模式）。
+        var gradedEventId: String?
         var answer = ""
         var verdict: RecallVerdict?
         /// 完形提示阶梯（① 释义 ② 槽位；对齐 Windows 两级）。
@@ -231,6 +234,35 @@ final class QuickReviewViewModel: ObservableObject {
         let first = card.graded == nil
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         card.graded = grade
+        // 学习接线路径：不可变评分事件 → commitReview（改评带 supersedesEventId；
+        // SRS/recall 由事件归并重建，与 Windows QuickReviewApp.applyGrade 同链路）。
+        if ReaderStore.shared.learning != nil {
+            let mode: RecallMode = card.mode == .cloze ? .cloze : .recognition
+            do {
+                let (eventId, _) = try ReaderStore.shared.gradeVocabWord(
+                    card.word, grade: grade, mode: mode, bucket: nil, now: now,
+                    supersedesEventId: card.gradedEventId
+                )
+                card.gradedEventId = eventId
+                if first {
+                    if let file = try? ReaderStore.shared.getVocabFile() {
+                        streak = reviewStats(file.words, file.reviewLog, nowMs: now).streak
+                    }
+                }
+                cards[pos] = card
+                ReviewTouchpointManager.shared.refreshBadge()
+                if first {
+                    if pos + 1 < cards.count {
+                        pos += 1
+                    } else {
+                        finished = true
+                    }
+                }
+            } catch {
+                // 提交失败保留在原卡（不改前进），下次评分或重开窗口再试。
+            }
+            return
+        }
         var updated = card.word
         // 改评：一律按进窗时原 SRS 重算，不叠加
         updated.srs = gradeSrs(card.baseSrs, grade, now: now)
@@ -340,6 +372,21 @@ final class QuickReviewSpeaker: NSObject, ObservableObject, AVSpeechSynthesizerD
                     data = try await EdgeTtsEngine.shared.audioData(for: clean)
                 case .local:
                     throw QuickReviewSpeakerError.useLocal
+                case .cloud:
+                    // 云音色档：跟随语音页 voiceProvider（外围消费点，网关化属后续批次）。
+                    switch await CloudTtsRouter.route(xfyunReady: XfyunTtsEngine.shared.isReady) {
+                    case .gateway:
+                        data = try await CloudTtsRouter.gatewayAudioData(text: clean)
+                    case .xfyun:
+                        guard XfyunTtsEngine.shared.isReady else {
+                            throw QuickReviewSpeakerError.credentials
+                        }
+                        data = try await XfyunTtsEngine.shared.audioData(for: clean)
+                    case .edge:
+                        data = try await EdgeTtsEngine.shared.audioData(for: clean)
+                    case .local:
+                        throw QuickReviewSpeakerError.useLocal
+                    }
                 }
                 guard !Task.isCancelled else { return }
                 let pcmPlayer = try AVAudioPlayer(data: data, fileTypeHint: AVFileType.mp3.rawValue)

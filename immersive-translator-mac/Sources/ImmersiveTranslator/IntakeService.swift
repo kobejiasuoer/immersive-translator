@@ -111,9 +111,14 @@ final class IntakeService {
 
     // MARK: - 网页抓取（对齐 web_extract.rs reader_fetch_url）
 
+    /// 浏览器 UA + 20s 超时会话（fetchArticle / fetchFeed 共用）。Windows 两处都是 reqwest
+    /// `.timeout(20s)`（web_extract.rs:273 / feed.rs:65）= 从发起到 body 读完的**总**超时，
+    /// 故 request（包间空闲）与 resource（整体）两档都设 20s——只设前者的话慢速滴流源站可远超
+    /// 20s 不中断。
     private let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 20
+        config.timeoutIntervalForResource = 20
         config.httpAdditionalHeaders = [
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         ]
@@ -176,6 +181,60 @@ final class IntakeService {
         if words < webExtractMinArticleWords {
             throw FileImportError("这个地址没有可读的文章正文。")
         }
-        return FetchedArticle(url: finalURL, host: hostOf(finalURL), title: "", text: text)
+        // 门槛检查按原文全量词数，之后再做 5 万字符整段截断（web_extract.rs:321 同款）。
+        let capped = capTextChars(text, maxChars: maxArticleChars)
+        return FetchedArticle(
+            url: finalURL, host: hostOf(finalURL), title: "", text: capped.text, truncated: capped.truncated
+        )
+    }
+
+    // MARK: - 订阅源抓取（对齐 feed.rs reader_fetch_feed）
+
+    /// 抓取原始 feed XML 文本：匿名直连用户提供的源站——不拼网关、不带任何登录令牌、
+    /// 不做致命错误广播（「不经服务端」是 B3 验收点）。复用上面的浏览器 UA + 20s
+    /// 会话（用户自添源站常有 Cloudflare 等 403 非浏览器 UA）。无 content-type 拒绝门禁
+    /// ——RSS 源响应头五花八门（含 text/html），「重定向到 HTML 页」的形状门禁在
+    /// parseFeedXml 解析层做。resolve 是未解析的 XML 字符串；失败抛 FileImportError（中文直显）。
+    func fetchFeed(url rawUrl: String) async throws -> String {
+        let parsed: URL
+        switch feedURLError(rawUrl) {
+        case .success(let url): parsed = url
+        case .failure(let error): throw error
+        }
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await session.bytes(for: URLRequest(url: parsed))
+        } catch {
+            throw FileImportError("打不开这个订阅源（\(error.localizedDescription)）——检查网络或地址后重试")
+        }
+        if let http = response as? HTTPURLResponse, let text = feedStatusErrorText(http.statusCode) {
+            throw FileImportError(text)
+        }
+        // 大小门禁第一级：content-length 头已知先查头，超上限不读 body 直接拒
+        //（expectedContentLength 为 -1 即无头，按未知放行）。
+        let expected = response.expectedContentLength
+        if let err = feedContentLengthGate(expected >= 0 ? expected : nil) {
+            throw FileImportError(err)
+        }
+        var data = Data()
+        if expected > 0 { data.reserveCapacity(Int(expected)) }
+        do {
+            for try await byte in bytes {
+                data.append(byte)
+                // 大小门禁第二级（无头 chunked 响应）：按已读字节长度复查同一上限，
+                // 超限即止（与读满后复查结论一致，省下多余流量）。
+                if let err = feedContentLengthGate(Int64(data.count)) {
+                    throw FileImportError(err)
+                }
+            }
+        } catch let error as FileImportError {
+            throw error
+        } catch {
+            throw FileImportError("读取订阅内容失败: \(error.localizedDescription)")
+        }
+        // 按响应头 Content-Type charset 解码（对齐 reqwest `resp.text()`：BOM 嗅探优先、
+        // 只看响应头、缺省 UTF-8 lossy）；textEncodingName 即 URLSession 自 charset 派生的 IANA 名。
+        return decodeFeedBody(data, charset: response.textEncodingName)
     }
 }

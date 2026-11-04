@@ -23,20 +23,33 @@
 
 /* Begin PBXFileReference section */
 		035DF19C03D1E5F30681E8A0 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		03B7BFE0461031D32FA798F4 /* mobile_http.rs */ = {isa = PBXFileReference; path = mobile_http.rs; sourceTree = "<group>"; };
 		06EC58AA7F4B66AA22DCB351 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
 		09A96E9D80972A442B508533 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		0F86D5407A4152C4A4374F75 /* persistence_commands.rs */ = {isa = PBXFileReference; path = persistence_commands.rs; sourceTree = "<group>"; };
+		13E89ACC7B0D5B39E75136BE /* persistence.rs */ = {isa = PBXFileReference; path = persistence.rs; sourceTree = "<group>"; };
 		2C8F80936351022C312DDAD3 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		2F305302492276DD3559A5E1 /* imreader-mobile_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "imreader-mobile_iOS.entitlements"; sourceTree = "<group>"; };
 		3074E1E9EED48415D37CD50E /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		399B9CC66A7746C41E1774D4 /* request_cancellation.rs */ = {isa = PBXFileReference; path = request_cancellation.rs; sourceTree = "<group>"; };
+		3B83594AB91AC6B49CDBF5A1 /* tts.rs */ = {isa = PBXFileReference; path = tts.rs; sourceTree = "<group>"; };
 		5C3105E97282CB08BD09C6A4 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		68B7FC6DCAA769D7CF6D08CD /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		715D0A21546047C55BD7046F /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		7BA50E9BC046FC718551C8A2 /* iat.rs */ = {isa = PBXFileReference; path = iat.rs; sourceTree = "<group>"; };
+		7BEFF8237F780AA3029D0C4B /* edge_tts.rs */ = {isa = PBXFileReference; path = edge_tts.rs; sourceTree = "<group>"; };
 		7FC44805C2D8563E04B0131F /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		8193F46BCF4D24D87C79C4B2 /* audio_store.rs */ = {isa = PBXFileReference; path = audio_store.rs; sourceTree = "<group>"; };
+		8FCEE0E86FB2B048D53680DD /* keychain.rs */ = {isa = PBXFileReference; path = keychain.rs; sourceTree = "<group>"; };
 		A536A46209C09A937AB01588 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		A6FD647CCF8313E8EDEF0DD0 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
-		B1FA62A8227FA1C06CEA01C7 /* imreader-mobile_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "imreader-mobile_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1FA62A8227FA1C06CEA01C7 /* 沉浸口语.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "immersive-speaking.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		BC2A78A55E62A69C08399CEF /* ise.rs */ = {isa = PBXFileReference; path = ise.rs; sourceTree = "<group>"; };
 		D00AF5173733FA85842CB70F /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		D2E3FD98EF9BC40B5EBDD164 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		DB42DC4D4BDC74C2C3404A33 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
+		DCAF9D5DEE2432EC166017F5 /* ocr.rs */ = {isa = PBXFileReference; path = ocr.rs; sourceTree = "<group>"; };
+		DE395F08943F964EECD2F591 /* auth.rs */ = {isa = PBXFileReference; path = auth.rs; sourceTree = "<group>"; };
 		DF187B2F8BEEC7CD4CE507DD /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		EF3274D9CEB000D8899B8DAB /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		F2ED30301C1305E6B28BCA94 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
@@ -87,7 +100,7 @@
 		362E4DACA79558A33A875039 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				B1FA62A8227FA1C06CEA01C7 /* imreader-mobile_iOS.app */,
+				B1FA62A8227FA1C06CEA01C7 /* 沉浸口语.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -143,11 +156,46 @@
 		CBB93F7890CCF2032592010B /* src */ = {
 			isa = PBXGroup;
 			children = (
+				8193F46BCF4D24D87C79C4B2 /* audio_store.rs */,
+				8FCEE0E86FB2B048D53680DD /* keychain.rs */,
 				7FC44805C2D8563E04B0131F /* lib.rs */,
 				06EC58AA7F4B66AA22DCB351 /* main.rs */,
+				03B7BFE0461031D32FA798F4 /* mobile_http.rs */,
+				DCAF9D5DEE2432EC166017F5 /* ocr.rs */,
+				0F86D5407A4152C4A4374F75 /* persistence_commands.rs */,
+				13E89ACC7B0D5B39E75136BE /* persistence.rs */,
+				399B9CC66A7746C41E1774D4 /* request_cancellation.rs */,
+				DBCE0D8F109A5300AD43EEE0 /* voice */,
 			);
 			name = src;
 			path = ../../src;
+			sourceTree = "<group>";
+		};
+		DBCE0D8F109A5300AD43EEE0 /* voice */ = {
+			isa = PBXGroup;
+			children = (
+				DE395F08943F964EECD2F591 /* auth.rs */,
+				7BEFF8237F780AA3029D0C4B /* edge_tts.rs */,
+				7BA50E9BC046FC718551C8A2 /* iat.rs */,
+				BC2A78A55E62A69C08399CEF /* ise.rs */,
+				DB42DC4D4BDC74C2C3404A33 /* mod.rs */,
+				3B83594AB91AC6B49CDBF5A1 /* tts.rs */,
+			);
+			path = voice;
+			sourceTree = "<group>";
+		};
+		"TEMP_82B81D13-90B6-481E-A3C2-559279FAFA4C" /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = arm64;
+			sourceTree = "<group>";
+		};
+		"TEMP_C8C6AC83-3558-4779-AA6E-0B0D2790D134" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -169,8 +217,8 @@
 			name = "imreader-mobile_iOS";
 			packageProductDependencies = (
 			);
-			productName = "imreader-mobile_iOS";
-			productReference = B1FA62A8227FA1C06CEA01C7 /* imreader-mobile_iOS.app */;
+			productName = "沉浸口语";
+			productReference = B1FA62A8227FA1C06CEA01C7 /* 沉浸口语.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -182,6 +230,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					FC60B56490A5A669943437DA = {
+						DevelopmentTeam = 3HX836XLHX;
+					};
 				};
 			};
 			buildConfigurationList = C8F3A5E94590A7699A321E1D /* Build configuration list for PBXProject "imreader-mobile" */;
@@ -236,7 +287,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}";
+			shellScript = "set -euo pipefail\nexport PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\ncd \"$SRCROOT/../../..\"\ncase \"$PLATFORM_NAME\" in\n  iphoneos) RUST_TARGET=aarch64-apple-ios ;;\n  iphonesimulator) RUST_TARGET=aarch64-apple-ios-sim ;;\n  *) echo \"Unsupported iOS platform: $PLATFORM_NAME\" >&2; exit 1 ;;\nesac\nRUST_PROFILE=debug\nset --\nif [ \"$CONFIGURATION\" = release ] || [ \"$CONFIGURATION\" = Release ]; then\n  RUST_PROFILE=release\n  set -- --release\nfi\ncargo build --locked --package imreader-mobile --manifest-path src-tauri/Cargo.toml --target \"$RUST_TARGET\" --features tauri/custom-protocol --lib \"$@\"\nmkdir -p \"$SRCROOT/Externals/arm64/$CONFIGURATION\"\ncp \"src-tauri/target/$RUST_TARGET/$RUST_PROFILE/libimreader_mobile_lib.a\" \"$SRCROOT/Externals/arm64/$CONFIGURATION/libapp.a\"";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -318,6 +369,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "imreader-mobile_iOS/imreader-mobile_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = "3HX836XLHX";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -332,11 +384,10 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.kobejiasuoer.reader;
-				PRODUCT_NAME = "reader-spike";
+				PRODUCT_NAME = "immersive-speaking";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
-				DEVELOPMENT_TEAM = "3HX836XLHX";
 			};
 			name = release;
 		};
@@ -413,6 +464,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "imreader-mobile_iOS/imreader-mobile_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = "3HX836XLHX";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -427,11 +479,10 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.kobejiasuoer.reader;
-				PRODUCT_NAME = "reader-spike";
+				PRODUCT_NAME = "immersive-speaking";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
-				DEVELOPMENT_TEAM = "3HX836XLHX";
 			};
 			name = debug;
 		};

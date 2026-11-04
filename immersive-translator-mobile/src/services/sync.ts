@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { articleFromEntities, canonicalJson, entitiesFromArticle, initialSrs, isReviewEvent, mergePracticePayload, reduceReviewEvents, withoutAudio, type RelayArticle, type RelayEntity } from "../../../packages/learning-core/src/index";
 import { activeRepository, commitRepository, deviceId, flushPersist, getState, profileIdentity, replaceSyncedState, type AppState, type NoteItem } from "../store";
 import type { Article, VocabWord } from "../core/types";
+import { hydrateBookMetadata } from "../core/readingLibrary";
 import type { CommitInput, OutboxItem, RecordWrite, Repository } from "../core/persistence";
 import { CloudError, cloudRequest, cloudState, loadCloudConfig, type CloudConfig } from "./cloud";
 
@@ -61,7 +62,7 @@ function project(state: AppState, device: string, targetBytes: number): Map<Coll
   };
   for (const article of state.articles) {
     const idx = Math.min(Math.max(0, state.progress[article.id] ?? 0), Math.max(0, article.sentences.length - 1));
-    const relay: RelayArticle = { ...article, createdAt: numeric(article.createdAt), lastReadAt: numeric(article.lastReadAt),
+    const relay: RelayArticle = { ...article, readingCompleted: state.readingCompleted?.[article.id] ?? false, createdAt: numeric(article.createdAt), lastReadAt: numeric(article.lastReadAt),
       sentences: article.sentences.map(s => ({ ...s, zhState: s.zhState ?? (s.zh ? "machine" : "empty") })),
       progress: { sentenceIdx: idx, percent: article.sentences.length ? Math.round((idx + 1) * 100 / article.sentences.length) : 0, secondsListened: numeric((article.progress as Json | undefined)?.secondsListened) },
     };
@@ -94,22 +95,25 @@ function restore(state: AppState, collection: Collection, rows: Map<string, Mirr
   const live = [...rows.values()].filter(e => !e.deleted && object(e.payload));
   if (collection === "reading-articles") {
     const relay: RelayEntity[] = live.filter(e => e.schemaVersion === 2).map(e => ({ ...e, schemaVersion: 2, payload: e.payload as Json }));
-    const articles: Article[] = []; const progress: Record<string, number> = {};
+    const books = live.filter(row => (row.payload as Json).kind === "book").map(row => ({ ...(row.payload as Json), id: row.id }));
+    const articles: Article[] = []; const progress: Record<string, number> = {}, readingCompleted: Record<string, boolean> = {};
     for (const row of live) {
       const payload = row.payload as Json;
       if (payload.kind !== "article" && !Array.isArray(payload.sentences)) continue;
       const hydrated = row.schemaVersion === 2 ? articleFromEntities(row.id, relay) : payload;
       if (!hydrated || !Array.isArray(hydrated.sentences)) {
         const previous = state.articles.find(a => a.id === row.id);
-        if (previous) { articles.push(previous); progress[row.id] = state.progress[row.id] ?? 0; }
+        if (previous) { articles.push(hydrateBookMetadata(previous, books)); progress[row.id] = state.progress[row.id] ?? 0; if (state.readingCompleted?.[row.id] !== undefined) readingCompleted[row.id] = state.readingCompleted[row.id]; }
         continue;
       }
       const sentences = hydrated.sentences.filter(s => object(s) && typeof s.en === "string").map((s, idx) => ({ ...s, idx: numeric(s.idx, idx), paragraphIdx: numeric(s.paragraphIdx), en: String(s.en), zh: typeof s.zh === "string" ? s.zh : null }));
       const article = { ...hydrated, id: row.id, title: String(hydrated.title ?? "未命名文章"), titleCn: String(hydrated.titleCn ?? ""), paragraphStarts: Array.isArray(hydrated.paragraphStarts) ? hydrated.paragraphStarts : [0], sentences, sourceType: hydrated.sourceType ?? "relay" } as Article;
-      articles.push(article); progress[row.id] = numeric((hydrated.progress as Json | undefined)?.sentenceIdx);
+      articles.push(hydrateBookMetadata(article, books)); progress[row.id] = numeric((hydrated.progress as Json | undefined)?.sentenceIdx);
+      if (typeof hydrated.readingCompleted === "boolean") readingCompleted[row.id] = hydrated.readingCompleted;
+      else if (state.readingCompleted?.[row.id] !== undefined) readingCompleted[row.id] = state.readingCompleted[row.id];
     }
     // A manifest is only visible after every referenced chunk has arrived. Never fall back to a deleted local article.
-    return { articles, progress };
+    return { articles, progress, readingCompleted };
   }
   if (collection === "reading-vocab") return { vocab: live.flatMap(row => {
     const p = row.payload as Json; if (typeof p.word !== "string") return [];

@@ -10,10 +10,9 @@ mod keychain;
 mod persistence;
 mod persistence_commands;
 mod audio_store;
+mod audio_session;
 mod mobile_http;
 mod request_cancellation;
-mod ocr;
-mod voice;
 
 use std::time::{Duration, Instant};
 use request_cancellation::RequestKind;
@@ -527,119 +526,77 @@ fn dict_abort(req_id: Option<String>) -> Result<(), String> {
     request_cancellation::cancel(RequestKind::Dictionary, req_id.as_deref())
 }
 
-/// iOS 音频会话：设为 playback 类别——默认 soloAmbient 受静音拨片控制（拨片一拨
-/// WebAudio/系统朗读全哑，表现为「合成成功但没声音」）。playback 与音乐类 App 同类，
-/// 朗读类学习 App 的预期行为；MixWithOthers(0x1) 不打断用户后台音乐。
-/// 录音（getUserMedia）时 WebKit 会自行切 PlayAndRecord，结束后的自动恢复有竞态
-/// （见 restore_playback_audio：采集 teardown 时前端会再重设一次）。
-///
-/// 实现走纯运行时 objc 消息（不引入绑定 crate）：AVFAudio.framework 按需 dlopen——
-/// 绑定 crate 的 extern 常量（AVAudioSessionCategoryPlayback）需要 Xcode 工程链接
-/// 框架，staticlib 的 -l flag 传不进去（实测 linker 报符号缺失）。返回值全用 raw
-/// 指针接：sharedInstance/stringWithUTF8String 都不是 +1 语义，Retained 会过度释放。
-/// 失败静默（不影响启动）。
-#[cfg(target_os = "ios")]
-fn enable_playback_audio_session() {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, NSObject};
-
-    extern "C" {
-        fn dlopen(path: *const std::ffi::c_char, mode: std::ffi::c_int) -> *mut std::ffi::c_void;
-    }
-
-    // RTLD_NOW(0x2) | RTLD_GLOBAL(0x100)，darwin 值；进程未加载该框架时类查找会是 nil
-    unsafe {
-        dlopen(
-            c"/System/Library/Frameworks/AVFAudio.framework/AVFAudio".as_ptr(),
-            0x102,
-        );
-    }
-
-    let classes =
-        unsafe { (AnyClass::get(c"AVAudioSession"), AnyClass::get(c"NSString")) };
-    let (Some(cls), Some(nsstring)) = classes else {
-        return;
-    };
-    unsafe {
-        let session: *mut NSObject = msg_send![cls, sharedInstance];
-        if session.is_null() {
-            return;
-        }
-        let category: *mut NSObject = msg_send![nsstring, stringWithUTF8String: c"playback".as_ptr()];
-        if category.is_null() {
-            return;
-        }
-        let (session, category) = (&*session, &*category);
-        // setCategory:withOptions:error: 返回 BOOL；成功再激活
-        let ok: bool = msg_send![
-            session,
-            setCategory: category,
-            withOptions: 1u64, // AVAudioSessionCategoryOptionMixWithOthers
-            error: std::ptr::null_mut::<*mut NSObject>()
-        ];
-        if ok {
-            let _: bool = msg_send![session, setActive: true];
-        }
-    }
+/// 句子解析（阅读域句子工作台）：非流式 LLM JSON（整句译文 + 句子主干 + 成分表），
+/// 容错解析与 dict_lookup 同口径（剥代码围栏）；取消复用 Dictionary 请求类
+/// （reqId 隔离，前端经 dict_abort 中止），超时走 once_client 的 60s 总时限。
+#[tauri::command]
+async fn sentence_parse(
+    sentence: String,
+    cfg: LlmCfg,
+    req_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let request = request_cancellation::begin(RequestKind::Dictionary, req_id.as_deref())?;
+    request.run(sentence_parse_request(sentence, cfg)).await
 }
 
-/// 录音结束后重设回 playback 会话。WebKit 录音时把会话切到 PlayAndRecord，停止后
-/// 的自动恢复有竞态窗口——录制刚停就播的云 TTS 会掉进去（听筒路由/中断态），
-/// 表现为「合成成功、流程走完，但全程没声音」。采集 teardown 时前端 fire-and-forget
-/// 调用本命令；与启动时同款设置（幂等），非 iOS 平台无操作。
-/// AVAudioSession 非线程安全：命令在 tokio 工作线程跑，必须派回主队列执行。
+async fn sentence_parse_request(sentence: String, cfg: LlmCfg) -> Result<serde_json::Value, String> {
+    let trimmed = sentence.trim().chars().take(2000).collect::<String>();
+    if trimmed.is_empty() {
+        return Err("这句没有可解析的原文".to_string());
+    }
+    let client = once_client();
+    let sys = "你是英语句子解析引擎，面向中文学习者。对给定的英文句子给出结构化解析。只输出 JSON，格式：{\"zh\":\"整句的中文翻译\",\"trunk\":\"句子主干（英文，尽量简短）\",\"parts\":[{\"label\":\"成分名（主语/谓语/宾语/状语/定语从句等，中文）\",\"text\":\"对应的英文片段\",\"note\":\"一句简短的中文说明\"}]}。parts 给 2-5 条，按原文出现顺序。不要输出 JSON 以外的任何文字。";
+    let body = serde_json::json!({
+        "model": cfg.model,
+        "messages": [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": trimmed},
+        ],
+        "stream": false,
+    });
+    let resp = send(&client, &cfg, body).await?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(status_err(status, text));
+    }
+    let content = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v["choices"][0]["message"]["content"].as_str().map(str::to_string))
+        .ok_or_else(|| "响应格式异常".to_string())?;
+    let cleaned = content
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    let parsed: serde_json::Value = serde_json::from_str(cleaned).map_err(|_| "句子解析失败".to_string())?;
+    if !parsed["parts"].as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+        return Err("句子解析失败".to_string());
+    }
+    Ok(parsed)
+}
+
+/// Restore iOS playback after microphone teardown and return the actual category/route/volume.
+/// The command runs on the main queue and propagates the AVAudioSession result to the caller.
 #[tauri::command]
-async fn restore_playback_audio(app: tauri::AppHandle) -> Result<(), String> {
+async fn restore_playback_audio(
+    app: tauri::AppHandle,
+) -> Result<Option<audio_session::AudioPlaybackState>, String> {
     #[cfg(target_os = "ios")]
     {
-        let (tx,rx) = tokio::sync::oneshot::channel();
-        app.run_on_main_thread(move || { enable_playback_audio_session(); let _ = tx.send(()); }).map_err(|e| e.to_string())?;
-        rx.await.map_err(|_| "音频播放会话恢复未完成".to_string())?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(audio_session::enable_playback_audio_session());
+        })
+        .map_err(|e| format!("音频播放会话主线程调度失败：{e}"))?;
+        let state = rx.await.map_err(|_| "音频播放会话恢复未完成".to_string())??;
+        Ok(Some(state))
     }
     #[cfg(not(target_os = "ios"))]
-    let _ = app;
-    Ok(())
-}
-
-/// 把闭包派到主队列执行。dispatch 符号经 dlopen/dlsym 运行时取（同 AVFAudio 的
-/// 原因：staticlib 的 -l flag 传不进 Xcode 工程，直接 extern 链接报符号缺失）。
-#[cfg(target_os = "ios")]
-fn enable_playback_audio_session_on_main() {
-    use std::ffi::{c_char, c_int, c_void};
-
-    extern "C" {
-        fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
-        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-    }
-
-    type GetMainQueueFn = unsafe extern "C" fn() -> *mut c_void;
-    type AsyncFFn = unsafe extern "C" fn(queue: *mut c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
-
-    extern "C" fn run_restore(ctx: *mut c_void) {
-        /* context 是 *mut Box<dyn FnOnce()>（瘦指针）：from_raw 恢复后执行 */
-        let boxed: Box<Box<dyn FnOnce()>> = unsafe { Box::from_raw(ctx as *mut Box<dyn FnOnce()>) };
-        let job: Box<dyn FnOnce()> = *boxed;
-        job();
-    }
-
-    // RTLD_NOW(0x2) | RTLD_GLOBAL(0x100)，darwin 值
-    unsafe {
-        let h = dlopen(c"/usr/lib/system/libdispatch.dylib".as_ptr(), 0x102);
-        if h.is_null() {
-            return; /* 主线程派发不可用：保持启动时已设的类别，不强求 */
-        }
-        let get_q = dlsym(h, c"dispatch_get_main_queue".as_ptr());
-        let async_f = dlsym(h, c"dispatch_async_f".as_ptr());
-        if get_q.is_null() || async_f.is_null() {
-            return;
-        }
-        let queue = std::mem::transmute::<*mut c_void, GetMainQueueFn>(get_q)();
-        let job: Box<dyn FnOnce()> = Box::new(enable_playback_audio_session);
-        std::mem::transmute::<*mut c_void, AsyncFFn>(async_f)(
-            queue,
-            Box::into_raw(Box::new(job)) as *mut c_void,
-            run_restore,
-        );
+    {
+        let _ = app;
+        Ok(None)
     }
 }
 
@@ -699,6 +656,260 @@ fn open_app_settings() -> Result<(), String> {
     }
 }
 
+/* ---------- Safari 入站分享交接队列（Share Extension 写 → 主 App 消费，mac-handoff P0） ----------
+   gen/apple/ShareExtension/ShareViewController.swift 校验后把 URL/文本写入
+   <App Group>/share-handoff/queue.json；本模块负责读取/确认/清除三个 Tauri 命令。
+   队列协议与 Swift 侧逐字段对齐（任何一侧不得单方面改动，见 Swift 文件头注释）：
+   {"version":1,"items":[{"id":"sha256hex","kind":"text"|"url","text":"..","receivedAt":毫秒}]}
+   · 稳定 ID 去重由扩展写入侧完成（同内容重复分享只入队一次）；
+   · 有界：≤20 条、文本 ≤200 KiB、URL ≤2 KiB、保留期 7 天——读取侧独立复核（纵深防御）；
+   · 恰好一次：App 确认保存后 share_queue_ack 删除队列项；确认前崩溃/被杀则队列项保留，
+     下次启动重新进入预览（且 article id 为正文哈希，重复确认也不会产生重复文章）；
+   · 原子性：临时文件 + rename 落盘，rename 后按 audio_store::apple_protection 同口径
+     重施加文件保护与备份排除；损坏文件隔离为 .json.corrupt 后按空队列继续。 */
+mod share_handoff {
+    #[cfg(target_os = "ios")]
+    use crate::audio_store;
+    use serde::{Deserialize, Serialize};
+    use std::{
+        io::Write,
+        path::{Path, PathBuf},
+    };
+    use crate::persistence::StorageResult;
+
+    /// 与 Swift 侧（ShareViewController.swift HandoffQueue.appGroupId）及两份 entitlements
+    /// 同源；非 iOS 编译下不被引用（命令如实报不支持），保留常量作为协议文档。
+    #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+    pub const GROUP_ID: &str = "group.com.kobejiasuoer.reader.shared";
+    pub const MAX_ITEMS: usize = 20;
+    pub const MAX_TEXT_BYTES: usize = 200_000;
+    pub const MAX_URL_BYTES: usize = 2_048;
+    pub const RETENTION_MS: i64 = 7 * 24 * 3600 * 1000;
+    const FILE_VERSION: i64 = 1;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ShareQueueItem {
+        pub id: String,
+        /// "text" | "url"（url 的 text 是 http/https 链接字符串）
+        pub kind: String,
+        pub text: String,
+        #[serde(rename = "receivedAt")]
+        pub received_at: i64,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    struct QueueFile {
+        version: i64,
+        items: Vec<ShareQueueItem>,
+    }
+
+    fn qerr(e: impl std::fmt::Display) -> String {
+        format!("SHARE_QUEUE: {e}")
+    }
+
+    /// App Group 容器（iOS 运行时经 NSFileManager 取；entitlements 缺失时返回可见错误）。
+    #[cfg(target_os = "ios")]
+    pub fn app_group_container(group: &str) -> StorageResult<PathBuf> {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, NSObject};
+
+        extern "C" {
+            fn dlopen(path: *const std::ffi::c_char, mode: std::ffi::c_int) -> *mut std::ffi::c_void;
+        }
+        unsafe {
+            dlopen(
+                c"/System/Library/Frameworks/Foundation.framework/Foundation".as_ptr(),
+                0x102,
+            );
+        }
+        let (Some(fm_cls), Some(nsstring)) =
+            (AnyClass::get(c"NSFileManager"), AnyClass::get(c"NSString"))
+        else {
+            return Err("SHARE_QUEUE: Foundation 类不可用".into());
+        };
+        let cgroup = std::ffi::CString::new(group).map_err(qerr)?;
+        unsafe {
+            let fm: *mut NSObject = msg_send![fm_cls, defaultManager];
+            let group_ns: *mut NSObject = msg_send![nsstring, stringWithUTF8String: cgroup.as_ptr()];
+            if fm.is_null() || group_ns.is_null() {
+                return Err("SHARE_QUEUE: App Group 查询对象不可用".into());
+            }
+            let url: *mut NSObject = msg_send![fm, containerURLForSecurityApplicationGroupIdentifier: group_ns];
+            if url.is_null() {
+                return Err("SHARE_QUEUE: App Group 容器不可用（检查主 App 与扩展的 entitlements）".into());
+            }
+            let path: *mut NSObject = msg_send![url, path];
+            if path.is_null() {
+                return Err("SHARE_QUEUE: App Group 容器路径为空".into());
+            }
+            let cstr: *const std::ffi::c_char = msg_send![path, UTF8String];
+            if cstr.is_null() {
+                return Err("SHARE_QUEUE: App Group 容器路径不可读".into());
+            }
+            Ok(PathBuf::from(
+                std::ffi::CStr::from_ptr(cstr).to_string_lossy().into_owned(),
+            ))
+        }
+    }
+
+    pub(crate) fn is_http_url(s: &str) -> bool {
+        let lower = s.to_ascii_lowercase();
+        let rest = lower
+            .strip_prefix("https://")
+            .or_else(|| lower.strip_prefix("http://"));
+        match rest {
+            // "http:///x" 的 rest 以 '/' 开头；控制字符/空格一律拒绝
+            Some(r) => {
+                !r.is_empty()
+                    && !r.starts_with('/')
+                    && !s.bytes().any(|b| b.is_ascii_control() || b == b' ')
+            }
+            None => false,
+        }
+    }
+
+    /// 读取侧独立复核（写入侧已校验；这里是对队列文件的第二道防线）。
+    fn item_valid(item: &ShareQueueItem, now: i64) -> bool {
+        if item.received_at <= 0 || item.received_at > now + 60_000 {
+            return false;
+        }
+        if now - item.received_at > RETENTION_MS {
+            return false;
+        }
+        let id_ok = item.id.len() == 64 && item.id.bytes().all(|b| b.is_ascii_hexdigit());
+        match item.kind.as_str() {
+            "text" => {
+                id_ok && !item.text.trim().is_empty() && item.text.len() <= MAX_TEXT_BYTES
+            }
+            "url" => id_ok && item.text.len() <= MAX_URL_BYTES && is_http_url(&item.text),
+            _ => false,
+        }
+    }
+
+    fn queue_file(base: &Path) -> PathBuf {
+        base.join("share-handoff").join("queue.json")
+    }
+
+    /// 读队列：过滤过期/非法项、最旧在前、封顶 MAX_ITEMS。文件缺失/损坏按空队列处理
+    /// （损坏文件改名 .json.corrupt 隔离留查，不阻塞主流程）。
+    pub fn read_from(base: &Path, now: i64) -> StorageResult<Vec<ShareQueueItem>> {
+        let path = queue_file(base);
+        let data = match std::fs::read(&path) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(qerr(e)),
+        };
+        let parsed: QueueFile = match serde_json::from_slice(&data) {
+            Ok(p) => p,
+            Err(_) => {
+                let _ = std::fs::rename(&path, path.with_extension("json.corrupt"));
+                return Ok(Vec::new());
+            }
+        };
+        if parsed.version != FILE_VERSION {
+            return Ok(Vec::new());
+        }
+        let mut items: Vec<ShareQueueItem> = parsed
+            .items
+            .into_iter()
+            .filter(|i| item_valid(i, now))
+            .collect();
+        items.sort_by_key(|i| i.received_at);
+        items.truncate(MAX_ITEMS);
+        Ok(items)
+    }
+
+    /// 原子写回（临时文件 + fsync + rename），rename 后重施加保护属性。
+    fn store(base: &Path, items: &[ShareQueueItem]) -> StorageResult<()> {
+        let dir = base.join("share-handoff");
+        std::fs::create_dir_all(&dir).map_err(qerr)?;
+        let path = dir.join("queue.json");
+        let tmp = dir.join("queue.json.tmp");
+        let payload = QueueFile {
+            version: FILE_VERSION,
+            items: items.to_vec(),
+        };
+        let mut data = serde_json::to_vec(&payload).map_err(qerr)?;
+        data.push(b'\n');
+        {
+            let mut f = std::fs::File::create(&tmp).map_err(qerr)?;
+            f.write_all(&data).map_err(qerr)?;
+            f.sync_all().map_err(qerr)?;
+        }
+        std::fs::rename(&tmp, &path).map_err(qerr)?;
+        // 与录音同口径的隐私属性（iOS 生效；其他平台 no-op）
+        #[cfg(target_os = "ios")]
+        audio_store::apple_protection::apply(&dir).map_err(qerr)?;
+        #[cfg(target_os = "ios")]
+        audio_store::apple_protection::apply(&path).map_err(qerr)?;
+        Ok(())
+    }
+
+    /// 确认消费（保存成功后前端调用）：按 ID 删除恰好一项；重复 ack 幂等。
+    pub fn ack_in(base: &Path, id: &str, now: i64) -> StorageResult<()> {
+        retain(base, |i| i.id != id, now)
+    }
+
+    /// 拒绝清除（用户取消导入后前端调用）：同 ack 一样删除该项，但语义是「未保存」。
+    pub fn clear_in(base: &Path, id: &str, now: i64) -> StorageResult<()> {
+        retain(base, |i| i.id != id, now)
+    }
+
+    fn retain(base: &Path, keep: impl Fn(&ShareQueueItem) -> bool, now: i64) -> StorageResult<()> {
+        let items = read_from(base, now)?;
+        let kept: Vec<ShareQueueItem> = items.into_iter().filter(keep).collect();
+        store(base, &kept)
+    }
+
+    /// 模拟扩展写入（供本机测试复现 Swift 侧协议；非测试构建不参与）。
+    #[cfg(test)]
+    pub fn append_item(base: &Path, item: ShareQueueItem, now: i64) -> StorageResult<bool> {
+        let mut items = read_from(base, now)?;
+        if items.iter().any(|i| i.id == item.id) {
+            return Ok(false);
+        }
+        items.push(item);
+        items.sort_by_key(|i| i.received_at);
+        if items.len() > MAX_ITEMS {
+            items = items.split_off(items.len() - MAX_ITEMS);
+        }
+        store(base, &items)?;
+        Ok(true)
+    }
+}
+
+fn share_queue_base() -> Result<std::path::PathBuf, String> {
+    #[cfg(target_os = "ios")]
+    {
+        share_handoff::app_group_container(share_handoff::GROUP_ID)
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        Err("share_queue 命令仅 iOS 提供（需要 App Group 容器）".into())
+    }
+}
+
+/// 读取 Safari 分享交接队列（最旧在前；前端启动/回前台时调用一次）。
+#[tauri::command]
+fn share_queue_read() -> Result<Vec<share_handoff::ShareQueueItem>, String> {
+    let base = share_queue_base()?;
+    share_handoff::read_from(&base, crate::persistence::now_ms())
+}
+
+/// 确认消费：用户在预览确认流中保存成功后调用，删除该队列项（恰好一次）。
+#[tauri::command]
+fn share_queue_ack(id: String) -> Result<(), String> {
+    let base = share_queue_base()?;
+    share_handoff::ack_in(&base, &id, crate::persistence::now_ms())
+}
+
+/// 拒绝清除：用户取消导入后调用，删除该队列项并提示。
+#[tauri::command]
+fn share_queue_clear(id: String) -> Result<(), String> {
+    let base = share_queue_base()?;
+    share_handoff::clear_in(&base, &id, crate::persistence::now_ms())
+}
+
 /* ---------- 真机 TTS 自检（诊断用；ITA_SELFTEST=1 环境变量或 --ita-selftest 参数门禁） ----------
    devicectl 以 DEVICECTL_CHILD_ITA_SELFTEST=1 拉起 App → 前端 boot 时查 selftest_active，
    自动跑「录音→停→立即云播放→对照播放」链路（services/selftest.ts），结果经
@@ -708,8 +919,20 @@ static SELFTEST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::
 static SELFTEST_TRUNCATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn selftest_enabled() -> bool {
-    std::env::args().any(|a| a == "--ita-selftest")
+    std::env::args().any(|a| a == "--ita-selftest" || a == "--ita-playback-selftest")
         || std::env::var("ITA_SELFTEST").map(|v| v == "1").unwrap_or(false)
+}
+
+#[tauri::command]
+fn selftest_mode() -> Option<&'static str> {
+    if !SELFTEST.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    if std::env::args().any(|a| a == "--ita-playback-selftest") {
+        Some("playback")
+    } else {
+        Some("recording")
+    }
 }
 
 /// 自检模式是否激活（App 启动后前端轮询一次）。
@@ -741,10 +964,14 @@ pub fn run() {
         SELFTEST.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     #[cfg(target_os = "ios")]
-    enable_playback_audio_session();
+    if let Err(error) = audio_session::enable_playback_audio_session() {
+        // Startup remains available; the playback command will surface the same native failure.
+        eprintln!("[audio-session] 启动时播放会话初始化失败：{error}");
+    }
     tauri::Builder::default()
         // 设备能力插件（A2 经官方 JS 包消费；capabilities/default.json 已授权）
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_study_notifications::init())
         .plugin(tauri_plugin_haptics::init())
         .plugin(tauri_plugin_share::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -754,24 +981,13 @@ pub fn run() {
             storage_probe,
             share_text,
             open_app_settings,
+            share_queue_read,
+            share_queue_ack,
+            share_queue_clear,
             restore_playback_audio,
             selftest_active,
+            selftest_mode,
             selftest_report,
-            translate_probe,
-            translate_text,
-            translate_abort,
-            llm_abort,
-            dict_lookup,
-            dict_abort,
-            llm_chat,
-            voice::iat::asr_start,
-            voice::iat::asr_push,
-            voice::iat::asr_finish,
-            voice::iat::asr_abort,
-            voice::ise::xfyun_ise_assess,
-            voice::tts::xfyun_tts_speak,
-            voice::edge_tts::edge_tts_speak,
-            ocr::ocr_image,
             keychain::secret_put,
             keychain::secret_get,
             keychain::secret_delete,
@@ -857,12 +1073,135 @@ async fn share_text(app: tauri::AppHandle, title: String, text: String) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use share_handoff::ShareQueueItem;
 
     #[test]
     fn strip_think_closed_and_none() {
         assert_eq!(strip_think_tags("纯文本"), "纯文本");
         assert_eq!(strip_think_tags("<think>推理</think>答案"), "答案");
         assert_eq!(strip_think_tags("前<think>a</think>中<think>b</think>后"), "前中后");
+    }
+
+    /* ---------- Safari 入站分享交接队列（lib.rs share_handoff） ---------- */
+    fn qbase(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("ita-shareq-{tag}-{}", std::process::id()))
+    }
+    fn item(id: &str, kind: &str, text: &str, at: i64) -> ShareQueueItem {
+        ShareQueueItem {
+            id: id.into(),
+            kind: kind.into(),
+            text: text.into(),
+            received_at: at,
+        }
+    }
+    const HEX64: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn share_queue_roundtrip_dedup_and_order() {
+        let base = qbase("round");
+        let _ = std::fs::remove_dir_all(&base);
+        let now = 1_700_000_000_000i64;
+        // 后写的 receivedAt 更大：读取必须最旧在前
+        assert!(share_handoff::append_item(&base, item(HEX64, "url", "https://example.com/a", now + 2), now).unwrap());
+        assert!(share_handoff::append_item(&base, item("1111111111111111111111111111111111111111111111111111111111111111", "text", "hello", now + 1), now).unwrap());
+        let items = share_handoff::read_from(&base, now).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].text, "hello");
+        assert_eq!(items[1].kind, "url");
+        // 稳定 ID 去重：同一内容重复分享不重复入队
+        assert!(!share_handoff::append_item(&base, item(HEX64, "url", "https://example.com/a", now + 3), now).unwrap());
+        assert_eq!(share_handoff::read_from(&base, now).unwrap().len(), 2);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn share_queue_capacity_retention_and_validation() {
+        let base = qbase("bounds");
+        let _ = std::fs::remove_dir_all(&base);
+        let now = 1_700_000_000_000i64;
+        for k in 0..25 {
+            let id = format!("{k:064x}");
+            share_handoff::append_item(&base, item(&id, "text", &format!("t{k}"), now + k), now).unwrap();
+        }
+        // 容量 ≤20，且保留的是最新一批
+        let items = share_handoff::read_from(&base, now).unwrap();
+        assert_eq!(items.len(), share_handoff::MAX_ITEMS);
+        assert_eq!(items[0].text, "t5");
+        assert_eq!(items.last().unwrap().text, "t24");
+        // 保留期：8 天前入队的项读不出来
+        let base2 = qbase("retention");
+        let _ = std::fs::remove_dir_all(&base2);
+        share_handoff::append_item(&base2, item(HEX64, "text", "old", now - 8 * 24 * 3600_000), now).unwrap();
+        share_handoff::append_item(&base2, item("2222222222222222222222222222222222222222222222222222222222222222", "text", "fresh", now), now).unwrap();
+        let items = share_handoff::read_from(&base2, now).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].text, "fresh");
+        // 非法项（坏 ID / 坏 kind / 超长 / 非 http URL / 未来时间戳）读侧一律过滤
+        let base3 = qbase("invalid");
+        let _ = std::fs::remove_dir_all(&base3);
+        let raw = serde_json::json!({
+            "version": 1,
+            "items": [
+                {"id": "short", "kind": "text", "text": "x", "receivedAt": now},
+                {"id": HEX64, "kind": "js", "text": "alert(1)", "receivedAt": now},
+                {"id": HEX64, "kind": "url", "text": "file:///etc/passwd", "receivedAt": now},
+                {"id": HEX64, "kind": "url", "text": "javascript:alert(1)", "receivedAt": now},
+                {"id": HEX64, "kind": "text", "text": "ok", "receivedAt": now + 999_999},
+                {"id": HEX64, "kind": "text", "text": "ok", "receivedAt": now}
+            ]
+        });
+        let dir = base3.join("share-handoff");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("queue.json"), serde_json::to_vec(&raw).unwrap()).unwrap();
+        let items = share_handoff::read_from(&base3, now).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].text, "ok");
+        for b in [&base, &base2, &base3] {
+            std::fs::remove_dir_all(b).unwrap();
+        }
+    }
+
+    #[test]
+    fn share_queue_ack_clear_exactly_once_and_corrupt_recovery() {
+        let base = qbase("ack");
+        let _ = std::fs::remove_dir_all(&base);
+        let now = 1_700_000_000_000i64;
+        share_handoff::append_item(&base, item(HEX64, "text", "hello", now), now).unwrap();
+        // 恰好一次：ack 后队列空，重复 ack 幂等不报错
+        share_handoff::ack_in(&base, HEX64, now).unwrap();
+        assert!(share_handoff::read_from(&base, now).unwrap().is_empty());
+        share_handoff::ack_in(&base, HEX64, now).unwrap();
+        // 拒绝清除路径
+        share_handoff::append_item(&base, item(HEX64, "text", "hello", now), now).unwrap();
+        share_handoff::clear_in(&base, HEX64, now).unwrap();
+        assert!(share_handoff::read_from(&base, now).unwrap().is_empty());
+        // 进程终止/半写恢复：损坏文件隔离为 .corrupt，按空队列继续，后续写入正常
+        let dir = base.join("share-handoff");
+        std::fs::write(dir.join("queue.json"), b"{\"version\":1,\"items\":[{\"id\":").unwrap();
+        assert!(share_handoff::read_from(&base, now).unwrap().is_empty());
+        assert!(dir.join("queue.json.corrupt").exists());
+        share_handoff::append_item(&base, item(HEX64, "text", "again", now), now).unwrap();
+        assert_eq!(share_handoff::read_from(&base, now).unwrap()[0].text, "again");
+        // 未知 ID 的 ack/clear 不报错（幂等）
+        share_handoff::ack_in(&base, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", now).unwrap();
+        // 队列文件缺失 → 空队列（且不会顺手创建任何目录/文件）
+        let base2 = qbase("missing");
+        let _ = std::fs::remove_dir_all(&base2);
+        assert!(share_handoff::read_from(&base2, now).unwrap().is_empty());
+        assert!(!base2.exists());
+        std::fs::remove_dir_all(&base).unwrap();
+        let _ = std::fs::remove_dir_all(&base2);
+    }
+
+    #[test]
+    fn share_queue_is_http_url_matrix() {
+        assert!(share_handoff::is_http_url("https://example.com/a?b=1"));
+        assert!(share_handoff::is_http_url("HTTP://EXAMPLE.COM"));
+        assert!(!share_handoff::is_http_url("file:///etc/passwd"));
+        assert!(!share_handoff::is_http_url("javascript:alert(1)"));
+        assert!(!share_handoff::is_http_url("https:///no-host"));
+        assert!(!share_handoff::is_http_url("https://exa mple.com"));
+        assert!(!share_handoff::is_http_url("notaurl"));
     }
 
     #[test]

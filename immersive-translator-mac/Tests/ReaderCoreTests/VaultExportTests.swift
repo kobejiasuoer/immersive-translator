@@ -36,7 +36,7 @@ final class VaultExportTests: XCTestCase {
     private func speakSession(_ turns: [SpeakTurn]) -> SpeakSession {
         SpeakSession(
             id: "s-\(UUID().uuidString)",
-            scenario: .smalltalk,
+            scenario: "smalltalk",
             difficulty: .medium,
             turns: turns,
             createdAt: nowMs,
@@ -518,5 +518,94 @@ final class InternalizationDashboardTests: XCTestCase {
         let round = try JSONDecoder().decode(VocabWord.self, from: data)
         XCTAssertEqual(round.spokenAt, 1770000001000)
         XCTAssertEqual(masteryStage(round), .s3)
+    }
+
+    // MARK: - 导出范围预过滤（2026-10-26 ExportStage；§2.4 测试组 5）
+    //
+    // 范围 chips 只在调用侧预过滤 words（addedAt）与 speakSessions（createdAt）
+    // 再喂 buildVaultMarkdown——对齐 VaultPage.test.tsx 导出组向量：
+    // 默认本周（含今天词、排久远词）；「全部」→全量；「今天」→仅今天。
+
+    private func wordAdded(_ id: String, addedAt: Int64) -> VocabWord {
+        VocabWord(
+            id: id,
+            word: id,
+            senses: [VocabSense(pos: "", cn: "释义")],
+            source: VocabSource(articleId: "", sentenceIdx: 0),
+            srs: VocabSrsState(dueAt: nowMs),
+            addedAt: addedAt
+        )
+    }
+
+    private func sessionCreated(_ id: String, createdAt: Int64) -> SpeakSession {
+        SpeakSession(
+            id: id,
+            scenario: "smalltalk",
+            difficulty: .medium,
+            turns: [
+                SpeakTurn(role: .user, text: "I very like it", coachDiff: CoachDiff(segs: [CoachSeg(t: .ins, v: "really")]), at: createdAt),
+            ],
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+    }
+
+    func testExportScopeWeekIncludesTodayAndRecentOnly() {
+        let today = wordAdded("today", addedAt: nowMs - 60_000)
+        let threeDaysAgo = wordAdded("recent", addedAt: nowMs - 3 * 24 * 60 * 60 * 1000)
+        let longAgo = wordAdded("old", addedAt: nowMs - 30 * 24 * 60 * 60 * 1000)
+        let words = [today, threeDaysAgo, longAgo]
+
+        // 默认范围 = 本周（最近 7 天）：今天与 3 天前的保留，30 天前的排除。
+        let week = filterVaultExportWords(words, scope: .week, nowMs: nowMs)
+        XCTAssertEqual(week.map(\.id), ["today", "recent"])
+        // 「全部」不过滤。
+        XCTAssertEqual(filterVaultExportWords(words, scope: .all, nowMs: nowMs).count, 3)
+        // 「今天」只留今天的词。
+        XCTAssertEqual(filterVaultExportWords(words, scope: .today, nowMs: nowMs).map(\.id), ["today"])
+    }
+
+    func testExportScopeTodayMatchesLocalDayKeyNot24h() {
+        // 今天口径 = 本地日键相等（不是往前 24 小时）：昨天 23:00 的词不在今天。
+        let cal = Calendar.current
+        let todayStart = cal.startOfDay(for: Date(timeIntervalSince1970: Double(nowMs) / 1000))
+        let yesterdayLate = Int64((todayStart - 3600).timeIntervalSince1970 * 1000)
+        let words = [wordAdded("yesterday", addedAt: yesterdayLate)]
+        XCTAssertEqual(filterVaultExportWords(words, scope: .today, nowMs: nowMs).count, 0)
+    }
+
+    func testExportScopeSessionsFilterByCreatedAt() {
+        let sessions = [
+            sessionCreated("s-today", createdAt: nowMs - 1_000),
+            sessionCreated("s-old", createdAt: nowMs - 20 * 24 * 60 * 60 * 1000),
+        ]
+        XCTAssertEqual(filterVaultExportSessions(sessions, scope: .week, nowMs: nowMs).map(\.id), ["s-today"])
+        XCTAssertEqual(filterVaultExportSessions(sessions, scope: .today, nowMs: nowMs).map(\.id), ["s-today"])
+        XCTAssertEqual(filterVaultExportSessions(sessions, scope: .all, nowMs: nowMs).count, 2)
+    }
+
+    func testExportFileNameAndMarkdownThreeSectionsUnchanged() {
+        // 保存文件名 `{dateKey}-学习笔记.md`；Markdown 三段结构（## 一、核心词块）随
+        // 范围过滤——过滤后的久远词不进源码（Windows「源码态随范围过滤」向量）。
+        XCTAssertEqual(vaultExportFileName(dateKey: "2026-09-10"), "2026-09-10-学习笔记.md")
+
+        let today = wordAdded("today", addedAt: nowMs - 1)
+        let longAgo = wordAdded("old", addedAt: 1)
+        let mdAll = buildVaultMarkdown(
+            words: [today, longAgo],
+            sourceSentence: { _, _ in nil },
+            speakSessions: [],
+            dateKey: "2026-09-10"
+        )
+        XCTAssertTrue(mdAll.contains("## 一、核心词块"))
+        XCTAssertTrue(mdAll.contains("old"))
+        let mdWeek = buildVaultMarkdown(
+            words: filterVaultExportWords([today, longAgo], scope: .week, nowMs: nowMs),
+            sourceSentence: { _, _ in nil },
+            speakSessions: [],
+            dateKey: "2026-09-10"
+        )
+        XCTAssertTrue(mdWeek.contains("today"))
+        XCTAssertFalse(mdWeek.contains("old"), "范围过滤后的词不进 Markdown 源码")
     }
 }

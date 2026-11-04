@@ -87,6 +87,16 @@ struct AuthHttpResponse {
     let status: Int
     let retryAfterSeconds: Int?
     let body: String
+    /// x-quota-* 白名单响应头（键小写；语音网关 402 配额余量所需，对齐 Rust
+    /// auth.rs whitelist_quota_headers——其余头一律不透传）。默认空保持既有构造兼容。
+    var headers: [String: String] = [:]
+
+    init(status: Int, retryAfterSeconds: Int?, body: String, headers: [String: String] = [:]) {
+        self.status = status
+        self.retryAfterSeconds = retryAfterSeconds
+        self.body = body
+        self.headers = headers
+    }
 }
 
 protocol AuthTransport: AnyObject {
@@ -99,8 +109,32 @@ enum ServerAuthConfiguration {
     /// dev/联调缺省；生产由 `~/Library/Application Support/ImmersiveTranslator/
     /// server_endpoint.json`（`{"baseUrl":"https://..."}`，明文非敏感）覆盖。
     static let devBaseURL = "http://127.0.0.1:8090"
+    /// 生产服务 base（登录/鉴权同源；gateway = base + /v1/chat/completions）。
+    /// 镜像 Windows auth.rs:153 PROD_BASE_URL。
+    static let prodBaseURL = "https://www.prismspace.online"
+    /// 沉浸云对公众开放（服务端已公开部署，2026-10）。镜像 Windows auth.rs:159。
+    /// 缺省地址按构建类型区分（见 `defaultBaseURL`/`resolveBaseURL`）：
+    /// debug 构建直连本地联调地址、release 构建直连生产域名；任何机器都可用
+    /// `server_endpoint.json` 覆盖（如内测机的正式包指回本地）。
+    static let platformPublic = true
     static let endpointFileName = "server_endpoint.json"
     static let serverConfigFileName = "server_config.json"
+
+    /// 编译期常量，等价 Windows cfg!(debug_assertions)（auth.rs:222）。
+    /// SwiftPM debug 配置（swift run / swift build / swift test）为 true；
+    /// release（scripts/build_app.sh:93 `swift build -c release`）为 false。
+    static let isDebugBuild: Bool = {
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
+    }()
+
+    /// 缺省 base：公众开放期 debug→本地联调、release→生产（对齐 auth.rs:221-227）。
+    static func defaultBaseURL(isDebugBuild: Bool) -> String {
+        (platformPublic && !isDebugBuild) ? prodBaseURL : devBaseURL
+    }
 
     /// 与 ReaderStore/NoteStore 同法的应用数据目录。
     static func defaultAppSupportDirectory() -> URL {
@@ -109,7 +143,11 @@ enum ServerAuthConfiguration {
         return base.appendingPathComponent("ImmersiveTranslator", isDirectory: true)
     }
 
-    /// §4.6 base_url 两层机制：endpoint 覆盖文件存在且 baseUrl 非空则覆盖 dev 缺省。
+    /// §4.6 base_url 两层机制：`server_endpoint.json`（`{"baseUrl":"https://..."}`）
+    /// 存在且 baseUrl 非空则优先；否则按构建类型取缺省——debug 构建（swift run）
+    /// 走本地联调地址，release 构建（build_app.sh 正式包）直连生产域名；
+    /// 沉浸云未开放期（platformPublic=false）正式包仍回退本地联调地址
+    /// （对齐 Windows resolve_base_url，auth.rs:215-228）。
     static func resolveBaseURL(appSupportDirectory: URL? = nil) -> String {
         let directory = appSupportDirectory ?? defaultAppSupportDirectory()
         let fileURL = directory.appendingPathComponent(endpointFileName)
@@ -120,7 +158,7 @@ enum ServerAuthConfiguration {
            !url.isEmpty {
             return url
         }
-        return devBaseURL
+        return defaultBaseURL(isDebugBuild: isDebugBuild)
     }
 }
 
@@ -135,6 +173,18 @@ final class URLSessionAuthTransport: AuthTransport {
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 60
         self.session = URLSession(configuration: config)
+    }
+
+    /// 响应头白名单：只放行 `x-quota-*`（语音网关 402 配额余量，契约 §一），
+    /// 键小写；其余头（含内部头）一律不透传——对齐 Rust auth.rs whitelist_quota_headers。
+    static func whitelistQuotaHeaders(_ headers: [AnyHashable: Any]) -> [String: String] {
+        var picked: [String: String] = [:]
+        for (key, value) in headers {
+            guard let name = key as? String, name.lowercased().hasPrefix("x-quota-"),
+                  let text = value as? String else { continue }
+            picked[name.lowercased()] = text
+        }
+        return picked
     }
 
     func send(_ request: AuthHttpRequest) async throws -> AuthHttpResponse {
@@ -161,7 +211,8 @@ final class URLSessionAuthTransport: AuthTransport {
             return AuthHttpResponse(
                 status: http.statusCode,
                 retryAfterSeconds: retryAfter,
-                body: body
+                body: body,
+                headers: Self.whitelistQuotaHeaders(http.allHeaderFields)
             )
         } catch let error as AuthError {
             throw error
@@ -318,6 +369,9 @@ actor AuthTokenManager {
     /// 可注入时钟与设备名（单测确定性；生产用真实时钟/Host 名）。
     private let now: () -> Int64
     private let deviceName: () -> String
+    /// 学习存储（命名空间守卫用；测试/未接线为 nil——此时仅做内存用户命名空间
+    /// 与所用 token 双校验，防线语义不变）。
+    private(set) var learningStore: LearningStore?
 
     init(
         transport: AuthTransport,
@@ -329,6 +383,11 @@ actor AuthTokenManager {
         self.store = store
         self.now = now
         self.deviceName = deviceName
+    }
+
+    /// 启动接线学习存储（AppDelegate configure；LearningStore.shared 单例）。
+    func attachLearningStore(_ learning: LearningStore) {
+        learningStore = learning
     }
 
     // ------------------------------------------------------------------
@@ -484,9 +543,18 @@ actor AuthTokenManager {
 
     /// 带鉴权请求（§4.3，红线 4）：惰性主动刷新 → 发送 → 401 分支。
     func withAuth(method: String, path: String, body: String?) async throws -> AuthHttpResponse {
+        try await withAuth(method: method, path: path, body: body, expectedNamespace: nil)
+    }
+
+    /// 带鉴权请求 + 命名空间守卫（auth.rs with_auth_for_namespace :616-687 的
+    /// Swift 对应物）：expectedNamespace 非空时，发送前做 LearningStore.verifyNamespace
+    /// + 内存态用户命名空间与所用 token 双校验，不符抛本地伪码 account_changed
+    /// ——**不出网**；401 token_expired 刷新重放路径同样先复核。
+    func withAuth(method: String, path: String, body: String?, expectedNamespace: String?) async throws -> AuthHttpResponse {
         let token = try await getAccessToken()
         func send(bearer: String) async throws -> AuthHttpResponse {
-            try await transport.send(
+            try verifyNamespace(expectedNamespace, bearer: bearer)
+            return try await transport.send(
                 AuthHttpRequest(method: method, path: path, body: body, bearer: bearer)
             )
         }
@@ -506,6 +574,11 @@ actor AuthTokenManager {
         case "token_expired":
             // 仅 token_expired 触发刷新（红线 4）；带旧票进单飞，迟到 401
             // 若逢并发刷新已完成则直接复用新凭据（红线 2 单飞无窗口）。
+            // 重放前只复核 LearningStore 命名空间（auth.rs:661-663 仅 verify_namespace）：
+            // 此刻内存态 token 可能已被并发刷新换新，这里若再比「所用旧票」会把
+            // 合法的迟到 401 误判成 account_changed；新票的用户/票据双校验留给
+            // 重放 send 内的完整守卫。
+            try verifyLearningNamespace(expectedNamespace)
             let stored: StoredAuth
             do {
                 stored = try await refreshAfter401(usedToken: token)
@@ -529,6 +602,36 @@ actor AuthTokenManager {
         default:
             // 未知 401 code：原样透传，不清凭据不刷新
             throw error
+        }
+    }
+
+    /// 同步流量守卫（auth.rs:628-641）：命名空间与内存用户/所用 token 任一不符
+    /// 即本地取消，请求不出网。
+    private func verifyNamespace(_ expected: String?, bearer: String) throws {
+        guard let expected else { return }
+        try verifyLearningNamespace(expected)
+        let matches: Bool
+        if state == nil { state = store.load() }
+        if let current = state {
+            matches = LearningStore.accountNamespace(current.user.id) == expected && current.accessToken == bearer
+        } else {
+            matches = false
+        }
+        if !matches {
+            throw AuthError.local("account_changed", "账号已切换，本次同步已取消")
+        }
+    }
+
+    /// 仅 LearningStore 命名空间复核（Rust learning_store::verify_namespace，失败文案
+    /// 原样进 account_changed 伪码；未接线学习存储时无此防线）。
+    private func verifyLearningNamespace(_ expected: String?) throws {
+        guard let expected, let learning = learningStore else { return }
+        do {
+            try learning.verifyNamespace(expected)
+        } catch {
+            // auth.rs:629-630 / :661-663：verify_namespace 文案原样进 account_changed 伪码
+            let message = (error as? LearningStoreError)?.message ?? "账号已切换，本次操作已取消"
+            throw AuthError.local("account_changed", message)
         }
     }
 
@@ -913,9 +1016,16 @@ struct OtpCooldownTracker {
 @MainActor
 final class ServerAuthClient: ObservableObject {
     @Published private(set) var status = AuthStatus.loggedOut
+    /// 交互式登录成功（验证码/密码登录 afterLoginSuccess）的递增序号；启动静默续登录
+    /// （bootstrap 预填/刷新）与手动刷新不递增。语音「登录成功瞬间自动切云」据此
+    /// 区分登录瞬间与启动续登录（status 初值即 loggedOut，bootstrap 异步发布 true，
+    /// 纯 loggedIn 边沿会把启动续登录误判成登录瞬间）。订阅方 dropFirst 跳过初值。
+    @Published private(set) var loginSuccessSerial = 0
 
     let manager: AuthTokenManager
     private let appSupportDirectory: URL
+    /// 学习存储（游客数据并入账号 / 命名空间切换的落点；测试可不接）。
+    private(set) var learningStore: LearningStore?
 
     /// 生产构造：URLSession 传输（base_url 支持 server_endpoint.json 覆盖）
     /// + Keychain 单槽存储。
@@ -935,19 +1045,29 @@ final class ServerAuthClient: ObservableObject {
         self.appSupportDirectory = appSupportDirectory ?? ServerAuthConfiguration.defaultAppSupportDirectory()
     }
 
+    /// 启动接线学习存储（manager 与 client 各持一份引用；幂等）。
+    func attachLearningStore(_ learning: LearningStore) {
+        learningStore = learning
+        Task { await manager.attachLearningStore(learning) }
+    }
+
     /// 启动静默续登录（§4.4，对应 Windows auth_bootstrap）：预填内存态 →
     /// 广播已登录（离线也显示已登录）→ 后台单飞刷新校验存活；fatal 才转
     /// 未登录；网络等瞬时错误保留预填态，不回退 UI（§4.4 ③）。
+    /// 对齐 auth_get_status 的 set_account 语义：预填即切命名空间。
     func bootstrap() {
         Task { [weak self] in
             guard let self else { return }
             guard let user = await self.manager.prefillFromStore() else { return }
+            self.learningStore?.setAccount(userId: user.id)
             self.publish(AuthStatus(loggedIn: true, user: user, notice: nil))
             do {
                 let stored = try await self.manager.refresh()
+                self.learningStore?.setAccount(userId: stored.user.id)
                 self.publish(AuthStatus(loggedIn: true, user: stored.user, notice: nil))
             } catch let error as AuthError where isFatalAuthCode(error.code) {
                 // 凭据已清；广播失效态（D8 状态条载体）
+                self.learningStore?.setAccount(userId: nil)
                 let snapshot = await self.manager.getStatus()
                 self.publish(AuthStatus(
                     loggedIn: false,
@@ -982,10 +1102,11 @@ final class ServerAuthClient: ObservableObject {
     }
 
     /// 登出：本地清理成功（走到这里 clear 必已成功，§5.3：失败路径直接抛
-    /// storage_error，不广播登出）→ 广播未登录。
+    /// storage_error，不广播登出）→ 切回 guest 命名空间 → 广播未登录。
     @discardableResult
     func logout() async throws -> LogoutOutcome {
         let outcome = try await manager.logout()
+        learningStore?.setAccount(userId: nil)
         publish(.loggedOut)
         return outcome
     }
@@ -1040,10 +1161,21 @@ final class ServerAuthClient: ObservableObject {
         status = next
     }
 
-    /// 登录成功命令的公共收尾：广播登录态 + fire-and-forget 拉取并落盘
-    /// me/config（D7：失败仅日志，账号区可手动重拉）。
+    /// 登录成功命令的公共收尾（auth.rs after_login_success :951-971 逐条）：
+    /// ① adopt_guest（guest→账号单向、单事务、音频随迁；失败仅日志，游客数据
+    /// 保留）；② set_account 切命名空间；③ 广播登录态；④ fire-and-forget 拉取
+    /// 并落盘 me/config（D7：失败仅日志，账号区可手动重拉）。
     private func afterLoginSuccess(_ user: AuthUser) {
+        if let learning = learningStore {
+            do {
+                try learning.adoptGuest(userId: user.id)
+            } catch {
+                DiagnosticLogger.log("learning.guest.adopt.failed（游客数据保留）: \(error)")
+            }
+            learning.setAccount(userId: user.id)
+        }
         publish(AuthStatus(loggedIn: true, user: user, notice: nil))
+        loginSuccessSerial &+= 1
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -1070,5 +1202,67 @@ final class ServerAuthClient: ObservableObject {
         if let notice = noticeForAuthCode(error.code) {
             publish(AuthStatus(loggedIn: false, user: nil, notice: notice))
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 云同步 / 兑换的鉴权传输（Windows sync.rs / redeem.rs 命令层对应物）。
+    // nonisolated：只做白名单校验与 path 拼接，实际请求全部经 manager
+    // （actor）——令牌不离开进程（红线 D4/D5 的 Mac 等效物）。
+    // ------------------------------------------------------------------
+
+    /// 鉴权传输入口：复用 manager.withAuth——base URL 解析、Bearer 会话令牌
+    /// 附带、401 token_expired 单飞刷新后重放一次全部继承（ServerAuth.swift
+    /// 既有实现）；**非 2xx 是协议数据不是错误**，原样带回 `{status, body,
+    /// retryAfterSeconds}`，只有网络/致命鉴权错误才 throw。
+    ///
+    /// throw 分支对齐 Windows sync.rs:137-140 / redeem.rs:37-40 的 `Err(e) =>
+    /// { emit_fatal_if_needed(&app, &e); Err(e) }`：致命鉴权（token_invalid /
+    /// token_reused，manager 已清凭据）广播 loggedIn=false + notice，账号区据此
+    /// 显示失效状态条（D8）——与 refreshNow/fetchMe/fetchServerConfig 同收尾。
+    /// expectedNamespace 透传给 withAuth 守卫（账号切换本地取消不出网）。
+    nonisolated func authorizedRequest(
+        method: String, path: String, body: String?, expectedNamespace: String? = nil
+    ) async throws -> AuthHttpResponse {
+        do {
+            return try await manager.withAuth(method: method, path: path, body: body, expectedNamespace: expectedNamespace)
+        } catch let error as AuthError {
+            await emitFatalIfNeeded(error)
+            throw error
+        }
+    }
+
+    /// GET /v1/sync/{collection}/pull?since=&limit=（since 钳制 ≥0、limit 钳制
+    /// 1...500，Windows sync.rs sync_pull 同口径）。集合白名单外本地拒绝、
+    /// 零网络。致命鉴权 reject 时的失效态广播在 authorizedRequest。
+    nonisolated func syncPull(
+        collection: String, since: Int64, limit: Int64, expectedNamespace: String? = nil
+    ) async throws -> AuthHttpResponse {
+        guard syncValidateCollection(collection) else {
+            throw AuthError.local("sync_collection_invalid", "未知同步集合 \(collection)（本地白名单外）")
+        }
+        let clampedSince = max(0, since)
+        let clampedLimit = min(max(limit, 1), 500)
+        let path = "/v1/sync/\(collection)/pull?since=\(clampedSince)&limit=\(clampedLimit)"
+        return try await authorizedRequest(method: "GET", path: path, body: nil, expectedNamespace: expectedNamespace)
+    }
+
+    /// POST /v1/sync/{collection}/push（entitiesJSON 是前端序列化的完整请求体
+    /// `{entities:[…]}`；服务端校验为准，这里不重复形状校验）。
+    nonisolated func syncPush(
+        collection: String, entitiesJSON: String, expectedNamespace: String? = nil
+    ) async throws -> AuthHttpResponse {
+        guard syncValidateCollection(collection) else {
+            throw AuthError.local("sync_collection_invalid", "未知同步集合 \(collection)（本地白名单外）")
+        }
+        return try await authorizedRequest(
+            method: "POST", path: "/v1/sync/\(collection)/push", body: entitiesJSON, expectedNamespace: expectedNamespace
+        )
+    }
+
+    /// POST /v1/redeem `{"code":…}`（redeem.rs 对应物；code 形状校验在服务端
+    /// RedeemDto——去空格 + 大写 + XXXX-XXXX-XXXX-XXXX，客户端不重复校验；
+    /// 429 限流时 retryAfterSeconds 随应答透传）。
+    nonisolated func redeem(code: String) async throws -> AuthHttpResponse {
+        try await authorizedRequest(method: "POST", path: "/v1/redeem", body: "{\"code\":\(escapeJSONString(code))}")
     }
 }

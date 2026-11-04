@@ -1,9 +1,13 @@
 import Foundation
 import OSLog
+import ProviderCore
 
 enum TranslationClientError: LocalizedError {
     case invalidEndpoint
     case missingAPIKey
+    /// 沉浸云已选中但本机没有可用账号令牌（未登录）——不同于 missingAPIKey，
+    /// 沉浸云不需要 API Key，需要的是登录（设置中心模型服务页「登录沉浸云」）。
+    case platformNotLoggedIn
     case badResponse(statusCode: Int, message: String?)
     case emptyTranslation
     case invalidResponse(preview: String?)
@@ -14,6 +18,8 @@ enum TranslationClientError: LocalizedError {
             return "接口地址不是有效 URL。"
         case .missingAPIKey:
             return "还没有配置 API Key。"
+        case .platformNotLoggedIn:
+            return "尚未登录沉浸云——请在设置中心「模型服务」页登录后再翻译。"
         case .badResponse(let statusCode, _):
             return "翻译接口返回 HTTP \(statusCode)。"
         case .emptyTranslation:
@@ -61,9 +67,13 @@ struct TranslationProgress {
 final class TranslationClient {
     private let logger = Logger(subsystem: "local.immersive-translator.mvp", category: "TranslationClient")
     private let settingsStore: SettingsStore
+    /// 沉浸云账号令牌来源（App 注入 ServerAuthClient.getAccessToken：无凭据抛错、
+    /// 临期单飞刷新）。nil 或抛错时按未登录处理。非沉浸云 provider 不取令牌。
+    private let accountTokenProvider: (@MainActor () async -> String?)?
 
-    init(settingsStore: SettingsStore) {
+    init(settingsStore: SettingsStore, accountTokenProvider: (@MainActor () async -> String?)? = nil) {
         self.settingsStore = settingsStore
+        self.accountTokenProvider = accountTokenProvider
     }
 
     @MainActor
@@ -96,7 +106,11 @@ final class TranslationClient {
         let apiKey = ((KeychainStore.apiKey(for: settingsStore.activeProviderID) ?? "")).trimmingCharacters(in: .whitespacesAndNewlines)
         let endpoint = settingsStore.activeProvider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = settingsStore.activeProvider.model.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedModel = model.isEmpty ? "gpt-5.4-mini" : model
+        // 沉浸云（平台 provider）：基址按 ServerAuthConfiguration.resolveBaseURL()
+        // 派生（Windows platformEndpoint(base) 同构，dev 覆盖文件也生效）；模型由
+        // 服务端下发，空值原样发送、不走 gpt-5.4-mini 兜底。
+        let isPlatformProvider = settingsStore.activeProviderID == ProviderProfile.platformProviderID
+        let resolvedModel = (!isPlatformProvider && model.isEmpty) ? "gpt-5.4-mini" : model
         let targetLanguage = Self.targetLanguage(for: text, settingsStore: settingsStore)
         let systemPrompt = Self.systemPrompt(
             targetLanguage: targetLanguage,
@@ -109,8 +123,29 @@ final class TranslationClient {
             return TranslationResult(text: localTranslation, elapsed: 0, model: "local-dictionary", targetLanguage: targetLanguage)
         }
 
-        guard let url = Self.chatCompletionsURL(from: endpoint) else { throw TranslationClientError.invalidEndpoint }
+        let url: URL
+        if isPlatformProvider {
+            let base = ServerAuthConfiguration.resolveBaseURL().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard let platformURL = URL(string: base + "/v1/chat/completions") else {
+                throw TranslationClientError.invalidEndpoint
+            }
+            url = platformURL
+        } else {
+            guard let providerURL = Self.chatCompletionsURL(from: endpoint) else { throw TranslationClientError.invalidEndpoint }
+            url = providerURL
+        }
         guard !apiKey.isEmpty || !Self.requiresAPIKey(for: url) else { throw TranslationClientError.missingAPIKey }
+        // 沉浸云鉴权走账号令牌（Windows：翻译请求自动携带账号令牌，到期自动续期）：
+        // 令牌由 ServerAuthClient 统一取发（临期单飞刷新），本地 API Key 槽不参与。
+        var accountToken: String?
+        if isPlatformProvider {
+            // try? + Optional 返回值会被 Swift 展平成单层 Optional：抛错或返回 nil
+            // 都按「未登录/无令牌」处理。
+            guard let bearer = try? await accountTokenProvider?(), !bearer.isEmpty else {
+                throw TranslationClientError.platformNotLoggedIn
+            }
+            accountToken = bearer
+        }
         let startedAt = Date()
         let requestOptions = Self.requestOptions(endpoint: url, model: resolvedModel)
         let logEndpoint = Self.redactedURLString(url.absoluteString)
@@ -120,7 +155,9 @@ final class TranslationClient {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 18
-        if !apiKey.isEmpty {
+        if let accountToken {
+            request.setValue("Bearer \(accountToken)", forHTTPHeaderField: "Authorization")
+        } else if !apiKey.isEmpty {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -462,6 +499,11 @@ final class TranslationClient {
     static func requiresAPIKey(for url: URL) -> Bool {
         guard let host = url.host()?.lowercased() else {
             return true
+        }
+        // 沉浸云平台域名免 Key：鉴权走账号令牌（登录豁免在 performTranslation 的
+        // 令牌分支里做——这里只回答「要不要 API Key」，答案是不用）。
+        if host == "prismspace.online" || host.hasSuffix(".prismspace.online") {
+            return false
         }
         return !(host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "0.0.0.0")
     }

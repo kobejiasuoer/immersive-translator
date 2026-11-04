@@ -6,7 +6,7 @@ interface Tokens { accessToken: string; refreshToken: string; expiresIn: number;
 export interface CloudConfig {
   gateway: { llm: string; voiceTicket: string; voiceAsrStream: string; voiceTtsStream: string };
   models: (string | { id: string })[];
-  voice: { ttsVoices: unknown[]; asrLanguages: string[]; iseEnabled: boolean; quota: unknown };
+  voice: { ttsVoices: { id: string; label: string }[]; asrLanguages: string[]; iseEnabled: boolean; quota?: unknown };
   features: { sync: boolean };
   sync?: { protocolVersion: number; collections: Record<string, { schemaVersions: number[]; maxEntityBytes: number }>; maxPushEntities: number; maxBodyBytes: number };
 }
@@ -16,12 +16,14 @@ let state: CloudState = { account: null, config: null, baseUrl: DEFAULT_BASE, ge
 let tokens: Tokens | null = null;
 let refreshFlight: { generation: number; promise: Promise<void> } | null = null;
 let restoreFlight: Promise<void> | null = null;
+let configFlight: { generation: number; promise: Promise<CloudConfig> } | null = null;
 let secretQueue: Promise<unknown> = Promise.resolve();
 const listeners = new Set<() => void>();
 const active = new Set<AbortController>();
 const SECRET = "mobile.account.session.v1";
 function emit() { listeners.forEach(fn => fn()); }
 export function cloudState(): CloudState { return state; }
+export function subscribeCloud(fn: () => void): () => void { listeners.add(fn); return () => listeners.delete(fn); }
 export function useCloud(): CloudState { return useSyncExternalStore(fn => { listeners.add(fn); return () => listeners.delete(fn); }, cloudState); }
 export class CloudError extends Error {
   constructor(message: string, readonly status = 0, readonly code = "network_error", readonly retryAfter?: string) { super(message); }
@@ -188,7 +190,13 @@ export async function login(email: string, credential: string, mode: "otp" | "pa
 }
 export async function loadCloudConfig(): Promise<CloudConfig> {
   const generation = state.generation;
-  const config = await cloudRequest<CloudConfig>("/v1/me/config"); checkGeneration(generation); state = { ...state, config }; emit(); return config;
+  if (configFlight?.generation === generation) return configFlight.promise;
+  const flight = { generation, promise: Promise.resolve(null as unknown as CloudConfig) };
+  flight.promise = (async () => {
+    const config = await cloudRequest<CloudConfig>("/v1/me/config"); checkGeneration(generation); state = { ...state, config }; emit(); return config;
+  })().finally(() => { if (configFlight === flight) configFlight = null; });
+  configFlight = flight;
+  return flight.promise;
 }
 export async function logout(): Promise<void> {
   const previous = tokens, url = endpoint("/v1/auth/logout");

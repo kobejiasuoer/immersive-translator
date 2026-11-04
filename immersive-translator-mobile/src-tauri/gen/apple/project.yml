@@ -10,7 +10,8 @@ configs:
 settingGroups:
   app:
     base:
-      PRODUCT_NAME: reader-spike
+      # 可执行路径保留 ASCII：中文显示名在 Info.plist，避免 NSBundle/WebKit 初始化崩溃。
+      PRODUCT_NAME: immersive-speaking
       PRODUCT_BUNDLE_IDENTIFIER: com.kobejiasuoer.reader
 targetTemplates:
   app:
@@ -30,7 +31,13 @@ targets:
     sources:
       - path: Sources
       - path: Assets.xcassets
+      # Externals 仅作文件引用（Build Rust Code 相位产物经 LIBRARY_SEARCH_PATHS + 下方
+      # framework 依赖链接）。不加 excludes 时，磁盘上已存在的 libapp.a 会被 xcodegen
+      # 误挂进 Resources 复制相位（把静态库塞进 .app 包）。
       - path: Externals
+        excludes:
+          - "*.a"
+          - "**/*.a"
       - path: imreader-mobile_iOS
       - path: assets
         buildPhase: resources
@@ -39,7 +46,23 @@ targets:
     info:
       path: imreader-mobile_iOS/Info.plist
       properties:
+        # xcodegen 每次生成都会按本节重写 Info.plist——历史手工加入的键（深链 / 麦克风 /
+        # 相机用途文案 / ATS）必须全部在这里声明，否则重新生成即回退
+        # （native-release-checks-2026-10-29「Recheck generated files」所指）。
+        CFBundleName: 沉浸口语
+        CFBundleDisplayName: 沉浸口语
+        CFBundleShortVersionString: 0.1.0
+        CFBundleVersion: "0.1.0"
+        CFBundleURLTypes:
+          - CFBundleURLName: ita
+            CFBundleURLSchemes: [ita]
         LSRequiresIPhoneOS: true
+        # NSAllowsArbitraryLoads 是 BYOK 自定义端点（任意自建/第三方 OpenAI 兼容服务）所需，
+        # 刻意保留；上架审核复核项：若未来收紧，需提供自定义端点例外说明。
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSCameraUsageDescription: 用于拍摄外文内容并识别翻译
+        NSMicrophoneUsageDescription: 用于口语陪练、影子跟读与录音直译的录音与语音识别
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:
@@ -47,8 +70,6 @@ targets:
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
-        CFBundleShortVersionString: 0.1.0
-        CFBundleVersion: "0.1.0"
     entitlements:
       path: imreader-mobile_iOS/imreader-mobile_iOS.entitlements
     scheme:
@@ -57,15 +78,17 @@ targets:
         RUST_LOG: info
     settings:
       base:
+        DEVELOPMENT_TEAM: 3HX836XLHX
         ENABLE_BITCODE: false
         ARCHS: [arm64]
-        VALID_ARCHS: arm64 
+        VALID_ARCHS: arm64
         LIBRARY_SEARCH_PATHS[arch=x86_64]: $(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)
         LIBRARY_SEARCH_PATHS[arch=arm64]: $(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)
         ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
         EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
       groups: [app]
     dependencies:
+      # （预览构建：ShareExt 临时摘除，正式构建恢复——见 /tmp/project.yml.bak）
       - framework: libapp.a
         embed: false
       - sdk: CoreGraphics.framework
@@ -76,7 +99,25 @@ targets:
       - sdk: UIKit.framework
       - sdk: WebKit.framework
     preBuildScripts:
-      - script: npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
+      # 按 Xcode 平台与配置编译，模拟器和真机共享同一构建入口。
+      - script: |-
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          cd "$SRCROOT/../../.."
+          case "$PLATFORM_NAME" in
+            iphoneos) RUST_TARGET=aarch64-apple-ios ;;
+            iphonesimulator) RUST_TARGET=aarch64-apple-ios-sim ;;
+            *) echo "Unsupported iOS platform: $PLATFORM_NAME" >&2; exit 1 ;;
+          esac
+          RUST_PROFILE=debug
+          set --
+          if [ "$CONFIGURATION" = release ] || [ "$CONFIGURATION" = Release ]; then
+            RUST_PROFILE=release
+            set -- --release
+          fi
+          cargo build --locked --package imreader-mobile --manifest-path src-tauri/Cargo.toml --target "$RUST_TARGET" --features tauri/custom-protocol --lib "$@"
+          mkdir -p "$SRCROOT/Externals/arm64/$CONFIGURATION"
+          cp "src-tauri/target/$RUST_TARGET/$RUST_PROFILE/libimreader_mobile_lib.a" "$SRCROOT/Externals/arm64/$CONFIGURATION/libapp.a"
         name: Build Rust Code
         basedOnDependencyAnalysis: false
         outputFiles:

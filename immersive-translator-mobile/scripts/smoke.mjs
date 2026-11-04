@@ -37,27 +37,35 @@ function type(e,value){assert.ok(e,'Expected input');Object.getOwnPropertyDescri
 async function until(fn,label){for(let i=0;i<175;i++){if(fn())return;if(errors.length)throw Error(errors.join(' | '));await wait(20);}throw Error(label+' timed out: '+text(top()||pane()).slice(0,800));}
 function ok(value,label){assert.ok(value,label);checks++;console.log('PASS '+label);}
 async function back(){click(button('返回',top()));await wait(380);}
-async function importPreview(value){click(all('button',pane()).find(e=>text(e).startsWith('加入阅读')));await until(()=>top()?.getAttribute('aria-label')==='加入阅读'&&q('textarea',top()),'Import');if(!q('textarea[rows="10"]',top())){click(button('返回',top()));await wait(40);}type(q('textarea',top()),value);await wait(40);click(button('预览内容',top()));await until(()=>button('保存并开始阅读',top()),'Preview');}
+/* 当前书架「导入」打开导入页；预览不写入文章，保存才创建阅读内容。 */
+async function importPreview(value){click(button('导入',pane()));await until(()=>top()?.getAttribute('aria-label')==='导入自己的内容'&&q('textarea',top()),'Import');if(!q('textarea',top())){click(button('返回',top()));await wait(40);}type(q('textarea',top()),value);await wait(40);click(button('预览正文',top()));await until(()=>button('保存并开始阅读',top()),'Preview');}
 try{
  await build({stdin:{contents:"import React from 'react';import{createRoot}from'react-dom/client';import App from './App';export{actions,initializeStore,activeRepository,getState,flushPersist}from'./store';export function mount(){let r=createRoot(document.getElementById('root'));r.render(React.createElement(React.StrictMode,null,React.createElement(App)));return r;}",resolveDir:fileURLToPath(new URL('../src',import.meta.url)),sourcefile:'smoke.tsx',loader:'tsx'},outfile,bundle:true,platform:'browser',format:'esm',jsx:'automatic',define:{'import.meta.env.DEV':'true','import.meta.env.VITE_API_BASE_URL':JSON.stringify('https://smoke.invalid'),'process.env.NODE_ENV':JSON.stringify('development')}});
  api=await import(pathToFileURL(outfile).href);await api.initializeStore('smoke-'+crypto.randomUUID());root=api.mount();
  await until(()=>q('.learning-onboarding'),'Onboarding');ok(all('.glass-nav .tab').length===3,'three primary tabs');ok(api.getState().vocab.length===0&&api.getState().tasks.length===0,'no fake history');
- click(button('开始我的第一篇阅读',q('.learning-onboarding')));await until(()=>!q('.learning-onboarding'),'Onboarding complete');
+ click(button('先体验一篇短文',q('.learning-onboarding')));await until(()=>q('[aria-label="学习方向"].push.in'),'Goal page');click(button('开始读第一篇',q('[aria-label="学习方向"]')));await until(()=>!q('[aria-label="学习方向"]'),'Goal done');await until(()=>!q('.learning-onboarding'),'Onboarding complete');
  for(const [i,key]of [[1,'practice'],[2,'vocab'],[0,'today']]){click(all('.glass-nav .tab')[i]);await until(()=>api.getState().tab===key,'Tab');await wait(40);}ok(all('.glass-nav .tab[aria-current="page"]').length===1,'single selected tab');
- click(all('.article-card',pane())[0]);await until(()=>q('.tok.ck',top()),'Sample reader');const sampleId=api.getState().readingArticleId;
- click(q('.tok.ck',top()));await until(()=>q('.sheet.on'),'Dictionary');ok(text(q('.sheet.on')).includes('来自《'),'dictionary source sentence');
- click(button('收藏并用它说一句',q('.sheet.on')));await until(()=>q('#practice-answer',top()),'Practice');await api.flushPersist();
+ /* fresh书架从入门卡「开始阅读」打开样文；当前首页的「导入」进入相同导入流程。
+    词典卡继续验证实际来源句，随后测试收藏到练习接续。 */
+ click(button('开始阅读',q('.starter-card',pane())));await until(()=>q('.tok.ck',top()),'Sample reader');const sampleId=api.getState().readingArticleId;
+ click(q('.tok.ck',top()));await until(()=>q('.sheet.on'),'Dictionary');ok(text(q('.sheet.on')).includes('· 第 1 句'),'dictionary source sentence');
+ click(button('收藏并用它说一句',q('.sheet.on')));await until(()=>button('文字回答',top()),'Practice');await api.flushPersist();
  ok(api.getState().vocab.length===1,'dictionary collection persisted');const task=api.getState().tasks[0],draft='This idea can take root in my own work.';ok(task.source?.articleId===sampleId&&task.word,'practice source expression');
- await wait(80);type(q('#practice-answer',top()),draft);await until(()=>api.getState().tasks[0].draft===draft,'Draft');await api.flushPersist();await until(()=>!button('确认文字，发送回答',top())?.disabled,'Send enabled');
- click(button('确认文字，发送回答',top()));await until(()=>q('.account-overlay'),'Login');click(button('先继续本地体验',q('.account-overlay')));await until(()=>!q('.account-overlay'),'Cancel login');
+ /* 原型 VIEWS.practice 默认作答态只有三段 dock（html:2608），文字草稿在「文字回答」后的 draft 态（html:2712）。 */
+ click(button('文字回答',top()));await until(()=>q('#practice-answer',top()),'Draft textarea');
+ await wait(80);type(q('#practice-answer',top()),draft);await until(()=>api.getState().tasks[0].draft===draft,'Draft');await api.flushPersist();await until(()=>!button('发送回答',top())?.disabled,'Send enabled');
+ /* proto-parity-2026-11-01：功能门登录升级态按原型 VIEWS.login（html:1992-1998）改为整页推入，
+    逃生口文案随原型 continue-without-login 取 upgrade 分支「继续本机学习，稍后登录」。 */
+ click(button('发送回答',top()));await until(()=>q('[aria-label="登录"].push'),'Login');click(button('继续本机学习，稍后登录',q('[aria-label="登录"]')));await until(()=>!q('[aria-label="登录"]'),'Cancel login');
  ok(q('#practice-answer',top()).value===draft&&api.getState().tasks[0].draft===draft,'cancel login preserves draft');ok(api.getState().tasks[0].attempts.length===0,'cancel makes no fake score');
- click(button('返回',top()));await until(()=>button('保留进度，返回',top()),'Practice exit');click(button('保留进度，返回',top()));await wait(400);await back();
+ click(button('返回',top()));await until(()=>button('保留进度，回到来源',q('.sheet.on')),'Practice exit');click(button('保留进度，回到来源',q('.sheet.on')));await wait(400);await back();
  click(all('.glass-nav .tab')[2]);await until(()=>api.getState().tab==='vocab','Review tab');await wait(40);click(button('开始这一轮',pane()));await until(()=>q('.rv-card',top()),'Review');
- click(button('直接看答案',top())||button('点按翻面',top()));await until(()=>all('.grade',top()).length===4,'Grades');const due=api.getState().vocab[0].dueAt,n=api.getState().reviewEvents.length;
+ /* 原型 review 题卡主钮为「核对答案」（html:2953，替代旧「直接看答案」文字链）；自评三档（html:2954）。 */
+ click(button('核对答案',top())||button('点按翻面',top()));await until(()=>all('.grade',top()).length===3,'Grades');const due=api.getState().vocab[0].dueAt,n=api.getState().reviewEvents.length;
  click(all('.grade',top())[2]);await until(()=>api.getState().reviewEvents.length>n,'Grade');ok(api.getState().vocab[0].dueAt>due,'review schedule advances');await until(()=>button('撤销'),'Undo toast');click(button('撤销'));await until(()=>api.getState().vocab[0].dueAt===due,'Undo');ok(api.getState().reviewEvents.length>n+1,'undo appends audit event');await api.flushPersist();
  click(button('退出',top()));await until(()=>q('.sheet.on'),'Exit review');click(button('退出',q('.sheet.on')));await wait(400);click(all('.glass-nav .tab')[0]);await wait(80);
  const pasted='A complete imported story.\n\nThe final paragraph is preserved. FINAL_SENTENCE_END.',count=api.getState().articles.length;
- await importPreview(pasted);ok(api.getState().articles.length===count,'preview writes no article');ok(q('textarea',top()).value.endsWith('FINAL_SENTENCE_END.'),'preview final sentence');click(button('保存并开始阅读',top()));await until(()=>api.getState().articles.length===count+1,'Save import');await until(()=>q('.rd-playbar',top()),'Imported reader');
+ await importPreview(pasted);ok(api.getState().articles.length===count,'preview writes no article');ok(text(top()).includes('FINAL_SENTENCE_END.'),'preview final sentence');click(button('保存并开始阅读',top()));await until(()=>api.getState().articles.length===count+1,'Save import');await until(()=>q('.rd-playbar',top()),'Imported reader');
  const imported=api.getState().articles.find(a=>a.sourceType==='paste');ok(imported.sentences.at(-1).en.endsWith('FINAL_SENTENCE_END.'),'saved final sentence');await back();await importPreview(pasted);click(button('保存并开始阅读',top()));await wait(450);await api.flushPersist();ok(api.getState().articles.length===count+1,'duplicate import deduped');
  root.unmount();root=null;await api.flushPersist();const snapshot=await api.activeRepository().loadSnapshot();ok(snapshot.state.tasks.some(t=>t.id===task.id&&t.draft===draft),'durable practice draft');ok(snapshot.state.articles.some(a=>a.id===imported.id),'durable imported article');ok(network.length===0,'local guest flow sends no network');ok(errors.length===0,'no React hook or runtime errors');console.log('PASS: '+checks+' source-rendered mobile smoke assertions');
 }finally{root?.unmount();try{if(api){await api.flushPersist();api.activeRepository().close();}}catch{}console.error=oldError;process.removeListener('unhandledRejection',rejected);dom.window.close();for(const id of timeouts)originalTimers.clearTimeout(id);for(const id of intervals)originalTimers.clearInterval(id);Object.assign(globalThis,originalTimers);await rm(dir,{recursive:true,force:true});}

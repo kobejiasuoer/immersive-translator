@@ -160,4 +160,52 @@ public extension TelemetryEvent {
     static func readingMinutes(seconds: Int) -> TelemetryEvent {
         TelemetryEvent(name: "reading_minutes", props: ["seconds": .int(seconds)])
     }
+
+    // MARK: 口语场景体系（事件名/字段名逐字对齐 Windows src/lib/analytics.ts:24-32 白名单；
+    // Windows 走云端 POST /v1/events，Mac 先落本地 JSONL，点位与载荷契约同款）。
+
+    /// 新会话开始：scenarioSource 取场景真实来源（查不到的场景回退内置，source 天然是 builtin）。
+    static func speakSessionStart(scenarioId: String, scenarioSource: SpeakScenarioSource) -> TelemetryEvent {
+        TelemetryEvent(name: "speak_session_start", props: [
+            "scenarioId": .string(scenarioId),
+            "scenarioSource": .string(scenarioSource.rawValue)
+        ])
+    }
+
+    /// 自定义场景新建（编辑不发）：via=表单内容是否源自最后一次成功生成（generate / manual）。
+    static func scenarioCreate(via: String) -> TelemetryEvent {
+        TelemetryEvent(name: "scenario_create", props: ["via": .string(via)])
+    }
+
+    /// 一句话生成结果：成功 {ok:true}；解析失败 {ok:false, parseError}（四类口径）；
+    /// 接口失败/取消/异常 {ok:false}（不带 parseError 键）。
+    static func scenarioGenerateResult(ok: Bool, parseError: String? = nil) -> TelemetryEvent {
+        var props: [String: PropValue] = ["ok": .bool(ok)]
+        if let parseError { props["parseError"] = .string(parseError) }
+        return TelemetryEvent(name: "scenario_generate_result", props: props)
+    }
+
+    // MARK: 资讯订阅 / 发现书库（B2/B3；事件名与字段名逐字对齐 Windows FeedTab.tsx:183/302、
+    // DiscoverTab.tsx:126、ReaderApp.tsx:1536-1538）。feed_* 两端同走本地 JSONL；
+    // discover_* Windows 走云端 POST /v1/events，Mac 无云端 analytics 客户端先落本地 JSONL。
+
+    /// 资讯订阅 tab 挂载曝光（空 props）。
+    static func feedView() -> TelemetryEvent {
+        TelemetryEvent(name: "feed_view", props: [:])
+    }
+
+    /// 订阅文章「加入书架并开始阅读」——发起导入意图口径（与 epub_import_intent 同层级）。
+    static func feedImport(host: String) -> TelemetryEvent {
+        TelemetryEvent(name: "feed_import", props: ["host": .string(host)])
+    }
+
+    /// 发现书库 tab 挂载曝光（空 props；每次进入计一次，不做 session 去重）。
+    static func discoverView() -> TelemetryEvent {
+        TelemetryEvent(name: "discover_view", props: [:])
+    }
+
+    /// 发现页下载的书入库成功（调用点在入库 toast 之后；本地导入不埋）。
+    static func discoverImport(bookId: String) -> TelemetryEvent {
+        TelemetryEvent(name: "discover_import", props: ["bookId": .string(bookId)])
+    }
 }

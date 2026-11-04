@@ -194,6 +194,10 @@ public struct ReaderThemeTokens: Equatable {
     /// 旧令牌派生（阅读室既有组件直接换肤）。
     public let surface: ReaderColorToken
     public let surface2: ReaderColorToken
+    /// 主色描边（reader.css:9258 `--accent-line: var(--border-strong)`；folio+light 改品牌绿淡线）。
+    public let accentLine: ReaderColorToken
+    /// 「mod」角色标签色（reader.css:9259 `--mod: var(--clause-indigo)`；folio+light 改 #4b5a9a）。
+    public let mod: ReaderColorToken
 
     /// 换肤过渡时长（秒）与弹性曲线控制点（原型 350ms var(--ease-spring)）。
     public static let skinTransitionDuration: Double = 0.35
@@ -209,6 +213,37 @@ public struct ReaderThemeTokens: Equatable {
         case .sepia:
             return nordicMist
         }
+    }
+
+    /// 带根皮肤维度的令牌：`.reader-root[data-skin='folio'][data-theme='light']`
+    /// （reader.css:9262-9276）只在 folio + light 这一格覆盖颜色系；sepia/dark/oled
+    /// 与非 folio 视图一律原主题令牌（作用域铁律，规格 §2.3）。
+    public static func tokens(for theme: ReaderTheme, skin: ReaderSkin) -> ReaderThemeTokens {
+        let base = tokens(for: theme)
+        guard skin == .folio, theme == .light else { return base }
+        return folioLight(base)
+    }
+
+    /// folio + light 颜色矩阵（reader.css:9262-9276，品牌绿 L9/L13）：
+    /// --accent #1f6b57 / --accent-hover #185646 / --accent-active = hover（Mac 无独立按压令牌）/
+    /// --accent-soft #e3f0ea / --accent-line #b9d8cc / --mod #4b5a9a / --warn #a1620f /
+    /// --warn-soft #fbf1e1。未在该作用域重定义的（accent-softer / accent-glow / err…）保持原值。
+    public static func folioLight(_ base: ReaderThemeTokens) -> ReaderThemeTokens {
+        ReaderThemeTokens(
+            theme: base.theme,
+            canvasBg: base.canvasBg, aura1: base.aura1, aura2: base.aura2,
+            glassSurface: base.glassSurface, glassElevated: base.glassElevated, glassPill: base.glassPill,
+            glassBorder: base.glassBorder, glassBorderStrong: base.glassBorderStrong, glassHighlight: base.glassHighlight,
+            ink1: base.ink1, ink2: base.ink2, ink3: base.ink3, ink4: base.ink4,
+            accent: .init("#1F6B57"), accentHover: .init("#185646"), accentSoft: .init("#E3F0EA"),
+            accentSofter: base.accentSofter, accentGlow: base.accentGlow,
+            sonicTeal: base.sonicTeal, sonicTealSoft: base.sonicTealSoft,
+            clauseIndigo: base.clauseIndigo, clauseIndigoSoft: base.clauseIndigoSoft,
+            tapeBg: base.tapeBg, tapeBorder: base.tapeBorder, tapeInk: base.tapeInk,
+            warn: .init("#A1620F"), warnSoft: .init("#FBF1E1"), err: base.err, errSoft: base.errSoft,
+            surface: base.surface, surface2: base.surface2,
+            accentLine: .init("#B9D8CC"), mod: .init("#4B5A9A")
+        )
     }
 
     /// warm-archival（纸书）。
@@ -333,7 +368,8 @@ public struct ReaderThemeTokens: Equatable {
             clauseIndigo: other.clauseIndigo, clauseIndigoSoft: other.clauseIndigoSoft,
             tapeBg: other.tapeBg, tapeBorder: other.tapeBorder, tapeInk: other.tapeInk,
             warn: other.warn, warnSoft: other.warnSoft, err: other.err, errSoft: other.errSoft,
-            surface: other.surface, surface2: other.surface2
+            surface: other.surface, surface2: other.surface2,
+            accentLine: other.accentLine, mod: other.mod
         )
     }
 
@@ -349,7 +385,8 @@ public struct ReaderThemeTokens: Equatable {
         clauseIndigo: ReaderColorToken, clauseIndigoSoft: ReaderColorToken,
         tapeBg: ReaderColorToken, tapeBorder: ReaderColorToken, tapeInk: ReaderColorToken,
         warn: ReaderColorToken, warnSoft: ReaderColorToken, err: ReaderColorToken, errSoft: ReaderColorToken,
-        surface: ReaderColorToken, surface2: ReaderColorToken
+        surface: ReaderColorToken, surface2: ReaderColorToken,
+        accentLine: ReaderColorToken? = nil, mod: ReaderColorToken? = nil
     ) {
         self.theme = theme
         self.canvasBg = canvasBg
@@ -383,12 +420,29 @@ public struct ReaderThemeTokens: Equatable {
         self.errSoft = errSoft
         self.surface = surface
         self.surface2 = surface2
+        // 缺省派生（reader.css:9258-9259）：--accent-line = --border-strong、--mod = --clause-indigo。
+        self.accentLine = accentLine ?? glassBorderStrong
+        self.mod = mod ?? clauseIndigo
+    }
+}
+
+/// 根皮肤（ReaderApp.tsx:2330-2335）：`data-skin="folio"` 仅 shelf/reading 两视图挂；
+/// speak/vault 不挂（base）。颜色系只在 folio + light 一格覆盖（reader.css:9262-9276）。
+public enum ReaderSkin: Equatable {
+    case base
+    case folio
+
+    public init(folding route: ReaderRouteKind) {
+        switch route {
+        case .shelf, .reading: self = .folio
+        case .speak, .vault: self = .base
+        }
     }
 }
 
 // MARK: - 顶部导航岛三档（对齐 Windows ReaderTopBar.tsx IslandSurface）
 
-/// 导航岛三档：阅读 / 口语 / 笔记与复习。阅读室内部路由（shelf/reading/review/notes/speak）
+/// 导航岛三档：阅读 / 口语 / 笔记与复习。阅读室内部路由（shelf/reading/vault/speak）
 /// 由 `IslandSurface(folding:)` 归并到这三档高亮。
 public enum IslandSurface: String, Equatable, CaseIterable {
     case reading
@@ -403,31 +457,33 @@ public enum IslandSurface: String, Equatable, CaseIterable {
         }
     }
 
-    /// 内部路由归并：shelf/reading → 阅读、speak → 口语、review/notes → 笔记与复习
-    /// （对齐 ReaderApp.tsx:1660 islandSurface）。
+    /// 内部路由归并：shelf/reading → 阅读、speak → 口语、vault → 笔记与复习
+    /// （对齐 ReaderApp.tsx:1877-1878 islandSurface）。
     public init(folding route: ReaderRouteKind) {
         switch route {
         case .shelf, .reading: self = .reading
         case .speak: self = .speak
-        case .review, .notes: self = .vault
+        case .vault: self = .vault
         }
     }
 }
 
 /// 阅读室内部路由种类（视图模型 Route 的纯数据镜像；书架是首页落点）。
+/// 2026-10-26 改版对齐 Windows：原 review/notes 两值删除（笔记与复习只有一个
+/// vault 容器，玩法档在 VaultPlayMode 上），对齐 `ReaderApp.tsx:155` 的
+/// `type ViewRoute = "shelf" | "reading" | "speak" | "vault"`。
 public enum ReaderRouteKind: String, Equatable, CaseIterable {
     case shelf
     case reading
-    case review
-    case notes
     case speak
+    case vault
 
     /// 顶栏「书架 · X」触发器与窗口标题用的当前面名（阅读档回落文章名，由调用方传入）。
     public func surfaceTitle(articleTitle: String?) -> String? {
         switch self {
         case .shelf: return "书架"
         case .reading: return articleTitle
-        case .review, .notes: return "笔记与复习"
+        case .vault: return "笔记与复习"
         case .speak: return "口语陪练"
         }
     }
@@ -462,20 +518,53 @@ public enum ReaderFontPair: String, Codable, Equatable, CaseIterable {
     }
 }
 
-/// 朗读引擎：local = 系统 AVSpeechSynthesizer（离线），xfyun = 讯飞在线合成，
-/// edge = 微软 Edge 在线合成（免费无凭据，对齐 Windows 默认引擎）。
+/// 朗读引擎：edge = 微软 Edge 在线合成（免费无凭据，默认），cloud = 云音色
+/// （来源跟随语音页 voiceProvider：沉浸云网关或讯飞），local = 系统
+/// AVSpeechSynthesizer（离线）。xfyun 仅作旧数据兼容：满足迁移条件时升级为
+/// cloud；不满足时保留旧讯飞/本地回落语义（对齐 Windows core/readerTypes.ts）。
 public enum TtsProvider: String, Codable, Equatable, CaseIterable {
     case local
     case xfyun
     case edge
+    case cloud
 
     public var label: String {
         switch self {
         case .local: return "系统语音（离线）"
         case .xfyun: return "讯飞在线合成"
         case .edge: return "Edge 在线"
+        case .cloud: return "云音色"
         }
     }
+}
+
+// MARK: - 旧 xfyun → cloud 迁移（对齐 Windows core/readerTypes.ts:338-351）
+
+/// 旧 xfyun → cloud 的迁移信号：与语音页迁移规则共用「任一讯飞凭据」口径。
+public struct LegacyTtsMigrationSignals: Equatable {
+    public var hasAnyXfyunCredential: Bool
+    public var loggedIn: Bool
+
+    public init(hasAnyXfyunCredential: Bool, loggedIn: Bool) {
+        self.hasAnyXfyunCredential = hasAnyXfyunCredential
+        self.loggedIn = loggedIn
+    }
+}
+
+/// 仅旧值参与迁移；edge/local/cloud 永不被凭据或登录态改写。
+public func shouldMigrateLegacyTtsProvider(
+    _ provider: TtsProvider,
+    signals: LegacyTtsMigrationSignals
+) -> Bool {
+    provider == .xfyun && (signals.hasAnyXfyunCredential || signals.loggedIn)
+}
+
+/// 不满足迁移条件时保留旧 xfyun，避免原「缺凭据 → 本地回落」用户被改成 Edge 回落。
+public func migrateLegacyTtsProviderValue(
+    _ provider: TtsProvider,
+    migrationAllowed: Bool
+) -> TtsProvider {
+    (migrationAllowed && provider == .xfyun) ? .cloud : provider
 }
 
 /// 跟读评测过关阈值范围（5 分制，默认 4.2 ≈ 84 分）。
@@ -535,12 +624,18 @@ public struct ReaderSettings: Codable, Equatable {
     /// 画报排版（v0.8）：prose 段落英文流 / parallel 双语对照。
     /// 可选字段：老 JSON 缺省回落 .prose（schema:269，免迁移）。
     public var spreadLayout: SpreadLayout?
+    /// 随读抽查（2026-10-26 改版）：已读句的词块/生词变行内填空，本地判分。
+    /// 可选字段：老 JSON 缺省读 false（schema 缺省 false，免迁移）。
+    public var spotQuizMode: Bool?
 
     /// 生效值：缺省 false（ReadingView.tsx:97 `settings.spotlightMode ?? false` 同口径）。
     public var spotlightEnabled: Bool { spotlightMode ?? false }
 
     /// 生效值：缺省 prose（ReadingView.tsx:98 `settings.spreadLayout ?? "prose"` 同口径）。
     public var effectiveSpreadLayout: SpreadLayout { spreadLayout ?? .prose }
+
+    /// 生效值：缺省 false（ReadingView.tsx:187 `settings.spotQuizMode ?? false` 同口径）。
+    public var spotQuizEnabled: Bool { spotQuizMode ?? false }
 
     public init(
         contrastMode: ContrastMode = .dual,
@@ -569,7 +664,8 @@ public struct ReaderSettings: Codable, Equatable {
         showVocabMarks: Bool = true,
         reviewMode: ReviewModeSetting = .smart,
         spotlightMode: Bool? = nil,
-        spreadLayout: SpreadLayout? = nil
+        spreadLayout: SpreadLayout? = nil,
+        spotQuizMode: Bool? = nil
     ) {
         self.contrastMode = contrastMode
         self.maskTranslation = maskTranslation
@@ -598,6 +694,7 @@ public struct ReaderSettings: Codable, Equatable {
         self.reviewMode = reviewMode
         self.spotlightMode = spotlightMode
         self.spreadLayout = spreadLayout
+        self.spotQuizMode = spotQuizMode
     }
 
     public static let `default` = ReaderSettings()
@@ -641,6 +738,8 @@ public struct ReaderSettingsOverride: Codable, Equatable {
     public var spotlightMode: Bool?
     /// 画报排版（v0.8，可选透传；非法值 merge 时忽略）。
     public var spreadLayout: String?
+    /// 随读抽查（2026-10-26 改版，可选透传）。
+    public var spotQuizMode: Bool?
 
     public init() {}
 
@@ -663,6 +762,7 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         self.reviewMode = patch["reviewMode"] as? String
         self.spotlightMode = patch["spotlightMode"] as? Bool
         self.spreadLayout = patch["spreadLayout"] as? String
+        self.spotQuizMode = patch["spotQuizMode"] as? Bool
     }
 
     enum CodingKeys: String, CodingKey {
@@ -672,7 +772,7 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         case edgeVoiceZh, edgeVoiceEn
         case shadowingAssess, shadowingPassScore, shadowingAutoMic, shadowingSilenceMs
         case chunkHighlight, showVocabMarks, reviewMode
-        case spotlightMode, spreadLayout
+        case spotlightMode, spreadLayout, spotQuizMode
     }
 
     public init(from decoder: Decoder) throws {
@@ -706,6 +806,7 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         // 不让坏数据打穿整份覆盖（merge 侧再挡非法枚举值）。
         spotlightMode = try? c.decodeIfPresent(Bool.self, forKey: .spotlightMode)
         spreadLayout = try? c.decodeIfPresent(String.self, forKey: .spreadLayout)
+        spotQuizMode = try? c.decodeIfPresent(Bool.self, forKey: .spotQuizMode)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -737,6 +838,7 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         try c.encodeIfPresent(reviewMode, forKey: .reviewMode)
         try c.encodeIfPresent(spotlightMode, forKey: .spotlightMode)
         try c.encodeIfPresent(spreadLayout, forKey: .spreadLayout)
+        try c.encodeIfPresent(spotQuizMode, forKey: .spotQuizMode)
     }
 
     /// 用一个合法设置 patch 覆盖（只写入 patch 里出现的字段）。
@@ -768,6 +870,7 @@ public struct ReaderSettingsOverride: Codable, Equatable {
         if let v = patch["reviewMode"] as? String { reviewMode = v }
         if let v = patch["spotlightMode"] as? Bool { spotlightMode = v }
         if let v = patch["spreadLayout"] as? String { spreadLayout = v }
+        if let v = patch["spotQuizMode"] as? Bool { spotQuizMode = v }
     }
 }
 
@@ -816,6 +919,7 @@ public func mergeReaderSettings(_ global: ReaderSettings, _ override: ReaderSett
     //（ReadingView.tsx:97-98 的 `?? false` / `?? "prose"` 同口径）。
     if let v = o.spotlightMode { merged.spotlightMode = v }
     if let v = o.spreadLayout, let parsed = SpreadLayout(rawValue: v) { merged.spreadLayout = parsed }
+    if let v = o.spotQuizMode { merged.spotQuizMode = v }
     return merged
 }
 
@@ -850,6 +954,7 @@ public func readerSettingsPatch(from old: ReaderSettings, to new: ReaderSettings
     // v0.8 画报字段：写出具体生效值（nil 归位 = 默认值），老覆盖缺字段不受影响。
     if old.spotlightMode != new.spotlightMode { patch["spotlightMode"] = new.spotlightMode ?? false }
     if old.spreadLayout != new.spreadLayout { patch["spreadLayout"] = (new.spreadLayout ?? .prose).rawValue }
+    if old.spotQuizMode != new.spotQuizMode { patch["spotQuizMode"] = new.spotQuizMode ?? false }
     return patch
 }
 

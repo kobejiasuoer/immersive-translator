@@ -141,4 +141,18 @@ test('hidden audio added during a task pull is sanitized before rebase and ackno
   assertNoAudioRegisters(t.state().tasks);assert.equal(t.state().tasks[0].draft,'edit during pull');assert.deepEqual(t.state().tasks[0].attempts.map(a=>a.id),['remote','local']);
   for(const call of t.calls.filter(c=>c.method==='POST'))assertNoAudioRegisters(call.body);assertNoAudioRegisters([...t.records.values()]);assert.equal(t.outbox.size,0);
 });
+test('desktop book metadata hydrates chapter names, author, cover and chapterIdx without deleting the book entity',async()=>{
+  const t=setup();
+  t.setRemote('reading-articles','desktop-book',{id:'desktop-book',kind:'book',title:'Alice in Wonderland',author:'Lewis Carroll',cover:'data:image/png;base64,AAA',chapters:[{articleId:'desktop-ch1',title:'Down the Rabbit-Hole'},{articleId:'desktop-ch2',title:'The Pool of Tears'}]});
+  t.setRemote('reading-articles','desktop-ch2',{...article(),id:'desktop-ch2',title:'The Pool of Tears',bookId:'desktop-book',chapterIdx:1},Date.now(),1);
+  await t.engine.sync();
+  const restored=t.state().articles[0];assert.equal(restored.bookTitle,'Alice in Wonderland');assert.equal(restored.author,'Lewis Carroll');assert.equal(restored.chapterIndex,1);assert.equal(restored.chapterTitle,'The Pool of Tears');assert.equal(restored.cover,'data:image/png;base64,AAA');
+  await t.engine.sync();assert.equal(t.remote.get('reading-articles').get('desktop-book').deleted,false);
+});
+test('completion is explicitly relayed and a final-sentence breakpoint never infers it',async()=>{
+  const t=setup({articles:[article()],progress:{'article-1':0},readingCompleted:{'article-1':true}});await t.engine.sync();
+  assert.equal(t.remote.get('reading-articles').get('article-1').payload.readingCompleted,true);
+  const other=setup();for(const [id,row]of t.remote.get('reading-articles'))other.remote.get('reading-articles').set(id,clone(row));await other.engine.sync();assert.equal(other.state().readingCompleted['article-1'],true);
+  const legacy=setup();legacy.setRemote('reading-articles','article-1',article(),Date.now(),1);await legacy.engine.sync();assert.notEqual(legacy.state().readingCompleted['article-1'],true);
+});
 (async()=>{let passed=0;for(const[name,fn]of tests){try{await fn();console.log('PASS '+name);passed++;}catch(e){console.error('FAIL '+name,e);process.exitCode=1;}}console.log(`${passed}/${tests.length} tests passed`);})();

@@ -172,4 +172,62 @@ final class ReaderSettingsEdgeTests: XCTestCase {
         XCTAssertEqual(SpreadLayout.prose.next, .parallel)
         XCTAssertEqual(SpreadLayout.parallel.next, .prose)
     }
+
+    // MARK: - 随读抽查（2026-10-26 改版 spotQuizMode：可选免迁移，§2.4 测试组 8）
+
+    /// 可选解码缺省 false：老 JSON 没有该字段 → nil → 生效值 false；
+    /// 显式 true → 生效 true。旧 JSON 读取不迁移、不报错。
+    func testSpotQuizModeOptionalDecodeDefaultsFalse() throws {
+        // 生效值派生（ReadingView.tsx:187 `settings.spotQuizMode ?? false` 同口径）。
+        XCTAssertFalse(ReaderSettings.default.spotQuizEnabled)
+        XCTAssertNil(ReaderSettings.default.spotQuizMode)
+        var on = ReaderSettings.default
+        on.spotQuizMode = true
+        XCTAssertTrue(on.spotQuizEnabled)
+
+        // 老 JSON（无 spotQuizMode 字段）走真实加载路径：读 Override（宽松）→ 与 default 合并
+        //（ReaderStore.loadGlobalReaderSettings 同口径）→ 缺省 nil / false，免迁移。
+        let legacy = #"{"contrastMode":"dual","fontSize":19}"#
+        let override = try ReaderFileCodec.decode(ReaderSettingsOverride.self, from: Data(legacy.utf8))
+        XCTAssertNil(override.spotQuizMode)
+        let settings = mergeReaderSettings(.default, override)
+        XCTAssertNil(settings.spotQuizMode)
+        XCTAssertFalse(settings.spotQuizEnabled)
+
+        // 新 JSON 往返：true / false / 缺省三态都保真。
+        var explicit = ReaderSettings.default
+        explicit.spotQuizMode = true
+        let data = try ReaderFileCodec.encode(explicit)
+        let round = try ReaderFileCodec.decode(ReaderSettings.self, from: data)
+        XCTAssertEqual(round.spotQuizMode, true)
+        let rawFalse = #"{"spotQuizMode":false}"#
+        let off = try ReaderFileCodec.decode(ReaderSettingsOverride.self, from: Data(rawFalse.utf8))
+        XCTAssertEqual(off.spotQuizMode, false)
+    }
+
+    /// override 合并逐字段：override.spotQuizMode 透传进合并结果；
+    /// patch 产出口径与 spotlight 一致（nil 归位写出生效默认值 false）。
+    func testSpotQuizModeOverrideMergeAndPatch() throws {
+        var base = ReaderSettings.default
+        base.spotQuizMode = false
+        var override = ReaderSettingsOverride()
+        override.spotQuizMode = true
+        let merged = mergeReaderSettings(base, override)
+        XCTAssertEqual(merged.spotQuizMode, true)
+        XCTAssertTrue(merged.spotQuizEnabled)
+
+        // patch 产出：设置变化落 patch（写出生效值）。
+        var changed = ReaderSettings.default
+        changed.spotQuizMode = true
+        let patch = readerSettingsPatch(from: ReaderSettings.default, to: changed)
+        XCTAssertEqual(patch["spotQuizMode"] as? Bool, true)
+        // 归位回 nil 时 patch 写出 false。
+        let resetPatch = readerSettingsPatch(from: changed, to: ReaderSettings.default)
+        XCTAssertEqual(resetPatch["spotQuizMode"] as? Bool, false)
+
+        // 坏 JSON：类型不符（字符串塞布尔位）宽松解码不落。
+        let raw = #"{"spotQuizMode":"on"}"#
+        let bad = try ReaderFileCodec.decode(ReaderSettingsOverride.self, from: Data(raw.utf8))
+        XCTAssertNil(bad.spotQuizMode)
+    }
 }

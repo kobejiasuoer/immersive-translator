@@ -1,0 +1,3 @@
+[default]
+description = "Manage this app's local study reminders and consume their review entry actions."
+permissions = ["allow-status", "allow-request", "allow-replace", "allow-take-action", "allow-ack-action", "allow-test"]

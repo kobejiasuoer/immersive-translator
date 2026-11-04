@@ -2,8 +2,8 @@
  * 复习笔记三屏（push）—— §3.15：流式生成可停 → 入库；笔记库 + AI 复盘 + 只测仍错词加练。
  * 笔记只汇总今天的复习，不改 SRS 排程（#53/#54）。
  * 生成口径（demo 16 实化）：
- *  · 已配置模型 → llm_chat 真流式（chatStream，onDelta 累计上屏），输出末行「建议：…」解析为 insight；
- *  · 未配置 / 请求失败 / 手动停止 → buildNoteDraft 本地统计模板（数据本就真实），
+ *  · 已登录 → 账号服务生成，输出末行「建议：…」解析为 insight；
+ *  · 未登录 / 请求失败 / 手动停止 → buildNoteDraft 本地统计模板（数据本就真实），
  *    并明示「本地统计（…）」来源，不再用 60ms/3 字打字机假装流式。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -118,7 +118,7 @@ export function NotesGen() {
   const [running, setRunning] = useState(mode === "ai");
   const [done, setDone] = useState(mode === "local");
   /** 数据来源说明：AI 成功为空串；本地/失败/停止明示原因。 */
-  const [source, setSource] = useState(mode === "local" ? "本地统计（未配置模型服务）" : "");
+  const [source, setSource] = useState(mode === "local" ? "本机学习统计" : "");
   const [blocked, setBlocked] = useState(false);
   const engineRef = useRef<ChatStream | null>(null);
   const startedRef = useRef(false);

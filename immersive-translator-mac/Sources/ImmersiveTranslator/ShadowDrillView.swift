@@ -213,6 +213,11 @@ final class ShadowDrillController: ObservableObject {
                         self.onToast("这个没听清，再试一次（读准一点、声音大一点）")
                         return
                     }
+                    // 评测记录入云（speak-assessments，source=coach 只练差词、无
+                    // sessionId；对齐 Windows ShadowDrill.tsx:126）。
+                    SpeakSyncCenter.shared.records?.recordAssessmentSilently(
+                        SpeakAssessmentInput(result: result, source: .coach, refText: entry.text)
+                    )
                     self.state.scores[idx] = result.total
                     self.state.step = .result(score: result.total, improved: result.total > entry.mark.score)
                 }

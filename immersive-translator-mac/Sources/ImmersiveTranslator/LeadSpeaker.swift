@@ -44,33 +44,65 @@ final class LeadSpeaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
 
         if provider == .edge {
             // Edge 免凭据恒尝试（isReady 恒 true）；失败静默回落本地（领读不弹归因 toast）。
-            cloudTask = Task { [weak self] in
-                do {
-                    let data = try await EdgeTtsEngine.shared.audioData(for: clean, nativeRate: nativeRate)
-                    guard !Task.isCancelled else { return }
-                    guard let self else { return }
-                    try self.play(data: data, rate: rate)
-                } catch {
-                    // stop() 取消（cloudTask.cancel）也会以错误落到 catch：取消后不得再回落
-                    // 本地出声，否则旧句会混进随后开始的评测录音（与上方成功路径同一取消守卫）。
-                    guard !Task.isCancelled, let self else { return }
-                    self.speakLocal(clean, chinese: chinese, rate: fallbackRate)
-                }
-            }
+            playEdge(clean, nativeRate: nativeRate, rate: rate, fallbackRate: fallbackRate, chinese: chinese)
         } else if provider == .xfyun, XfyunTtsEngine.shared.isReady {
+            playXfyun(clean, nativeRate: nativeRate, rate: rate, fallbackRate: fallbackRate, chinese: chinese)
+        } else if provider == .cloud {
+            // 云音色档：跟随语音页 voiceProvider（裁决与阅读室主链路同源；
+            // 外围消费点网关化属后续批次——守卫不过按裁决落 edge/本地，不弹回落提示）。
             cloudTask = Task { [weak self] in
-                do {
-                    let data = try await XfyunTtsEngine.shared.audioData(for: clean, nativeRate: nativeRate)
-                    guard !Task.isCancelled else { return }
-                    guard let self else { return }
-                    try self.play(data: data, rate: rate)
-                } catch {
-                    guard let self else { return }
-                    self.speakLocal(clean, chinese: chinese, rate: fallbackRate)
+                switch await CloudTtsRouter.route(xfyunReady: XfyunTtsEngine.shared.isReady) {
+                case .gateway:
+                    do {
+                        let data = try await CloudTtsRouter.gatewayAudioData(text: clean)
+                        guard !Task.isCancelled, let self else { return }
+                        try self.play(data: data, rate: rate)
+                    } catch {
+                        guard !Task.isCancelled, let self else { return }
+                        self.speakLocal(clean, chinese: chinese, rate: fallbackRate)
+                    }
+                case .edge:
+                    self?.playEdge(clean, nativeRate: nativeRate, rate: rate, fallbackRate: fallbackRate, chinese: chinese)
+                case .xfyun:
+                    self?.playXfyun(clean, nativeRate: nativeRate, rate: rate, fallbackRate: fallbackRate, chinese: chinese)
+                case .local:
+                    self?.speakLocal(clean, chinese: chinese, rate: fallbackRate)
                 }
             }
         } else {
             speakLocal(clean, chinese: chinese, rate: fallbackRate)
+        }
+    }
+
+    /// Edge 云合成 + 失败静默回落本地（领读不弹归因 toast）。
+    private func playEdge(_ clean: String, nativeRate: String?, rate: Double, fallbackRate: Double, chinese: Bool) {
+        cloudTask = Task { [weak self] in
+            do {
+                let data = try await EdgeTtsEngine.shared.audioData(for: clean, nativeRate: nativeRate)
+                guard !Task.isCancelled else { return }
+                guard let self else { return }
+                try self.play(data: data, rate: rate)
+            } catch {
+                // stop() 取消（cloudTask.cancel）也会以错误落到 catch：取消后不得再回落
+                // 本地出声，否则旧句会混进随后开始的评测录音（与上方成功路径同一取消守卫）。
+                guard !Task.isCancelled, let self else { return }
+                self.speakLocal(clean, chinese: chinese, rate: fallbackRate)
+            }
+        }
+    }
+
+    /// 讯飞云合成 + 失败静默回落本地（调用方已确认 isReady）。
+    private func playXfyun(_ clean: String, nativeRate: String?, rate: Double, fallbackRate: Double, chinese: Bool) {
+        cloudTask = Task { [weak self] in
+            do {
+                let data = try await XfyunTtsEngine.shared.audioData(for: clean, nativeRate: nativeRate)
+                guard !Task.isCancelled else { return }
+                guard let self else { return }
+                try self.play(data: data, rate: rate)
+            } catch {
+                guard let self else { return }
+                self.speakLocal(clean, chinese: chinese, rate: fallbackRate)
+            }
         }
     }
 

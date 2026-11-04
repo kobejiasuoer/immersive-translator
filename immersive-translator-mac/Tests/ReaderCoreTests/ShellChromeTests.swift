@@ -150,12 +150,12 @@ final class ShellChromeTests: XCTestCase {
     // MARK: - SHELL-2：导航岛三档归并 + 角标口径
 
     func testIslandSurfaceFoldsInternalRoutes() {
-        // shelf/reading → 阅读、speak → 口语、review/notes → 笔记与复习。
+        // shelf/reading → 阅读、speak → 口语、vault → 笔记与复习（2026-10-26 改版后
+        // 内部路由只有四值，review/notes 已并入 vault）。
         XCTAssertEqual(IslandSurface(folding: .shelf), .reading)
         XCTAssertEqual(IslandSurface(folding: .reading), .reading)
         XCTAssertEqual(IslandSurface(folding: .speak), .speak)
-        XCTAssertEqual(IslandSurface(folding: .review), .vault)
-        XCTAssertEqual(IslandSurface(folding: .notes), .vault)
+        XCTAssertEqual(IslandSurface(folding: .vault), .vault)
     }
 
     func testIslandSurfaceLabelsMatchWindowsCopy() {
@@ -186,8 +186,7 @@ final class ShellChromeTests: XCTestCase {
         XCTAssertEqual(ReaderRouteKind.reading.folioTriggerLabel(articleTitle: "  "), "书架")
         // 其他档带面名。
         XCTAssertEqual(ReaderRouteKind.speak.folioTriggerLabel(articleTitle: nil), "书架 · 口语陪练")
-        XCTAssertEqual(ReaderRouteKind.notes.folioTriggerLabel(articleTitle: nil), "书架 · 笔记与复习")
-        XCTAssertEqual(ReaderRouteKind.review.folioTriggerLabel(articleTitle: nil), "书架 · 笔记与复习")
+        XCTAssertEqual(ReaderRouteKind.vault.folioTriggerLabel(articleTitle: nil), "书架 · 笔记与复习")
     }
 
     func testSurfaceTitleForRoutes() {

@@ -2,10 +2,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 import ReaderCore
 
-// MARK: - 导入弹窗（内容进水口）：五个入口
+// MARK: - 导入弹窗（内容进水口）：七个入口
 //
-// 内置文库（默认）/ 整本 EPUB·长书 / 本地文件（docx·pdf·txt）/ 网页链接抓取 / 粘贴文本。
-// 对齐 Windows ImportDialog.tsx：
+// 内置文库（默认）/ 整本 EPUB·长书 / 本地文件（docx·pdf·txt）/ 网页链接抓取 / 粘贴文本
+// / 发现书库 / 资讯订阅。对齐 Windows ImportDialog.tsx：
 // - 文库：今日一篇 hero + 分级书单，覆盖数随「考试目标」联动（考研/四级/六级），
 //   未掌握数与生词本 SRS 状态同源（intervalDays < 7）。
 // - EPUB/长书：整本书导入建书——拖入 .epub（或长 .txt/.docx/.pdf）→ 解析目录
@@ -16,19 +16,79 @@ import ReaderCore
 // - 链接：应用层抓正文（去导航/广告），预览（词数/时长/难度/覆盖），
 //   失败态给出原因与「切到粘贴文本」退路。
 // - 粘贴：原有能力原样保留。⌘↩ 直接开始（粘贴页）。
+// - 发现书库（B2）：服务端公版书目录 → 选书下载镜像 EPUB → 校验后注入「EPUB / 长书」
+//   tab 走既有 parseEpub → 预览 → 入库链（pendingEpub 同帧接力，注入只消费一次）。
+// - 资讯订阅（B3）：RSS/Atom 订阅源聚合 → 合并文章列表 → 点文章复用网页链接导入链。
+
+/// 发现页交接的注入载荷（IntakeDiscoverTab onDeliver → pendingEpub → IntakeBookTab 挂载取走；
+/// 对齐 ImportDialog.tsx EpubTabInjected）。以 id 判等，避免 SwiftUI diff 比对整份字节。
+struct EpubTabInjected: Equatable {
+    let id = UUID()
+    let data: Data
+    let fileName: String
+    let sourceBookId: String?
+
+    static func == (lhs: EpubTabInjected, rhs: EpubTabInjected) -> Bool { lhs.id == rhs.id }
+}
+
+/// 注入一次性消费（纯逻辑，IntakeBookTab 在挂载 / 注入值变化时调用；对齐 ImportDialog.tsx:905-910
+/// 的 effect + injectedRef）：有注入且本实例尚未消费过 → 置位 → 先回调清 pending → 再交给解析；
+/// 无注入、或已消费过（视图重出现 / 注入值再变化）都不动，解析绝不重复触发。
+/// `consumed` 是调用方持有的实例级标记（视图里为 @State，随视图身份重置——对应 injectedRef
+/// 随组件实例重置）。返回是否发生了消费，便于单测计数。
+@discardableResult
+func consumeEpubInjection(
+    _ injected: EpubTabInjected?,
+    consumed: inout Bool,
+    onConsumed: () -> Void,
+    parse: (EpubTabInjected) -> Void
+) -> Bool {
+    guard let injected, !consumed else { return false }
+    consumed = true
+    onConsumed()
+    parse(injected)
+    return true
+}
 
 struct ReaderImportSheet: View {
     @ObservedObject var vm: ReaderViewModel
     @Environment(\.dismiss) private var dismiss
-    @State private var tab: IntakeTab = .lib
+    /// 初始 tab 由外部注入（书架发现三列 discover/feed/lib 直达；Windows ImportDialog
+    /// `initialTab ?? "lib"` 契约：每次重开弹窗都以注入值为初值）。
+    let initialTab: IntakeTab
+    @State private var tab: IntakeTab
     @State private var goal: ExamGoal = IntakeService.shared.examGoal
+    /// 发现页下载完成 → EPUB tab 的注入接力（ImportDialog.tsx:114-116 pendingEpub）。
+    @State private var pendingEpub: EpubTabInjected?
 
+    init(vm: ReaderViewModel, initialTab: IntakeTab = .lib) {
+        self.vm = vm
+        self.initialTab = initialTab
+        _tab = State(initialValue: initialTab)
+    }
+
+    /// 导入弹窗七档 tab（Windows ImportDialog.tsx:70 TabId 同集合，顺序对齐 :174-183 tab 条）。
     enum IntakeTab: String, CaseIterable {
         case lib = "内置文库"
         case epub = "EPUB / 长书"
         case file = "本地文件"
         case url = "网页链接"
         case paste = "粘贴文本"
+        case discover = "发现书库"
+        case feed = "资讯订阅"
+
+        /// 由白名单归一的 ReaderImportTab 构造（未知值在 resolveImportOpenTab 已回落 lib）。
+        init(importTab: ReaderImportTab) {
+            switch importTab {
+            case .lib: self = .lib
+            case .epub: self = .epub
+            case .file: self = .file
+            case .url: self = .url
+            case .paste: self = .paste
+            case .discover: self = .discover
+            case .feed: self = .feed
+            }
+        }
     }
 
     /// 书架上已有的文库条目 id（sourceUrl 形如 "library:<id>"）。
@@ -55,11 +115,14 @@ struct ReaderImportSheet: View {
                         dismiss()
                     }
                 case .epub:
-                    IntakeBookTab(vm: vm, goal: $goal, onImported: {
-                        dismiss()
-                    }) {
-                        tab = .paste
-                    }
+                    IntakeBookTab(
+                        vm: vm,
+                        goal: $goal,
+                        injected: pendingEpub,
+                        onInjectedConsumed: { pendingEpub = nil },
+                        onImported: { dismiss() },
+                        onSwitchToPaste: { tab = .paste }
+                    )
                 case .file:
                     IntakeFileTab(vm: vm, goal: $goal, onImported: {
                         dismiss()
@@ -75,6 +138,19 @@ struct ReaderImportSheet: View {
                 case .paste:
                     IntakePasteTab(vm: vm) {
                         dismiss()
+                    }
+                case .discover:
+                    // 下载校验通过 → 同帧两步：注入载荷就位 + 切到 EPUB tab（SwiftUI 同一
+                    // render cycle 内两状态同帧生效，对齐 ImportDialog.tsx:223-231）。
+                    IntakeDiscoverTab { data, bookId in
+                        pendingEpub = EpubTabInjected(data: data, fileName: "\(bookId).epub", sourceBookId: bookId)
+                        tab = .epub
+                    }
+                case .feed:
+                    IntakeFeedTab(vm: vm, goal: $goal, onImported: {
+                        dismiss()
+                    }) {
+                        tab = .paste
                     }
                 }
             }
@@ -452,6 +528,10 @@ func minutesLabel(_ minutes: Int) -> String {
 private struct IntakeBookTab: View {
     @ObservedObject var vm: ReaderViewModel
     @Binding var goal: ExamGoal
+    /// 外部注入的 EPUB 字节（发现页下载交接；既有本地导入路径不传，行为零变化）。
+    let injected: EpubTabInjected?
+    /// 注入被消费后的回调（弹窗层清 pendingEpub，防重复解析）。
+    let onInjectedConsumed: () -> Void
     let onImported: () -> Void
     let onSwitchToPaste: () -> Void
 
@@ -462,6 +542,8 @@ private struct IntakeBookTab: View {
         var selected: Set<Int>
         /// 缩小后的封面 dataURL。
         var cover: String?
+        /// 来源书目 id（发现页下载注入时携带；透传进 draft 供 discover_import 埋点）。
+        var sourceBookId: String?
     }
 
     private enum Phase {
@@ -474,6 +556,9 @@ private struct IntakeBookTab: View {
     @State private var phase: Phase = .idle
     @State private var dragOver = false
     @State private var fileImporterShown = false
+    /// 防重入：注入只消费一次（视图重出现 / 注入值变化都不重复解析，对齐
+    /// ImportDialog.tsx:874-910 injectedRef）。
+    @State private var injectedConsumed = false
 
     private static var importTypes: [UTType] {
         var types: [UTType] = []
@@ -509,6 +594,16 @@ private struct IntakeBookTab: View {
             if let url = try? result.get().first {
                 parse(url: url)
             }
+        }
+        // 挂载消费注入（发现页路径：pendingEpub 在挂载前已就位）；先回调清 pending
+        // 再解析，「返回重选文件」后重选路径不带 sourceBookId。
+        .onAppear { consumeInjectedIfNeeded() }
+        .onChange(of: injected?.id) { _ in consumeInjectedIfNeeded() }
+    }
+
+    private func consumeInjectedIfNeeded() {
+        consumeEpubInjection(injected, consumed: &injectedConsumed, onConsumed: onInjectedConsumed) { payload in
+            parse(data: payload.data, fileName: payload.fileName, sourceBookId: payload.sourceBookId)
         }
     }
 
@@ -741,7 +836,8 @@ private struct IntakeBookTab: View {
             author: state.book.author.isEmpty ? nil : state.book.author,
             cover: state.cover,
             chapters: chapters,
-            wordlists: IntakeService.shared.wordlists
+            wordlists: IntakeService.shared.wordlists,
+            sourceBookId: state.sourceBookId
         ) else {
             vm.showToast("没有可导入的章节内容")
             return
@@ -761,9 +857,24 @@ private struct IntakeBookTab: View {
         // 本地埋点：选中文件开始解析（对齐 Windows book_import_attempt；
         // 文件大小读不到时省略该键，不阻断解析、不发 0）。
         ReaderTelemetry.track(.bookImportAttempt(fileSizeBytes: fileSizeBytes(of: url)))
+        runParse { try Self.parseBook(url: url) }
+    }
+
+    /// 注入字节解析（发现页下载交接）：埋点口径与本地文件一致（ImportDialog.tsx:877-881
+    /// 同一 parse 函数），sourceBookId 进预览态并在确认导入时透传。
+    private func parse(data: Data, fileName: String, sourceBookId: String?) {
+        ReaderTelemetry.track(.bookImportAttempt(fileSizeBytes: data.count))
+        runParse {
+            var state = try Self.parseEpubData(data, fileName: fileName)
+            state.sourceBookId = sourceBookId
+            return state
+        }
+    }
+
+    private func runParse(_ work: @escaping () throws -> PreviewState) {
         phase = .parsing
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = Result { try Self.parseBook(url: url) }
+            let result = Result { try work() }
             DispatchQueue.main.async {
                 switch result {
                 case .success(let state):
@@ -785,6 +896,20 @@ private struct IntakeBookTab: View {
         return (attrs?[.size] as? NSNumber)?.intValue
     }
 
+    /// EPUB 字节 → 预览态（封面缩小）；本地文件与发现页注入共用。
+    private static func parseEpubData(_ data: Data, fileName: String) throws -> PreviewState {
+        var book = try parseEpub(data: data, fileName: fileName)
+        if let rawCover = book.coverDataUrl {
+            book.coverDataUrl = BookCoverImage.downscaleToDataUrl(rawCover) ?? rawCover
+        }
+        return PreviewState(
+            book: book,
+            fileName: fileName,
+            selected: Set(book.chapters.indices),
+            cover: book.coverDataUrl
+        )
+    }
+
     /// 解析电子书 / 长文 → 预览态。epub 走 BookImport.parseEpub；其余走应用层
     /// 抽文（FileImportCore/DocxTextExtractor/PDFKit）+ fallbackSections 分节。
     private static func parseBook(url: URL) throws -> PreviewState {
@@ -798,16 +923,7 @@ private struct IntakeBookTab: View {
             } catch {
                 throw FileImportError("读取文件失败：\(error.localizedDescription)")
             }
-            var book = try parseEpub(data: data, fileName: fileName)
-            if let rawCover = book.coverDataUrl {
-                book.coverDataUrl = BookCoverImage.downscaleToDataUrl(rawCover) ?? rawCover
-            }
-            return PreviewState(
-                book: book,
-                fileName: fileName,
-                selected: Set(book.chapters.indices),
-                cover: book.coverDataUrl
-            )
+            return try parseEpubData(data, fileName: fileName)
         }
         // 长文：复用本地文件抽取（txt / docx / pdf），再按 ~3000 词分节。
         let extracted = try IntakeService.shared.extractTextFromFile(url: url)
@@ -1152,6 +1268,11 @@ private struct IntakeUrlTab: View {
                             .font(.system(size: 11.5))
                             .foregroundColor(.secondary)
                     }
+                    if article.truncated {
+                        Text("原文过长，仅导入前 50,000 字符")
+                            .font(.system(size: 11))
+                            .foregroundColor(.orange)
+                    }
                     Text("覆盖\(goal.label)大纲词 \(cov.total)\(cov.unmastered > 0 ? " · \(cov.unmastered) 个你还没掌握" : "")")
                         .font(.system(size: 11.5))
                         .foregroundColor(cov.unmastered > 0 ? .orange : .secondary)
@@ -1311,4 +1432,1000 @@ private struct IntakePasteTab: View {
             fileError = "读取文件失败：\(error.localizedDescription)"
         }
     }
+}
+
+// MARK: - 发现书库（升级计划 B2）
+
+/// 目录分页大小（服务端默认 20，显式传参固定口径）。
+private let discoverPageSize = 20
+
+/// 千分位数字（Windows `Number.toLocaleString()` 口径：12,345）。
+private func commaNumber(_ value: Int) -> String {
+    let formatter = NumberFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.numberStyle = .decimal
+    return formatter.string(from: NSNumber(value: value)) ?? String(value)
+}
+
+/// 发现书库 tab：服务端公版书目目录 → 选书下载镜像 EPUB → 校验后 onDeliver 上抛
+/// （弹窗层注入「EPUB / 长书」tab 走既有 parseEpub → 预览 → 入库链），本组件只做
+/// 「导入管线前面的目录页」。对齐 Windows DiscoverTab.tsx:
+/// - 目录：GET /v1/books 匿名只读；q/grade 筛选 + 「加载更多」分页。
+/// - 下载：booksDownload 拿字节 → sha256 校验 → onDeliver(data, bookId) 上抛。
+/// - 失败双口径：目录级整块换失败卡片（含重试），下载级换行内态（红字 + 重新下载），
+///   全部中文文案出自 discoverCatalog，绝不白屏。
+/// - 断点语义：校验失败留在本页行内，不上抛半成品；parseEpub 失败由 EPUB tab
+///   既有失败卡片兜底。
+/// - 未登录口径：匿名可用，tab 恒可见（与 A1 场景目录一致）；埋点 discover_view
+///   本地 JSONL，每次进入发现 tab 计一次（不做 session 去重）。
+private struct IntakeDiscoverTab: View {
+    /// 下载校验通过后上抛：bytes 交给 parseEpub，bookId 作 sourceBookId 透传到入库埋点。
+    let onDeliver: (Data, String) -> Void
+
+    /// 在途下载（同一时刻至多一个；全部下载按钮 disabled 防连点触发 429）。
+    private struct DownloadState: Equatable {
+        var bookId: String
+        var received: Int64
+        var total: Int64
+    }
+
+    private struct DownloadErrorState: Equatable {
+        var bookId: String
+        var text: String
+    }
+
+    /// 目录级状态机：loading（含换筛选/重试）/ ready / error（整块失败卡片）。
+    private enum Phase: Equatable {
+        case loading
+        case ready
+        case error(String)
+    }
+
+    @State private var phase: Phase = .loading
+    @State private var list: [DiscoverBook] = []
+    @State private var total = 0
+    /// 已载页数（加载更多从 page+1 继续）。
+    @State private var page = 0
+
+    // 筛选：qDraft 是输入框受控值，applied 是已生效口径（Enter/按钮/切难度才生效）。
+    @State private var qDraft = ""
+    @State private var appliedQ = ""
+    @State private var appliedGrade = ""
+
+    @State private var loadingMore = false
+    @State private var moreError = ""
+
+    @State private var download: DownloadState?
+    @State private var downloadError: DownloadErrorState?
+    @State private var fetchTask: Task<Void, Never>?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // 工具行在所有目录态下恒可见（DiscoverTab.tsx:203-231 在 phase 分支之外）。
+            toolbar
+            Group {
+                switch phase {
+                case .loading:
+                    skeletonView(phaseText: "正在加载书库目录…")
+                case .error(let message):
+                    listFailCard(message: message)
+                case .ready:
+                    readyView
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(16)
+        .onAppear {
+            ReaderTelemetry.track(.discoverView())
+            fetchPage(pageToLoad: 1, append: false)
+        }
+        .onDisappear { fetchTask?.cancel() }
+    }
+
+    /// 目录级错误卡（整块替换）：标题「没能加载书库」+ 原因 + 「重试」。
+    private func listFailCard(message: String) -> some View {
+        VStack(spacing: 10) {
+            Text("没能加载书库")
+                .font(.system(size: 14, weight: .semibold))
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("重试") {
+                fetchPage(pageToLoad: 1, append: false)
+            }
+            .controlSize(.small)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: 视图
+
+    private var toolbar: some View {
+        HStack(spacing: 8) {
+            TextField("搜索书名 / 作者", text: $qDraft)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12))
+                .onSubmit { applySearch() }
+            Picker("难度筛选", selection: $appliedGrade) {
+                Text("全部难度").tag("")
+                Text("入门").tag("easy")
+                Text("进阶").tag("medium")
+                Text("挑战").tag("hard")
+            }
+            .labelsHidden()
+            .frame(width: 96)
+            .onChange(of: appliedGrade) { _ in changeGrade() }
+            Button("搜索") { applySearch() }
+                .controlSize(.small)
+        }
+    }
+
+    private var readyView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("共 \(commaNumber(total)) 本")
+                    .font(.system(size: 11.5))
+                    .foregroundColor(.secondary)
+                VStack(spacing: 8) {
+                    ForEach(list, id: \.id) { book in
+                        bookCard(book)
+                    }
+                }
+                if list.count < total {
+                    HStack {
+                        Spacer()
+                        Button {
+                            fetchPage(pageToLoad: page + 1, append: true)
+                        } label: {
+                            Text(loadingMore ? "正在加载…" : "加载更多（\(list.count)/\(total)）")
+                                .font(.system(size: 12))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 5)
+                                .background(Color.secondary.opacity(0.08))
+                                .clipShape(RoundedRectangle(cornerRadius: 7))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(loadingMore)
+                        Spacer()
+                    }
+                }
+                if !moreError.isEmpty {
+                    Text(moreError)
+                        .font(.system(size: 11))
+                        .foregroundColor(.red)
+                }
+            }
+            .padding(16)
+        }
+    }
+
+    private func bookCard(_ book: DiscoverBook) -> some View {
+        let dl = download?.bookId == book.id ? download : nil
+        let derr = downloadError?.bookId == book.id ? downloadError : nil
+        return HStack(alignment: .top, spacing: 12) {
+            Text(book.coverEmoji.isEmpty ? "📘" : book.coverEmoji)
+                .font(.system(size: 22))
+                .frame(width: 44, height: 44)
+                .background(Color.secondary.opacity(0.07))
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(book.title)
+                    .font(.system(size: 13.5, weight: .semibold, design: .serif))
+                if !book.author.isEmpty {
+                    Text(book.author)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                HStack(spacing: 8) {
+                    Text(gradeLabels[book.grade] ?? book.grade)
+                        .font(.system(size: 10, weight: .semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.14))
+                        .foregroundColor(.blue)
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                    if let wordCount = book.wordCount {
+                        Text("\(commaNumber(wordCount)) 词")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                    Text(formatFileSize(book.fileSizeBytes))
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                if let description = book.description, !description.isEmpty {
+                    Text(description)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                        .help(description)
+                }
+                Text("许可：\(book.licenseName)")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(.secondary.opacity(0.8))
+                    .help(book.licenseUrl)
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 4) {
+                if let dl {
+                    Text(downloadProgressText(dl))
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                } else if let derr {
+                    Text(derr.text)
+                        .font(.system(size: 11))
+                        .foregroundColor(.red)
+                        .frame(maxWidth: 150, alignment: .trailing)
+                    Button("重新下载") {
+                        startDownload(book)
+                    }
+                    .controlSize(.small)
+                    .disabled(download != nil)
+                } else {
+                    Button {
+                        startDownload(book)
+                    } label: {
+                        Text("下载 · \(formatFileSize(book.fileSizeBytes))")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(Color.accentColor.opacity(0.12))
+                            .foregroundColor(.accentColor)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(download != nil)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.secondary.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// 下载进度：total>0 `{received} / {total}…`；total=0（无 content-length）`下载中…{received}`。
+    private func downloadProgressText(_ dl: DownloadState) -> String {
+        if dl.total > 0 {
+            return "\(formatFileSize(Int(dl.received))) / \(formatFileSize(Int(dl.total)))…"
+        }
+        return "下载中…\(formatFileSize(Int(dl.received)))"
+    }
+
+    // MARK: 行为
+
+    /// 拉一页目录。append=false 为整块替换（首拉/筛选/重试），true 为加载更多
+    /// （失败只记 moreError 不动已加载内容）。
+    @MainActor
+    private func fetchPage(pageToLoad: Int, append: Bool) {
+        let q = appliedQ.isEmpty ? nil : appliedQ
+        let grade = appliedGrade.isEmpty ? nil : appliedGrade
+        if append {
+            loadingMore = true
+            moreError = ""
+        } else {
+            phase = .loading
+        }
+        fetchTask = Task {
+            defer { if append { loadingMore = false } }
+            do {
+                let http = try await DiscoverService.shared.booksList(
+                    q: q, grade: grade, page: pageToLoad, perPage: discoverPageSize
+                )
+                if http.status != 200 {
+                    let text = discoverListErrorText(status: http.status, retryAfterSeconds: http.retryAfterSeconds)
+                    if append {
+                        moreError = text
+                    } else {
+                        phase = .error(text)
+                    }
+                    return
+                }
+                guard let parsed = parseBooksPage(http.body) else {
+                    if append {
+                        moreError = discoverBodyErrorText
+                    } else {
+                        phase = .error(discoverBodyErrorText)
+                    }
+                    return
+                }
+                list = append ? list + parsed.books : parsed.books
+                total = parsed.total
+                page = pageToLoad
+                phase = .ready
+            } catch {
+                let text = discoverInvokeErrorText(error)
+                if append {
+                    moreError = text
+                } else {
+                    phase = .error(text)
+                }
+            }
+        }
+    }
+
+    private func applySearch() {
+        let q = qDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        appliedQ = q
+        fetchPage(pageToLoad: 1, append: false)
+    }
+
+    private func changeGrade() {
+        fetchPage(pageToLoad: 1, append: false)
+    }
+
+    /// 下载一本书：非 200 / sha256 不匹配都留在行内，成功才 onDeliver。
+    @MainActor
+    private func startDownload(_ book: DiscoverBook) {
+        guard download == nil else { return }
+        downloadError = nil
+        download = DownloadState(bookId: book.id, received: 0, total: 0)
+        Task {
+            defer { download = nil }
+            do {
+                let http = try await DiscoverService.shared.booksDownload(bookId: book.id) { progress in
+                    // 进度回调来自 URLSession 内部线程 → 主线程按 bookId 匹配更新
+                    //（切 tab 卸载后 @State 写入落地空视图，无泄漏风险）。
+                    DispatchQueue.main.async {
+                        if let current = download, current.bookId == progress.bookId {
+                            download = DownloadState(
+                                bookId: progress.bookId,
+                                received: progress.received,
+                                total: progress.total
+                            )
+                        }
+                    }
+                }
+                if http.status != 200 {
+                    downloadError = DownloadErrorState(
+                        bookId: book.id,
+                        text: discoverDownloadErrorText(status: http.status, retryAfterSeconds: http.retryAfterSeconds)
+                    )
+                    return
+                }
+                if !verifyEpubSha256(http.data, expected: book.sha256) {
+                    downloadError = DownloadErrorState(bookId: book.id, text: discoverChecksumMismatchText)
+                    return
+                }
+                onDeliver(http.data, book.id)
+            } catch {
+                downloadError = DownloadErrorState(bookId: book.id, text: discoverInvokeErrorText(error))
+            }
+        }
+    }
+}
+
+// MARK: - 资讯订阅（升级计划 B3）
+
+/// 缓存新鲜期：挂载自动刷新只针对超过该时长的订阅（10 分钟）。
+private let feedFreshTtlMs: Int64 = 10 * 60 * 1000
+
+private func feedNowMs() -> Int64 {
+    Int64(Date().timeIntervalSince1970 * 1000)
+}
+
+/// 订阅兜底命名用的 host 标签（对齐 FeedTab.tsx:91-97 `new URL(url).host`）：WHATWG `host`
+/// 含非默认端口（`host:8080`），默认端口（http 80 / https 443 等）省略，IPv6 字面量带方括号；
+/// 解析失败原样返回 url。Foundation `URL.host` 不含端口，故按 scheme 默认端口表手工拼回。
+func feedHostLabel(_ url: String) -> String {
+    guard let parsed = URL(string: url), let rawHost = parsed.host, !rawHost.isEmpty else { return url }
+    let host = rawHost.contains(":") ? "[\(rawHost)]" : rawHost
+    if let port = parsed.port, port != feedDefaultPort(forScheme: parsed.scheme) {
+        return "\(host):\(port)"
+    }
+    return host
+}
+
+/// WHATWG special scheme 默认端口表（URL 标准 §4.2）：命中默认端口时 `host` 不带端口。
+private func feedDefaultPort(forScheme scheme: String?) -> Int? {
+    switch scheme?.lowercased() {
+    case "http", "ws": return 80
+    case "https", "wss": return 443
+    case "ftp": return 21
+    default: return nil
+    }
+}
+
+/// 相对时间（「3 小时前」口径；未来时间按「刚刚」处理）。
+private func feedRelativeTime(_ ts: Int64) -> String {
+    let diff = feedNowMs() - ts
+    if diff < 60_000 { return "刚刚" }
+    if diff < 3_600_000 { return "\(diff / 60_000) 分钟前" }
+    if diff < 86_400_000 { return "\(diff / 3_600_000) 小时前" }
+    return "\(diff / 86_400_000) 天前"
+}
+
+/// 摘要展示：超 120 字截断加「…」。
+private func feedSummaryLine(_ summary: String) -> String? {
+    if summary.isEmpty { return nil }
+    return summary.count > 120 ? String(summary.prefix(120)) + "…" : summary
+}
+
+/// 资讯订阅 tab：RSS/Atom 订阅源聚合 → 合并文章列表 → 点文章复用网页链接导入链
+/// （fetchArticle 抓正文 → 预览 → 「加入书架并开始阅读」importText 入库）。对齐
+/// Windows FeedTab.tsx:
+/// - 抓取：IntakeService.fetchFeed 匿名直连用户提供的源站（不走网关、不带 token），
+///   拿回 feed 原始 XML 文本；解析在 ReaderCore.parseFeedXml；订阅列表与条目缓存在
+///   UserDefaults（FeedStore），抓取层零存储。
+/// - 刷新：挂载先渲染缓存，再对 fetchedAt 距今超过 10 分钟的订阅并行自动刷新
+///   （TaskGroup，单源失败不阻断其他）；手动按钮无条件全量刷新；不做常驻轮询
+///   （切 tab 即卸载，无后台基建）。
+/// - 添加：手添输入与推荐勾选共用同一链——归一化 → 查重（不发请求）→ 拉一次校验
+///   可达且是 feed → 频道名（取不到以 host 兜底）→ 入库并立即写条目缓存 → 清空输入。
+/// - 导入：点文章标题 → fetchArticle(条目 link) → 预览卡 → 「加入书架并开始阅读」以
+///   {sourceType: url, sourceUrl: 文章 link, level} 调 importText，之后的链路与 URL tab 共用。
+/// - 埋点：feed_view / feed_import 走本地 JSONL（纯本地零网络；feed_import 埋「发起
+///   导入」意图，与 epub_import_intent 同层级口径）。
+private struct IntakeFeedTab: View {
+    @ObservedObject var vm: ReaderViewModel
+    @Binding var goal: ExamGoal
+    let onImported: () -> Void
+    let onSwitchToPaste: () -> Void
+
+    private let feedStore = FeedStore()
+
+    /// 文章预览态（点开文章 → fetchArticle → 网页链接 tab 同款预览卡）。
+    private enum PreviewPhase: Equatable {
+        case idle
+        case loading
+        case preview
+        case error
+    }
+
+    @State private var feeds: [FeedSubscription] = []
+    @State private var cache: [String: FeedCacheEntry] = [:]
+
+    // 订阅管理行
+    @State private var urlDraft = ""
+    @State private var adding = false
+    @State private var addError = ""
+    /// 最近一次发起添加的地址（失败行的「重试」按钮复用）。
+    @State private var lastAddUrl = ""
+
+    // 工具行
+    @State private var refreshing = false
+    @State private var failedFeedIds: [String] = []
+
+    // 文章预览态
+    @State private var openEntry: FeedEntryItem?
+    @State private var pvPhase: PreviewPhase = .idle
+    @State private var pv: FetchedArticle?
+    @State private var pvError = ""
+    @State private var fetchTask: Task<Void, Never>?
+
+    var body: some View {
+        Group {
+            if let entry = openEntry {
+                switch pvPhase {
+                case .loading:
+                    skeletonView(phaseText: "正在抓取正文…")
+                case .error:
+                    previewFailCard(entry)
+                case .preview:
+                    if let article = pv {
+                        articlePreview(entry, article)
+                    } else {
+                        skeletonView(phaseText: "正在抓取正文…")
+                    }
+                case .idle:
+                    EmptyView()
+                }
+            } else {
+                feedListView
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            ReaderTelemetry.track(.feedView())
+            feeds = feedStore.loadFeeds()
+            cache = feedStore.loadFeedCache()
+            // 挂载曝光 + 节流自动刷新（只刷超过 TTL 的订阅；全部新鲜则零网络）。
+            let now = feedNowMs()
+            let stale = feeds.filter { now - (cache[$0.id]?.fetchedAt ?? 0) > feedFreshTtlMs }
+            if !stale.isEmpty {
+                refreshFeeds(stale, cache)
+            }
+        }
+        .onDisappear { fetchTask?.cancel() }
+    }
+
+    // MARK: 订阅主视图
+
+    private var merged: [FeedEntryItem] {
+        mergeFeedEntries(feeds.map { feed in
+            FeedEntriesBundle(
+                feedId: feed.id,
+                feedTitle: feed.title,
+                fetchedAt: cache[feed.id]?.fetchedAt ?? 0,
+                entries: cache[feed.id]?.entries ?? []
+            )
+        })
+    }
+
+    private var lastRefreshAt: Int64? {
+        var latest: Int64 = 0
+        for feed in feeds {
+            latest = max(latest, cache[feed.id]?.fetchedAt ?? 0)
+        }
+        return latest > 0 ? latest : nil
+    }
+
+    private var hasAnyCache: Bool {
+        feeds.contains { cache[$0.id] != nil }
+    }
+
+    private var feedListView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                addRow
+                if !addError.isEmpty {
+                    HStack(spacing: 8) {
+                        Text(addError)
+                            .font(.system(size: 11.5))
+                            .foregroundColor(.red)
+                        Button("重试") {
+                            addFeed(lastAddUrl)
+                        }
+                        .controlSize(.small)
+                        .disabled(adding)
+                    }
+                }
+                if !feeds.isEmpty {
+                    chips
+                }
+                recoSection
+                toolbar
+                listSection
+            }
+            .padding(16)
+        }
+    }
+
+    private var addRow: some View {
+        HStack(spacing: 8) {
+            TextField("粘贴 RSS/Atom 订阅地址", text: $urlDraft)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12))
+                .onSubmit { addFeed(urlDraft) }
+            Button {
+                addFeed(urlDraft)
+            } label: {
+                Text(adding ? "正在添加…" : "添加")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .background(Color.accentColor.opacity(urlDraft.trimmingCharacters(in: .whitespaces).isEmpty || adding ? 0.4 : 1))
+                    .foregroundColor(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+            }
+            .buttonStyle(.plain)
+            .disabled(urlDraft.trimmingCharacters(in: .whitespaces).isEmpty || adding)
+        }
+    }
+
+    private var chips: some View {
+        WrappingChips(feeds: feeds) { id in
+            removeFeed(id)
+        }
+    }
+
+    private var recoSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("推荐订阅 · 美国政府公开源")
+                .font(.system(size: 12, weight: .semibold))
+            VStack(spacing: 6) {
+                ForEach(recommendedFeeds, id: \.url) { reco in
+                    HStack(alignment: .top, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(reco.title)
+                                .font(.system(size: 12, weight: .medium, design: .serif))
+                            Text(reco.note)
+                                .font(.system(size: 10.5))
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        let added = findFeedByUrl(feeds, url: reco.url) != nil
+                        Button {
+                            addFeed(reco.url)
+                        } label: {
+                            Text(added ? "已添加" : "添加")
+                                .font(.system(size: 11))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 3)
+                                .background(
+                                    added ? Color.clear : Color.accentColor.opacity(0.12)
+                                )
+                                .foregroundColor(added ? .secondary : .accentColor)
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .strokeBorder(added ? Color.secondary.opacity(0.3) : Color.accentColor.opacity(0.4))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(added || adding)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color.secondary.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+    }
+
+    private var toolbar: some View {
+        HStack(spacing: 10) {
+            Button {
+                refreshFeeds(feeds, cache)
+            } label: {
+                Text(refreshing ? "正在刷新…" : "刷新")
+                    .font(.system(size: 11))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 3)
+                    .background(Color.secondary.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+            .disabled(refreshing || feeds.isEmpty)
+            if let at = lastRefreshAt {
+                Text("更新于 \(feedRelativeTime(at))")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            if !failedFeedIds.isEmpty {
+                HStack(spacing: 6) {
+                    Text("\(failedFeedIds.count) 个订阅刷新失败")
+                        .font(.system(size: 11))
+                        .foregroundColor(.red)
+                    Button("重试") {
+                        refreshFeeds(
+                            feeds.filter { failedFeedIds.contains($0.id) },
+                            cache
+                        )
+                    }
+                    .controlSize(.small)
+                    .disabled(refreshing)
+                }
+            }
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private var listSection: some View {
+        let articles = merged
+        if feeds.isEmpty {
+            Text("先添加一个 RSS/Atom 订阅地址，或从下方推荐列表勾选几个")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+        } else if articles.isEmpty {
+            if !hasAnyCache && refreshing {
+                skeletonView(phaseText: "正在刷新订阅…")
+            } else {
+                Text(feedEmptyText)
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+        } else {
+            VStack(spacing: 6) {
+                // key = feedId-link-序号（Windows FeedTab.tsx:538 同款三元 key，防跨源同链接撞 key）。
+                ForEach(Array(articles.enumerated()), id: \.offset) { _, entry in
+                    articleRow(entry)
+                }
+            }
+        }
+    }
+
+    private func articleRow(_ entry: FeedEntryItem) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(entry.feedTitle)
+                .font(.system(size: 10.5))
+                .foregroundColor(.secondary)
+            Button {
+                openArticle(entry)
+            } label: {
+                Text(entry.title)
+                    .font(.system(size: 13, weight: .medium, design: .serif))
+                    .multilineTextAlignment(.leading)
+            }
+            .buttonStyle(.plain)
+            if let summary = feedSummaryLine(entry.summary) {
+                Text(summary)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+            }
+            if let publishedAt = entry.publishedAt {
+                Text(feedRelativeTime(publishedAt))
+                    .font(.system(size: 10.5))
+                    .foregroundColor(.secondary.opacity(0.8))
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: 文章预览卡（照网页链接 tab 预览卡结构）
+
+    /// 文章预览失败卡：标题 + 原因 + 「返回列表 / 重试 / 切到粘贴文本」三退路。
+    private func previewFailCard(_ entry: FeedEntryItem) -> some View {
+        VStack(spacing: 10) {
+            Text("没能读取这篇文章")
+                .font(.system(size: 14, weight: .semibold))
+            Text(pvError)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("返回列表") { closePreview() }
+                    .controlSize(.small)
+                Button("重试") { openArticle(entry) }
+                    .controlSize(.small)
+                Button("切到粘贴文本") {
+                    closePreview()
+                    onSwitchToPaste()
+                }
+                .controlSize(.small)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func articlePreview(_ entry: FeedEntryItem, _ article: FetchedArticle) -> some View {
+        let stats = IntakePreviewStats(text: article.text)
+        let cov = coverageForText(
+            article.text, goal: goal, vocab: vm.vocabWords, wordlists: IntakeService.shared.wordlists
+        )
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                IntakeGoalRow(goal: $goal)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("\(article.host) · 来自订阅「\(entry.feedTitle)」")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    Text(article.title.isEmpty ? article.host : article.title)
+                        .font(.system(size: 15, weight: .semibold, design: .serif))
+                    HStack(spacing: 10) {
+                        Text(stats.level)
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.blue.opacity(0.14))
+                            .foregroundColor(.blue)
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                        Text("\(commaNumber(stats.words)) 词 · \(stats.paras) 段 · 约 \(stats.minutes) 分钟")
+                            .font(.system(size: 11.5))
+                            .foregroundColor(.secondary)
+                    }
+                    if article.truncated {
+                        Text("原文过长，仅导入前 50,000 字符")
+                            .font(.system(size: 11))
+                            .foregroundColor(.orange)
+                    }
+                    Text("覆盖\(goal.label)大纲词 \(cov.total)\(cov.unmastered > 0 ? " · \(cov.unmastered) 个你还没掌握" : "")")
+                        .font(.system(size: 11.5))
+                        .foregroundColor(cov.unmastered > 0 ? .orange : .secondary)
+                    Text(String(article.text.prefix(180)) + "…")
+                        .font(.system(size: 12, design: .serif))
+                        .foregroundColor(.secondary)
+                        .lineLimit(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.secondary.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    HStack {
+                        Spacer()
+                        Button("返回列表") { closePreview() }
+                            .controlSize(.small)
+                        Button("加入书架并开始阅读") { confirmImport(entry, article) }
+                            .controlSize(.small)
+                            .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding(14)
+                .background(Color.secondary.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .padding(16)
+        }
+    }
+
+    // MARK: 行为
+
+    /// 添加订阅（手添输入与推荐勾选共用）：拉一次 feed 校验可达且是 feed，
+    /// 通过后入库存并立即写条目缓存（首拉即缓存）。
+    @MainActor
+    private func addFeed(_ rawUrl: String) {
+        let url = normalizeFeedUrl(rawUrl)
+        if url.isEmpty || adding { return }
+        addError = ""
+        lastAddUrl = url
+        if findFeedByUrl(feeds, url: url) != nil {
+            addError = feedDuplicateText
+            return
+        }
+        adding = true
+        Task {
+            defer { adding = false }
+            do {
+                let xml = try await IntakeService.shared.fetchFeed(url: url)
+                guard let entries = parseFeedXml(xml) else {
+                    // nil=不是订阅（如填错成普通网页，形状门禁在 parseFeedXml.isFeedShaped）；
+                    // [] 是合法 feed 暂无文章，照常入库（列表态走 feedEmptyText 文案）。
+                    addError = feedParseErrorText
+                    return
+                }
+                let channelTitle = feedTitleOf(xml: xml)
+                let sub = FeedSubscription(
+                    id: UUID().uuidString,
+                    url: url,
+                    title: channelTitle.isEmpty ? feedHostLabel(url) : channelTitle,
+                    addedAt: feedNowMs()
+                )
+                feeds.append(sub)
+                cache[sub.id] = FeedCacheEntry(entries: entries, fetchedAt: feedNowMs())
+                feedStore.saveFeeds(feeds)
+                feedStore.saveFeedCache(cache)
+                urlDraft = ""
+            } catch {
+                addError = feedInvokeErrorText(error)
+            }
+        }
+    }
+
+    /// 删订阅：连同其条目缓存一起清（chips 上的 ✕）；失败列表与打开中的预览级联清理。
+    @MainActor
+    private func removeFeed(_ id: String) {
+        feeds.removeAll { $0.id == id }
+        cache.removeValue(forKey: id)
+        feedStore.saveFeeds(feeds)
+        feedStore.saveFeedCache(cache)
+        failedFeedIds.removeAll { $0 == id }
+        if openEntry?.feedId == id {
+            closePreview()
+        }
+    }
+
+    /// 刷新若干订阅：并行拉取（TaskGroup，单源失败不阻断其他），成功源写缓存，
+    /// 失败源聚进 failedFeedIds（工具行给「N 个订阅刷新失败」+重试）。
+    /// parseFeedXml 返回 nil（源站给了非 feed 内容）按该源失败计。
+    @MainActor
+    private func refreshFeeds(_ targets: [FeedSubscription], _ currentCache: [String: FeedCacheEntry]) {
+        if targets.isEmpty { return }
+        refreshing = true
+        Task {
+            var nextCache = currentCache
+            var failed: [String] = []
+            await withTaskGroup(of: (String, FeedSubscription, [FeedEntryItem]?).self) { group in
+                for feed in targets {
+                    group.addTask {
+                        do {
+                            let xml = try await IntakeService.shared.fetchFeed(url: feed.url)
+                            guard let entries = parseFeedXml(xml) else {
+                                throw FileImportError(feedParseErrorText)
+                            }
+                            return (feed.id, feed, entries)
+                        } catch {
+                            return (feed.id, feed, nil)
+                        }
+                    }
+                }
+                for await (feedId, feed, entries) in group {
+                    if let entries {
+                        nextCache[feedId] = FeedCacheEntry(entries: entries, fetchedAt: feedNowMs())
+                    } else {
+                        failed.append(feed.id)
+                    }
+                }
+            }
+            feedStore.saveFeedCache(nextCache)
+            cache = nextCache
+            failedFeedIds = failed
+            refreshing = false
+        }
+    }
+
+    /// 点开文章：fetchArticle 抓正文 → 预览卡（网页链接 tab 同链）。
+    @MainActor
+    private func openArticle(_ entry: FeedEntryItem) {
+        openEntry = entry
+        pv = nil
+        pvError = ""
+        pvPhase = .loading
+        fetchTask = Task {
+            do {
+                let article = try await IntakeService.shared.fetchArticle(url: entry.link)
+                if !Task.isCancelled {
+                    pv = article
+                    pvPhase = .preview
+                }
+            } catch {
+                if !Task.isCancelled {
+                    pvError = feedInvokeErrorText(error)
+                    pvPhase = .error
+                }
+            }
+        }
+    }
+
+    private func closePreview() {
+        fetchTask?.cancel()
+        openEntry = nil
+        pv = nil
+        pvError = ""
+        pvPhase = .idle
+    }
+
+    /// 确认导入：同帧埋 feed_import（发起意图，本地轨），meta 带 sourceUrl=文章 link。
+    @MainActor
+    private func confirmImport(_ entry: FeedEntryItem, _ article: FetchedArticle) {
+        let stats = IntakePreviewStats(text: article.text)
+        ReaderTelemetry.track(.feedImport(host: article.host))
+        onImported()
+        vm.importText(
+            article.text,
+            title: article.title.isEmpty ? nil : article.title,
+            meta: ImportMeta(sourceType: .url, sourceUrl: entry.link, level: stats.level)
+        )
+    }
+}
+
+// MARK: - 订阅 chip 流式布局（行内小组件）
+
+/// 订阅 chip 组（FeedTab 订阅管理行）：标题 + ✕，流式换行排布。
+private struct WrappingChips: View {
+    let feeds: [FeedSubscription]
+    let onRemove: (String) -> Void
+
+    var body: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 180), spacing: 6)],
+            alignment: .leading,
+            spacing: 6
+        ) {
+            ForEach(feeds, id: \.id) { feed in
+                HStack(spacing: 6) {
+                    Text(feed.title)
+                        .font(.system(size: 11.5))
+                        .lineLimit(1)
+                    Button {
+                        onRemove(feed.id)
+                    } label: {
+                        Text("✕")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("删除订阅 \(feed.title)")
+                    .help("删除这个订阅")
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.secondary.opacity(0.08))
+                .clipShape(Capsule())
+                .help(feed.url)
+            }
+        }
+    }
+}
+
+// MARK: - 共用骨架（发现与资讯订阅 tab；照 IntakeBookTab.parsingView 口径）
+
+private func skeletonView(phaseText: String) -> some View {
+    VStack(spacing: 12) {
+        ProgressView()
+        Text(phaseText)
+            .font(.system(size: 12))
+            .foregroundColor(.secondary)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
 }

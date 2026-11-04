@@ -3,31 +3,28 @@
  */
 import { createContext, useContext } from "react";
 
+/* visual-theme-cleanup 死代码收窄：translate/camera/scenes/chat/shadow/caption/about/share
+   随旧 spike 屏一并删除；noteslib/notedetail 保留（NotesGen 存库跳转 / NotesLib 行点击是活引用）。
+   proto-parity-2026-11-01：account 撤出 push 栈——原型 SHEETS.account 是根页呼出的底部抽屉
+   （components/account/accountGate），不再是推入页路由。 */
 export type PushName =
-  | "learningPractice" | "account" | "learningImport" | "learningWord" | "learningNote" | "learningSearch"
+  | "learningPractice" | "learningImport" | "learningWord" | "learningNote" | "learningSearch"
+  | "learningLibrary" | "learningFeeds" | "learningWordbook"
   | "reader"
   | "review"
   | "quick"
-  | "translate"
-  | "camera"
-  | "scenes"
-  | "chat"
-  | "shadow"
-  | "caption"
   | "notes"
   | "noteslib"
   | "notedetail"
   | "history"
   | "glossary"
   | "diag"
-  | "about"
   | "setModel"
   | "setPref"
   | "setVoice"
   | "setRemind"
   | "setLook"
-  | "onboarding"
-  | "share";
+  | "onboarding";
 
 export type PushProps = Record<string, unknown>;
 

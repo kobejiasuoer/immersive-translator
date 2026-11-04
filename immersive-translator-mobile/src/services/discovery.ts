@@ -1,4 +1,5 @@
 import type { Article } from "../core/types";
+import { extractReadingPage, readingContentKey } from "../core/readingLibrary";
 import { activeRepository, getState, replaceSyncedState } from "../store";
 import { cloudState, httpRequest } from "./cloud";
 import { parseBooksPage, formatFileSize, type DiscoverBook, type DiscoverPage } from "../../../immersive-translator-windows/src/lib/discoverCatalog";
@@ -18,6 +19,8 @@ const MAX_FEED_CHARS = 4 * 1024 * 1024;
 
 export function discoveryError(error: unknown): string {
   if (error instanceof DOMException && error.name === "AbortError") return "操作已取消，未加入书架";
+  /* fetch 网络失败（TypeError: Failed to fetch 等）映射为友好中文（library-easy：不透出原始异常） */
+  if (error instanceof TypeError) return "网络暂时连不上，请检查网络后再试；书架里已保存的内容仍可阅读。";
   return error instanceof Error ? error.message : String(error);
 }
 function context() {
@@ -65,7 +68,9 @@ export async function previewBook(catalog: DiscoverBook, signal?: AbortSignal): 
   const { parseEpub } = await import("../../../immersive-translator-windows/src/core/bookImport");
   const book = await parseEpub(new File([bytes], `${catalog.id}.epub`, { type: "application/epub+zip" }));
   ctx.check(); checkSignal(signal);
-  const bookId = `book-${(await hash(`${sourceOrigin}/${catalog.id}`)).slice(0, 24)}`;
+  // Reuse the old ID for an already imported edition; a revised EPUB gets its own book.
+  const existing = getState().articles.find(article => article.bookId && article.sourceCatalogId === catalog.id && article.catalogOrigin === sourceOrigin && article.contentRevision === catalog.sha256);
+  const bookId = existing?.bookId || `book-${(await hash(`${sourceOrigin}/${catalog.id}/${catalog.sha256}`)).slice(0, 24)}`;
   return { catalog, book, sourceOrigin, bookId };
 }
 function sentenceContent(text: string): Pick<Article, "sentences" | "paragraphStarts"> {
@@ -82,7 +87,7 @@ export function articlesFromBook(preview: BookPreview, now = Date.now()): Articl
     id: `${preview.bookId}-chapter-${index + 1}`, bookId: preview.bookId, title: `${preview.book.title} · ${chapter.title}`, titleCn: "",
     ...sentenceContent(chapter.text), sourceType: "book", sourceUrl: preview.catalog.sourceUrl,
     bookTitle: preview.book.title, chapterTitle: chapter.title, chapterIndex: index, totalChapters: preview.book.chapters.length,
-    author: preview.book.author || preview.catalog.author, sourceCatalogId: preview.catalog.id, catalogOrigin: preview.sourceOrigin,
+    author: preview.book.author || preview.catalog.author, cover: preview.book.coverDataUrl, sourceCatalogId: preview.catalog.id, catalogOrigin: preview.sourceOrigin,
     licenseName: preview.catalog.licenseName, licenseUrl: preview.catalog.licenseUrl,
     contentRevision: preview.catalog.sha256, createdAt: now, updatedAt: now,
   }));
@@ -94,7 +99,7 @@ export async function importBook(preview: BookPreview): Promise<{ firstArticleId
     const prior = current.articles.filter(article => article.bookId === preview.bookId);
     if (prior.some(article => article.contentRevision !== preview.catalog.sha256)) throw new Error("书架里已有这本书的其他版本，请先保留或移除旧版本后再导入；未混合章节");
     const existing = new Set(current.articles.map(article => article.id)), incoming = articles.filter(article => !existing.has(article.id));
-    added = incoming.length; return { articles: [...incoming, ...current.articles] };
+    added = incoming.length; return { articles: [...incoming, ...current.articles.map(article => article.bookId === preview.bookId ? { ...article, archived: false } : article)] };
   });
   ctx.check(); window.dispatchEvent(new Event("mobile-state-change"));
   return { firstArticleId: articles[0].id, added };
@@ -145,24 +150,20 @@ export async function previewFeedEntry(entry: FeedEntryItem, summaryOnly = false
   }
   const response = await httpRequest(canonicalContentUrl(entry.link), "GET", undefined, {}, signal, true);
   if (response.status !== 200) throw responseError(response.status, "文章读取");
-  const doc = new DOMParser().parseFromString(response.body, "text/html");
-  doc.querySelectorAll("script,style,nav,header,footer,aside,form,noscript").forEach(el => el.remove());
-  const root = doc.querySelector("article,main,[role=main]") || doc.body;
-  root.querySelectorAll("p,h1,h2,h3,br,li").forEach(el => el.insertAdjacentText("afterend", "\n\n"));
-  const text = root.textContent?.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim() || "";
+  const { text } = extractReadingPage(response.body);
   if (text.length < 80) throw new Error("网页没有足够正文，可能需要登录或动态加载；可以选择只保存订阅摘要");
   if (text.length > 300000) throw new Error("文章超过手机单篇上限，未截断原文；请复制所需内容分段导入");
   checkSignal(signal);
   return { title: entry.title, text, sourceUrl: canonicalContentUrl(response.url || entry.link), feedTitle: entry.feedTitle, summaryOnly: false };
 }
 export async function importFeedEntry(preview: EntryPreview): Promise<{ articleId: string; duplicate: boolean }> {
-  const ctx = context(), sourceUrl = canonicalContentUrl(preview.sourceUrl), id = `rss-${(await hash(sourceUrl)).slice(0, 24)}`, now = Date.now();
+  const ctx = context(), sourceUrl = canonicalContentUrl(preview.sourceUrl), content = sentenceContent(preview.text), key = readingContentKey(content), id = `rss-${(await hash(`${sourceUrl}\n${key}`)).slice(0, 24)}`, now = Date.now();
   ctx.check(); let duplicate = false, articleId = id;
-  const article: Article = { id, title: preview.title, titleCn: "", ...sentenceContent(preview.text), sourceType: "rss", sourceUrl, feedTitle: preview.feedTitle, summaryOnly: preview.summaryOnly, contentRevision: await hash(preview.text), createdAt: now, updatedAt: now };
+  const article: Article = { id, title: preview.title, titleCn: "", ...content, sourceType: "rss", sourceUrl, feedTitle: preview.feedTitle, summaryOnly: preview.summaryOnly, contentRevision: await hash(key), createdAt: now, updatedAt: now };
   await replaceSyncedState(current => {
     ctx.check();
-    const existing = current.articles.find(item => { try { return item.id === id || !!item.sourceUrl && canonicalContentUrl(item.sourceUrl) === sourceUrl; } catch { return false; } });
-    if (existing) { duplicate = true; articleId = existing.id; return {}; }
+    const existing = current.articles.find(item => !item.bookId && readingContentKey(item) === key);
+    if (existing) { duplicate = true; articleId = existing.id; return existing.archived ? { articles: current.articles.map(item => item.id === existing.id ? { ...item, archived: false } : item) } : {}; }
     return { articles: [article, ...current.articles] };
   });
   ctx.check(); window.dispatchEvent(new Event("mobile-state-change"));

@@ -37,11 +37,32 @@ struct SpeakView: View {
     @State private var lensPronAt: Int64?
     /// 口语页是否借用了全局抽屉的接线（收起时还给阅读室）。
     @State private var drillBorrowed = false
+    /// 场景目录服务（A1）：官方目录来源三态徽标随 officialSource 重渲染。
+    @ObservedObject private var catalog: ScenarioCatalogService
+    /// 目录分组的渲染快照（preload / refresh / 编辑器保存后各 set 一次；对齐 Windows extraLists）。
+    @State private var officialScenarios: [SpeakScenario] = []
+    @State private var userScenarios: [SpeakScenario] = []
+    /// 官方场景库的分类筛选 + 展开态（纯本地 UI 状态，不持久化；切分类回到收起态）。
+    @State private var officialFilter: ScenarioFilter = .all
+    @State private var officialExpanded = false
+    /// 场景编辑器（A2）：nil = 关闭；initial nil = 新建，非 nil = 编辑该场景。
+    @State private var editorState: ScenarioEditorState?
 
-    init(vm: ReaderViewModel, controller: SpeakViewController) {
+    @MainActor
+    init(vm: ReaderViewModel, controller: SpeakViewController, catalog: ScenarioCatalogService) {
         self.vm = vm
         self.controller = controller
         self.drill = vm.drill
+        self.catalog = catalog
+        _relayPanelModel = StateObject(wrappedValue: PracticeRelayViewModel(
+            environment: Self.relayEnvironment(controller: controller, vm: vm)
+        ))
+    }
+
+    /// 编辑器弹层的身份（sheet(item:) 需要 Identifiable；每次打开新建一份）。
+    private struct ScenarioEditorState: Identifiable {
+        let id = UUID()
+        let initial: SpeakScenario?
     }
 
     private enum PendingAfterReview {
@@ -65,7 +86,9 @@ struct SpeakView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             controller.refreshRecent()
+            controller.syncRecordsOnEntry()
             wireDependencies()
+            loadScenarioCatalog()
         }
         // 离开口语页：抽屉是口语页借用的就一并收起（Windows 的 drill 渲染在 SpeakView
         // 内部，卸载即消失）并归还接线，避免 onDone 残留指向口语控制器。
@@ -103,6 +126,43 @@ struct SpeakView: View {
                 )
             }
         }
+        // 场景编辑器（A2）：入口全在入口页（「＋ 新建场景」/ 卡片「编辑」）。
+        .sheet(item: $editorState) { state in
+            SpeakScenarioEditorView(
+                initial: state.initial,
+                chat: { [weak controller] system, input in
+                    guard let controller else { throw FileImportError("翻译服务不可用") }
+                    return try await controller.chatProvider(system, input) { _ in }
+                },
+                syncStore: SpeakSyncCenter.shared.records?.store,
+                onToast: { [weak vm] in vm?.showToast($0) },
+                onSaved: { onScenarioSaved() },
+                onClose: { editorState = nil }
+            )
+        }
+    }
+
+    /// 挂载时装载场景目录（A1，对齐 Windows SpeakView.tsx:391-398）：先 preload（官方
+    /// 缓存+同步的用户场景），再拉取官方目录（每次进口语视图都拉，无节流；404/断网
+    /// 全静默）。装载前后各 set 一次，保证目录到达后入口网格刷新出分组。
+    private func loadScenarioCatalog() {
+        Task { @MainActor in
+            await catalog.preloadScenarioCatalog()
+            refreshScenarioLists()
+            await catalog.refreshOfficialScenarioCatalog()
+            refreshScenarioLists()
+        }
+    }
+
+    private func refreshScenarioLists() {
+        officialScenarios = listOfficialScenarios()
+        userScenarios = listUserScenarios()
+    }
+
+    /// 编辑器保存成功（A2）：直接读内存注册表刷新「我的场景」分组——preload 是
+    /// once 单飞永久缓存，保存后重跑无效，必须 register（编辑器内）+ 显式 set。
+    private func onScenarioSaved() {
+        userScenarios = listUserScenarios()
     }
 
     /// 接线外部依赖（第 2 波可上移到 ReaderViewModel 统一挂载）：
@@ -260,7 +320,12 @@ struct SpeakView: View {
                     }
                 }
 
-                groupLabel("日常与职场模拟场景", trailing: "点击即可开始")
+                // 日常组标签：目录 fallback（官方桶空）时挂「内置场景」徽标（SpeakView.tsx:1496-1498）
+                groupLabel(
+                    "日常与职场模拟场景",
+                    trailing: "点击即可开始",
+                    badge: catalog.officialSource == .fallback ? officialCatalogBadge(.fallback) : nil
+                )
                 // 日常 4 列网格（原型 .scenario-daily-grid，html:736-739；
                 // Windows SpeakView.tsx:1102 同构），不再单列竖摞。
                 LazyVGrid(
@@ -272,16 +337,181 @@ struct SpeakView: View {
                     }
                 }
 
+                // 官方场景库分组（目录非空时才渲染；SpeakView.tsx:1521-1579）
+                if !officialScenarios.isEmpty {
+                    officialCatalogGroup
+                }
+
+                // 「我的场景」（A2 起标签行常显：空分组也提供「＋ 新建场景」入口）
+                myScenariosGroup
+
                 if !controller.recentSessions.isEmpty {
                     groupLabel("继续上次的对话", trailing: nil)
                     ForEach(controller.recentSessions.prefix(3)) { session in
                         recentRow(session)
                     }
                 }
+
+                // 练习接力（跨设备续练；Windows SpeakView.tsx:1632-1633 同位置：
+                // 最近会话之后、场景编辑器之前）。无任务时两个组件都不渲染。
+                PracticeRelayList(environment: relayEnvironment) { task in
+                    relayPanelModel.select(task)
+                }
+                PracticeRelayView(model: relayPanelModel)
             }
             .padding(20)
         }
         .background(palette.background)
+    }
+
+    /// 练习接力面板模型（入口页常驻一个；列表行点击直接 select，与 Windows
+    /// practice-relay-select 事件同语义）。
+    @StateObject private var relayPanelModel: PracticeRelayViewModel
+
+    /// 练习接力生产环境（SpeakSyncCenter 启动接线后 serverAuth 必在；测试/极早期
+    /// 回退空客户端——一切云入口走未登录分支，零网络）。
+    private var relayEnvironment: PracticeRelayEnvironment {
+        Self.relayEnvironment(controller: controller, vm: vm)
+    }
+
+    private static func relayEnvironment(controller: SpeakViewController, vm: ReaderViewModel) -> PracticeRelayEnvironment {
+        PracticeRelayEnvironment.production(
+            learning: LearningStore.shared,
+            serverAuth: SpeakSyncCenter.shared.serverAuth ?? ServerAuthClient(),
+            translate: { prompt, system, _ in
+                let text = try await controller.chatProvider(system, prompt) { _ in }
+                return PracticeRelayTranslateResult(status: "done", text: text)
+            },
+            speakEn: { text in
+                await MainActor.run { controller.speakRelayReference(text) }
+            },
+            onToast: { message in
+                Task { @MainActor in vm.showToast(message) }
+            }
+        )
+    }
+
+    // MARK: 官方场景库 / 我的场景（目录层，紧凑卡）
+
+    /// 官方场景库：组标签 + 三态徽标 + 分类 chips（只出实际有场景的分类、固定序）+
+    /// 紧凑卡网格（收起且超过 8 张只渲染前 8 张）+「展开全部 N 个」/「收起」。
+    private var officialCatalogGroup: some View {
+        let counts = scenarioCategoryCounts(officialScenarios)
+        let preview = filterScenarioPreview(officialScenarios, filter: officialFilter, expanded: officialExpanded)
+        return VStack(alignment: .leading, spacing: 10) {
+            groupLabel("官方场景库", trailing: officialCatalogBadge(catalog.officialSource))
+            HStack(spacing: 4) {
+                filterChip("全部 \(officialScenarios.count)", active: officialFilter == .all) {
+                    pickOfficialFilter(.all)
+                }
+                ForEach(counts, id: \.category) { item in
+                    filterChip(
+                        "\(speakScenarioCategoryTag(item.category)) \(item.count)",
+                        active: officialFilter == .category(item.category)
+                    ) {
+                        pickOfficialFilter(.category(item.category))
+                    }
+                }
+            }
+            .padding(2)
+            .background(Capsule().fill(palette.surfaceAlt))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("官方场景分类筛选")
+            compactGrid(preview.visible, editable: false)
+            if preview.hasMore || officialExpanded {
+                Button {
+                    officialExpanded.toggle()
+                } label: {
+                    Text(officialExpanded ? "收起" : "展开全部 \(preview.total) 个")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundColor(palette.accent)
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(officialExpanded ? [.isSelected] : [])
+                .accessibilityValue(officialExpanded ? "已展开" : "已收起")
+            }
+        }
+    }
+
+    /// 切分类回到收起态（SpeakView.tsx pickFilter）。
+    private func pickOfficialFilter(_ filter: ScenarioFilter) {
+        officialFilter = filter
+        officialExpanded = false
+    }
+
+    private func filterChip(_ label: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 11, weight: active ? .semibold : .regular).monospacedDigit())
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(active ? palette.accent.opacity(0.16) : Color.clear)
+                .foregroundColor(active ? palette.accent : palette.textSecondary)
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(active ? [.isSelected] : [])
+    }
+
+    /// 「我的场景」：标签行常显（空分组也有）；有场景时 trailing「多端同步」＋恒显「＋ 新建场景」；
+    /// 卡片同紧凑卡，外加「编辑」pill。
+    private var myScenariosGroup: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("我的场景")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(palette.textSecondary)
+                Spacer()
+                if !userScenarios.isEmpty {
+                    Text("多端同步")
+                        .font(.system(size: 10.5))
+                        .foregroundColor(palette.textTertiary)
+                }
+                Button {
+                    editorState = ScenarioEditorState(initial: nil)
+                } label: {
+                    Text("＋ 新建场景")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(palette.accent)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 6)
+            if !userScenarios.isEmpty {
+                compactGrid(userScenarios, editable: true)
+            }
+        }
+    }
+
+    /// 紧凑卡网格（官方库 / 我的场景共用）；editable 时外层包「编辑」pill。
+    private func compactGrid(_ list: [SpeakScenario], editable: Bool) -> some View {
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4),
+            spacing: 12
+        ) {
+            ForEach(list) { sc in
+                ZStack(alignment: .topTrailing) {
+                    CompactScenarioCard(sc: sc, palette: palette) {
+                        controller.start(scenario: sc.id, difficulty: sc.defaultDifficulty ?? selectedDifficulty)
+                    }
+                    if editable {
+                        Button {
+                            editorState = ScenarioEditorState(initial: sc)
+                        } label: {
+                            Text("编辑")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundColor(palette.accent)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(palette.accentSoft))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(8)
+                        .help("编辑这个场景")
+                    }
+                }
+            }
+        }
     }
 
     private var difficultySwitch: some View {
@@ -323,12 +553,17 @@ struct SpeakView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    private func groupLabel(_ title: String, trailing: String?) -> some View {
-        HStack {
+    private func groupLabel(_ title: String, trailing: String?, badge: String? = nil) -> some View {
+        HStack(spacing: 8) {
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(palette.textSecondary)
             Spacer()
+            if let badge {
+                Text(badge)
+                    .font(.system(size: 10.5))
+                    .foregroundColor(palette.textTertiary)
+            }
             if let trailing {
                 Text(trailing)
                     .font(.system(size: 10.5))
@@ -379,7 +614,7 @@ struct SpeakView: View {
                 Text("AI 围绕第 \(chapterNo) 章剧情与你互动讨论，引导你在回答中自然用出本章刚查过的词块。")
             },
             openerPreview: opener.text,
-            action: { controller.start(scenario: .smalltalk, difficulty: selectedDifficulty, context: ctx) }
+            action: { controller.start(scenario: "smalltalk", difficulty: selectedDifficulty, context: ctx) }
         )
     }
 
@@ -399,7 +634,7 @@ struct SpeakView: View {
             openerPreview: speakContextOpener(.vocab(wordIds: [])).text,
             action: {
                 controller.start(
-                    scenario: .smalltalk, difficulty: selectedDifficulty,
+                    scenario: "smalltalk", difficulty: selectedDifficulty,
                     context: .vocab(wordIds: dueVocabWords.map(\.id))
                 )
             }
@@ -409,8 +644,8 @@ struct SpeakView: View {
     private func dailyScenarioCard(_ id: SpeakScenarioId) -> some View {
         let scenario = scenarioOf(id)
         return scenarioCard(
-            icon: id == .interview ? "briefcase.fill" : id == .ordering ? "fork.knife" : id == .travel ? "airplane" : "bubble.left",
-            tag: id == .interview ? "职场高频" : id == .ordering ? "生活实用" : id == .travel ? "出行必备" : "轻松开口",
+            icon: id == "interview" ? "briefcase.fill" : id == "ordering" ? "fork.knife" : id == "travel" ? "airplane" : "bubble.left",
+            tag: speakScenarioCardTag(id),
             tagTone: .neutral,
             title: speakScenarioCardTitle(id),
             desc: { Text(speakScenarioCardDesc(id)) },
@@ -447,6 +682,77 @@ struct SpeakView: View {
         return speakHitTargetIds(turns: session.turns, targets: contextTargets)
     }
 
+    // ---- 用户场景的 keyPhrases → 目标短语（A2 独立新通道，不碰语境 targets/SRS） ----
+    // 只对 source == user 的场景产出（内置/官方/语境会话恒 []，现状零变化）；
+    // 命中只打勾（chips done 态），不接 gradeSpokenVocab、不进生词库。
+    private var scenarioPhrases: [String] {
+        guard let session = controller.session else { return [] }
+        return userScenarioTargets(session.scenario).map(\.word)
+    }
+
+    private var scenarioHits: Set<String> {
+        hitKeyPhrases(turns: controller.session?.turns ?? [], keyPhrases: scenarioPhrases)
+    }
+
+    /// 目标词 chip（语境目标词与用户场景短语两条通道合并展示，命中判定各走各的：
+    /// 前者按 VocabWord.id 驱动 SRS，后者只打勾；对齐 SpeakView.tsx:1259-1276）。
+    struct TargetChipItem: Identifiable, Equatable {
+        var key: String
+        var word: String
+        var zh: String
+        var done: Bool
+        /// 点击 chip 时的 toast 文案。
+        var toast: String
+        var id: String { key }
+    }
+
+    private var targetItems: [TargetChipItem] {
+        let hits = hitTargetIds
+        let phraseHits = scenarioHits
+        return contextTargets.prefix(6).map { target in
+            TargetChipItem(
+                key: target.word.id,
+                word: target.word.word,
+                zh: target.zh,
+                done: hits.contains(target.word.id),
+                toast: "今日练习词块：\(target.word.word) — 在对话中自然说出即可完成"
+            )
+        } + scenarioPhrases.map { phrase in
+            TargetChipItem(
+                key: phrase,
+                word: phrase,
+                zh: "",
+                done: phraseHits.contains(phrase),
+                toast: "本场景目标短语：\(phrase) — 在对话中自然说出即可"
+            )
+        }
+    }
+
+    /// 场景条目标词进度（无目标词不画）。
+    private var stageProgress: SpeakTargetProgress? {
+        let items = targetItems
+        return targetProgress(hit: items.filter(\.done).count, total: items.count)
+    }
+
+    /// 建议下一个试的词（第一个还没用上的）；nil = 全部用上。
+    private var nextChipKey: String? {
+        let items = targetItems
+        return nextTargetKey(items.map(\.key), hit: Set(items.filter(\.done).map(\.key)))
+    }
+
+    /// 一句话里的目标词命中：句内高亮区间 + 用上了几个不同的目标词
+    /// （判定复用 textHitsTarget，与 chips 打勾一致；对齐 SpeakView.tsx analyzeTargets）。
+    private func analyzeTargets(_ text: String) -> (spans: [TargetSpan], count: Int) {
+        var spans: [TargetSpan] = []
+        var count = 0
+        for item in targetItems {
+            let found = findTargetSpans(text, item.word)
+            if !found.isEmpty { count += 1 }
+            spans.append(contentsOf: found)
+        }
+        return (spans.sorted { $0.start < $1.start }, count)
+    }
+
     private var conversationPage: some View {
         HStack(spacing: 0) {
             dialogueColumn
@@ -473,8 +779,8 @@ struct SpeakView: View {
                     // 原型 .sonic-turns-scroll gap: 20
                     VStack(spacing: 20) {
                         if let session = controller.session {
-                            ForEach(session.turns) { turn in
-                                turnBubble(turn)
+                            ForEach(Array(session.turns.enumerated()), id: \.element.id) { idx, turn in
+                                turnBubble(turn, index: idx)
                                     .id(turn.id)
                             }
                         }
@@ -593,8 +899,13 @@ struct SpeakView: View {
                                 .lineLimit(1)
                                 .help(speakSceneTitle(s))
                         }
+                        // 目标词进度（语境词 + 场景短语合并计数；无目标词不画，SpeakParts.tsx:45-58）
+                        if let progress = stageProgress {
+                            stageProgressView(progress)
+                        }
+                        listenModeToggle
                     }
-                    if !contextTargets.isEmpty {
+                    if !targetItems.isEmpty {
                         stageTargetChips
                     }
                 }
@@ -607,6 +918,51 @@ struct SpeakView: View {
         .glassCard(palette: palette, radius: 20)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("声波舞台：\(controller.session.map(speakSceneTitle) ?? "")")
+    }
+
+    /// 场景条目标词进度：细条 + 「已用上 {hit} / {total} 个词」。
+    private func stageProgressView(_ progress: SpeakTargetProgress) -> some View {
+        HStack(spacing: 6) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(palette.surfaceAlt)
+                    Capsule()
+                        .fill(palette.sonicTeal)
+                        .frame(width: geo.size.width * CGFloat(progress.pct) / 100)
+                }
+            }
+            .frame(width: 56, height: 5)
+            Text(progress.label)
+                .font(.system(size: 10.5).monospacedDigit())
+                .foregroundColor(palette.textTertiary)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(progress.label)
+        .accessibilityValue("\(progress.hit) / \(progress.total)")
+    }
+
+    /// 听力模式开关（SpeakParts.tsx:69-77）：按钮文案「听力模式」，on 态强调色。
+    private var listenModeToggle: some View {
+        Button {
+            controller.toggleListenMode()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: controller.listenMode ? "ear.fill" : "ear")
+                    .font(.system(size: 10.5, weight: .semibold))
+                Text("听力模式").font(.system(size: 11.5, weight: controller.listenMode ? .semibold : .regular))
+            }
+            .foregroundColor(controller.listenMode ? palette.accent : palette.textSecondary)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
+            .background(
+                Capsule().fill(controller.listenMode ? palette.accentSoft : palette.glassElevated)
+                    .overlay(Capsule().strokeBorder(controller.listenMode ? palette.accent : palette.glassBorderStrong))
+            )
+        }
+        .buttonStyle(.plain)
+        .help("听力模式：AI 的话先只听不看——答完一句自动显示原文，也可点「看原文」随时查看")
+        .accessibilityAddTraits(controller.listenMode ? [.isSelected] : [])
+        .accessibilityValue(controller.listenMode ? "开" : "关")
     }
 
     private var replayButton: some View {
@@ -624,20 +980,23 @@ struct SpeakView: View {
         .help("重听 AI 最新一句")
     }
 
-    /// 舞台卡内的目标词 chips（.lex-target-chip，html:873-891；≤6 个）：
-    /// ○ 待练习 = glass-elevated 底 + 发丝边；✓ 已用上 = teal-soft 底 + teal 边 600 字重。
-    /// 中文释义收进悬浮说明，chips 保持一行能放下的密度；点击 toast 说明。
+    /// 舞台卡内的目标词 chips（.lex-target-chip，html:873-891；语境词 ≤6 个 + 用户场景短语）：
+    /// ○ 待练习 = glass-elevated 底 + 发丝边；✓ 已用上 = teal-soft 底 + teal 边 600 字重；
+    /// 「下一个该用的词」（第一个未用上）加强调边。中文释义收进悬浮说明，chips 保持
+    /// 一行能放下的密度；点击 toast 说明（文案按通道各自逐字）。
     private var stageTargetChips: some View {
-        FlowLayout(spacing: 8, lineSpacing: 6) {
-            ForEach(contextTargets.prefix(6), id: \.word.id) { target in
-                let done = hitTargetIds.contains(target.word.id)
+        let nextKey = nextChipKey
+        return FlowLayout(spacing: 8, lineSpacing: 6) {
+            ForEach(targetItems) { item in
+                let done = item.done
+                let next = item.key == nextKey
                 Button {
-                    vm.showToast("今日练习词块：\(target.word.word) — 在对话中自然说出即可完成")
+                    vm.showToast(item.toast)
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: done ? "checkmark" : "circle")
                             .font(.system(size: 8, weight: .bold))
-                        Text(target.word.word)
+                        Text(item.word)
                             .font(.system(size: 12, weight: done ? .semibold : .regular, design: .serif))
                     }
                     .foregroundColor(done ? palette.sonicTeal : palette.textSecondary)
@@ -645,35 +1004,35 @@ struct SpeakView: View {
                     .padding(.vertical, 4)
                     .background(
                         Capsule().fill(done ? palette.sonicTealSoft : palette.glassElevated)
-                            .overlay(Capsule().strokeBorder(done ? palette.sonicTeal : palette.glassBorderStrong))
+                            .overlay(Capsule().strokeBorder(
+                                done ? palette.sonicTeal : (next ? palette.accent : palette.glassBorderStrong)
+                            ))
                     )
                 }
                 .buttonStyle(.plain)
-                .help(
-                    "\(target.word.word)\(target.zh.isEmpty ? "" : " · \(target.zh)")"
-                        + (done ? " — 已用上" : " — 在对话中自然说出即可完成")
-                )
-                .accessibilityLabel("\(done ? "已用上" : "待练习")：\(target.word.word)")
+                .help("\(item.word) — 在对话中自然说出即可完成")
+                .accessibilityLabel("\(done ? "已用上" : "待练习")：\(item.word)\(item.zh.isEmpty ? "" : " · \(item.zh)")")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("本轮目标词")
     }
 
     /// 对话轮（原型 html:901-930）：AI 轮直接落在画布上（无底卡），用户轮是
     /// .dialogue-turn.mine——18 圆角 glass-elevated + shadow-pill，最大宽 58ch；
     /// 排版三级：英文 19pt 衬线 / 行距 1.58、中文提示 13.5、speaker 行 11.5。
-    private func turnBubble(_ turn: SpeakTurn) -> some View {
+    private func turnBubble(_ turn: SpeakTurn, index: Int) -> some View {
         let isUser = turn.role == .user
         return HStack {
             if isUser { Spacer(minLength: 24) }
             if isUser {
-                turnContent(turn)
+                turnContent(turn, index: index)
                     .padding(.vertical, 16)
                     .padding(.horizontal, 20)
                     .frame(maxWidth: 560, alignment: .trailing)
                     .glassCard(palette: palette, radius: 18, elevated: true)
             } else {
-                turnContent(turn)
+                turnContent(turn, index: index)
                     .frame(maxWidth: 580, alignment: .leading)
                     .padding(.horizontal, 2)
             }
@@ -682,8 +1041,12 @@ struct SpeakView: View {
     }
 
     @ViewBuilder
-    private func turnContent(_ turn: SpeakTurn) -> some View {
+    private func turnContent(_ turn: SpeakTurn, index: Int) -> some View {
         let isUser = turn.role == .user
+        // 听力模式：未揭开的 AI 轮遮原文（答完自动揭/点「看原文」手动揭；重开的历史会话
+        // 全部已揭）。遮罩保高度，不引起滚动跳动（SpeakView.tsx:1724-1773）。
+        let veiled = !isUser && controller.isTurnVeiled(index)
+        let analysis = isUser ? analyzeTargets(turn.text) : (spans: [], count: 0)
         VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
             if isUser {
                 HStack(spacing: 8) {
@@ -695,23 +1058,50 @@ struct SpeakView: View {
                             .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
                             .foregroundColor(palette.accent)
                     }
+                    // 用户轮 meta pill：「✓ 用上 {count} 个目标词」（speakUi 句内高亮口径）
+                    if analysis.count > 0 {
+                        Text("✓ 用上 \(analysis.count) 个目标词")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(palette.sonicTeal)
+                    }
                 }
             } else {
-                Text("AI 陪练 · \(scenarioOf(controller.session?.scenario ?? .smalltalk).label)")
-                    .font(.system(size: 11.5))
-                    .foregroundColor(palette.textTertiary)
+                HStack(spacing: 12) {
+                    Text("AI 陪练 · \(scenarioOf(controller.session?.scenario ?? "smalltalk").title)")
+                        .font(.system(size: 11.5))
+                        .foregroundColor(palette.textTertiary)
+                    if veiled {
+                        Button {
+                            controller.revealTurn(index)
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "eye").font(.system(size: 10.5))
+                                Text("看原文").font(.system(size: 11.5))
+                            }
+                            .foregroundColor(palette.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .help("显示这句原文")
+                    }
+                }
             }
-            Text(turn.text)
-                .font(.system(size: 19, design: .serif))
-                .lineSpacing(7)
-                .foregroundColor(palette.text)
-                .fixedSize(horizontal: false, vertical: true)
-                .multilineTextAlignment(.leading)
+            if isUser {
+                highlightedUserText(turn.text, spans: analysis.spans)
+            } else {
+                Text(turn.text)
+                    .font(.system(size: 19, design: .serif))
+                    .lineSpacing(7)
+                    .foregroundColor(palette.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+                    .modifier(ListenVeil(on: veiled))
+            }
             if let hint = turn.hintZh {
                 Text(hint)
                     .font(.system(size: 13.5))
                     .foregroundColor(palette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .modifier(ListenVeil(on: veiled))
             }
             // 历史 assistant 轮的跟读摘要行；最新一轮由对话流末尾的报告卡承担，不重复
             //（SpeakView.tsx:1260 `!isLastAssistant && …`）。
@@ -730,6 +1120,28 @@ struct SpeakView: View {
                 coachDiffBlock(diff, turnText: turn.text)
             }
         }
+    }
+
+    /// 用户轮英文：按目标词命中区间切段高亮（annotateSegments 两层区间切段的
+    /// 目标层；发音标记在右栏透镜卡承担，此处 marks 为空）。
+    private func highlightedUserText(_ text: String, spans: [TargetSpan]) -> some View {
+        let segments = annotateSegments(text, marks: [], targets: spans)
+        let ns = text as NSString
+        var out = Text("")
+        for seg in segments {
+            let piece = ns.substring(with: NSRange(location: seg.start, length: seg.end - seg.start))
+            if seg.target {
+                out = out + Text(verbatim: piece).fontWeight(.semibold).foregroundColor(palette.sonicTeal)
+            } else {
+                out = out + Text(verbatim: piece)
+            }
+        }
+        return out
+            .font(.system(size: 19, design: .serif))
+            .lineSpacing(7)
+            .foregroundColor(palette.text)
+            .fixedSize(horizontal: false, vertical: true)
+            .multilineTextAlignment(.leading)
     }
 
     /// 用户气泡下的「表达改进建议」块（原型 .editorial-diff-block，html:932-935）：
@@ -803,7 +1215,13 @@ struct SpeakView: View {
     private var thinkingBubble: some View {
         HStack {
             VStack(alignment: .leading, spacing: 3) {
-                if controller.streaming.en.isEmpty {
+                // 听力模式下不流式上屏回复原文，避免抢在 TTS 前被看到（SpeakView.tsx:1872-1879）
+                if controller.listenMode {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("…对方回复中…").font(.system(size: 11.5)).foregroundColor(palette.textTertiary)
+                    }
+                } else if controller.streaming.en.isEmpty {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.mini)
                         Text("…在想你该怎么说…").font(.system(size: 11.5)).foregroundColor(palette.textTertiary)
@@ -821,7 +1239,10 @@ struct SpeakView: View {
     }
 
     private func errorBanner(_ message: String) -> some View {
-        HStack(spacing: 8) {
+        // 通知分类（Windows friendlyNotice redeem 档）：文案含「额度已用完」→
+        // 主按钮「兑换更多额度」跳设置账号分区兑换码卡（SpeakView.tsx:1700-1710）。
+        let redeemable = speakFriendlyNotice(message).kind == .redeem
+        return HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 11))
                 .foregroundColor(palette.err)
@@ -831,6 +1252,13 @@ struct SpeakView: View {
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
+            if redeemable {
+                Button("兑换更多额度") {
+                    (NSApp.delegate as? AppDelegate)?.openAccountRedeem()
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+            }
             Button("知道了") { controller.clearError() }
                 .controlSize(.small)
         }
@@ -1302,6 +1730,94 @@ struct SpeakView: View {
         }
         .frame(width: path.width, height: path.height)
         .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - 听力模式遮罩
+
+/// 听力模式遮罩（reader.css .listen-veil：blur 9px / opacity .85 / 不可选不可点），
+/// 保高度不引起滚动跳动；辅助功能隐藏（aria-hidden 对应物）。
+private struct ListenVeil: ViewModifier {
+    let on: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .blur(radius: on ? 9 : 0)
+            .opacity(on ? 0.85 : 1)
+            .allowsHitTesting(!on)
+            .accessibilityHidden(on)
+    }
+}
+
+// MARK: - 目录紧凑卡（「官方场景库」「我的场景」共用）
+
+/// 目录紧凑卡（对齐 Windows CompactScenarioCard）：分类+emoji 标签、标题、2 行摘要
+/// （goal 优先，缺位回退 aiRole）、difficulty 小标签；开场白预览挪到悬浮提示
+/// 逐字 `开场白：“{opener}”`。点击行为与大卡一致（start(sc.id, defaultDifficulty ?? 当前难度)）。
+private struct CompactScenarioCard: View {
+    let sc: SpeakScenario
+    let palette: ReaderPalette
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 0) {
+                    Text("\(speakScenarioCategoryTag(sc.category))\(sc.emoji.map { " \($0)" } ?? "")")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundColor(palette.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2.5)
+                        .background(
+                            Capsule().fill(palette.background)
+                                .overlay(Capsule().strokeBorder(palette.glassBorder, lineWidth: 1))
+                        )
+                    Spacer(minLength: 0)
+                }
+                Text(sc.title)
+                    .font(.system(size: 15, weight: .semibold, design: .serif))
+                    .foregroundColor(palette.text)
+                    .lineLimit(1)
+                Text(scenarioSummary(sc))
+                    .font(.system(size: 11.5))
+                    .lineSpacing(2)
+                    .foregroundColor(palette.textSecondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 0)
+                if let difficulty = sc.defaultDifficulty {
+                    Text("\(difficultyOf(difficulty).label)难度")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(palette.textSecondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule().fill(palette.background)
+                                .overlay(Capsule().strokeBorder(palette.glassBorder, lineWidth: 1))
+                        )
+                }
+            }
+            .padding(.vertical, 14)
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 128, maxHeight: .infinity, alignment: .topLeading)
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .modifier(GlassCardStyle(
+                palette: palette,
+                radius: 16,
+                elevated: hover,
+                heavyShadow: hover,
+                borderColor: hover ? palette.textSecondary.opacity(0.55) : nil
+            ))
+        }
+        .buttonStyle(.plain)
+        .offset(y: hover ? -2 : 0)
+        .onHover { h in
+            withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.2)) { hover = h }
+        }
+        .help("开场白：“\(sc.opener)”")
+        .accessibilityLabel("\(speakScenarioCategoryTag(sc.category))：\(sc.title)")
     }
 }
 

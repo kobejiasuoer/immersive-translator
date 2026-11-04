@@ -1,8 +1,9 @@
 //! Edge 在线语音合成（微软 Edge 浏览器「大声朗读」同源服务，免费无凭据）。
-//! 逐行照 mac/Sources/XfyunCore/EdgeTts.swift（同源 windows/src/core/edgeTts.ts）：
-//! - 端点 wss + TrustedClientToken（公开常量）+ Sec-MS-GEC（SHA-256 大写
-//!   hex("{ticks}{TOKEN}")，ticks 为对齐到 5 分钟窗口的 Windows filetime）；
-//!   本机时钟偏差 >5 分钟即握手 403——失败后用 voices 接口的 Date 头校准一次再重试。
+//! 对齐 windows/src/core/edgeTts.ts / edgeDrm.ts 与 rany2/edge-tts drm.py：
+//! - 端点 wss + TrustedClientToken（公开常量）+ Sec-MS-GEC v2（CS64 + 定制 SHA-256，
+//!   被签串仍是 "{ticks}{TOKEN}"，ticks 对齐 5 分钟的 Windows filetime）。
+//!   旧 v1 普通 SHA-256 签名已被服务端拒绝，校准时钟无法修复协议不匹配。
+//!   真实时钟偏差仍可用 voices 接口的 Date 头校准一次再重试。
 //! - 握手必须显式带浏览器 User-Agent（tungstenite 不自动带，无 UA 直接被拒）。
 //! - 帧序列：连上发 speech.config + ssml 两条文本帧；二进制帧 = 2 字节大端头长 +
 //!   头文本（须含 Path:audio）+ mp3 净荷逐帧累加；文本帧含 Path:turn.end 收尾。
@@ -13,7 +14,6 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use sha2::{Digest, Sha256};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
@@ -25,8 +25,8 @@ use super::encode_b64;
 
 /// 逆向自浏览器的公开客户端令牌（非机密）。
 pub const TRUSTED_CLIENT_TOKEN: &str = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
-/// 随 Chromium 主版本走；服务端只校验格式（edge-tts 同款策略）。
-pub const SEC_MS_GEC_VERSION: &str = "1-143.0.3650.75";
+/// v2 签名必须使用 "2-" 前缀，不能只更新 Chromium 版本。
+pub const SEC_MS_GEC_VERSION: &str = "2-143.0.3650.75";
 pub const WSS_URL: &str = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1";
 /// voices 列表接口：仅用来读响应 Date 头校准时钟。
 pub const VOICES_URL: &str = "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list";
@@ -59,10 +59,159 @@ pub fn token_ticks(now_secs: i64, skew_seconds: i64) -> i64 {
     seconds * TICKS_PER_SECOND
 }
 
-/// Sec-MS-GEC 签名：SHA-256 大写十六进制("{ticks}{TOKEN}")。
+/// Sec-MS-GEC v2：CS64（小端 16 hex）+ 定制 SHA-256（64 hex）。
 pub fn sec_ms_gec_token(ticks: i64) -> String {
-    let digest = Sha256::digest(format!("{ticks}{TRUSTED_CLIENT_TOKEN}").as_bytes());
-    digest.iter().map(|b| format!("{b:02X}")).collect()
+    drm_v2::token(format!("{ticks}{TRUSTED_CLIENT_TOKEN}").as_bytes())
+}
+
+/// 对齐仓库 Windows edgeDrm.ts；算法来源 rany2/edge-tts drm.py（LGPL-3.0）。
+/// https://github.com/rany2/edge-tts/blob/master/src/edge_tts/drm.py
+/// 首块常量、调度修正与 CS64 均属于 v2 协议，不能替换成标准库 SHA-256。
+mod drm_v2 {
+    const INITIAL: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    ];
+    const STATE: [u32; 8] = [
+        0xfd9fbea2, 0x91243ce7, 0xbe499094, 0xcd2e1e0a,
+        0x6c006f49, 0x04bd35ab, 0xfeb0a7e4, 0x03effbd2,
+    ];
+    const SCHEDULE: [u32; 14] = [
+        0xeb24bf9e, 0x1558691f, 0xa0c09ee2, 0x0cfa32ba, 0xa622ee8c, 0xd1dd9491,
+        0xc0dd25a0, 0xf9e70ab6, 0xf0c31573, 0x7058ce4e, 0x7188e606, 0x00e5ab33,
+        0xd258b060, 0x72766564,
+    ];
+    const ROUNDS: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+        0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+        0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+        0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+        0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    ];
+    const COEFFICIENTS: [(u32, u32); 14] = [
+        (0xe82e91b1, 0xb32700d0), (0x44de24c6, 0x88dff51d),
+        (0x3beb65bc, 0x29514038), (0xc89c5933, 0xb328cbdf),
+        (0x8d1ec211, 0xd405b4d5), (0x314ef5d5, 0x26e55f3c),
+        (0xe92491b1, 0x607801c6), (0xf0a5b9d5, 0x82b2c1fb),
+        (0x06064cf3, 0xfa51a3da), (0xda79fa60, 0x207cc464),
+        (0xbed20560, 0x3c3c74f3), (0x89f9c9f8, 0xd2d14b61),
+        (0x35fa38c6, 0xbb04a2c1), (0xcb49e3c6, 0xc5626167),
+    ];
+
+    fn sigma0(v: u32) -> u32 {
+        (v >> 7) ^ (v << 25) ^ (v >> 18) ^ (v << 14) ^ (v >> 3)
+    }
+    fn sigma1(v: u32) -> u32 {
+        (v >> 17) ^ (v << 15) ^ (v >> 19) ^ (v << 13) ^ (v >> 10)
+    }
+    fn expand(words: &mut [u32; 64], first: usize) {
+        for i in first..64 {
+            words[i] = sigma1(words[i - 2]).wrapping_add(words[i - 7])
+                .wrapping_add(sigma0(words[i - 15])).wrapping_add(words[i - 16]);
+        }
+    }
+    fn rounds(state: [u32; 8], words: &[u32; 64], first: usize) -> [u32; 8] {
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
+        for i in first..64 {
+            let k = if first == 14 && i == 14 { 0xc9dc06a7 } else { ROUNDS[i] };
+            let t1 = h.wrapping_add(e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25))
+                .wrapping_add(g ^ (e & (f ^ g))).wrapping_add(k).wrapping_add(words[i]);
+            let t2 = (a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22))
+                .wrapping_add((a & b) | (c & (a | b)));
+            [a, b, c, d, e, f, g, h] = [t1.wrapping_add(t2), a, b, c, d.wrapping_add(t1), e, f, g];
+        }
+        [a, b, c, d, e, f, g, h]
+    }
+    fn modified_sha256(data: &[u8]) -> [u8; 32] {
+        let mut words = [0u32; 64];
+        words[14] = u32::from_be_bytes([0, data[0], data[1], data[2]]);
+        words[15] = u32::from_be_bytes(data[3..7].try_into().unwrap());
+        for i in 16..30 {
+            let s1 = sigma1(words[i - 2]) ^ if i == 16 { 0x000b92c0 } else { 0 };
+            let s0 = if i >= 29 { sigma0(words[i - 15]) ^ 0x059c0b80 } else { 0 };
+            words[i] = SCHEDULE[i - 16].wrapping_add(s1)
+                .wrapping_add(if i >= 21 { words[i - 7] } else { 0 }).wrapping_add(s0);
+        }
+        words[30] = sigma1(words[28]).wrapping_add(words[23]).wrapping_add(sigma0(words[15]))
+            .wrapping_add(words[14]).wrapping_add(0xc9dc06a7).wrapping_sub(ROUNDS[14]);
+        expand(&mut words, 31);
+        let working = rounds(STATE, &words, 14);
+        let mut state = std::array::from_fn(|i| INITIAL[i].wrapping_add(working[i]));
+        let length = 57 + data.len();
+        let mut padded = data[7..].to_vec();
+        padded.push(0x80);
+        padded.resize(padded.len() + (55i64 - length as i64).rem_euclid(64) as usize, 0);
+        padded.extend_from_slice(&(length as u64 * 8).to_be_bytes());
+        for block in padded.chunks_exact(64) {
+            for (i, word) in block.chunks_exact(4).enumerate() {
+                words[i] = u32::from_be_bytes(word.try_into().unwrap());
+            }
+            expand(&mut words, 16);
+            let working = rounds(state, &words, 0);
+            state = std::array::from_fn(|i| state[i].wrapping_add(working[i]));
+        }
+        let mut out = [0u8; 32];
+        for (chunk, word) in out.chunks_exact_mut(4).zip(state) {
+            chunk.copy_from_slice(&word.to_be_bytes());
+        }
+        out
+    }
+    fn cs64(data: &[u8], sha: &[u8; 32]) -> [u8; 8] {
+        let keys = [u32::from_le_bytes(sha[..4].try_into().unwrap()) | 1,
+            u32::from_le_bytes(sha[4..8].try_into().unwrap()) | 1];
+        let factors = keys.map(|k| k.wrapping_mul(0x82893933));
+        let mut terms: Vec<u32> = COEFFICIENTS.iter().enumerate()
+            .map(|(i, (c, _))| c.wrapping_mul(factors[i % 2])).collect();
+        let mut offsets: Vec<u32> = COEFFICIENTS.iter().map(|(_, o)| *o).collect();
+        let mut padded = vec![0];
+        padded.extend_from_slice(data);
+        padded.resize(padded.len().div_ceil(8) * 8, 0);
+        for (i, bytes) in padded.chunks_exact(4).enumerate() {
+            let word = u32::from_le_bytes(bytes.try_into().unwrap());
+            let mut term = word.wrapping_mul(keys[i % 2]);
+            let mut offset = word.rotate_left(16).wrapping_mul(if i % 2 == 0 { 0xef0569fb } else { 0xc31713db });
+            if i == 0 {
+                term = term.wrapping_add(0xf2f90b1au32.wrapping_mul(factors[0]));
+                offset = offset.wrapping_add(0x0b1a0000);
+            }
+            terms.push(term);
+            offsets.push(offset);
+        }
+        let (mut swap_acc, mut swap_last, mut state, mut acc) = (0u32, 0u32, 0u32, 0u32);
+        for i in (0..terms.len()).step_by(2) {
+            let (x, y) = (terms[i], terms[i + 1]);
+            let q = offsets[i].wrapping_add(x).rotate_left(16).wrapping_mul(0x76f50f34);
+            swap_acc = swap_acc.wrapping_add(q.rotate_left(16).wrapping_mul(0xc3efea97).wrapping_add(q));
+            let q = offsets[i + 1].wrapping_add(y).rotate_left(16).wrapping_mul(0x1881ce3c);
+            swap_last = q.rotate_left(16).wrapping_mul(0x35bd1ec9).wrapping_add(q);
+            swap_acc = swap_acc.wrapping_add(swap_last);
+            state = state.wrapping_mul(keys[0]).wrapping_add(x);
+            for k in [0xcf98b111, 0x87085b9f, 0x12ceb96d, 0x257e1d83] {
+                state = state.rotate_left(16).wrapping_mul(k);
+            }
+            acc = acc.wrapping_add(state);
+            state = state.wrapping_mul(keys[1]).wrapping_add(y);
+            for k in [0xa27416f5, 0xd38396ff, 0x7c932b89, 0xbfa49f69] {
+                state = state.rotate_left(16).wrapping_mul(k);
+            }
+            acc = acc.wrapping_add(state);
+        }
+        let mut out = [0u8; 8];
+        out[..4].copy_from_slice(&(swap_last ^ state).to_le_bytes());
+        out[4..].copy_from_slice(&(swap_acc ^ acc).to_le_bytes());
+        out
+    }
+    pub(super) fn token(data: &[u8]) -> String {
+        let sha = modified_sha256(data);
+        let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02X}")).collect::<String>();
+        format!("{}-{}", hex(&cs64(data, &sha)), hex(&sha))
+    }
 }
 
 /// 拼 wss 握手地址（query 三参数，值均 URL 安全字符，无需编码）。
@@ -213,7 +362,7 @@ async fn synthesize_once(text: &str, voice: &str, rate_percent: i64, skew_second
     let (mut ws, _) = connected.map_err(|e| {
         use tokio_tungstenite::tungstenite::Error as WsErr;
         match &e {
-            WsErr::Http(resp) => format!("连接被拒（HTTP {}）：时钟偏差或服务暂不可用", resp.status().as_u16()),
+            WsErr::Http(resp) => format!("Edge 服务拒绝连接（HTTP {}）", resp.status().as_u16()),
             _ => format!("连接被拒：{e}"),
         }
     })?;
@@ -267,7 +416,7 @@ async fn synthesize_once(text: &str, voice: &str, rate_percent: i64, skew_second
 }
 
 /// 合成一段文本 → 整段 mp3 base64（TtsResult 形状与讯飞 TTS 一致，前端同一播放路径）。
-/// 首次失败（多为时钟偏差 403）校准时钟重试一次；校准无变化/重试仍失败上抛首次错误。
+/// 首次失败后尝试校准时钟重试一次；校准无变化/重试仍失败上抛首次错误。
 pub async fn synthesize(text: &str, voice_name: Option<&str>, speed: Option<f64>) -> Result<TtsResult, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -323,25 +472,25 @@ pub async fn edge_tts_speak(
 mod tests {
     use super::*;
 
-    /// 金标向量由独立 Python hashlib 生成（非自证）：
-    /// sha256(f"{ticks}6A5AA1D4EAFF4E9FB37E23D68491D6F4").upper()。
+    /// 金标向量由上游 Python generate_sec_ms_gec_v2 独立生成，
+    /// 同时覆盖 CS64 小端序、定制 SHA-256 与跨 5 分钟窗口的时钟校准。
     #[test]
     fn sec_ms_gec_golden() {
         assert_eq!(token_ticks(1_760_000_000, 0), 134_044_734_000_000_000);
         assert_eq!(
             sec_ms_gec_token(token_ticks(1_760_000_000, 0)),
-            "70AED27457006C255086B4F079B9FE44A4D10827C4AFDFC3C45583B6F40D7DDF"
+            "6D50DDDB91812C33-DD68EFB01898B0750C9797D51A5FF93471DFDAE6888A1039D532CBDCCE54545D"
         );
         // skew=200 跨到下一个 5 分钟窗口
         assert_eq!(token_ticks(1_760_000_000, 200), 134_044_737_000_000_000);
         assert_eq!(
             sec_ms_gec_token(token_ticks(1_760_000_000, 200)),
-            "32A87B305304212BBADE91B2770A75D030D53CE656470B1761F45AB0E85C0B4B"
+            "BAF4076F572BFE4E-2D6FBE5C0E24F56622EB94F37395F2D153C6C0C451DAAE2249A459BB3AFAD62C"
         );
         assert_eq!(token_ticks(0, 0), 116_444_736_000_000_000);
         assert_eq!(
             sec_ms_gec_token(token_ticks(0, 0)),
-            "7ECB79D14E3AA576D2D79E6D487A1388156D91E614B1BE11C64226A29BC8DD8C"
+            "52BC7A17B50DFEC9-28C4394775C8751CD2F6859C030C06DB1489ACAB3B3A7651831FC26895177ED6"
         );
     }
 
@@ -352,8 +501,11 @@ mod tests {
         assert!(url.starts_with(&format!("{WSS_URL}?TrustedClientToken={TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=")));
         assert!(url.ends_with(&format!("&Sec-MS-GEC-Version={SEC_MS_GEC_VERSION}")));
         let gec = url.split("&Sec-MS-GEC=").nth(1).unwrap().split('&').next().unwrap();
-        assert_eq!(gec.len(), 64);
-        assert!(gec.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
+        let (cs64, sha) = gec.split_once('-').unwrap();
+        assert_eq!(cs64.len(), 16);
+        assert_eq!(sha.len(), 64);
+        assert!(cs64.chars().chain(sha.chars()).all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase()));
+        assert_eq!(SEC_MS_GEC_VERSION, "2-143.0.3650.75");
     }
 
     /// JS Date.toString 形态：英文星期/月份缩写 + 无前导零日 + UTC 后缀。
@@ -434,13 +586,14 @@ mod tests {
                     None,
                 )
                 .await;
-                match r {
-                    Ok(t) => {
-                        let bytes = t.audio_b64.len() * 3 / 4;
-                        println!("→ {label} 成功：mp3 约 {bytes}B（format={}）", t.format);
-                    }
-                    Err(e) => println!("→ {label} 失败：{e}"),
-                }
+                let t = r.unwrap_or_else(|e| panic!("{label} 合成失败：{e}"));
+                assert_eq!(t.format, "mp3");
+                use base64::Engine;
+                let bytes = base64::engine::general_purpose::STANDARD.decode(t.audio_b64).unwrap();
+                assert!(bytes.len() > 1024, "{label} 返回空或过短的音频");
+                assert!(bytes.starts_with(b"ID3") || (bytes[0] == 0xff && bytes[1] & 0xe0 == 0xe0),
+                    "{label} 返回数据不是 MP3");
+                println!("→ {label} 成功：mp3 {}B", bytes.len());
             }
         });
     }

@@ -56,9 +56,9 @@
   --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.55);
 }
 
-/* ---------- §1.4 字体栈（零 webfont：iOS 命中 New York + 宋体） ---------- */
+/* ---------- 字体栈：与已确认移动原型一致，未安装 Source Serif 4 时使用 Georgia ---------- */
 :root {
-  --font-serif: ui-serif, "New York", "Songti SC", "Noto Serif SC", Georgia, serif;
+  --font-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
   --font-sans: -apple-system, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
   --ease: cubic-bezier(0.32, 0.72, 0, 1);

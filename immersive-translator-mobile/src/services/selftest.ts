@@ -9,18 +9,26 @@
 import { getState } from "../store";
 import { invokeRaw } from "./device";
 import { startPcmCapture } from "./audio";
-import { cloudAvailable, speakCloud } from "./voice";
+import { cloudAvailable, restorePlaybackSession, speakCloud } from "./voice";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export async function runTtsSelftest(): Promise<void> {
+let started = false;
+export async function runTtsSelftest(mode: "playback" | "recording" = "recording"): Promise<void> {
+  if (started) return;
+  started = true;
   const report = (tag: string, extra: Record<string, unknown> = {}) => {
     void invokeRaw("selftest_report", { line: JSON.stringify({ t: new Date().toISOString(), tag, ...extra }) }).catch(
       () => undefined,
     );
   };
 
-  report("start", { ua: navigator.userAgent.slice(0, 90) });
+  report("start", { mode, ua: navigator.userAgent.slice(0, 90) });
+  try {
+    report("native-session", { session: await restorePlaybackSession() });
+  } catch (err) {
+    report("native-session", { error: String(err) });
+  }
   /* 合成手势态：真实链路里用户刚按过 hold 按钮（pointerdown 解锁仪式），
      这里用合成事件尽力对齐（untrusted 事件 iOS 可能不认，diag 尾巴会暴露差异） */
   try {
@@ -33,19 +41,21 @@ export async function runTtsSelftest(): Promise<void> {
   /* 1) 真实录音 1.2s → stop（teardown 内自动调 restore_playback_audio） */
   const tRec = Date.now();
   let recDetail: Record<string, unknown> = {};
-  try {
-    const cap = await startPcmCapture();
-    if (!cap) {
-      recDetail = { denied: true };
-    } else {
-      await wait(1200);
-      const r = await cap.stop();
-      recDetail = { ms: r.ms, peak: +r.peak.toFixed(3), pcmKB: Math.round(r.pcmB64.length / 1365) };
+  if (mode === "recording") {
+    try {
+      const cap = await startPcmCapture();
+      if (!cap) {
+        recDetail = { denied: true };
+      } else {
+        await wait(1200);
+        const r = await cap.stop();
+        recDetail = { ms: r.ms, peak: +r.peak.toFixed(3), pcmKB: Math.round(r.pcmB64.length / 1365) };
+      }
+    } catch (err) {
+      recDetail = { error: String(err) };
     }
-  } catch (err) {
-    recDetail = { error: String(err) };
   }
-  report("record", { wallMs: Date.now() - tRec, ...recDetail });
+  report("record", mode === "recording" ? { wallMs: Date.now() - tRec, ...recDetail } : { skipped: true });
 
   /* 2) 停止后立即云合成+播放（毒窗口探测）与 3s 后对照 */
   const speakOnce = async (label: string, text: string) => {
@@ -58,6 +68,7 @@ export async function runTtsSelftest(): Promise<void> {
     try {
       const h = speakCloud(text);
       const result = await Promise.race([h.done.then(() => "done"), wait(25000).then(() => "timeout")]);
+      if (result === "timeout") h.stop();
       report(label, { result, ms: Date.now() - t0 });
     } catch (err) {
       report(label, { result: "error", err: String(err), ms: Date.now() - t0 });

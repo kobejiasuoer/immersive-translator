@@ -79,7 +79,7 @@ let disposed = false;
 let stopSync: (() => void) | null = null;
 async function boot() {
   if (disposed) return;
-  root.render(<div className="boot-state"><h1>沉浸阅读室</h1><p>正在载入这台设备的学习资料…</p></div>);
+  root.render(<div className="boot-state"><h1>沉浸口语</h1><p>正在载入这台设备的学习资料…</p></div>);
   try {
     await restoreCloud();
     if (disposed) return;

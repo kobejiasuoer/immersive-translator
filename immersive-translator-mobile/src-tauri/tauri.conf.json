@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "reader-spike",
+  "productName": "沉浸口语",
   "version": "0.1.0",
   "identifier": "com.kobejiasuoer.reader",
   "build": {
@@ -14,7 +14,7 @@
       {
         "label": "main",
         "url": "index.html",
-        "title": "reader-spike"
+        "title": "沉浸口语"
       }
     ],
     "security": {

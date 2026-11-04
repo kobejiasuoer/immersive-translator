@@ -17,9 +17,30 @@ struct LiveCaptionView: View {
             captionList
             Divider().opacity(0.5)
             footer
+            hintBar
         }
         .frame(minWidth: 480, minHeight: 560)
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    /// 底部 hint（对齐 Windows lc-hint，LiveCaptionApp.tsx:375-380 文案逐字）。
+    private var hintBar: some View {
+        HStack(spacing: 6) {
+            Text("静音约 1 秒自动断句；语音引擎在 设置 → 语音 里选择（沉浸云登录即用，或自带讯飞凭据）")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("打开设置") {
+                // 复用阅读室 toast 的公开入口（AppDelegate.openSettings 为 private）。
+                (NSApp.delegate as? AppDelegate)?.openSettingsFromReader()
+            }
+            .controlSize(.small)
+            .buttonStyle(.borderless)
+            .font(.system(size: 10.5))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var header: some View {

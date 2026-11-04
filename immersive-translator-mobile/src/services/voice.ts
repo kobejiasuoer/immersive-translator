@@ -1,145 +1,234 @@
-/**
- * 语音服务（services/voice.ts）—— 讯飞三链路（IAT 听写 / ISE 评测 / TTS 合成）
- * 的前端封装，批次二各屏消费；命令契约见 A1（asr_start/asr_push/asr_finish/asr_abort/
- * xfyun_ise_assess/xfyun_tts_speak）。
- *
- * 铁律：先 await listen() 成功再触发对应 invoke（事件监听先于命令，防首包丢失）。
- * 凭据：VoiceCfg 从 getState().settings（voiceAppId/voiceApiKey/voiceApiSecret）组装。
- */
+/** 移动端语音统一通过账号服务：短期凭证换票，音频经服务器收发。 */
+import { activeRepository, getState, profileIdentity } from "../store";
+import { invokeRaw, isTauri, reportDiag } from "./device";
+import { CloudError, cloudRequest, cloudState, loadCloudConfig, subscribeCloud, type CloudConfig } from "./cloud";
+import { isAudioRecordingActive, setWebAudioSessionType } from "./webAudioSession";
 
-import { getState } from "../store";
-import { invoke, invokeRaw, isTauri, reportDiag } from "./device";
-
-/** 讯飞凭据（Rust 侧 serde camelCase 对齐：voice: VoiceCfg）。 */
-export interface VoiceCfg {
-  appId: string;
-  apiKey: string;
-  apiSecret: string;
+export type VoiceCapability = "tts" | "asr" | "ise";
+interface VoiceIdentity { accountId: string; generation: number; repository: ReturnType<typeof activeRepository> }
+function captureIdentity(): VoiceIdentity {
+  const { account, generation } = cloudState();
+  if (!account || profileIdentity() !== account.id) throw new CloudError("请完成登录后使用语音功能", 401, "login_required");
+  return { accountId: account.id, generation, repository: activeRepository() };
+}
+function checkIdentity(identity: VoiceIdentity): void {
+  if (cloudState().generation !== identity.generation || cloudState().account?.id !== identity.accountId || profileIdentity() !== identity.accountId || activeRepository() !== identity.repository) throw new DOMException("账号或资料已切换", "AbortError");
+}
+function checkRequest(identity: VoiceIdentity, signal: AbortSignal): void {
+  if (signal.aborted) throw new DOMException("操作已取消", "AbortError");
+  checkIdentity(identity);
+}
+function withCancellation<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(new DOMException("操作已取消", "AbortError"));
+    signal.addEventListener("abort", abort, { once: true });
+    pending.then(value => { signal.removeEventListener("abort", abort); resolve(value); }, error => { signal.removeEventListener("abort", abort); reject(error); });
+    if (signal.aborted) abort();
+  });
 }
 
-function voiceCfg(): VoiceCfg {
-  const s = getState().settings;
-  return { appId: s.voiceAppId.trim(), apiKey: s.voiceApiKey.trim(), apiSecret: s.voiceApiSecret.trim() };
+export function voiceConfigured(kind?: VoiceCapability): boolean {
+  const { account, config } = cloudState();
+  if (!account || profileIdentity() !== account.id) return false;
+  if (!kind) return true;
+  if (!config?.voice) return false;
+  return kind === "tts" ? config.voice.ttsVoices.length > 0 : kind === "asr" ? config.voice.asrLanguages.length > 0 : config.voice.iseEnabled;
 }
 
-/** 讯飞凭据已配置（听写/评测/讯飞合成引擎的可用前提）。 */
-export function voiceConfigured(): boolean {
-  const c = voiceCfg();
-  return isTauri() && !!c.appId && !!c.apiKey && !!c.apiSecret;
+export function voiceErrorText(error: unknown): string {
+  if (error instanceof DOMException && error.name === "AbortError") return "操作已取消";
+  const code = error instanceof CloudError ? error.code : "";
+  const messages: Record<string, string> = {
+    login_required: "登录后即可使用语音功能",
+    token_expired: "登录已失效，请重新登录",
+    token_invalid: "登录已失效，请重新登录",
+    unauthorized: "登录已失效，请重新登录",
+    token_reused: "登录已失效，请重新登录",
+    banned: "账号暂时无法使用，请联系支持",
+    quota_exceeded: "本月语音额度已用完，请稍后再试",
+    rate_limited: "操作太频繁，请稍后再试",
+    ise_disabled: "跟读评分暂未开放",
+    voice_not_configured: "语音功能暂未开通，请稍后再试",
+    voice_language_unavailable: "当前语言暂不支持语音识别",
+    voice_ticket_invalid: "语音连接未成功，请稍后再试",
+    upstream_error: "语音服务暂时不可用，请稍后再试",
+    upstream_timeout: "语音服务响应超时，请稍后再试",
+    voice_invalid_state: "语音识别已结束，请重新开始",
+    voice_session_too_long: "单次录音最长 60 秒，请重新开始",
+    voice_disconnected: "网络已断开，请重新开始",
+    network_error: "网络连接失败，请稍后再试",
+    unknown_result: "网络连接失败，请稍后再试",
+  };
+  if (code) return messages[code] ?? "语音服务暂时不可用，请稍后再试";
+  if (error instanceof Error && error.message && !/undefined|\[object|https?:|wss?:/i.test(error.message)) return error.message;
+  return "语音服务暂时不可用，请稍后再试";
 }
 
-/** Edge 在线音色建议列表（空值 = 按文本语言自动：中文晓晓 / 英文 Ava）。
- *  对齐 mac EdgeTts.voiceSuggestions / Windows EDGE_TTS_VOICE_SUGGESTIONS。 */
-export const EDGE_VOICE_SUGGESTIONS: [string, string][] = [
-  ["", "自动 · 中文句晓晓 / 英文句 Ava（默认）"],
-  ["en-US-AvaNeural", "Ava · 英语女声，自然"],
-  ["en-US-AndrewNeural", "Andrew · 英语男声，自然"],
-  ["en-US-EmmaNeural", "Emma · 英语女声，温和"],
-  ["en-US-BrianNeural", "Brian · 英语男声，沉稳"],
-  ["en-US-JennyNeural", "Jenny · 英语女声，亲切"],
-  ["en-US-GuyNeural", "Guy · 英语男声，新闻"],
-  ["en-US-AvaMultilingualNeural", "Ava · 多语种女声"],
-  ["zh-CN-XiaoxiaoNeural", "晓晓 · 中文女声"],
-  ["zh-CN-YunxiNeural", "云希 · 中文男声，阳光"],
-  ["zh-CN-YunyangNeural", "云扬 · 中文男声，新闻"],
-  ["zh-CN-XiaoyiNeural", "晓伊 · 中文女声，活泼"],
-  ["zh-CN-YunjianNeural", "云健 · 中文男声，有力"],
-];
-
-function errMsg(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
+export async function ensureVoiceCapability(kind: VoiceCapability): Promise<CloudConfig> {
+  const identity = captureIdentity(), current = cloudState().config;
+  const config = current ?? await loadCloudConfig();
+  checkIdentity(identity);
+  if (!voiceConfigured(kind)) throw new CloudError("语音功能暂未开放", 503, kind === "ise" ? "ise_disabled" : "voice_not_configured");
+  return config;
 }
 
-function newSessionId(): string {
-  try {
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  } catch {
-    /* 降级手拼 */
+const gatewayRequests = new Set<AbortController>();
+const playbackStops = new Set<() => void>();
+let voiceGeneration = cloudState().generation;
+subscribeCloud(() => {
+  if (cloudState().generation === voiceGeneration) return;
+  voiceGeneration = cloudState().generation;
+  gatewayRequests.forEach(controller => controller.abort());
+  gatewayRequests.clear();
+  playbackStops.forEach(stop => stop());
+  ttsCache.clear(); ttsInflight.clear(); ttsPending.clear();
+  currentCloud?.stop(); currentCloud = null;
+});
+
+async function gatewaySocket(path: string, ticketPath: string, signal: AbortSignal, params: Record<string, string> = {}): Promise<WebSocket> {
+  const identity = captureIdentity();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    checkRequest(identity, signal);
+    const { baseUrl } = cloudState();
+    const url = new URL(path, baseUrl), origin = new URL(baseUrl);
+    if (url.origin !== origin.origin || (url.protocol !== "https:" && !(import.meta.env.DEV && url.protocol === "http:"))) throw new CloudError("服务地址不可用", 0, "voice_not_configured");
+    const { ticket } = await withCancellation(cloudRequest<{ ticket: string }>(ticketPath, "POST", undefined, signal), signal);
+    checkRequest(identity, signal);
+    if (!ticket) throw new CloudError("连接未成功", 0, "voice_ticket_invalid");
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.search = ""; url.hash = "";
+    url.searchParams.set("ticket", ticket);
+    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+    const ws = new WebSocket(url.toString());
+    ws.binaryType = "arraybuffer";
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const finish = (error?: Error) => {
+          clearTimeout(timeout);
+          signal.removeEventListener("abort", abort);
+          ws.onopen = null; ws.onerror = null; ws.onclose = null;
+          if (error) { ws.close(); reject(error); } else resolve();
+        };
+        const abort = () => finish(new DOMException("操作已取消", "AbortError"));
+        const timeout = setTimeout(() => finish(new CloudError("连接超时", 0, "upstream_timeout")), 10000);
+        signal.addEventListener("abort", abort, { once: true });
+        ws.onopen = () => finish();
+        ws.onclose = () => finish(new CloudError("连接未成功", 0, "voice_ticket_invalid"));
+        ws.onerror = () => finish(new CloudError("连接未成功", 0, "voice_ticket_invalid"));
+      });
+      try { checkRequest(identity, signal); } catch (error) { ws.close(); throw error; }
+      return ws;
+    } catch (error) {
+      checkRequest(identity, signal);
+      if (signal.aborted || attempt > 0) throw error;
+    }
   }
-  return "asr-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+  throw new CloudError("连接未成功", 0, "voice_ticket_invalid");
 }
-
-/* ---------- IAT 流式听写 ---------- */
+function serverFrame(raw: string): { type?: string; code?: string; text?: string } {
+  try { return JSON.parse(raw); } catch { throw new CloudError("服务响应无法识别", 0, "upstream_error"); }
+}
+function fromBase64(value: string): Uint8Array<ArrayBuffer> {
+  const binary = atob(value), bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
 
 export interface AsrSession {
-  /** 推送 PCM16LE/16k/单声道分块（base64；任意长度，Rust 内部切 1280B 帧）。 */
   push: (pcmB64: string) => void;
-  /** 结束收流：发 status=2 结束帧，返回最终文本；失败上抛中文错误串。 */
   finish: () => Promise<string>;
-  /** 异常收尾：直接关 WS、静默清理（不等结果）。 */
   abort: () => void;
 }
-
 export interface AsrSessionHandlers {
-  /** 每次识别增量（text=按 sn last-write-wins 合并后的累计文本）。 */
   onDelta: (text: string, final: boolean) => void;
+  onError?: (error: unknown) => void;
 }
 
-/**
- * 建听写会话：先 listen('asr-delta') 成功再 invoke('asr_start')（事件监听铁律）。
- * 事件按 sessionId 过滤；asr_start/push/abort 失败转发诊断汇（不中断调用方 UI 流）。
- */
-export function createAsrSession(language: "en_us" | "zh_cn", h: AsrSessionHandlers): AsrSession {
-  const sessionId = newSessionId();
-  let unlisten: (() => void) | null = null;
-  let settled = false;
-  /** asr_start 就绪前的推送排队（上限 ~2s，防句首丢失）。 */
-  let ready = false;
-  const pending: string[] = [];
-  const MAX_PENDING = 16;
-
-  const cleanup = () => {
-    settled = true;
-    ready = true; // 排队路径不再积压
-    pending.length = 0;
-    unlisten?.();
-    unlisten = null;
+/** Buffers only while opening; all recorded audio stays in memory. Upload errors require a new recording. */
+export function createAsrSession(language: "en_us" | "zh_cn", handlers: AsrSessionHandlers): AsrSession {
+  let identity: VoiceIdentity | null = null, identityError: unknown;
+  try { identity = captureIdentity(); } catch (error) { identityError = error; }
+  const controller = new AbortController(); gatewayRequests.add(controller);
+  let socket: WebSocket | null = null, settled = false, stopWanted = false;
+  let pending: Uint8Array<ArrayBuffer>[] = [], pendingBytes = 0, totalBytes = 0;
+  let resolveFinal!: (text: string) => void, rejectFinal!: (error: unknown) => void;
+  const final = new Promise<string>((resolve, reject) => { resolveFinal = resolve; rejectFinal = reject; });
+  void final.catch(() => undefined);
+  const finish = (text?: string, error?: unknown) => {
+    if (settled) return;
+    settled = true; pending = []; pendingBytes = 0; clearTimeout(watchdog);
+    gatewayRequests.delete(controller); controller.signal.removeEventListener("abort", abort);
+    socket?.close();
+    if (error) { rejectFinal(error); if (!(error instanceof DOMException && error.name === "AbortError")) handlers.onError?.(error); }
+    else resolveFinal(text ?? "");
   };
-
+  const abort = () => finish(undefined, new DOMException("操作已取消", "AbortError"));
+  controller.signal.addEventListener("abort", abort, { once: true });
+  const watchdog = setTimeout(() => finish(undefined, new CloudError("识别超时", 0, "voice_session_too_long")), 75000);
+  const send = (bytes: Uint8Array<ArrayBuffer>) => {
+    if (!socket || settled) return;
+    checkRequest(identity!, controller.signal);
+    for (let offset = 0; offset < bytes.length; offset += 10240) socket.send(bytes.slice(offset, offset + 10240).buffer);
+  };
   void (async () => {
     try {
-      const { listen } = await import("@tauri-apps/api/event");
-      unlisten = await listen<{ sessionId: string; text: string; final: boolean }>("asr-delta", (e) => {
-        if (settled || e.payload?.sessionId !== sessionId) return;
-        h.onDelta(e.payload.text, e.payload.final);
-      });
-      await invokeRaw("asr_start", { language, sessionId, voice: voiceCfg() });
-      ready = true;
-      for (const b64 of pending.splice(0)) void invoke("asr_push", { sessionId, pcmB64: b64 });
-    } catch (err) {
-      reportDiag("asr", `听写会话建立失败：${errMsg(err)}`);
-      cleanup();
-    }
-  })();
-
-  return {
-    push: (pcmB64: string) => {
+      if (identityError) throw identityError;
+      checkRequest(identity!, controller.signal);
+      const config = await ensureVoiceCapability("asr");
+      checkRequest(identity!, controller.signal);
+      if (!config.voice.asrLanguages.includes(language)) throw new CloudError("当前语言暂未开放", 400, "voice_language_unavailable");
       if (settled) return;
-      if (!ready) {
-        if (pending.length < MAX_PENDING) pending.push(pcmB64);
-        return;
-      }
-      void invoke("asr_push", { sessionId, pcmB64 });
-    },
-    finish: async () => {
-      /* 失败也要 cleanup（治 rust-tts-3）：此前 invokeRaw 抛错时 cleanup 被跳过——
-         unlisten 永不移除、settled 恒 false，弱网下每次识别失败泄漏一个全局 asr-delta 监听器 */
+      const ws = await gatewaySocket(config.gateway.voiceAsrStream, config.gateway.voiceTicket, controller.signal, { lang: language });
+      socket = ws;
+      checkRequest(identity!, controller.signal);
+      if (settled) { ws.close(); return; }
+      ws.onmessage = event => {
+        if (settled || typeof event.data !== "string") return;
+        try {
+          checkRequest(identity!, controller.signal);
+          const frame = serverFrame(event.data);
+          if (frame.type === "error") finish(undefined, new CloudError("识别失败", 0, frame.code ?? "upstream_error"));
+          else if ((frame.type === "interim" || frame.type === "final") && typeof frame.text === "string") {
+            handlers.onDelta(frame.text, frame.type === "final");
+            if (frame.type === "final") finish(frame.text);
+          }
+        } catch (error) { finish(undefined, error); }
+      };
+      ws.onclose = () => finish(undefined, new CloudError("连接已断开", 0, "voice_disconnected"));
+      ws.onerror = () => finish(undefined, new CloudError("连接已断开", 0, "voice_disconnected"));
+      ws.send(JSON.stringify({ type: "start" }));
+      for (const bytes of pending) send(bytes);
+      pending = []; pendingBytes = 0;
+      if (stopWanted) ws.send(JSON.stringify({ type: "stop" }));
+    } catch (error) { finish(undefined, error); }
+  })();
+  return {
+    push: pcmB64 => {
+      if (settled || stopWanted) return;
       try {
-        const text = await invokeRaw<string>("asr_finish", { sessionId });
-        return text || "";
-      } finally {
-        cleanup();
+        if (identityError) throw identityError;
+        checkRequest(identity!, controller.signal);
+        const bytes = fromBase64(pcmB64); totalBytes += bytes.length;
+        if (totalBytes > 1920000) throw new CloudError("录音过长", 0, "voice_session_too_long");
+        if (socket?.readyState === WebSocket.OPEN) send(bytes);
+        else {
+          pendingBytes += bytes.length;
+          if (pendingBytes > 64000) throw new CloudError("连接缓慢", 0, "upstream_timeout");
+          pending.push(bytes);
+        }
+      } catch (error) { finish(undefined, error); }
+    },
+    finish: () => {
+      if (!settled && !stopWanted) {
+        stopWanted = true;
+        try { checkRequest(identity!, controller.signal); if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "stop" })); }
+        catch (error) { finish(undefined, error); }
       }
+      return final;
     },
-    abort: () => {
-      cleanup();
-      void invoke("asr_abort", { sessionId });
-    },
+    abort: () => controller.abort(),
   };
 }
-
-/* ---------- ISE 跟读评测 ---------- */
 
 export interface IsePhoneTS {
   content: string;
@@ -167,12 +256,25 @@ export interface IseResultTS {
   words: IseWordTS[];
 }
 
-/** 句子发音评测；错误上抛 Rust 侧中文错误串（28673 未听到声音等已映射）。 */
-export function assessSentence(text: string, pcmB64: string): Promise<IseResultTS> {
-  return invokeRaw<IseResultTS>("xfyun_ise_assess", { text, pcmB64, voice: voiceCfg() });
+/** Server scores use the same five-point scale; flatten syllable phones for the mobile highlighter. */
+export async function assessSentence(text: string, pcmB64: string): Promise<IseResultTS> {
+  const identity = captureIdentity();
+  await ensureVoiceCapability("ise");
+  checkIdentity(identity);
+  const result = await cloudRequest<{
+    total: number; accuracy: number; fluency: number; standard: number; integrity?: number;
+    isRejected: boolean; exceptInfo?: string | null;
+    words?: { content: string; totalScore?: number; dpMessage?: number; phones?: IsePhoneTS[]; sylls?: { phones?: IsePhoneTS[] }[] }[];
+  }>("/v1/voice/ise", "POST", { refText: text, lang: "en", audio: pcmB64 });
+  checkIdentity(identity);
+  return {
+    totalScore: result.total, accuracyScore: result.accuracy, fluencyScore: result.fluency,
+    standardScore: result.standard, integrityScore: result.integrity ?? 5,
+    isRejected: result.isRejected, exceptInfo: result.exceptInfo,
+    words: (result.words ?? []).map(word => ({ content: word.content, totalScore: word.totalScore,
+      dpMessage: word.dpMessage ?? 0, phones: word.phones ?? word.sylls?.flatMap(syll => syll.phones ?? []) ?? [] })),
+  };
 }
-
-/* ---------- 云 TTS（讯飞合成 → decodeAudioData 播放） ---------- */
 
 export interface CloudSpeech {
   stop: () => void;
@@ -189,6 +291,7 @@ let sharedCtx: AudioContext | null = null;
 let decodeCtx: OfflineAudioContext | null = null;
 
 function audioCtx(): AudioContext {
+  setWebAudioSessionType("playback");
   if (!sharedCtx || sharedCtx.state === "closed") sharedCtx = new AudioContext();
   if (sharedCtx.state === "suspended") void sharedCtx.resume().catch(() => undefined);
   return sharedCtx;
@@ -202,7 +305,8 @@ async function awaitRunningCtx(maxMs: number): Promise<AudioContext> {
   const deadline = Date.now() + maxMs;
   for (;;) {
     const ctx = audioCtx();
-    if (ctx.state === "running" || Date.now() >= deadline) return ctx;
+    if (ctx.state === "running") return ctx;
+    if (Date.now() >= deadline) throw new Error(`音频输出未恢复（${ctx.state}）`);
     await new Promise<void>((resolve) => {
       let settled = false;
       const fin = () => {
@@ -282,239 +386,296 @@ if (typeof window !== "undefined") {
   }
 }
 
-/** 云朗读是否可达：真机 + （xfyun 引擎需三件套；edge 免凭据）。 */
-export function cloudAvailable(): boolean {
-  const s = getState().settings;
-  return isTauri() && (s.ttsEngine === "xfyun" ? voiceConfigured() : true);
+/** Call synchronously from a user gesture before any storage/network awaits. */
+export function prepareAudioPlayback(): void {
+  setWebAudioSessionType("playback");
+  if (typeof AudioContext === "undefined") return;
+  unlockAudioOnce();
+  void audioCtx();
 }
 
-/* ---------- 云合成缓存（内存 LRU；键 = 引擎|音色|rate|文本） ----------
-   领读/朗读的重复点播（再听一次、差词重练）直接命中已解码 AudioBuffer，秒出声；
-   语速在键里——不同倍速各存一份。另设在途表（同键并发只发一次网络请求）：
-   陪练边流边读时「预取」与「按序点播」会前后脚到，共享在途 promise 不重复合成。 */
+export interface PlaybackSession {
+  category: string;
+  outputVolume: number;
+  outputs: string[];
+}
+
+/** Reassert both WebKit and native playback after synthesis/storage or recording. */
+export async function restorePlaybackSession(): Promise<PlaybackSession | null> {
+  setWebAudioSessionType("playback");
+  if (isAudioRecordingActive()) return null;
+  if (!isTauri()) return null;
+  const session = await invokeRaw<PlaybackSession | null>("restore_playback_audio");
+  if (session) {
+    reportDiag("tts", `输出会话 ${session.category} · 音量 ${session.outputVolume.toFixed(2)} · ${session.outputs.join(", ") || "无输出路由"}`);
+  }
+  return session;
+}
+
+/** Play a local audio buffer through the same iOS-unlocked WebAudio route as cloud TTS. */
+export async function playAudioBufferData(data: ArrayBuffer): Promise<() => void> {
+  prepareAudioPlayback();
+  const audio = await decode(data.slice(0));
+  await restorePlaybackSession();
+  const ctx = await awaitRunningCtx(3000);
+  if (ctx.state !== "running") throw new Error(`音频输出未恢复（${ctx.state}）`);
+  const source = ctx.createBufferSource();
+  source.buffer = audio;
+  source.connect(ctx.destination);
+  source.onended = () => source.disconnect();
+  try {
+    source.start();
+  } catch (error) {
+    source.disconnect();
+    throw error;
+  }
+  let stopped = false;
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    try {
+      source.stop();
+    } catch {
+      /* Already ended. */
+    }
+    source.disconnect();
+  };
+}
+
+/** Availability reflects the signed-in account and server capabilities. */
+export function cloudAvailable(): boolean { return voiceConfigured("tts"); }
+
 const TTS_CACHE_MAX = 24;
 const ttsCache = new Map<string, AudioBuffer>();
 const ttsPending = new Set<string>();
-const ttsInflight = new Map<string, Promise<AudioBuffer>>();
-
-function cloudKey(text: string, voiceName: string | undefined, speed?: number, forceEngine?: "edge" | "xfyun"): string {
-  const s = getState().settings;
-  const useXfyun = forceEngine ? forceEngine === "xfyun" : s.ttsEngine === "xfyun" && voiceConfigured();
-  const rate = typeof speed === "number" && Number.isFinite(speed) ? speed : 1;
-  const voice = useXfyun ? voiceName ?? "auto" : (voiceName ?? s.edgeVoice).trim() || "auto";
-  return `${useXfyun ? "xfyun" : "edge"}|${voice}|${rate.toFixed(2)}|${text}`;
+interface TtsFlight { promise: Promise<AudioBuffer>; controller: AbortController; consumers: Set<symbol>; finished: boolean }
+const ttsInflight = new Map<string, TtsFlight>();
+const repositoryIds = new WeakMap<object, number>();
+let nextRepositoryId = 0;
+let synthesisQueue: Promise<unknown> = Promise.resolve();
+function playbackRate(speed?: number): number { return typeof speed === "number" && Number.isFinite(speed) ? Math.max(0.5, Math.min(2, speed)) : 1; }
+function cloudKey(text: string, voice?: string): string {
+  const { generation, account } = cloudState();
+  const repository = activeRepository();
+  if (!repositoryIds.has(repository)) repositoryIds.set(repository, ++nextRepositoryId);
+  return `${generation}|${account?.id ?? "guest"}|${repositoryIds.get(repository)}|${voice ?? getState().settings.ttsVoice}|${text}`;
 }
-
-/** 合成 + 解码（带缓存 + 在途共享）。失败 reject（调用方降级/兜底）。 */
-async function synthAndDecode(
-  text: string,
-  voiceName: string | undefined,
-  speed?: number,
-  forceEngine?: "edge" | "xfyun",
-): Promise<AudioBuffer> {
-  const key = cloudKey(text, voiceName, speed, forceEngine);
-  const hit = ttsCache.get(key);
-  if (hit) {
-    ttsCache.delete(key); // LRU touch
-    ttsCache.set(key, hit);
-    return hit;
+function splitText(text: string): string[] {
+  const encoder = new TextEncoder(), pieces: string[] = [];
+  let piece = "", bytes = 0;
+  for (const character of text.trim()) {
+    const size = encoder.encode(character).length;
+    if (bytes + size >= 8000) { pieces.push(piece); piece = ""; bytes = 0; }
+    piece += character; bytes += size;
   }
-  const running = ttsInflight.get(key);
-  if (running) return running;
-  const s = getState().settings;
-  const useXfyun = forceEngine ? forceEngine === "xfyun" : s.ttsEngine === "xfyun" && voiceConfigured();
-  const rate = typeof speed === "number" && Number.isFinite(speed) ? speed : 1;
-  const job = (async () => {
-    const r = useXfyun
-      ? await invokeRaw<{ audioB64: string; format: string }>("xfyun_tts_speak", {
-          text,
-          voiceName: voiceName ?? null,
-          /* 直传倍率（1 = 常速）：0-100 档位换算在 Rust map_speed（×50 后 clamp）——
-             此前端再预换算会被乘两次（1× → 50×50 → clamp 100 恒最快档），治 services-1 */
-          speed: rate,
-          voice: voiceCfg(),
-        })
-      : await invokeRaw<{ audioB64: string; format: string }>("edge_tts_speak", {
-          text,
-          voiceName: (voiceName ?? s.edgeVoice).trim() || null,
-          speed: rate,
-        });
-    if (!r?.audioB64) throw new Error("云 TTS 未返回音频");
-    const bin = atob(r.audioB64);
-    const buf = new ArrayBuffer(bin.length);
-    const u8 = new Uint8Array(buf);
-    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-    const audio = await decode(buf);
-    ttsCache.set(key, audio);
-    if (ttsCache.size > TTS_CACHE_MAX) ttsCache.delete(ttsCache.keys().next().value as string);
-    return audio;
-  })();
-  ttsInflight.set(key, job);
+  if (piece) pieces.push(piece);
+  return pieces;
+}
+async function synthesizePiece(text: string, voice: string | undefined, config: CloudConfig, controller: AbortController): Promise<Uint8Array<ArrayBuffer>> {
+  const identity = captureIdentity();
+  const socket = await gatewaySocket(config.gateway.voiceTtsStream, config.gateway.voiceTicket, controller.signal);
+  try { checkRequest(identity, controller.signal); } catch (error) { socket.close(); throw error; }
+  return new Promise((resolve, reject) => {
+    const chunks: Uint8Array<ArrayBuffer>[] = [];
+    let byteLength = 0, settled = false;
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true; clearTimeout(timeout); controller.signal.removeEventListener("abort", abort);
+      socket.onmessage = null; socket.onclose = null; socket.onerror = null; socket.close();
+      if (error) { reject(error); return; }
+      if (!byteLength) { reject(new CloudError("朗读未返回音频", 0, "upstream_error")); return; }
+      const audio = new Uint8Array(byteLength); let offset = 0;
+      for (const chunk of chunks) { audio.set(chunk, offset); offset += chunk.length; }
+      resolve(audio);
+    };
+    const abort = () => finish(new DOMException("操作已取消", "AbortError"));
+    const timeout = setTimeout(() => finish(new CloudError("朗读超时", 0, "upstream_timeout")), 30000);
+    controller.signal.addEventListener("abort", abort, { once: true });
+    socket.onmessage = event => {
+      if (settled) return;
+      try {
+        if (typeof event.data === "string") {
+          const frame = serverFrame(event.data);
+          if (frame.type === "end") finish();
+          else if (frame.type === "error") finish(new CloudError("朗读失败", 0, frame.code ?? "upstream_error"));
+        } else if (event.data instanceof ArrayBuffer) {
+          byteLength += event.data.byteLength;
+          if (byteLength > 32 * 1024 * 1024) finish(new CloudError("音频过大", 0, "upstream_error"));
+          else chunks.push(new Uint8Array(event.data));
+        }
+      } catch (error) { finish(error); }
+    };
+    socket.onclose = () => finish(new CloudError("连接已断开", 0, "voice_disconnected"));
+    socket.onerror = () => finish(new CloudError("连接已断开", 0, "voice_disconnected"));
+    try { checkRequest(identity, controller.signal); socket.send(JSON.stringify({ type: "synthesis", text, ...(voice ? { voice } : {}) })); }
+    catch (error) { finish(error); }
+  });
+}
+async function synthAndDecode(text: string, requestedVoice?: string, _speed?: number, signal?: AbortSignal): Promise<AudioBuffer> {
+  const identity = captureIdentity();
+  if (signal?.aborted) throw new DOMException("操作已取消", "AbortError");
+  const selected = requestedVoice ?? getState().settings.ttsVoice;
+  const key = cloudKey(text, selected), cached = ttsCache.get(key);
+  if (cached) { ttsCache.delete(key); ttsCache.set(key, cached); return cached; }
+  let flight = ttsInflight.get(key);
+  if (!flight) {
+    const controller = new AbortController(); gatewayRequests.add(controller);
+    const current: TtsFlight = { controller, consumers: new Set(), finished: false, promise: Promise.resolve(null as unknown as AudioBuffer) };
+    current.promise = synthesisQueue.catch(() => undefined).then(async () => {
+      checkRequest(identity, controller.signal);
+      const config = await withCancellation(ensureVoiceCapability("tts"), controller.signal);
+      checkRequest(identity, controller.signal);
+      const voice = config.voice.ttsVoices.some(item => item.id === selected) ? selected : undefined;
+      const pieces: Uint8Array<ArrayBuffer>[] = [];
+      let retried = false;
+      for (const piece of splitText(text)) {
+        checkRequest(identity, controller.signal);
+        try { pieces.push(await synthesizePiece(piece, voice, config, controller)); }
+        catch (error) {
+          checkRequest(identity, controller.signal);
+          if (retried || !(error instanceof CloudError) || !["upstream_error", "upstream_timeout", "voice_disconnected"].includes(error.code)) throw error;
+          retried = true;
+          pieces.push(await synthesizePiece(piece, voice, config, controller));
+        }
+        checkRequest(identity, controller.signal);
+      }
+      if (!pieces.length) throw new Error("请选择一段文字再试听");
+      const buffers: AudioBuffer[] = [];
+      for (const piece of pieces) {
+        checkRequest(identity, controller.signal);
+        buffers.push(await withCancellation(decode(piece.buffer), controller.signal));
+        checkRequest(identity, controller.signal);
+      }
+      let audio = buffers[0];
+      if (buffers.length > 1) {
+        const ctx = decodeCtx ?? audioCtx(), channels = Math.max(...buffers.map(buffer => buffer.numberOfChannels));
+        audio = ctx.createBuffer(channels, buffers.reduce((length, buffer) => length + buffer.length, 0), buffers[0].sampleRate);
+        let offset = 0;
+        for (const buffer of buffers) {
+          for (let channel = 0; channel < channels; channel++) audio.getChannelData(channel).set(buffer.getChannelData(Math.min(channel, buffer.numberOfChannels - 1)), offset);
+          offset += buffer.length;
+        }
+      }
+      checkRequest(identity, controller.signal);
+      ttsCache.set(key, audio);
+      if (ttsCache.size > TTS_CACHE_MAX) ttsCache.delete(ttsCache.keys().next().value as string);
+      return audio;
+    }).finally(() => {
+      current.finished = true; gatewayRequests.delete(controller);
+      if (ttsInflight.get(key) === current) ttsInflight.delete(key);
+    });
+    synthesisQueue = current.promise;
+    ttsInflight.set(key, current); flight = current;
+  }
+  const shared = flight, consumer = Symbol(); shared.consumers.add(consumer);
+  const release = () => {
+    shared.consumers.delete(consumer);
+    if (!shared.finished && shared.consumers.size === 0) shared.controller.abort();
+  };
+  let abort: (() => void) | undefined;
+  const cancelled = new Promise<never>((_, reject) => {
+    abort = () => { release(); reject(new DOMException("操作已取消", "AbortError")); };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
   try {
-    return await job;
+    if (signal?.aborted) abort?.();
+    const audio = await Promise.race([shared.promise, cancelled]);
+    checkIdentity(identity);
+    return audio;
   } finally {
-    ttsInflight.delete(key);
+    if (abort) signal?.removeEventListener("abort", abort);
+    // A stopped preview must not leave work in the queue. Other active listeners
+    // (including an intentional reader prefetch) may still need this synthesis.
+    release();
   }
 }
-
-/** 预取合成进缓存（不播放）：句子出现时后台拉音，用户点播时已命中、秒出声。
- *  失败写诊断（预取失败是「点播无声」的头号线索，不能静默）。 */
 export function prefetchCloud(text: string, voiceName?: string, speed?: number): void {
   if (!cloudAvailable() || !text.trim()) return;
-  const key = cloudKey(text, voiceName, speed);
+  const key = cloudKey(text, voiceName);
   if (ttsCache.has(key) || ttsPending.has(key)) return;
   ttsPending.add(key);
-  void synthAndDecode(text, voiceName, speed)
-    .catch((e) =>
-      reportDiag("tts", `预取失败（${typeof speed === "number" ? `${speed}× ` : ""}「${text.slice(0, 12)}…」）：${errMsg(e)}`),
-    )
-    .finally(() => ttsPending.delete(key));
+  void synthAndDecode(text, voiceName, speed).catch(error => reportDiag("tts", `预取失败：${voiceErrorText(error)}`)).finally(() => ttsPending.delete(key));
 }
 
-/** 云 TTS 朗读；失败 done reject（调用方降级 speechSynthesis）。
- *  引擎路由（settings.ttsEngine）：edge（默认，免费无凭据）→ edge_tts_speak，
- *  speed 为语音倍率（1 = 常速）；xfyun（需三件套）→ xfyun_tts_speak，
- *  speed 直传倍率，0-100 档位换算（×50 后 clamp）在 Rust map_speed。
- *  播放用合成 await 之后重取的当前共享 ctx；onended + 估时兜底双保险。音色：edge 用 settings.edgeVoice（空 = 按语言自动）。 */
 export function speakCloud(text: string, voiceName?: string, speed?: number): CloudSpeech {
+  prepareAudioPlayback();
   let stopped = false;
+  const controller = new AbortController();
   let src: AudioBufferSourceNode | null = null;
-  const done = (async () => {
-    let audio: AudioBuffer;
-    try {
-      audio = await synthAndDecode(text, voiceName, speed);
-    } catch (err) {
-      /* Edge 失败且讯飞三件套在 → 换引擎再试一次（国内网络 Edge 偶发不可达，别让朗读直接哑掉） */
-      if (getState().settings.ttsEngine === "edge" && voiceConfigured()) {
-        reportDiag("tts", `Edge 合成失败（${errMsg(err)}），换讯飞引擎重试`);
-        audio = await synthAndDecode(text, voiceName, speed, "xfyun");
-      } else {
-        throw err;
-      }
-    }
+  const stop = () => {
     if (stopped) return;
+    stopped = true; controller.abort();
+    try { src?.stop(); } catch { /* Already stopped. */ }
+  };
+  playbackStops.add(stop);
+  const done = (async () => {
+    const identity = captureIdentity();
+    let audio: AudioBuffer;
+    try { audio = await synthAndDecode(text, voiceName, speed, controller.signal); }
+    catch (error) { if (stopped) return; throw error; }
+    if (stopped) return;
+    checkIdentity(identity);
+    await restorePlaybackSession();
+    if (stopped) return;
+    checkIdentity(identity);
     /* 合成是网络往返，期间共享 ctx 可能被解锁仪式重建/关闭：await 之后重取当前 ctx，
        别用合成前捕获的旧句柄——旧 ctx 挂起时 start() 静默排队、done 永不落定（治 rust-tts-2）。
        另：录音刚停就播（陪练句队）会撞上 WebKit 会话恢复竞态窗——等 ctx 回 running
        再 start，最多 3s（治「录完就播全无声」）；等待超 150ms 记诊断（头号判别信号）。 */
     const waitFrom = Date.now();
     const ctx = await awaitRunningCtx(3000);
+    if (stopped) return;
+    checkIdentity(identity);
     const waited = Date.now() - waitFrom;
     if (waited > 150) reportDiag("tts", `播放前等待音频上下文恢复 ${waited}ms（终态 ${ctx.state}）`);
-    if (ctx.state !== "running") {
-      reportDiag("tts", `播放时音频上下文 ${ctx.state}（应为 running）`);
-      await ctx.resume().catch(() => undefined);
-    }
+    if (ctx.state !== "running") throw new Error(`音频输出未恢复（${ctx.state}）`);
     /* resume 是异步空窗：停止若落在这里，复查丢弃——被打断的旧朗读迟些照样出声会叠音（治 services-3） */
     if (stopped) return;
-    await new Promise<void>((resolve) => {
-      src = ctx.createBufferSource();
-      src.buffer = audio;
-      src.connect(ctx.destination);
+    await new Promise<void>((resolve, reject) => {
+      const source = ctx.createBufferSource();
+      src = source;
+      source.buffer = audio;
+      const rate = playbackRate(speed);
+      if (source.playbackRate) source.playbackRate.value = rate;
+      source.connect(ctx.destination);
       let settled = false;
-      const fin = () => {
+      let timer: ReturnType<typeof setTimeout>;
+      const fin = (error?: Error) => {
         if (settled) return;
         settled = true;
-        resolve();
+        clearTimeout(timer);
+        source.onended = null;
+        if (error) reject(error);
+        else resolve();
       };
-      src.onended = fin;
-      /* 云路径补兜底定时（本地路径早有）：上下文挂起时 onended 不触发、done 永挂，
-         调用方 onend 不回。时长按音频实际时长（倍速已在合成侧生效）+ 2.5s 余量 */
-      setTimeout(fin, audio.duration * 1000 + 2500);
-      src.start();
-    });
-    reportDiag("tts", `播放完成 · ${audio.duration.toFixed(1)}s`);
-  })();
-  return {
-    stop: () => {
-      stopped = true;
+      source.onended = () => fin();
+      /* A lost ended event is safe to settle only while the output context stayed active. */
+      timer = setTimeout(() => {
+        if (ctx.state === "running") fin();
+        else fin(new Error(`音频播放未结束（${ctx.state}）`));
+      }, audio.duration / rate * 1000 + 2500);
       try {
-        src?.stop();
-      } catch {
-        /* 未开始/已停 */
+        source.start();
+      } catch (error) {
+        fin(error instanceof Error ? error : new Error(String(error)));
       }
-    },
-    done,
-  };
+    });
+    if (!stopped) reportDiag("tts", `播放完成 · ${(audio.duration / playbackRate(speed)).toFixed(1)}s`);
+  })();
+  void done.then(() => playbackStops.delete(stop), () => playbackStops.delete(stop));
+  return { stop, done };
 }
 
-/* ---------- 带降级的朗读（云优先 → speechSynthesis） ---------- */
-
-/* 本地 speechSynthesis 兜底不回环 store.speak（store.speak 云分支已路由到本函数，
-   回环会在「填了凭据但非真机」时无限递归）——此处本地实现同语义：
-   onend + 估时兜底双保险（对齐 store.speak / spike S3a）。 */
-let localVoiceEn: SpeechSynthesisVoice | null = null;
-let localVoiceZh: SpeechSynthesisVoice | null = null;
-function pickLocalVoice(): void {
-  if (!("speechSynthesis" in window)) return;
-  const vs = speechSynthesis.getVoices();
-  const en = vs.filter((v) => /^en(-|_)/i.test(v.lang));
-  localVoiceEn = en.find((v) => /Google US|Natural|Samantha|Zira/i.test(v.name)) || en[0] || null;
-  const zh = vs.filter((v) => /^zh(-|_)/i.test(v.lang));
-  localVoiceZh = zh[0] || null;
-}
-if (typeof window !== "undefined" && "speechSynthesis" in window) {
-  pickLocalVoice();
-  /* addEventListener 而非 onvoiceschanged 赋值：store.speak 已占用后者，避免互相覆盖（iOS 声音晚载） */
-  try {
-    speechSynthesis.addEventListener("voiceschanged", pickLocalVoice);
-  } catch {
-    /* 旧 WebView 无 addEventListener，忽略 */
-  }
-}
-
-function speakLocal(text: string, rate: number, onend: (() => void) | undefined, lang: "en" | "zh"): void {
-  if (!("speechSynthesis" in window)) {
-    onend?.();
-    return;
-  }
-  speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = lang === "zh" ? "zh-CN" : "en-US";
-  u.rate = rate;
-  const v = lang === "zh" ? localVoiceZh : localVoiceEn;
-  if (v) u.voice = v;
-  let settled = false;
-  const done = () => {
-    if (settled) return;
-    settled = true;
-    onend?.();
-  };
-  u.onend = () => done();
-  u.onerror = () => done();
-  /* 估时兜底：onend 不触发时按字数估算（store.speak 同口径） */
-  const perUnit = lang === "zh" ? 260 : 380;
-  const estMs = (text.split(/\s+|(?=[\u4e00-\u9fff])/).length * perUnit) / Math.max(0.5, rate) + 1200;
-  setTimeout(done, estMs);
-  speechSynthesis.speak(u);
-}
-
-/** 当前在播的云句柄：新一次朗读顶掉上一次（store.speak「新 speak 顶旧」语义的云侧落点）。 */
+/** Compatibility entry point: all speech uses the account gateway, with no device/provider fallback. */
 let currentCloud: CloudSpeech | null = null;
-
-/**
- * 朗读统一入口：
- *  · 云朗读可达（真机；默认 Edge 免凭据）→ 云 TTS 优先；失败降级 speechSynthesis
- *    并经诊断汇上报。
- *  · 浏览器 → 直接 speechSynthesis（onend + 估时兜底双保险）。
- */
-export function speakWithFallback(text: string, rate = 1, onend?: () => void, lang: "en" | "zh" = "en"): void {
+export function speakWithFallback(text: string, rate = 1, onend?: () => void, _lang: "en" | "zh" = "en"): void {
   currentCloud?.stop();
-  currentCloud = null;
-  if (cloudAvailable()) {
-    const h = speakCloud(text, undefined, rate);
-    currentCloud = h;
-    h.done
-      .then(() => {
-        if (currentCloud === h) currentCloud = null;
-        onend?.();
-      })
-      .catch((err) => {
-        if (currentCloud === h) currentCloud = null;
-        reportDiag("tts", `云 TTS 失败，已降级系统朗读：${errMsg(err)}`);
-        speakLocal(text, rate, onend, lang);
-      });
-    return;
-  }
-  speakLocal(text, rate, onend, lang);
+  const speech = speakCloud(text, undefined, rate); currentCloud = speech;
+  void speech.done.then(() => {
+    if (currentCloud !== speech) return;
+    currentCloud = null; onend?.();
+  }).catch(error => {
+    if (currentCloud !== speech) return;
+    currentCloud = null; reportDiag("tts", voiceErrorText(error));
+  });
 }

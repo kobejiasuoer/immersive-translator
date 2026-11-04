@@ -95,6 +95,21 @@ final class XfyunCredentialsStore: ObservableObject {
         credentials[service]?.isComplete ?? false
     }
 
+    /// 三槽位凭据存在性快照（语音 voiceProvider 迁移推断用，对齐 Windows
+    /// xfyunCredentialPresence：三槽位各自 isComplete，不含 asr 回落 ise 语义）。
+    func presenceSnapshot() -> XfyunCredentialPresenceSnapshot {
+        XfyunCredentialPresenceSnapshot(
+            iseMain: isComplete(.ise),
+            ttsOwn: isComplete(.tts),
+            asrOwn: isComplete(.asr)
+        )
+    }
+
+    /// 任一讯飞凭据槽位已保存（语音页讯飞行 keydot 等布尔场景用）。
+    var hasAnyCredential: Bool {
+        presenceSnapshot().hasAny
+    }
+
     /// 业务凭据：听写留空自动回落评测凭据（iat 与 ise 常共用一个应用）。
     func creds(for service: XfyunService) -> XfyunCredentials? {
         if let c = credentials[service], c.isComplete {

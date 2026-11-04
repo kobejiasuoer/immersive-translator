@@ -1,11 +1,10 @@
 /**
  * 应用外壳 —— 阅读/口语/笔记与复习三标签 + push 栈 + 底部 sheet +
- * 应用内通知横幅（60s 无操作自动收起 §3.14）+ 首启 Onboarding + 深链（ita:// 等价 hash）。
+ * 系统学习提醒 + 首启 Onboarding + 深链（ita:// 等价 hash）。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { actions, flushPersist, reviewStats, rolloverIfDue, toast, useApp } from "./store";
-import { Icon } from "./ui/icons";
-import { NavCtx, useNav, type Nav, type PushName, type PushProps } from "./ui/nav";
+import { actions, flushPersist, rolloverIfDue, toast, useApp } from "./store";
+import { NavCtx, type Nav, type PushName, type PushProps } from "./ui/nav";
 import { SheetHost } from "./ui/sheets";
 import { haptic, invoke, onDeepLink, registerDiagSink } from "./services/device";
 /* 静态导入（非动态 chunk）：诊断模块共享 store/voice 模块，动态 import 会让
@@ -15,23 +14,22 @@ import { runTtsSelftest } from "./services/selftest";
 import ReaderScreen from "./screens/ReaderScreen";
 import ReviewScreen from "./screens/ReviewScreen";
 import QuickReview from "./screens/QuickReview";
-import TranslateScreen from "./screens/TranslateScreen";
-import CameraScreen from "./screens/CameraScreen";
-import ShadowScreen from "./screens/ShadowScreen";
-import CaptionScreen from "./screens/CaptionScreen";
-import { SpeakChat, SpeakScenes } from "./screens/SpeakScreens";
 import { NotesGen, NotesLib, NoteDetail } from "./screens/NotesScreens";
-import { AboutScreen, DiagScreen, GlossaryScreen, HistoryScreen, ShareScreen } from "./screens/MiscScreens";
+import { DiagScreen, GlossaryScreen, HistoryScreen } from "./screens/MiscScreens";
 import { SetLookScreen, SetModelScreen, SetPrefScreen, SetRemindScreen, SetVoiceScreen } from "./screens/SettingsScreens";
 import OnboardingScreen from "./screens/OnboardingScreen";
 import GlassNav from "./ui/GlassNav";
-import { ReadingHome, SpeakingHome, LearningVault, WordDetail, LearningNote, LearningSearch } from "./screens/LearningHome";
+import { ReadingHome, SpeakingHome, LearningVault, WordDetail, LearningNote, LearningSearch, WordbookScreen } from "./screens/LearningHome";
 import LearningImport from "./screens/LearningImport";
+import { LearningLibrary, LearningFeeds } from "./screens/LearningDiscover";
 import { LearningPractice } from "./screens/LearningPractice";
 import AccountScreen, { LoginHost } from "./screens/AccountScreen";
+import GoalSheetHost from "./components/account/GoalSheet";
+import { useGoalSource } from "./components/account/goalGate";
+import { useAccountOpen } from "./components/account/accountGate";
 import { useLoginIntent } from "./services/authGate";
 import type { Article } from "./core/types";
-import type { SpeakSession } from "./core/sessions";
+import { acknowledgeNotificationAction, reconcileStudyNotifications, takeNotificationAction, type NotificationAction } from "./services/studyNotifications";
 
 interface Entry {
   id: number;
@@ -41,42 +39,48 @@ interface Entry {
   closing: boolean;
 }
 
+/** App Group 交接队列项（lib.rs share_handoff::ShareQueueItem 的 JSON 形状，receivedAt 毫秒） */
+interface ShareQueueItem {
+  id: string;
+  kind: "text" | "url";
+  text: string;
+  receivedAt: number;
+}
+
 const TABS = [{ key: "today" }, { key: "practice" }, { key: "vocab" }] as const;
 
-/* push 页名称 → 读屏名称（U-17：.push 根 role=dialog 的 aria-label；与各屏 PNav 标题同口径） */
-const PUSH_TITLES: Record<PushName, string> = { learningPractice: "口语练习", account: "账号与设置", learningImport: "加入阅读", learningWord: "表达详情", learningNote: "学习笔记", learningSearch: "搜索",
+/* push 页名称 → 读屏名称（U-17：.push 根 role=dialog 的 aria-label；与各屏 PNav 标题同口径；
+   account 已撤出 push 栈——原型 SHEETS.account 为底部抽屉，由 AccountScreen+accountGate 承担） */
+const PUSH_TITLES: Record<PushName, string> = { learningPractice: "口语练习", learningImport: "导入自己的内容", learningWord: "表达详情", learningNote: "学习笔记", learningSearch: "搜索",
+  learningLibrary: "精选经典书库", learningFeeds: "英文资讯订阅", learningWordbook: "生词本",
   reader: "阅读",
   review: "复习",
   quick: "快速复习",
-  translate: "翻译",
-  camera: "拍译",
-  scenes: "口语场景",
-  chat: "口语陪练",
-  shadow: "跟读",
-  caption: "录音直译",
   notes: "生成笔记",
   noteslib: "笔记库",
   notedetail: "笔记详情",
   history: "历史",
   glossary: "生词本",
   diag: "诊断",
-  about: "关于",
-  setModel: "模型服务",
+  setModel: "账号服务",
   setPref: "偏好设置",
-  setVoice: "语音服务",
+  setVoice: "语音与朗读",
   setRemind: "提醒设置",
   setLook: "外观",
   onboarding: "欢迎使用",
-  share: "分享",
 };
 
 export default function App() {
   const tab = useApp((s) => s.tab);
-  const st = useApp(reviewStats);
   const onboarded = useApp((s) => s.onboarded);
   const articles = useApp((s) => s.articles);
-  const bannerState = useApp((s) => s.banner);
+  const reminderSettings = useApp((s) => s.settings);
+  const reminderWords = useApp((s) => s.vocab);
+  const [notificationAction, setNotificationAction] = useState<NotificationAction | null>(null);
+  const handledNotification = useRef<string | null>(null);
   const sheet = useApp((s) => s.sheet);
+  const loginIntent = useLoginIntent();
+  const accountOpen = useAccountOpen();
 
   /* ---------- push 栈 ---------- */
   const stackRef = useRef<Entry[]>([]);
@@ -86,7 +90,11 @@ export default function App() {
   const lastPushRef = useRef<{ name: PushName; at: number } | null>(null);
   /** U-17：进栈前抓当前焦点，栈清空后归还（中途 pop 回到上一层时聚焦其标题） */
   const lastFocusRef = useRef<HTMLElement | null>(null);
-  const sync = useCallback(() => setStack([...stackRef.current]), []);
+  /* mobile-push-change：push 栈变化广播（tab 层页面据此刷新「继续上次复习」等跨页状态） */
+  const sync = useCallback(() => {
+    setStack([...stackRef.current]);
+    window.dispatchEvent(new Event("mobile-push-change"));
+  }, []);
 
   const focusPushTitle = useCallback((id: number) => {
     const el = document.querySelector<HTMLElement>(`.push[data-push-id="${id}"] .ttl`);
@@ -128,7 +136,7 @@ export default function App() {
         const top = stackRef.current[stackRef.current.length - 1];
         if (top) focusPushTitle(top.id);
         else lastFocusRef.current?.focus?.();
-      }, 330);
+      }, 350); /* >.push 340ms 出场过渡，动画收尾后再卸载 */
     },
     popAll: () => {
       lastPushRef.current = null;
@@ -140,7 +148,7 @@ export default function App() {
         stackRef.current = stackRef.current.filter((e) => !ids.includes(e.id));
         sync();
         lastFocusRef.current?.focus?.();
-      }, 330);
+      }, 350);
     },
     replace: (name, props = {}) => {
       /* U-32：replace 与 push 同款入场（entered:false + 双 rAF），新屏 320ms 滑入、旧屏即刻卸载露 tab 层 */
@@ -158,12 +166,20 @@ export default function App() {
     },
   };
 
-  /* ---------- 深链（#quick / #translate / #vocab / #shelf / #share?text=…；
+  /* ---------- 主题接线（visual-theme-cleanup）：阅读主题档选「暖黄」时整应用切 sepia，
+     纸色/纯黑保持既有行为（纯黑只作用于阅读正文 .rd-black，全局仍随 themePref light/dark）。
+     store.applyThemeDom 仍是 light/dark 的写入口；本 effect 在其之后收敛最终值，二者不冲突。 ---------- */
+  const theme = useApp((s) => s.theme);
+  const readerTopic = useApp((s) => s.reader.topic);
+  useEffect(() => {
+    document.documentElement.dataset.theme = readerTopic === "sepia" ? "sepia" : theme;
+  }, [readerTopic, theme]);
+
+  /* ---------- 深链（#quick / #vocab / #shelf / #share?text=…；
      ita://share?text=… 经 onDeepLink（iOS 系统分享/浏览器地址栏）；通知深链落点 §3.14） ---------- */
   useEffect(() => {
     const h = window.location.hash.replace(/^#/, "");
     if (h === "quick") nav.push("quick", { fromNotify: true });
-    else if (h === "translate") nav.push("translate");
     else if (h === "vocab" || h === "shelf") actions.setTab(h === "shelf" ? "today" : "vocab");
     else if (h === "share" || h.startsWith("share?")) {
       const text = new URLSearchParams(h.slice("share".length).replace(/^\?/, "")).get("text");
@@ -194,6 +210,35 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* ---------- Safari 入站分享交接队列（gen/apple ShareExtension 写入 → 此处消费）：
+     读 App Group 队列最旧一条，推入既有 learningImport 预览确认流。确认保存后由
+     LearningImport 内 share_queue_ack 收尾；返回拒绝则 share_queue_clear + toast。
+     恰好一次由「内容寻址 article id（正文哈希）+ ack 删除队列项」共同保证：确认前
+     进程被杀则队列项保留，下次启动重新进预览，重复确认也不会产生重复文章。
+     消费时机 = 启动 + 回前台（share 时 App 已运行、被系统挂起的场景）；
+     队列不可用/为空静默返回，绝不阻塞启动。 ---------- */
+  const consumeShareQueue = useCallback(async () => {
+    if (!onboarded) return; /* 首启引导未完成不插队 */
+    if (loginIntent) return; /* 登录浮层打开时不插队 */
+    if (accountOpen) return; /* 账号抽屉打开时不插队（推入页会落在抽屉之下不可见） */
+    if (stackRef.current.length) return; /* 已有盖层不叠加 */
+    const items = await invoke<ShareQueueItem[]>("share_queue_read");
+    const item = items?.[0];
+    if (!item) return;
+    actions.setShareIn({ text: item.text, source: "safari-share" });
+    nav.push("learningImport", { shareQueueId: item.id });
+  }, [onboarded, loginIntent, accountOpen]);
+  useEffect(() => {
+    void consumeShareQueue();
+  }, [consumeShareQueue]);
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === "visible") void consumeShareQueue();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [consumeShareQueue]);
+
   /* ---------- 剪贴板自动检测（demo 12）：回前台（visibilitychange visible / bfcache pageshow）读一次——
      新文本 ≠ 当前 clip.en、长度 8..5000 → setClip(text, "")（zh 空串，点翻译走真实链路）；
      同一文本 60s 节流。iOS 粘贴许可由系统弹窗，拒绝 → readClipboard 返 null 静默。 ---------- */
@@ -211,8 +256,8 @@ export default function App() {
 
   /* ---------- 真机 TTS 自检（ITA_SELFTEST=1 启动门禁；正常使用恒 false 零影响） ---------- */
   useEffect(() => {
-    void invoke<boolean>("selftest_active").then((on) => {
-      if (on) void runTtsSelftest();
+    void invoke<"playback" | "recording" | null>("selftest_mode").then((mode) => {
+      if (mode) void runTtsSelftest(mode);
     });
   }, []);
 
@@ -225,68 +270,55 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
-  /* ---------- 应用内横幅：进出场动画与 60s 自动收起都由 BannerHost 承担（U-05/§3.14） ---------- */
-  const bannerShown = useRef(false);
-  const bannerDeferred = useRef(false);
+  /* OS-owned reminders are restored after hydration and refreshed on foreground.
+     Startup never requests permission; the reminder switch owns that request. */
   useEffect(() => {
-    if (bannerShown.current || !onboarded) return;
-    const t = setTimeout(() => {
-      if (st.due <= 0) {
-        bannerShown.current = true;
-        return;
-      }
-      if (stackRef.current.length) {
-        bannerDeferred.current = true; /* push 盖层开着不弹出（P-01），回到底层再补弹 */
-        return;
-      }
-      bannerShown.current = true;
-      actions.showBanner();
-    }, 8000);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onboarded]);
+    if (!onboarded) return;
+    const reconcile = () => void reconcileStudyNotifications(reminderSettings, reminderWords);
+    reconcile();
+    const visible = () => { if (document.visibilityState === "visible") reconcile(); };
+    document.addEventListener("visibilitychange", visible);
+    return () => document.removeEventListener("visibilitychange", visible);
+  }, [onboarded, reminderSettings.daily, reminderSettings.remindTime, reminderSettings.dnd, reminderWords]);
 
-  /* 被 push 盖层压住的到期提醒：栈清空后补弹一次 */
   useEffect(() => {
-    if (!bannerDeferred.current || stack.length) return;
-    bannerDeferred.current = false;
-    if (st.due > 0 && !bannerState) {
-      bannerShown.current = true;
-      actions.showBanner();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stack.length]);
+    let disposed = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const consume = async () => {
+      const action = await takeNotificationAction();
+      if (action && !disposed && handledNotification.current !== `${action.id}:${action.at}`) setNotificationAction(action);
+    };
+    const visible = () => {
+      if (document.visibilityState !== "visible") return;
+      void consume();
+      if (retry) clearTimeout(retry);
+      retry = setTimeout(() => void consume(), 700);
+    };
+    visible();
+    document.addEventListener("visibilitychange", visible);
+    return () => { disposed = true; if (retry) clearTimeout(retry); document.removeEventListener("visibilitychange", visible); };
+  }, []);
 
   /* ---------- push 内容解析 ---------- */
   function view(e: Entry) {
     const p = e.props;
     switch (e.name) {
       case "learningPractice": return <LearningPractice taskId={String(p.taskId)} />;
-      case "account": return <AccountScreen />;
-      case "learningImport": return <LearningImport />;
+      case "learningImport": return <LearningImport shareQueueId={p.shareQueueId as string | undefined} />;
       case "learningWord": return <WordDetail id={String(p.id)} />;
       case "learningNote": return <LearningNote id={p.id as string | undefined} />;
       case "learningSearch": return <LearningSearch />;
+      case "learningLibrary": return <LearningLibrary />;
+      case "learningFeeds": return <LearningFeeds />;
+      case "learningWordbook": return <WordbookScreen />;
       case "reader": {
         const article = (p.article as Article | undefined) || articles.find((a) => a.id === p.articleId);
         return article ? <ReaderScreen article={article} /> : <Missing onBack={nav.pop} />;
       }
       case "review":
-        return <ReviewScreen wordId={p.wordId as string | undefined} from={p.from as string | undefined} cards={p.cards as never} />;
+        return <ReviewScreen wordId={p.wordId as string | undefined} from={p.from as string | undefined} cards={p.cards as never} mode={p.mode as "cloze" | "listen" | "speak" | undefined} />;
       case "quick":
         return <QuickReview wordId={p.wordId as string | undefined} fromNotify={p.fromNotify as boolean | undefined} />;
-      case "translate":
-        return <TranslateScreen src={p.src as string | undefined} srcText={p.srcText as string | undefined} />;
-      case "camera":
-        return <CameraScreen />;
-      case "scenes":
-        return <SpeakScenes />;
-      case "chat":
-        return <SpeakChat scene={p.scene as string | undefined} resumeSession={p.resumeSession as SpeakSession | undefined} />;
-      case "shadow":
-        return <ShadowScreen fromArticle={p.fromArticle as string | undefined} sentIdx={p.sentIdx as number | undefined} />;
-      case "caption":
-        return <CaptionScreen />;
       case "notes":
         return <NotesGen />;
       case "noteslib":
@@ -299,8 +331,6 @@ export default function App() {
         return <GlossaryScreen />;
       case "diag":
         return <DiagScreen />;
-      case "about":
-        return <AboutScreen />;
       case "setModel":
         return <SetModelScreen />;
       case "setPref":
@@ -313,17 +343,29 @@ export default function App() {
         return <SetLookScreen />;
       case "onboarding":
         return <OnboardingScreen />;
-      case "share":
-        return <ShareScreen />;
       default:
         return <Missing onBack={nav.pop} />;
     }
   }
 
-  /* U-17：任一模态层（push/sheet/首启）打开时，底层 pane 与 tabbar 一律 inert——
+  /* U-17：任一模态层（push/sheet/首启/登录/学习方向页/账号抽屉）打开时，底层 pane 与 tabbar 一律 inert——
      读屏与点按都无法穿层（sheet 与 push 共用这一套机制） */
-  const loginIntent = useLoginIntent();
-  const overlayOpen = stack.length > 0 || !!sheet || !onboarded || !!loginIntent;
+  const goalOpen = useGoalSource();
+  useEffect(() => {
+    if (!notificationAction || !onboarded || loginIntent || accountOpen || goalOpen) return;
+    const key = `${notificationAction.id}:${notificationAction.at}`;
+    if (handledNotification.current === key) return;
+    handledNotification.current = key;
+    setNotificationAction(null);
+    actions.setSheet(null);
+    nav.popAll();
+    if (reminderWords.some(word => !word.paused && word.dueAt <= Date.now())) nav.push("quick", { fromNotify: true });
+    else nav.push("learningWordbook");
+    void acknowledgeNotificationAction(notificationAction);
+    // The navigation owner is imperative; stack rerenders must not replay the tap.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notificationAction, onboarded, loginIntent, accountOpen, goalOpen]);
+  const overlayOpen = stack.length > 0 || !!sheet || !onboarded || !!loginIntent || !!goalOpen || accountOpen;
 
   return (
     <NavCtx.Provider value={nav}>
@@ -338,6 +380,10 @@ export default function App() {
 
         <GlassNav hidden={stack.length > 0} inert={overlayOpen} />
         <LoginHost />
+        {/* 账号抽屉（原型 SHEETS.account：根页页头圆章/本地保存行/阅读页「登录同步」呼出） */}
+        <AccountScreen />
+        {/* 学习方向页（首启完成 / 新账号登录后推入；账号抽屉「学习方向」行呼出，盖在抽屉上） */}
+        <GoalSheetHost />
 
         {/* U-37：push 存在期间底层压暗 + tab 栏视差左移，「盖纸」变「推入」 */}
         <div className={`push-scrim ${stack.length > 0 ? "on" : ""}`} />
@@ -351,7 +397,8 @@ export default function App() {
             aria-modal="true"
             aria-label={PUSH_TITLES[e.name]}
             className={`push ${e.entered && !e.closing ? "in" : ""} ${e.closing ? "out" : ""}`}
-            inert={!!loginIntent || !!sheet || i < stack.length - 1 || undefined}
+            data-view={e.name} /* 阅读页整页 surface 等视图级令牌挂在 push 根（原型 .view.reading 的对位） */
+            inert={!!loginIntent || !!goalOpen || !!sheet || i < stack.length - 1 || undefined}
           >
             {view(e)}
           </div>
@@ -363,11 +410,7 @@ export default function App() {
             <OnboardingScreen />
           </div>
         )}
-
-        {/* 通知横幅（U-05：进出场 400ms） */}
-        {!loginIntent && <BannerHost />}
-
-        <SheetHost inert={!!loginIntent} />
+        <SheetHost inert={(!!loginIntent || !!goalOpen) || undefined} />
       </div>
     </NavCtx.Provider>
   );
@@ -382,100 +425,6 @@ function Missing({ onBack }: { onBack: () => void }) {
       <button className="btn-ghost" style={{ border: "1px solid var(--hairline-strong)", maxWidth: 200 }} onClick={onBack}>
         返回
       </button>
-    </div>
-  );
-}
-
-/* 通知横幅（U-05，规格「顶部弹入 400ms」）：挂载先无 .on、双 rAF 后加类播滑入；
-   所有关闭路径（手动/稍后/60s 无操作）先摘 .on 播 400ms 收起，420ms 后再清 store——
-   「先清一张」的 320ms push 与收起并行。60s「无操作」计时也在这里（任意 pointerdown 重置，§3.14）。 */
-function BannerHost() {
-  const banner = useApp((s) => s.banner);
-  const nav = useNav();
-  const [shown, setShown] = useState(false);
-  const [closing, setClosing] = useState(false);
-  const busyRef = useRef(false);
-  const primaryRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (!banner) return;
-    busyRef.current = false;
-    setClosing(false);
-    setShown(false);
-    const raf = requestAnimationFrame(() => requestAnimationFrame(() => setShown(true)));
-    return () => cancelAnimationFrame(raf);
-  }, [banner?.at]);
-
-  /* 出现后「先清一张」成为第一顺序焦点（U-29：读屏用户可直接激活主动作） */
-  useEffect(() => {
-    if (banner && shown && !closing) primaryRef.current?.focus({ preventScroll: true });
-  }, [banner?.at, shown, closing]);
-
-  const close = useCallback((after?: () => void) => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setClosing(true);
-    setTimeout(() => {
-      after?.();
-      actions.closeBanner();
-    }, 420);
-  }, []);
-
-  useEffect(() => {
-    if (!banner || closing) return;
-    let t = setTimeout(() => close(), 60000);
-    const bump = () => {
-      clearTimeout(t);
-      t = setTimeout(() => close(), 60000);
-    };
-    document.addEventListener("pointerdown", bump, true);
-    return () => {
-      clearTimeout(t);
-      document.removeEventListener("pointerdown", bump, true);
-    };
-  }, [banner?.at, closing, close]);
-
-  if (!banner) return null;
-  return (
-    <div className={`banner ${shown && !closing ? "on" : ""}`} role="alert">
-      <div className="bt">
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <span className="bico">
-            <Icon name="mark" size={16} />
-          </span>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>{banner.title}</div>
-            <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 1 }}>{banner.body}</div>
-          </div>
-        </div>
-        {/* U-08：去 28×28 覆写恢复 .iconbtn 44 默认，负 margin 抵消行高位移 */}
-        <button className="iconbtn" aria-label="关闭" style={{ margin: "-8px" }} onClick={() => close()}>
-          <Icon name="close" size={14} />
-        </button>
-      </div>
-      <div className="brow2">
-        <button
-          ref={primaryRef}
-          className="bbtn"
-          onClick={() => {
-            close();
-            nav.push("quick", { fromNotify: true });
-          }}
-        >
-          先清一张
-        </button>
-        <button
-          className="bbtn later"
-          onClick={() =>
-            close(() => {
-              actions.snoozeBanner();
-              toast("今晚不再提醒 · 角标保留");
-            })
-          }
-        >
-          稍后
-        </button>
-      </div>
     </div>
   );
 }

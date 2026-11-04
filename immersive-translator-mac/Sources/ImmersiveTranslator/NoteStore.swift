@@ -7,6 +7,11 @@ import ReaderCore
 /// - 同名不覆盖：base.md 存在则依次尝试 base-2.md、base-3.md……
 /// - 防路径穿越：只允许纯文件名（与读删入口同一判法）。
 /// - 复盘写回只改 meta.replay / updatedAt，正文不动。
+/// - 学习接力接线后（生产恒接线）：读写全部经 LearningStore——写入走 commit
+///   （files 表 + derive 派生 `notes` 实体 + 导出兼容 .md，单事务）、删除走
+///   commit(nil)（tombstone 随同步传播）、读与列表 files 表优先（同步拉下来尚未
+///   导出到磁盘的笔记也可见）；笔记目录随账号命名空间切换（data_dir/notes）。
+///   未接线（单测）= 纯文件 IO。
 
 struct NoteStoreError: Error, LocalizedError {
     let message: String
@@ -16,8 +21,10 @@ struct NoteStoreError: Error, LocalizedError {
 final class NoteStore {
     /// 基目录（默认应用支持目录；测试可注入临时目录）。
     let baseDirectory: URL
+    /// 学习存储（nil = 纯文件 IO；生产经 ReaderViewModel 注入 LearningStore.shared）。
+    let learning: LearningStore?
 
-    init(baseDirectory: URL? = nil) {
+    init(baseDirectory: URL? = nil, learning: LearningStore? = nil) {
         if let baseDirectory {
             self.baseDirectory = baseDirectory
         } else {
@@ -25,12 +32,32 @@ final class NoteStore {
                 ?? FileManager.default.temporaryDirectory
             self.baseDirectory = support.appendingPathComponent("ImmersiveTranslator", isDirectory: true)
         }
+        self.learning = learning
     }
 
+    /// 笔记目录（Windows notes_dir = data_dir/notes：接线后命名空间感知）。
     private var notesDirectory: URL {
-        let dir = baseDirectory.appendingPathComponent("notes", isDirectory: true)
+        let base = learning.flatMap { try? $0.dataDirectory() } ?? baseDirectory
+        let dir = base.appendingPathComponent("notes", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+
+    /// 读笔记文本（Rust read_path：files 表优先、磁盘兜底；读不到 = nil）。
+    private func readText(_ path: URL) -> String? {
+        if let learning {
+            return try? learning.readPath(path)
+        }
+        return try? String(contentsOf: path, encoding: .utf8)
+    }
+
+    /// 写笔记文本（Rust write_path：接线后 commit 派生 notes 实体）。
+    private func writeText(_ text: String, to path: URL) throws {
+        if let learning {
+            try learning.commit(path, text)
+            return
+        }
+        try text.data(using: .utf8)?.write(to: path, options: .atomic)
     }
 
     // MARK: - frontmatter
@@ -75,31 +102,41 @@ final class NoteStore {
             finalMeta.updatedAt = meta.createdAt
         }
         let path = try pathForFile(finalMeta.file)
-        try Self.noteWithFrontmatter(meta: finalMeta, body: content)
-            .data(using: .utf8)?
-            .write(to: path, options: .atomic)
+        do {
+            try writeText(Self.noteWithFrontmatter(meta: finalMeta, body: content), to: path)
+        } catch {
+            // reader_store.rs note_save：`map_err(|e| format!("写入笔记失败: {e}"))`
+            throw NoteStoreError(message: "写入笔记失败: \(noteErrorText(error))")
+        }
         return finalMeta
     }
 
-    /// 同名不覆盖：base.md 存在则依次尝试 base-2.md、base-3.md……
+    /// 同名不覆盖：base.md 存在则依次尝试 base-2.md、base-3.md……（Rust
+    /// dedup_note_path 以 read_path 成功判「已存在」：files 表里同步来的笔记也算）。
     private func dedupedFileName(base: String) -> String {
-        let fm = FileManager.default
+        let candidate = { (n: Int) in n == 1 ? "\(base).md" : "\(base)-\(n).md" }
         var n = 1
-        while fm.fileExists(atPath: notesDirectory.appendingPathComponent(n == 1 ? "\(base).md" : "\(base)-\(n).md").path) {
+        while readText(notesDirectory.appendingPathComponent(candidate(n))) != nil {
             n += 1
         }
-        return n == 1 ? "\(base).md" : "\(base)-\(n).md"
+        return candidate(n)
     }
 
-    /// 列出全部笔记（按创建时间倒序；损坏的 frontmatter 跳过）。
+    /// 列出全部笔记（按创建时间倒序；损坏的 frontmatter 跳过）。接线后清单 =
+    /// 磁盘项 ∪ files 表行（Rust list_paths），已删除（NULL）的行剔除。
     func list() throws -> [NoteMeta] {
-        let fm = FileManager.default
-        guard let entries = try? fm.contentsOfDirectory(at: notesDirectory, includingPropertiesForKeys: nil) else {
-            return []
+        let entries: [URL]
+        if let learning {
+            entries = (try? learning.listPaths(notesDirectory)) ?? []
+        } else {
+            guard let found = try? FileManager.default.contentsOfDirectory(at: notesDirectory, includingPropertiesForKeys: nil) else {
+                return []
+            }
+            entries = found
         }
         var metas: [NoteMeta] = []
         for path in entries where path.pathExtension.lowercased() == "md" {
-            guard let text = try? String(contentsOf: path, encoding: .utf8) else { continue }
+            guard let text = readText(path) else { continue }
             let (meta, _) = splitNoteFrontmatter(text)
             if var meta {
                 meta.file = path.lastPathComponent
@@ -113,7 +150,7 @@ final class NoteStore {
     /// 读取一篇笔记；文件不存在返回 nil。
     func read(file: String) throws -> (meta: NoteMeta, content: String)? {
         let path = try pathForFile(file)
-        guard let text = try? String(contentsOf: path, encoding: .utf8) else { return nil }
+        guard let text = readText(path) else { return nil }
         let (meta, body) = splitNoteFrontmatter(text)
         guard var meta else { return nil }
         meta.file = file
@@ -124,7 +161,7 @@ final class NoteStore {
     @discardableResult
     func writeReplay(file: String, replay: NoteReplay, rounds: Int, nowMs: Int64) throws -> NoteMeta {
         let path = try pathForFile(file)
-        guard let text = try? String(contentsOf: path, encoding: .utf8) else {
+        guard let text = readText(path) else {
             throw NoteStoreError(message: "读取笔记失败")
         }
         let (metaOpt, body) = splitNoteFrontmatter(text)
@@ -136,16 +173,31 @@ final class NoteStore {
         updated.lastAt = nowMs
         meta.replay = updated
         meta.updatedAt = nowMs
-        try Self.noteWithFrontmatter(meta: meta, body: body)
-            .data(using: .utf8)?
-            .write(to: path, options: .atomic)
+        do {
+            try writeText(Self.noteWithFrontmatter(meta: meta, body: body), to: path)
+        } catch {
+            // reader_store.rs note_write_replay：`format!("写入笔记失败: {e}")`
+            throw NoteStoreError(message: "写入笔记失败: \(noteErrorText(error))")
+        }
         return meta
     }
 
-    /// 删除一篇笔记。
+    /// 删除一篇笔记（reader_store.rs note_delete：磁盘上不存在返回 false；存在则
+    /// 接线后走 commit(nil)——files 置 NULL + notes 实体 tombstone + 删导出文件）。
     @discardableResult
     func delete(file: String) throws -> Bool {
         let path = try pathForFile(file)
-        return (try? FileManager.default.removeItem(at: path)) != nil
+        guard let learning else {
+            return (try? FileManager.default.removeItem(at: path)) != nil
+        }
+        guard FileManager.default.fileExists(atPath: path.path) else { return false }
+        try learning.commit(path, nil)
+        return true
     }
+}
+
+/// 错误 → 文本（LearningStoreError.message / LocalizedError 优先）。
+private func noteErrorText(_ error: Error) -> String {
+    if let storeError = error as? LearningStoreError { return storeError.message }
+    return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
 }
