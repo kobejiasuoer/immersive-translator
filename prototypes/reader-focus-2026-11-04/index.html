@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>沉浸口语 · 安静地读下去</title>
+  <link rel="stylesheet" href="reader.css">
+  <script src="reader.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#story">跳到正文</a>
+  <header class="app-nav">
+    <a class="brand" href="../reader-room-redesign-2026-10-26.html" aria-label="返回书架"><span class="brand-mark">I</span><span>沉浸口语</span></a>
+    <nav aria-label="主导航">
+      <a href="index.html" aria-current="page">阅读</a>
+      <a href="../speaking-practice-redesign.html">口语</a>
+      <a href="../notes-review-redesign-2026-10-26.html">笔记与复习</a>
+    </nav>
+    <button class="icon-button" id="theme" aria-label="切换深色外观" title="切换深色外观"><span data-icon="sun"></span></button>
+  </header>
+  <main>
+    <div class="reading-tools">
+      <span class="breadcrumb">The Happy Prince <span>节选</span></span>
+      <div class="tools-end">
+        <div class="tool-wrap">
+          <button class="tool-button" id="appearance-toggle" aria-controls="appearance" aria-expanded="false"><span class="type-icon" aria-hidden="true">Aa</span><span class="tool-label">排版</span></button>
+          <section id="appearance" class="popover" hidden aria-label="阅读排版">
+            <header><strong>阅读排版</strong><button data-close-menu class="icon-button" aria-label="关闭排版设置"><span data-icon="close"></span></button></header>
+            <div class="setting-row"><span>字号</span><div class="font-stepper"><button data-font="-1" aria-label="减小字号">−</button><output id="font-value">22</output><button data-font="1" aria-label="增大字号">＋</button></div></div>
+            <label class="setting-row"><span>短语提示<small>为常用表达加上轻下划线</small></span><input id="phrases" type="checkbox"></label>
+          </section>
+        </div>
+        <div class="tool-wrap">
+          <button class="tool-button" id="assist-toggle" aria-controls="assist" aria-expanded="false"><span data-icon="help"></span>阅读辅助</button>
+          <section id="assist" class="popover assist-popover" hidden aria-label="阅读辅助">
+            <header><strong>需要时，再借一点帮助</strong><button data-close-menu class="icon-button" aria-label="关闭阅读辅助"><span data-icon="close"></span></button></header>
+            <label class="setting-row"><span>双语对照<small>在每段原文下显示中文</small></span><input id="bilingual" type="checkbox" role="switch"></label>
+            <div class="help-legend"><p><span data-icon="cursor"></span><span>点词查义，划选可查短语</span></p><p><span data-icon="help"></span><span>点击段旁问号，直接看这段句意</span></p><p><kbd>H</kbd><span>按住临时看句意，松开回到原文</span></p><p><kbd>Esc</kbd><span>收起帮助，继续读</span></p></div>
+          </section>
+        </div>
+      </div>
+    </div>
+    <article class="reading-column" aria-labelledby="title">
+      <header class="book-heading">
+        <div class="book-meta"><span>短篇小说</span><span>英语 · B1</span></div>
+        <h1 id="title" lang="en">The Happy Prince</h1>
+        <p class="author" lang="en">Oscar Wilde</p>
+        <div class="first-hint" id="first-hint"><span>点词查义，段旁 <span class="hint-question">?</span> 看句意。</span><button id="dismiss-hint" class="icon-button" aria-label="知道了，隐藏操作提示"><span data-icon="close"></span></button></div>
+      </header>
+      <div id="story" tabindex="-1"></div>
+      <footer class="excerpt-end"><span>节选到这里</span><button id="back-top">回到开头 <span aria-hidden="true">↑</span></button></footer>
+    </article>
+  </main>
+  <div class="player" role="group" aria-label="原文朗读">
+    <button class="icon-button" id="previous" aria-label="上一句"><span data-icon="previous"></span></button>
+    <button class="play-button" id="play" aria-label="朗读原文"><span data-icon="play"></span></button>
+    <button class="icon-button" id="next" aria-label="下一句"><span data-icon="next"></span></button>
+    <div class="player-meta"><span id="play-status">听原文</span><div class="track" aria-hidden="true"><span id="track-fill"></span></div></div>
+    <button id="speed" class="speed-button" aria-label="朗读速度 1.0 倍">1.0×</button>
+  </div>
+  <div id="selection-tools" class="selection-tools" role="group" aria-label="选中文本操作" hidden><button id="explain-selection"><span data-icon="help"></span><span id="selection-label">查释义</span></button><button id="listen-selection" aria-label="朗读选中内容"><span data-icon="volume"></span></button><button id="copy-selection" aria-label="复制选中内容"><span data-icon="copy"></span></button></div>
+  <div id="status" class="sr-only" role="status" aria-live="polite"></div>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

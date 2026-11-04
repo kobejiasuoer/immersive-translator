@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>沉浸口语 · 原文阅读交互原型</title>
+<style>
+:root{color-scheme:light;--ground:#eff2ef;--paper:#fdfefd;--soft:#f3f6f3;--ink:#26342d;--secondary:#647269;--muted:#7b877f;--line:#e1e7e1;--accent:#27644e;--tint:#e9f2ec;--ring:#a7c7b4;--shadow:0 10px 32px #263e3020;--ui:"Segoe UI","Microsoft YaHei UI",sans-serif;--book:Georgia,"Times New Roman",serif;--size:24px;--leading:1.8}
+*{box-sizing:border-box}body{margin:0;background:var(--ground);color:var(--ink);font:14px/1.5 var(--ui)}button,input,textarea{font:inherit}button{color:inherit;border:0;background:transparent;cursor:pointer}button:disabled{cursor:default;opacity:.4}button,input,textarea{touch-action:manipulation}button:focus-visible,summary:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:4px}button{transition:background .16s,color .16s}button:active:not(:disabled){transform:translateY(1px)}[hidden]{display:none!important}.icon{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round;flex:none}svg.symbols{position:absolute;width:0;height:0;overflow:hidden}::selection{background:#c9dfcf;color:#183e2b}
+.app{height:100dvh;min-height:480px;display:flex;flex-direction:column;max-width:1640px;margin:auto;background:var(--paper)}.topbar{height:72px;flex:none;display:flex;align-items:center;gap:22px;padding:0 38px;border-bottom:1px solid var(--line);position:relative;z-index:20;background:var(--paper)}.back{display:flex;gap:7px;align-items:center;color:var(--secondary);padding:10px 4px}.back:hover{color:var(--accent)}.crumb{border-left:1px solid var(--line);padding-left:22px;font:17px var(--book);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.top-actions{display:flex;align-items:center;gap:12px;margin-left:auto;flex:none}.quiet-button{display:flex;align-items:center;gap:7px;padding:9px 12px;border-radius:7px;color:var(--secondary);font-size:13px;white-space:nowrap}.quiet-button:hover,.quiet-button[aria-expanded=true]{background:var(--soft);color:var(--accent)}.harvest-count{font-size:11px;border-radius:4px;min-width:19px;padding:0 4px;color:var(--accent);background:var(--tint);font-variant-numeric:tabular-nums}.toolbar-divider{height:18px;border-left:1px solid var(--line)}
+.workspace{position:relative;display:grid;grid-template-columns:minmax(0,1fr);flex:1;min-height:0}.workspace.has-panel{grid-template-columns:minmax(0,1fr) 352px}.reading-area{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column}.scrollpane{overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--line) transparent;flex:1;min-height:0;scroll-behavior:smooth;scroll-padding-top:26px}.book{max-width:calc(100% - 144px);width:680px;margin:0 auto;padding:60px 0 150px}.book-meta{color:var(--secondary);font-size:12px;display:flex;gap:10px;align-items:center}.book-meta span+span:before{content:"·";margin-right:10px;color:var(--muted)}h1{font:600 46px/1.15 var(--book);letter-spacing:-1.6px;margin:14px 0 12px}.author{font:15px var(--book);color:var(--secondary)}.reading-tip{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);margin:32px 0 25px;min-height:22px}.reading-tip .icon{width:14px;height:14px}.reading-tip button{color:var(--secondary);margin-left:7px;font-size:11px;text-decoration:underline;text-underline-offset:3px}.reading-tip.dismissed>*{visibility:hidden}.prose{font:var(--size)/var(--leading) var(--book);letter-spacing:.005em}.paragraph{position:relative;margin:0 0 1.05em}.sentence{border-radius:3px;transition:background .16s}.sentence.inspected{background:var(--tint);box-shadow:0 2px 0 var(--ring)}.sentence.sounding{background:var(--tint)}.word{cursor:pointer;border-radius:2px}.word:hover{box-shadow:0 1px 0 var(--ring);color:var(--accent)}.word.selected{background:var(--tint);box-shadow:0 2px 0 var(--accent)}.word.collected{border-bottom:1px dotted var(--ring)}.gutter-help{position:absolute;left:calc(100% + 20px);top:0;display:flex;align-items:center;gap:5px;width:86px;padding:7px 4px;font:12px var(--ui);color:var(--accent);white-space:nowrap;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .15s,background .15s}.gutter-help .icon{width:16px;height:16px}.paragraph:hover .gutter-help,.paragraph:focus-within .gutter-help,.gutter-help:focus-visible{opacity:1;pointer-events:auto}.gutter-help:hover{background:var(--tint)}.bilingual-text{font:15px/1.9 var(--ui);color:var(--secondary);margin:10px 0 24px;padding-left:16px;border-left:2px solid var(--ring)}
+.player-wrap{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:center;pointer-events:none;padding:28px 20px 24px;background:linear-gradient(transparent,var(--paper) 38%);z-index:5}.player{pointer-events:auto;display:flex;align-items:center;gap:14px;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:10px 17px;box-shadow:0 4px 18px #244c3710;width:min(450px,100%)}.player-controls{display:flex;align-items:center;gap:6px}.icon-button{display:grid;place-items:center;min-width:32px;min-height:32px;border-radius:6px;color:var(--secondary)}.icon-button:hover{background:var(--soft);color:var(--accent)}.play{width:36px;height:36px;background:var(--accent);border-radius:50%;color:#fff;display:grid;place-items:center}.play:hover{background:#1c503d}.play .icon{width:17px;height:17px}.play .play-icon{margin-left:2px}.player-track{flex:1;min-width:0}.player-label{display:flex;align-items:center;justify-content:space-between;color:var(--secondary);font-size:11px;margin-bottom:3px;gap:12px}.position{font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--muted)}input[type=range]{width:100%;height:3px;accent-color:var(--accent);display:block;margin:6px 0;cursor:pointer}.speed{font-size:12px;color:var(--secondary);min-width:33px;border-left:1px solid var(--line);padding-left:14px;font-variant-numeric:tabular-nums}
+.side-panel{display:flex;flex-direction:column;min-height:0;border-left:1px solid var(--line);background:var(--soft)}.panel-head{height:64px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:1px solid var(--line)}.panel-title{font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}.panel-title .icon{color:var(--accent);width:17px;height:17px}.panel-content{overflow:auto;scrollbar-width:thin;flex:1;padding:24px}.panel-intro{font-size:12px;color:var(--secondary);margin:0 0 18px}.source-quote{font:17px/1.65 var(--book);margin:0 0 24px;padding-bottom:22px;border-bottom:1px solid var(--line)}.source-quote .quote-light{color:var(--secondary)}.section-label{font-size:12px;color:var(--secondary);margin:0 0 12px;font-weight:500}.spine{font:21px/1.5 var(--book);margin:0 0 8px}.spine strong{font-weight:600;color:var(--accent)}.explain-note{font-size:12px;line-height:1.8;color:var(--secondary);margin:0}.clause-list{margin:22px 0 0;list-style:none;padding:0}.clause{padding:14px 0;border-top:1px solid var(--line);border-left:2px solid transparent;padding-left:12px;margin-left:-14px}.clause:hover,.clause:focus-visible{border-left-color:var(--accent);background:var(--tint);outline:none}.clause-en{font:17px/1.5 var(--book);margin:0 0 5px}.clause-cn{color:var(--secondary);font-size:12px;line-height:1.75;margin:0}.plain-note{font-size:12px;line-height:1.9;color:var(--secondary);margin:20px 0}.chinese-help{margin:22px 0 0;border-top:1px solid var(--line);padding-top:16px}.chinese-help summary{cursor:pointer;list-style:none;font-size:12px;color:var(--secondary);display:flex;align-items:center;gap:6px}.chinese-help summary::-webkit-details-marker{display:none}.chinese-help summary .icon{width:13px;height:13px;transition:transform .15s}.chinese-help[open] summary .icon{transform:rotate(90deg)}.chinese-help p{font-size:13px;line-height:1.9;color:var(--secondary);margin:12px 0 0}.panel-footer{padding:17px 20px;border-top:1px solid var(--line);display:flex;gap:5px;justify-content:space-between;background:var(--paper);flex:none}.panel-footer button{font-size:12px}.return-reading{border:0;border-top:1px solid var(--line);border-radius:0;padding:15px;display:flex;align-items:center;justify-content:center;gap:6px;color:var(--accent);font-size:12px;background:var(--paper)}.return-reading .icon{width:14px;height:14px}.return-reading:hover{background:var(--tint)}.clause-highlight{background:#dae9c0;border-radius:2px}.empty-harvest{padding-top:32px}.empty-harvest .icon{width:26px;height:26px;color:var(--accent);margin-bottom:14px}.empty-harvest h2{font-size:17px;font-weight:500;margin:0 0 10px}.empty-harvest p{font-size:13px;line-height:1.9;color:var(--secondary);margin:0}.saved-row{padding:19px 0;border-bottom:1px solid var(--line)}.saved-row:first-child{padding-top:0}.saved-row-header{display:flex;gap:12px;align-items:center}.saved-word{font:21px/1.4 var(--book);overflow-wrap:anywhere;flex:1}.saved-row p{font-size:13px;color:var(--secondary);margin:7px 0 10px}.saved-context{display:block;width:100%;font:14px/1.7 var(--book);text-align:left;color:var(--secondary);padding:8px 0 0}.saved-context:hover{color:var(--accent)}.saved-type{font-size:11px;color:var(--muted);margin-bottom:8px}.saved-sentence{font:17px/1.6 var(--book)}
+.word-pop{position:fixed;z-index:40;width:304px;background:var(--paper);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:19px 20px 0}.word-pop-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.headword{font:600 27px/1.15 var(--book);margin:0;overflow-wrap:anywhere;flex:1}.phonetic{font-size:12px;color:var(--secondary);margin-top:7px}.word-definition{font-size:14px;line-height:1.8;margin:17px 0 6px}.word-pos{font:italic 13px var(--book);color:var(--secondary);margin-right:6px}.english-gloss{font:14px/1.6 var(--book);color:var(--secondary);margin:0 0 17px}.word-pop-footer{display:flex;align-items:center;gap:6px;margin:0 -20px;padding:8px 12px;border-top:1px solid var(--line)}.word-pop-footer .quiet-button{padding:7px 8px;font-size:12px}.word-pop-footer .quiet-button:last-child{margin-left:auto}.word-pop-footer .icon{width:14px;height:14px}.word-pop .close-word{margin-top:-6px;margin-right:-7px}.pop-secondary{border:0;padding-top:14px;margin:0 0 18px}.pop-secondary p{font:14px/1.75 var(--book)}
+.menu{position:absolute;top:62px;right:35px;z-index:45;background:var(--paper);box-shadow:var(--shadow);border:1px solid var(--line);border-radius:10px;width:306px;padding:22px}.menu-title{display:flex;align-items:center;justify-content:space-between;font-weight:600;margin-bottom:20px}.menu-row{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:20px 0;font-size:12px;color:var(--secondary)}.stepper{display:flex;align-items:center;gap:10px}.stepper button{width:31px;height:31px;border:1px solid var(--line);border-radius:5px}.stepper button:hover{background:var(--soft)}.stepper output{width:28px;text-align:center;color:var(--ink);font-variant-numeric:tabular-nums}.swatches{display:flex;gap:9px}.swatch{width:33px;height:33px;display:grid;place-items:center;border-radius:50%;border:1px solid #a2aea6;color:#45604d;background:#fdfefd;font:17px var(--book)}.swatch[data-theme=sepia]{background:#f6f1e6;color:#72654e}.swatch[data-theme=dark]{background:#26342d;color:#d8e1d9}.swatch[aria-pressed=true]{outline:2px solid var(--accent);outline-offset:3px}.setting-divider{border-top:1px solid var(--line);margin-top:22px;padding-top:5px}.switch{width:32px;height:20px;border-radius:12px;background:var(--line);padding:3px;display:flex;align-items:center}.switch:after{content:"";width:14px;height:14px;background:var(--paper);border-radius:50%;box-shadow:0 1px 3px #263e3025;transition:transform .16s}.switch[aria-checked=true]{background:var(--accent)}.switch[aria-checked=true]:after{transform:translateX(12px)}.menu-note{font-size:11px;line-height:1.8;color:var(--muted);margin:8px 0 0}.shelf-menu{left:30px;right:auto;width:300px}.shelf-book{display:flex;gap:15px;width:100%;text-align:left;align-items:center;border-radius:6px;padding:8px}.shelf-book:hover{background:var(--soft)}.book-cover{width:40px;height:57px;display:flex;align-items:center;justify-content:center;background:var(--accent);color:#fff;font:italic 24px var(--book);flex:none}.shelf-book strong{font:16px var(--book);display:block}.shelf-book small{font-size:11px;color:var(--secondary)}
+.reading-end{margin-top:55px;padding-top:33px;border-top:1px solid var(--line);font-family:var(--ui)}.reading-end h2{font-size:21px;line-height:1.4;font-weight:500;margin:0 0 12px}.reading-end p{font-size:13px;line-height:1.9;color:var(--secondary);margin:0 0 21px}.end-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.primary-button{background:var(--accent);color:#fff;border-radius:7px;padding:10px 17px;display:inline-flex;align-items:center;justify-content:center;gap:8px;font-size:13px}.primary-button:hover{background:#1c503d}.primary-button .icon{width:15px;height:15px}.after-read{margin-top:32px;padding-top:30px;border-top:1px solid var(--line)}.after-read h3{font-size:16px;font-weight:500;margin:0 0 10px}.after-read .question{font:23px/1.5 var(--book);color:var(--ink);margin-bottom:20px}.after-read .optional{font-size:11px;color:var(--muted);margin-bottom:13px}.after-read textarea{width:100%;resize:vertical;min-height:115px;border:1px solid var(--line);background:var(--paper);border-radius:7px;padding:14px;color:var(--ink);font:18px/1.6 var(--book);margin-bottom:12px}.draft-actions{display:flex;gap:10px;align-items:center}.saved-draft{font:18px/1.7 var(--book);white-space:pre-wrap;overflow-wrap:anywhere;margin:15px 0!important;color:var(--ink)!important}.status-message{position:fixed;left:50%;bottom:102px;transform:translateX(-50%);background:var(--ink);color:var(--paper);box-shadow:var(--shadow);border-radius:7px;padding:10px 18px;z-index:60;font-size:12px;max-width:calc(100vw - 30px);pointer-events:none}
+body[data-theme=sepia]{--ground:#ebe6dc;--paper:#f8f4eb;--soft:#f0ebe0;--ink:#403a2d;--secondary:#796f5b;--muted:#8c826d;--line:#e2dbcb;--tint:#e9eddf;--ring:#bac8a8}
+body[data-theme=dark]{color-scheme:dark;--ground:#17221d;--paper:#202c25;--soft:#26332b;--ink:#e0e7df;--secondary:#a8b8a8;--muted:#8b9d8d;--line:#36473b;--accent:#9bc8a8;--tint:#304c39;--ring:#5c8b68;--shadow:0 10px 32px #0005}.app:has(.side-panel:not([hidden])) .scrollpane{overflow-anchor:none}body[data-theme=dark] .play,body[data-theme=dark] .primary-button{color:#193322}body[data-theme=dark] .play:hover,body[data-theme=dark] .primary-button:hover{background:#b6dbbd}body[data-theme=dark] .clause-highlight{background:#475c33}
+@media(min-width:1500px){.book{padding-top:75px}}
+@media(max-width:1150px){.topbar{padding:0 25px}.workspace.has-panel{grid-template-columns:minmax(0,1fr) 320px}.panel-content{padding:22px}.book{max-width:calc(100% - 112px);padding-top:42px}.gutter-help{left:calc(100% + 12px);width:33px;padding:7px}.gutter-help span{display:none}h1{font-size:41px}.prose{font-size:calc(var(--size) - 1px)}}
+@media(max-width:800px){.app{min-height:400px}.topbar{height:61px;padding:0 16px;gap:14px}.crumb{font-size:15px;padding-left:14px}.top-actions{gap:4px}.top-actions .quiet-button{padding:8px}.settings-label,.harvest-label,.toolbar-divider{display:none}.workspace.has-panel{display:flex;flex-direction:column}.workspace.has-panel .side-panel{height:48%;flex:none;border-left:0;border-top:1px solid var(--line);box-shadow:0 -3px 20px #28483108}.workspace.has-panel .reading-area{flex:1}.panel-head{height:48px;padding:0 20px}.panel-content{padding:18px 22px}.panel-footer{padding:7px 15px}.return-reading{display:none}.book{width:620px;max-width:calc(100% - 78px);padding-top:32px;padding-bottom:120px}h1{font-size:36px;letter-spacing:-.8px}.prose{font-size:calc(var(--size) - 3px)}.reading-tip{margin:25px 0 20px;font-size:11px}.player-wrap{padding:20px 18px 16px}.player{padding:8px 12px;gap:12px;max-width:390px}.player-label{font-size:10px}.menu{right:14px;top:53px}.shelf-menu{left:14px;right:auto}.word-pop{width:min(304px,calc(100vw - 24px))}.side-panel .source-quote{font-size:16px}.reading-end h2{font-size:19px}}
+@media(max-width:430px){.crumb{max-width:120px}.book{max-width:calc(100% - 64px)}.gutter-help{left:calc(100% + 3px);width:28px;padding:5px}.book-meta{gap:7px;font-size:11px}.book-meta span+span:before{margin-right:7px}.topbar{gap:9px}.back{font-size:12px}.top-actions .quiet-button{padding:6px}.reading-tip button{margin-left:0}h1{font-size:32px}.prose{font-size:calc(var(--size) - 4px)}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<svg class="symbols" aria-hidden="true"><defs>
+<symbol id="i-back" viewBox="0 0 24 24"><path d="m14 5-7 7 7 7"/></symbol>
+<symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+<symbol id="i-book" viewBox="0 0 24 24"><path d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Zm0 0v15"/></symbol>
+<symbol id="i-type" viewBox="0 0 24 24"><path d="m3 18 5-13 5 13M5 13h6m5-2c4-3 6 0 5 3v4m0-4c-7-2-6 6 0 3"/></symbol>
+<symbol id="i-leaf" viewBox="0 0 24 24"><path d="M19 3C8 2 2 8 5 15c3 7 15 4 14-12ZM5 20l10-11"/></symbol>
+<symbol id="i-sound" viewBox="0 0 24 24"><path d="m11 5-6 4H2v6h3l6 4Zm4 3c3 2 3 6 0 8m3-11c5 4 5 10 0 14"/></symbol>
+<symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4Z"/></symbol>
+<symbol id="i-lens" viewBox="0 0 24 24"><path d="M4 5h16M4 12h10M4 19h6m8-11v11m-4-4 4 4 4-4"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="m8 4 12 8-12 8Z"/></symbol>
+<symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+<symbol id="i-prev" viewBox="0 0 24 24"><path d="M5 5v14m14-14L8 12l11 7Z"/></symbol>
+<symbol id="i-next" viewBox="0 0 24 24"><path d="M19 5v14M5 5l11 7-11 7Z"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+<symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+<symbol id="i-cursor" viewBox="0 0 24 24"><path d="m5 3 3 17 4-7 8-3Z"/></symbol>
+</defs></svg>
+<main class="app">
+  <header class="topbar">
+    <button class="back" id="shelf-trigger" aria-expanded="false" aria-controls="shelf-menu"><svg class="icon"><use href="#i-back"/></svg>书架</button>
+    <span class="crumb">The Happy Prince</span>
+    <div class="top-actions">
+      <button class="quiet-button" id="harvest-trigger" aria-expanded="false" aria-controls="side-panel"><svg class="icon"><use href="#i-leaf"/></svg><span class="harvest-label">本篇收获</span><span class="harvest-count" id="harvest-count">0</span></button>
+      <span class="toolbar-divider"></span>
+      <button class="quiet-button" id="settings-trigger" aria-expanded="false" aria-controls="settings-menu"><svg class="icon"><use href="#i-type"/></svg><span class="settings-label">阅读设置</span></button>
+    </div>
+    <section class="menu" id="settings-menu" aria-label="阅读设置" hidden>
+      <div class="menu-title">阅读设置<button class="icon-button" data-close-menu aria-label="关闭阅读设置"><svg class="icon"><use href="#i-close"/></svg></button></div>
+      <div class="menu-row"><span>字号</span><div class="stepper"><button id="font-minus" aria-label="减小字号">A−</button><output id="font-size">24</output><button id="font-plus" aria-label="增大字号">A+</button></div></div>
+      <div class="menu-row"><span>行距</span><div class="stepper"><button id="line-minus" aria-label="减小行距">−</button><output id="line-size">1.8</output><button id="line-plus" aria-label="增大行距">+</button></div></div>
+      <div class="menu-row"><span>纸张</span><div class="swatches"><button class="swatch" data-theme="light" aria-label="纸白主题" aria-pressed="true">Aa</button><button class="swatch" data-theme="sepia" aria-label="护眼主题" aria-pressed="false">Aa</button><button class="swatch" data-theme="dark" aria-label="夜读主题" aria-pressed="false">Aa</button></div></div>
+      <div class="setting-divider"><div class="menu-row"><span>对照译文</span><button class="switch" id="bilingual" role="switch" aria-label="对照译文" aria-checked="false"></button></div><p class="menu-note">只在需要逐段核对时开启。默认保留完整原文。</p></div>
+    </section>
+    <section class="menu shelf-menu" id="shelf-menu" aria-label="我的书架" hidden>
+      <div class="menu-title">正在阅读<button class="icon-button" data-close-menu aria-label="关闭书架"><svg class="icon"><use href="#i-close"/></svg></button></div>
+      <button class="shelf-book" id="continue-book"><span class="book-cover">P</span><span><strong>The Happy Prince</strong><small>Oscar Wilde · 回到当前阅读位置</small></span></button>
+    </section>
+  </header>
+  <div class="workspace" id="workspace">
+    <section class="reading-area" aria-label="原文阅读">
+      <div class="scrollpane" id="scrollpane" tabindex="0" aria-label="文章正文">
+        <article class="book" id="book">
+          <header><div class="book-meta"><span>短篇小说 · 节选</span><span id="word-count"></span><span>经典文学</span></div><h1>The Happy Prince</h1><div class="author">Oscar Wilde · 1888</div></header>
+          <div class="reading-tip" id="reading-tip"><svg class="icon"><use href="#i-cursor"/></svg><span>点词查义，句旁解读。读懂后，继续往下读。</span><button id="dismiss-tip">知道了</button></div>
+          <div class="prose" id="prose" lang="en"></div>
+          <section class="reading-end" id="reading-end">
+            <h2>这段读完了。</h2><p id="end-summary">好故事可以先留在心里，也可以试着讲给别人听。</p>
+            <div class="end-actions"><button class="primary-button" id="tell-story">用自己的话讲讲<svg class="icon"><use href="#i-arrow"/></svg></button><button class="quiet-button" id="end-harvest"><svg class="icon"><use href="#i-leaf"/></svg>回看本篇收获</button></div>
+            <section class="after-read" id="after-read" hidden aria-label="读后表达">
+              <p class="optional">一个问题，从你刚读到的故事开始。</p><h3 lang="en" class="question">Why do you think the Prince is crying?</h3><p>不用复述全文，也没有标准答案。先写一两句，表达你的理解。</p>
+              <textarea id="story-draft" lang="en" aria-label="用英文写下你的理解" placeholder="I think he is crying because…" spellcheck="true"></textarea>
+              <div class="draft-actions"><button class="primary-button" id="save-story">留下这段想法</button><button class="quiet-button" id="hear-question"><svg class="icon"><use href="#i-sound"/></svg>听这个问题</button><button class="quiet-button" id="cancel-story">稍后再说</button></div><p id="draft-feedback" role="status" hidden></p>
+            </section>
+          </section>
+        </article>
+      </div>
+      <div class="player-wrap"><div class="player" role="group" aria-label="原文朗读">
+        <div class="player-controls"><button class="icon-button" id="prev" aria-label="上一句"><svg class="icon"><use href="#i-prev"/></svg></button><button class="play" id="play" aria-label="开始朗读"><svg class="icon play-icon"><use href="#i-play"/></svg></button><button class="icon-button" id="next" aria-label="下一句"><svg class="icon"><use href="#i-next"/></svg></button></div>
+        <div class="player-track"><div class="player-label"><span id="play-label">听原文</span><span class="position" id="play-position"></span></div><input type="range" id="play-progress" min="0" value="0" aria-label="朗读位置"></div>
+        <button class="speed" id="speed" aria-label="调整朗读语速">1.0×</button>
+      </div></div>
+    </section>
+    <aside class="side-panel" id="side-panel" aria-label="阅读辅助" hidden>
+      <div class="panel-head"><span class="panel-title" id="panel-title"></span><button class="icon-button" id="close-panel" aria-label="关闭辅助，返回阅读"><svg class="icon"><use href="#i-close"/></svg></button></div>
+      <div class="panel-content" id="panel-content"></div><div class="panel-footer" id="panel-footer"></div>
+      <button class="return-reading" id="return-reading"><svg class="icon"><use href="#i-back"/></svg>读懂了，回到原文</button>
+    </aside>
+  </div>
+</main>
+<section class="word-pop" id="word-pop" role="dialog" aria-label="单词释义" hidden></section>
+<div class="status-message" id="status-message" role="status" hidden></div>
+<script>
+// 本原型只使用这段节选的固定释义和解读，全部在本地运行；不调用模型、不提交数据。
+const paragraphs=[
+  ["High above the city, on a tall column, stood the statue of the Happy Prince.","He was gilded all over with thin leaves of fine gold; for eyes he had two bright sapphires, and a large red ruby glowed on his sword-hilt."],
+  ["He was very much admired indeed.","“He is as beautiful as a weathercock,” remarked one of the Town Councillors who wished to gain a reputation for having artistic tastes; “only not quite so useful,” he added, fearing lest people should think him unpractical, which he really was not."],
+  ["“Why can’t you be like the Happy Prince?” asked a sensible mother of her little boy who was crying for the moon.","“The Happy Prince never dreams of crying for anything.”"],
+  ["“I am glad there is some one in the world who is quite happy,” muttered a disappointed man as he gazed at the wonderful statue."],
+  ["“He looks just like an angel,” said the Charity Children as they came out of the cathedral in their bright scarlet cloaks, and their clean white pinafores."],
+  ["One night there flew over the city a little Swallow.","His friends had gone away to Egypt six weeks before, but he had stayed behind, for he was in love with the most beautiful Reed."],
+  ["“Where shall I put up?” he said; “I hope the town has made preparations.”","Then he saw the statue on the tall column.","“I will put up there,” he cried; “it is a fine position, with plenty of fresh air.”"],
+  ["So he alighted just between the feet of the Happy Prince.","“I have a golden bedroom,” he said softly to himself as he looked round, and he prepared to go to sleep."],
+  ["But just as he was putting his head under his wing a large drop of water fell on him.","“What a curious thing!” he cried; “there is not a single cloud in the sky, the stars are quite clear and bright, and yet it is raining.”"],
+  ["Then another drop fell.","He looked up, and saw—Ah! what did he see?"],
+  ["The eyes of the Happy Prince were filled with tears, and tears were running down his golden cheeks.","His face was so beautiful in the moonlight that the little Swallow was filled with pity."]
+];
+const translations=[
+"在城市上空，一根高高的圆柱上，矗立着快乐王子的雕像。他全身贴满了薄薄的纯金金箔，双眼是两颗明亮的蓝宝石，一颗硕大的红宝石在他的剑柄上闪光。",
+"他的确十分受人赞赏。一位想博得艺术鉴赏家名声的市议员评价，他像风信鸡一样漂亮，只是不那么实用；他生怕别人认为他不务实，尽管他并非如此。",
+"一位明事理的母亲问她那哭着要月亮的小男孩，为什么不能像快乐王子那样。快乐王子从来不会为任何事哭泣。",
+"一位失意的人凝视着那尊美丽的雕像，低声说，很高兴世上至少还有一个真正快乐的人。",
+"慈善学校的孩子们穿着鲜红的斗篷和洁白的围裙，从大教堂出来，说他就像一位天使。",
+"一天晚上，一只小燕子飞过这座城市。他的朋友们六周前就去了埃及，他却留了下来，因为他爱上了一株美丽的芦苇。",
+"燕子想找个地方过夜。他看见高柱上的雕像，便决定住在那里，那里位置好，空气也新鲜。",
+"于是他落在快乐王子的双脚之间，轻声说自己有了一间金色的卧室，然后准备睡觉。",
+"正当他把头藏到翅膀下面，一大滴水落在他身上。他觉得奇怪：天空万里无云，繁星明亮，却下起雨来。",
+"又有一滴水落下来。他抬头一看——啊！他看到了什么？",
+"快乐王子的眼中盈满了泪水，泪水顺着金色的脸颊流下。月光下他的脸如此美丽，小燕子心中充满了怜悯。"
+];
+const lexicon={
+  gilded:{phonetic:"/ˈɡɪldɪd/",pos:"adj.",cn:"镀金的；贴上金箔的",en:"covered with a thin layer of gold"},
+  column:{phonetic:"/ˈkɒləm/",pos:"n.",cn:"柱；圆柱",en:"a tall, upright pillar"},
+  statue:{phonetic:"/ˈstætʃuː/",pos:"n.",cn:"雕像",en:"a figure of a person or animal made from stone or metal"},
+  leaves:{phonetic:"/liːvz/",pos:"n.",cn:"薄片；这里指金箔",en:"very thin sheets of metal, not leaves on a tree"},
+  sapphires:{phonetic:"/ˈsæfaɪəz/",pos:"n.",cn:"蓝宝石",en:"precious blue stones"},
+  ruby:{phonetic:"/ˈruːbi/",pos:"n.",cn:"红宝石",en:"a precious red stone"},
+  "sword-hilt":{phonetic:"/ˈsɔːd hɪlt/",pos:"n.",cn:"剑柄",en:"the handle of a sword"},
+  weathercock:{phonetic:"/ˈweðəkɒk/",pos:"n.",cn:"风向标，常做成公鸡形状",en:"a metal bird on a roof that shows the wind’s direction"},
+  admired:{phonetic:"/ədˈmaɪəd/",pos:"v.",cn:"受到赞赏；受人钦佩",en:"was respected or liked very much"},
+  reputation:{phonetic:"/ˌrepjəˈteɪʃən/",pos:"n.",cn:"名声；声誉",en:"what other people think of someone"},
+  sensible:{phonetic:"/ˈsensəbl/",pos:"adj.",cn:"明事理的；理智的",en:"able to make good decisions"},
+  unpractical:{phonetic:"/ʌnˈpræktɪkl/",pos:"adj.",cn:"不切实际的",en:"not concerned with what is useful or realistic"},
+  fearing:{phonetic:"/ˈfɪərɪŋ/",pos:"v.",cn:"担心；害怕",en:"being afraid that something might happen"},
+  lest:{phonetic:"/lest/",pos:"conj.",cn:"唯恐；以免",en:"so that something unwanted will not happen"},
+  muttered:{phonetic:"/ˈmʌtəd/",pos:"v.",cn:"低声嘟囔；喃喃地说",en:"said something in a quiet, low voice"},
+  gazed:{phonetic:"/ɡeɪzd/",pos:"v.",cn:"凝视",en:"looked at something for a long time"},
+  cathedral:{phonetic:"/kəˈθiːdrəl/",pos:"n.",cn:"大教堂",en:"the main church in an area"},
+  scarlet:{phonetic:"/ˈskɑːlət/",pos:"adj.",cn:"鲜红色的",en:"bright red"},
+  pinafores:{phonetic:"/ˈpɪnəfɔːz/",pos:"n.",cn:"围裙；围裙式罩衣",en:"sleeveless garments worn over other clothes"},
+  swallow:{phonetic:"/ˈswɒləʊ/",pos:"n.",cn:"燕子",en:"a small bird with pointed wings and a divided tail"},
+  reed:{phonetic:"/riːd/",pos:"n.",cn:"芦苇",en:"a tall plant that grows beside water"},
+  alighted:{phonetic:"/əˈlaɪtɪd/",pos:"v.",cn:"飞落；停落",en:"landed on something after flying"},
+  pity:{phonetic:"/ˈpɪti/",pos:"n.",cn:"怜悯；同情",en:"sadness for someone who is suffering"},
+  cheeks:{phonetic:"/tʃiːks/",pos:"n.",cn:"脸颊",en:"the sides of the face below the eyes"},
+  glowed:{phonetic:"/ɡləʊd/",pos:"v.",cn:"发光；闪耀",en:"shone with a warm, steady light"},
+  "crying for the moon":{pos:"phrase",cn:"想要不可能得到的东西",en:"wanting something impossible to have"},
+  "put up":{pos:"phrase",cn:"投宿；过夜",en:"to stay somewhere for the night"},
+  "filled with pity":{pos:"phrase",cn:"充满怜悯之情",en:"feeling very sorry for someone"},
+  "thin leaves of fine gold":{pos:"phrase",cn:"薄薄的纯金金箔",en:"very thin sheets of pure gold"}
+};
+const xrays={
+  0:{spine:"The statue <strong>stood</strong> high above the city.",note:"先找“谁站在那儿”。作者把地点提前，最后才让王子登场。",parts:[ ["High above the city","先给出远景：城市上方。"],["on a tall column","再缩小范围：一根高高的圆柱上。"],["stood the statue of the Happy Prince","主语放在 stood 后面。换回日常语序就是 The statue stood…"] ],zh:"在城市的上空，一根高高的圆柱上，矗立着快乐王子的雕像。"},
+  1:{spine:"He <strong>was gilded</strong> all over.",note:"先抓住主干：雕像全身贴着金箔。后面继续描写眼睛和剑柄。",parts:[ ["with thin leaves of fine gold","with 补充材料。leaves 在这里是薄金箔，不是树叶。"],["for eyes he had two bright sapphires","换成更熟悉的说法：His eyes were two bright sapphires."],["a large red ruby glowed on his sword-hilt","另一处细节：A ruby shone on the handle of his sword."] ],zh:"他全身贴满了薄薄的纯金金箔，双眼是两颗明亮的蓝宝石，一颗硕大的红宝石在他的剑柄上闪光。"},
+  3:{spine:"One of the Town Councillors <strong>remarked</strong>…",note:"中间插入了人物的动机，最后补上他担心什么。先把议员的两句话连起来读。",parts:[ ["He is as beautiful as a weathercock","as…as…：和风向标一样美。"],["who wished to gain a reputation for having artistic tastes","说明这个人想获得怎样的名声：让别人觉得自己懂艺术。"],["fearing lest people should think him unpractical","fearing lest…：唯恐别人觉得他不务实。"],["which he really was not","补一句评论：他其实并不缺乏务实精神。"] ],zh:"一位想博得艺术鉴赏家名声的市议员说：“他像风信鸡一样漂亮，只是不那么实用。”他唯恐别人认为他不务实，尽管他并非如此。"},
+  4:{spine:"A sensible mother <strong>asked</strong> her little boy…",note:"先找谁在说话，再看小男孩在做什么。",parts:[ ["Why can’t you be like the Happy Prince?","母亲问男孩的话。"],["who was crying for the moon","who 描写 little boy。cry for the moon 是想要不可能得到的东西。"] ],zh:translations[2]},
+  19:{spine:"His eyes <strong>were filled with tears</strong>.",note:"一个静止的雕像开始流泪。前文中的“快乐”，在这里有了转折。",parts:[ ["The eyes of the Happy Prince were filled with tears","be filled with…：充满……"],["tears were running down his golden cheeks","顺着脸颊流下，用 were running 描写眼前正在发生的画面。"] ],zh:translations[10]}
+};
+const $=id=>document.getElementById(id);
+const icon=name=>`<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const escapeHTML=value=>String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const flat=[];paragraphs.forEach((p,pi)=>p.forEach(en=>flat.push({id:flat.length,pi,en})));
+let saved=new Map(),panelMode=null,pinnedId=null,wordTarget=null,wordSource=null,bilingual=false;
+let playIndex=0,playing=false,speechEpoch=0,rate=1,fontSize=24,leading=1.8,lastPanelTrigger=null;
+let wordAnchor=null,toastTimer=null,selectionClick=false;
+const paragraphElements=[];
+function renderWords(en){return en.split(/([A-Za-z]+(?:[’'-][A-Za-z]+)*)/g).map((part,i)=>i%2?`<span class="word" data-word="${escapeHTML(part)}">${escapeHTML(part)}</span>`:escapeHTML(part)).join('');}
+for(let pi=0;pi<paragraphs.length;pi++){
+  const p=document.createElement('div');p.className='paragraph';p.dataset.paragraph=pi;
+  const s=flat.filter(x=>x.pi===pi);
+  p.innerHTML=`<p style="margin:0">${s.map(x=>`<span class="sentence" data-sid="${x.id}" id="sentence-${x.id}">${renderWords(x.en)}</span>`).join(' ')}</p><button class="gutter-help" data-sid="${s[0].id}" aria-label="解读这一段中的句子">${icon('lens')}<span>读懂这句</span></button>`;
+  const zh=document.createElement('div');zh.className='bilingual-text';zh.hidden=true;zh.textContent=translations[pi];p.append(zh);$('prose').append(p);paragraphElements.push(p);
+}
+$('word-count').textContent=`${flat.reduce((n,s)=>n+s.en.split(/\s+/).length,0).toLocaleString()} 词`;
+$('play-progress').max=String(flat.length-1);
+function status(text){clearTimeout(toastTimer);$('status-message').textContent=text;$('status-message').hidden=false;toastTimer=setTimeout(()=>$('status-message').hidden=true,2400);}
+function closeMenus(focus=false){const active=!$('settings-menu').hidden?'settings-trigger':!$('shelf-menu').hidden?'shelf-trigger':null;$('settings-menu').hidden=true;$('shelf-menu').hidden=true;$('settings-trigger').setAttribute('aria-expanded','false');$('shelf-trigger').setAttribute('aria-expanded','false');if(focus&&active)$(active).focus();}
+function toggleMenu(which){const open=$(which+'-menu').hidden;closeWord();closeMenus();if(open){$(which+'-menu').hidden=false;$(which+'-trigger').setAttribute('aria-expanded','true');}}
+$('settings-trigger').onclick=()=>toggleMenu('settings');$('shelf-trigger').onclick=()=>toggleMenu('shelf');
+document.querySelectorAll('[data-close-menu]').forEach(b=>b.onclick=()=>closeMenus(true));$('continue-book').onclick=()=>{closeMenus(true);$('scrollpane').focus({preventScroll:true});};
+$('dismiss-tip').onclick=()=>$('reading-tip').classList.add('dismissed');
+function changeFont(delta){fontSize=Math.max(19,Math.min(30,fontSize+delta));document.documentElement.style.setProperty('--size',fontSize+'px');$('font-size').textContent=fontSize;$('font-minus').disabled=fontSize===19;$('font-plus').disabled=fontSize===30;closeWord();}
+$('font-minus').onclick=()=>changeFont(-1);$('font-plus').onclick=()=>changeFont(1);
+function changeLeading(delta){leading=Math.round(Math.max(1.5,Math.min(2.2,leading+delta))*10)/10;document.documentElement.style.setProperty('--leading',leading);$('line-size').textContent=leading.toFixed(1);$('line-minus').disabled=leading===1.5;$('line-plus').disabled=leading===2.2;}
+$('line-minus').onclick=()=>changeLeading(-.1);$('line-plus').onclick=()=>changeLeading(.1);
+document.querySelectorAll('.swatch').forEach(b=>b.onclick=()=>{document.body.dataset.theme=b.dataset.theme;document.querySelectorAll('.swatch').forEach(s=>s.setAttribute('aria-pressed',String(s===b)));});
+$('bilingual').onclick=()=>{bilingual=!bilingual;$('bilingual').setAttribute('aria-checked',String(bilingual));document.querySelectorAll('.bilingual-text').forEach(el=>el.hidden=!bilingual);closeWord();};
+function closeWord(){if(wordAnchor)wordAnchor.classList?.remove('selected');wordAnchor=null;wordTarget=null;wordSource=null;$('word-pop').hidden=true;}
+function showWord(text,sid,anchor,rect){
+  closeMenus();closeWord();wordTarget=text;wordSource=sid;wordAnchor=anchor;anchor?.classList?.add('selected');
+  const key=text.toLowerCase().replace(/[“”.,!?;:]+$/g,'');const entry=lexicon[key];const collected=saved.has('w:'+key);
+  $('word-pop').innerHTML=`<div class="word-pop-head"><div class="headword" lang="en">${escapeHTML(text)}</div><button class="icon-button close-word" aria-label="关闭词义">${icon('close')}</button></div>${entry?.phonetic?`<div class="phonetic">${escapeHTML(entry.phonetic)}</div>`:''}${entry?`<p class="word-definition"><span class="word-pos">${escapeHTML(entry.pos)}</span>${escapeHTML(entry.cn)}</p><p class="english-gloss" lang="en">${escapeHTML(entry.en)}</p>`:`<p class="word-definition">这份原型暂未收录这个词的释义。</p><p class="english-gloss">可以试点 gilded、leaves、weathercock，或划选 crying for the moon。</p>`}<div class="word-pop-footer"><button class="quiet-button" id="hear-word">${icon('sound')}听发音</button>${entry?`<button class="quiet-button" id="save-word">${icon(collected?'check':'bookmark')}${collected?'已收藏':'收藏'}</button>`:''}<button class="quiet-button" id="understand-source">读懂这句${icon('chevron')}</button></div>`;
+  $('word-pop').hidden=false;positionWord(rect||anchor.getBoundingClientRect());
+  $('word-pop').querySelector('.close-word').onclick=closeWord;
+  $('hear-word').onclick=()=>speakOne(text);
+  if($('save-word'))$('save-word').onclick=()=>{toggleWordSaved(key,text,entry,sid);const b=$('save-word');b.innerHTML=icon(saved.has('w:'+key)?'check':'bookmark')+(saved.has('w:'+key)?'已收藏':'收藏');};
+  $('understand-source').onclick=()=>{const idx=wordSource;closeWord();openSentence(idx,document.querySelector(`.paragraph[data-paragraph="${flat[idx].pi}"] .gutter-help`));};
+}
+function positionWord(rect){const pop=$('word-pop'),width=pop.offsetWidth;let left=Math.max(12,Math.min(rect.left,innerWidth-width-12));let top=rect.bottom+12;if(top+pop.offsetHeight>innerHeight-20)top=Math.max(12,rect.top-pop.offsetHeight-12);pop.style.left=left+'px';pop.style.top=top+'px';}
+function updateSaved(){const n=saved.size;$('harvest-count').textContent=n;$('end-summary').textContent=n?`你留下了 ${n} 个词句。它们已经在「本篇收获」里，可以随时回来看看。`:'好故事可以先留在心里，也可以试着讲给别人听。';document.querySelectorAll('.word').forEach(el=>el.classList.toggle('collected',saved.has('w:'+el.dataset.word.toLowerCase())));if(panelMode==='harvest')renderHarvest();}
+function toggleWordSaved(key,text,entry,sid){const id='w:'+key;if(saved.has(id)){saved.delete(id);status('已取消收藏');}else{saved.set(id,{kind:'word',text,entry,sid});status('已加入本篇收获');}updateSaved();}
+function preserveAnchor(change){const scroll=$('scrollpane'),anchor=pinnedId!==null?$('sentence-'+pinnedId):document.elementFromPoint(scroll.getBoundingClientRect().left+scroll.clientWidth/2,scroll.getBoundingClientRect().top+scroll.clientHeight/3)?.closest('.paragraph');const before=anchor?.getBoundingClientRect().top;change();if(anchor&&before!==undefined){scroll.scrollTop+=anchor.getBoundingClientRect().top-before;}}
+function setPanel(mode){closeMenus();closeWord();preserveAnchor(()=>{$('side-panel').hidden=false;$('workspace').classList.add('has-panel');});panelMode=mode;$('harvest-trigger').setAttribute('aria-expanded',String(mode==='harvest'));}
+function clearHighlights(){document.querySelectorAll('.clause-highlight').forEach(el=>{el.replaceWith(...el.childNodes);});document.querySelectorAll('.sentence.inspected').forEach(el=>el.classList.remove('inspected'));}
+function closePanel(restoreFocus=true){clearHighlights();preserveAnchor(()=>{$('side-panel').hidden=true;$('workspace').classList.remove('has-panel');});panelMode=null;pinnedId=null;$('harvest-trigger').setAttribute('aria-expanded','false');if(restoreFocus){if(lastPanelTrigger?.isConnected)lastPanelTrigger.focus({preventScroll:true});else $('scrollpane').focus({preventScroll:true});}}
+$('close-panel').onclick=()=>closePanel();$('return-reading').onclick=()=>closePanel();
+function markClause(snippet){const el=$('sentence-'+pinnedId);if(!el)return;el.innerHTML=renderWords(flat[pinnedId].en);if(!snippet)return;const en=flat[pinnedId].en;const start=en.toLowerCase().indexOf(snippet.toLowerCase());if(start>=0)el.innerHTML=renderWords(en.slice(0,start))+`<mark class="clause-highlight">${renderWords(en.slice(start,start+snippet.length))}</mark>`+renderWords(en.slice(start+snippet.length));updateSaved();}
+function openSentence(sid,trigger){
+  if(!Number.isInteger(sid)||!flat[sid])return;clearHighlights();pinnedId=sid;lastPanelTrigger=trigger||document.activeElement;setPanel('sentence');$('sentence-'+sid).classList.add('inspected');$('panel-footer').hidden=false;$('return-reading').innerHTML=icon('back')+'读懂了，回到原文';
+  const data=xrays[sid];$('panel-title').innerHTML=icon('lens')+'读懂这句';
+  $('panel-content').innerHTML=`<p class="panel-intro">先抓主干，再把细节接上。</p><blockquote class="source-quote" lang="en">${escapeHTML(flat[sid].en)}</blockquote>${data?`<h2 class="section-label">先读这一层</h2><p class="spine" lang="en">${data.spine}</p><p class="explain-note">${escapeHTML(data.note)}</p><ul class="clause-list">${data.parts.map(([en,cn],i)=>`<li class="clause" tabindex="0" data-clause="${i}"><p class="clause-en" lang="en">${escapeHTML(en)}</p><p class="clause-cn">${escapeHTML(cn)}</p></li>`).join('')}</ul><details class="chinese-help"><summary>${icon('chevron')}需要中文提示？</summary><p>${escapeHTML(data.zh)}</p></details>`:`<p class="section-label">先慢慢听一遍</p><p class="explain-note">这份交互原型为开篇的倒装句、镀金描写和议员的长句准备了完整解读。你也可以先听这句，或收藏后回看。</p>`}`;
+  $('panel-footer').innerHTML=`<button class="quiet-button" id="hear-sentence">${icon('sound')}听这一句</button><button class="quiet-button" id="save-sentence"></button>`;
+  const refreshSave=()=>{$('save-sentence').innerHTML=icon(saved.has('s:'+sid)?'check':'bookmark')+(saved.has('s:'+sid)?'已收藏这句':'收藏这句');};refreshSave();
+  $('hear-sentence').onclick=()=>speakOne(flat[sid].en);$('save-sentence').onclick=()=>{const id='s:'+sid;if(saved.has(id)){saved.delete(id);status('已取消收藏');}else{saved.set(id,{kind:'sentence',text:flat[sid].en,sid});status('这句话已加入本篇收获');}updateSaved();refreshSave();};
+  $('panel-content').querySelectorAll('.clause').forEach(li=>{const part=data.parts[Number(li.dataset.clause)][0];li.onmouseenter=()=>markClause(part);li.onmouseleave=()=>markClause(null);li.onfocus=()=>markClause(part);li.onblur=()=>markClause(null);});
+  $('close-panel').focus({preventScroll:true});
+}
+function openHarvest(trigger){if(panelMode==='harvest'){closePanel();return;}clearHighlights();lastPanelTrigger=trigger;setPanel('harvest');pinnedId=null;renderHarvest();$('close-panel').focus({preventScroll:true});}
+function renderHarvest(){
+  $('panel-title').innerHTML=icon('leaf')+'本篇收获';$('panel-footer').hidden=true;$('return-reading').innerHTML=icon('back')+'回到原文';
+  if(!saved.size){$('panel-content').innerHTML=`<div class="empty-harvest">${icon('bookmark')}<h2>留下值得再读的词句。</h2><p>点词看释义后，可以收藏。<br>读到喜欢的一句，也可以在解读中留下。<br><br>没有必做任务，按自己的节奏读。</p></div>`;return;}
+  $('panel-content').innerHTML=`<p class="panel-intro">你在这篇文章里留下的 ${saved.size} 个词句。</p>`+Array.from(saved.entries()).map(([id,item])=>`<article class="saved-row"><div class="saved-type">${item.kind==='word'?'词与表达':'原文摘句'}</div><div class="saved-row-header"><span class="${item.kind==='word'?'saved-word':'saved-sentence'}" lang="en">${escapeHTML(item.text)}</span><button class="icon-button" data-remove="${escapeHTML(id)}" aria-label="取消收藏 ${escapeHTML(item.text)}">${icon('bookmark')}</button></div>${item.entry?`<p>${escapeHTML(item.entry.cn)}</p>`:''}<button class="saved-context" data-locate="${item.sid}" title="回到原文中的这句话" lang="en">${item.kind==='word'?escapeHTML(flat[item.sid].en):'回到原文'} ${icon('chevron')}</button></article>`).join('');
+  $('panel-content').querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{saved.delete(b.dataset.remove);updateSaved();status('已取消收藏');});
+  $('panel-content').querySelectorAll('[data-locate]').forEach(b=>b.onclick=()=>{const sid=Number(b.dataset.locate);closePanel(false);$('sentence-'+sid).scrollIntoView({block:'center',behavior:'smooth'});$('scrollpane').focus({preventScroll:true});});
+}
+$('harvest-trigger').onclick=e=>openHarvest(e.currentTarget);$('end-harvest').onclick=e=>openHarvest(e.currentTarget);
+$('prose').addEventListener('pointerover',e=>{const sentence=e.target.closest('.sentence');if(!sentence)return;const p=sentence.closest('.paragraph');const b=p.querySelector('.gutter-help');b.dataset.sid=sentence.dataset.sid;b.setAttribute('aria-label','解读这句：'+flat[Number(sentence.dataset.sid)].en);b.style.top=Math.max(0,sentence.getClientRects()[0].top-p.getBoundingClientRect().top-4)+'px';});
+$('prose').addEventListener('click',e=>{if(selectionClick){selectionClick=false;return;}const selection=window.getSelection();if(selection&&!selection.isCollapsed)return;const help=e.target.closest('.gutter-help');if(help){openSentence(Number(help.dataset.sid),help);return;}const word=e.target.closest('.word');if(!word)return;const sentence=word.closest('.sentence');showWord(word.dataset.word,Number(sentence.dataset.sid),word);});
+$('prose').addEventListener('mouseup',e=>{const selection=window.getSelection();if(!selection||selection.isCollapsed)return;const sentence=e.target.closest('.sentence'),start=selection.anchorNode?.parentElement?.closest('.sentence');if(!sentence||start!==sentence)return;const text=selection.toString().trim();if(!text||text.length>400)return;selectionClick=true;setTimeout(()=>selectionClick=false,0);const sid=Number(sentence.dataset.sid);if(text.split(/\s+/).length>=10){openSentence(sid,sentence.closest('.paragraph').querySelector('.gutter-help'));selection.removeAllRanges();}else showWord(text,sid,null,selection.getRangeAt(0).getBoundingClientRect());});
+function refreshPlayer(){document.querySelectorAll('.sounding').forEach(s=>s.classList.remove('sounding'));if(playing)$('sentence-'+playIndex)?.classList.add('sounding');$('play').innerHTML=icon(playing?'pause':'play');$('play').setAttribute('aria-label',playing?'暂停朗读':'开始朗读');$('play-label').textContent=playing?'正在朗读':'听原文';$('play-position').textContent=`${playIndex+1} / ${flat.length} 句`;$('play-progress').value=String(playIndex);$('prev').disabled=playIndex===0;$('next').disabled=playIndex===flat.length-1;}
+function stopSpeech(){speechEpoch++;if('speechSynthesis'in window)speechSynthesis.cancel();playing=false;refreshPlayer();}
+function makeUtterance(text){if(!('speechSynthesis'in window)||!('SpeechSynthesisUtterance'in window)){status('当前浏览器不支持朗读');return null;}const u=new SpeechSynthesisUtterance(text);u.lang='en-GB';u.rate=rate;const voices=speechSynthesis.getVoices();u.voice=voices.find(v=>v.lang==='en-GB')||voices.find(v=>v.lang.startsWith('en'))||null;return u;}
+function speakOne(text){stopSpeech();const u=makeUtterance(text);if(!u)return;u.onerror=()=>status('朗读暂不可用，请检查系统语音');speechSynthesis.speak(u);}
+function playCurrent(){const u=makeUtterance(flat[playIndex].en);if(!u)return;const token=++speechEpoch;playing=true;refreshPlayer();const el=$('sentence-'+playIndex);const rect=el.getBoundingClientRect(),view=$('scrollpane').getBoundingClientRect();if(rect.top<view.top+20||rect.bottom>view.bottom-100)el.scrollIntoView({block:'center',behavior:'smooth'});u.onend=()=>{if(token!==speechEpoch||!playing)return;if(playIndex<flat.length-1){playIndex++;playCurrent();}else{playing=false;refreshPlayer();status('这段已经听完了');}};u.onerror=e=>{if(token!==speechEpoch)return;playing=false;refreshPlayer();if(e.error!=='interrupted'&&e.error!=='canceled')status('朗读暂不可用，请检查系统语音');};speechSynthesis.speak(u);}
+$('play').onclick=()=>{if(playing)stopSpeech();else playCurrent();};
+function jumpSpeech(idx){const resume=playing;stopSpeech();playIndex=Math.max(0,Math.min(flat.length-1,idx));refreshPlayer();if(resume)playCurrent();}
+$('prev').onclick=()=>jumpSpeech(playIndex-1);$('next').onclick=()=>jumpSpeech(playIndex+1);$('play-progress').onchange=e=>jumpSpeech(Number(e.target.value));
+$('speed').onclick=()=>{const rates=[.8,1,1.2,1.5];rate=rates[(rates.indexOf(rate)+1)%rates.length];$('speed').textContent=rate.toFixed(1)+'×';$('speed').setAttribute('aria-label','朗读语速 '+rate+' 倍');if(playing)jumpSpeech(playIndex);};
+$('tell-story').onclick=()=>{$('after-read').hidden=false;$('after-read').scrollIntoView({block:'start',behavior:'smooth'});$('story-draft').focus({preventScroll:true});};
+$('cancel-story').onclick=()=>{$('after-read').hidden=true;$('tell-story').focus({preventScroll:true});};
+$('hear-question').onclick=()=>speakOne('Why do you think the Prince is crying?');
+$('save-story').onclick=()=>{
+  const draft=$('story-draft').value.trim();
+  if(!draft){$('story-draft').focus();status('先写下一点你的理解');return;}
+  try{localStorage.setItem('reader-focus-prototype-draft',draft);$('draft-feedback').hidden=false;$('draft-feedback').textContent='这段想法已保存在本机。可以继续修改。';status('已留下这段想法');}
+  catch{status('暂时无法保存，请先保留输入内容');}
+};
+try{const draft=localStorage.getItem('reader-focus-prototype-draft');if(draft)$('story-draft').value=draft;}catch{}
+document.addEventListener('pointerdown',e=>{
+  if(!e.target.closest('.menu,#settings-trigger,#shelf-trigger'))closeMenus();
+  if(!e.target.closest('.word-pop,.word,.sentence'))closeWord();
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){
+    if(!$('settings-menu').hidden||!$('shelf-menu').hidden)closeMenus(true);
+    else if(!$('word-pop').hidden)closeWord();
+    else if(panelMode)closePanel();
+    return;
+  }
+  if(e.repeat||e.ctrlKey||e.metaKey||e.altKey||e.target.closest('input,textarea,button,summary,[contenteditable=true]'))return;
+  if(e.code==='Space'){e.preventDefault();$('play').click();}
+});
+$('scrollpane').addEventListener('scroll',closeWord,{passive:true});
+window.addEventListener('resize',closeWord);
+window.addEventListener('pagehide',stopSpeech);
+refreshPlayer();
+// 单文件场景链接便于评审；不在阅读界面增加演示控制条。
+const scene=new URLSearchParams(location.search).get('scene');
+if(scene==='sentence')openSentence(1,document.querySelector('.gutter-help'));
+else if(scene==='word'){const w=document.querySelector('[data-word="gilded"]');showWord('gilded',1,w);}
+else if(scene==='end')$('reading-end').scrollIntoView({block:'start'});
+</script>
+</body>
+</html>
