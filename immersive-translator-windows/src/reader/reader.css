@@ -10692,6 +10692,13 @@ button.notes-word:hover { color: var(--accent); }
   font-size: 12px;
   color: var(--text-3);
 }
+.reader-root[data-skin='folio'] .shelf-load-state,
+.reader-root[data-skin='folio'] .shelf-load-state:hover {
+  cursor: default;
+  border-style: solid;
+  border-color: var(--border-strong);
+  color: var(--text-3);
+}
 
 /* ---------- 统计卡：今日阅读 / 今日复习 / 连续天数 ---------- */
 .reader-root[data-skin='folio'] .shelf-statcard {
@@ -11225,6 +11232,34 @@ button.notes-word:hover { color: var(--accent); }
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+.reader-root[data-skin='folio'] .reading-translation-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--r-sm, 8px);
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  font-weight: 400;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+.reader-root[data-skin='folio'] .reading-translation-toggle:hover,
+.reader-root[data-skin='folio'] .reading-translation-toggle.on {
+  background: var(--surface-2);
+  color: var(--accent);
+}
+.reader-root[data-skin='folio'] .reading-translation-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.reader-root[data-skin='folio'] .reading-translation-toggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 
 /* ---------- 阅读设置浮层（排版/句卡/字号/短语虚线/专注/随读抽查/主题只读） ---------- */
 .reader-root[data-skin='folio'] .reading-settings-pop {
@@ -11437,24 +11472,6 @@ button.notes-word:hover { color: var(--accent); }
   border-top: 1px solid var(--border-strong);
   transform: rotate(45deg);
 }
-.reader-root[data-skin='folio'] .pop-veil {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 9px 12px;
-  border-radius: var(--r-sm, 8px);
-  background: repeating-linear-gradient(135deg, var(--bg) 0 8px, var(--surface-2) 8px 16px);
-  border: 1px dashed var(--border-strong);
-  color: var(--ink-2);
-  font-size: 14px;
-  cursor: pointer;
-  font-family: inherit;
-}
-.reader-root[data-skin='folio'] .pop-veil:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
 .reader-root[data-skin='folio'] .pop-zh {
   padding: 9px 4px 7px;
   font-size: 15px;
@@ -11494,11 +11511,10 @@ button.notes-word:hover { color: var(--accent); }
   color: var(--ink-3);
   font-size: 12px;
 }
-/* 对照模式（视图菜单）与浮层的语义：仅英文时藏中文行（veil 也不出现）；
+/* 对照模式（视图菜单）与浮层的语义：仅英文时藏中文行；
    仅中文时英文句已 display:none（getClientRects 为空，placePop 直测跳过），
    整个浮层一并收起，避免悬空卡片。 */
-.reader-root[data-skin='folio'] .reader-contrast-en .translation-pop .pop-zh,
-.reader-root[data-skin='folio'] .reader-contrast-en .translation-pop .pop-veil {
+.reader-root[data-skin='folio'] .reader-contrast-en .translation-pop .pop-zh {
   display: none;
 }
 .reader-root[data-skin='folio'] .reader-contrast-zh .translation-pop {

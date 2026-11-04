@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // v0.8 Phase 1 书架浮层（FolioSheet，ReaderShelf.tsx 新导出）交互用例：
 // 当前书卡 + 短文行渲染、点书卡继续读并请求关闭、点短文切换、
-// 「＋ 导入文件」开导入、删除走 window.confirm（文案契约不变）。
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// 「＋ 导入文件」开导入、删除走应用内 ConfirmDialog（文案契约不变）。
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { FolioSheet } from "./ReaderShelf";
@@ -93,15 +93,7 @@ function click(el: Element) {
   });
 }
 
-let confirmMock: ReturnType<typeof vi.fn>;
-
-beforeEach(() => {
-  confirmMock = vi.fn(() => true);
-  vi.stubGlobal("confirm", confirmMock);
-});
-
 afterEach(() => {
-  vi.unstubAllGlobals();
   document.body.innerHTML = "";
 });
 
@@ -153,29 +145,28 @@ describe("FolioSheet（v0.8 书架浮层）", () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
-  it("删除书 / 删除短文都走 window.confirm；confirm 拒绝则不删", () => {
+  it("删除书 / 删除短文先弹应用内确认；确认才删、取消不删", () => {
     const onDelete = vi.fn();
     const onDeleteBook = vi.fn();
     const { container } = mount({ onDelete, onDeleteBook });
-    // 书卡删除按钮（aria-label 删除《书名》）
+    // 书卡删除按钮（aria-label 删除《书名》）→ 弹确认框，尚未删除
     click(container.querySelector('.folio-book-hero .folio-del')!);
-    expect(confirmMock).toHaveBeenCalledExactlyOnceWith(
-      "删除《The Call of the Wild》？将删除全部 2 章内容与这本书的阅读进度，不可恢复；生词本不受影响。",
-    );
+    const dialog = container.querySelector('[role="alertdialog"]');
+    expect(dialog).toBeTruthy();
+    expect(dialog!.textContent).toContain("删除《The Call of the Wild》");
+    expect(dialog!.textContent).toContain("不可恢复；生词本不受影响");
+    expect(onDeleteBook).not.toHaveBeenCalled();
+    // 点「删除」确认 → 删书并关弹窗
+    click(Array.from(dialog!.querySelectorAll("button")).find((b) => b.textContent === "删除")!);
     expect(onDeleteBook).toHaveBeenCalledExactlyOnceWith("b1");
-    // 短文删除
-    confirmMock.mockClear();
+    expect(container.querySelector('[role="alertdialog"]')).toBeNull();
+    // 短文删除 → 弹确认框；点「取消」→ 不删并关弹窗
     click(container.querySelectorAll(".folio-article-row")[0].querySelector(".folio-del")!);
-    expect(confirmMock).toHaveBeenCalledExactlyOnceWith(
-      "删除《Why Deep Reading Matters》？生词本不受影响。",
-    );
-    expect(onDelete).toHaveBeenCalledExactlyOnceWith("a1");
-    // 拒绝 → 不删
-    confirmMock.mockClear();
-    confirmMock.mockReturnValue(false);
-    onDelete.mockClear();
-    click(container.querySelectorAll(".folio-article-row")[0].querySelector(".folio-del")!);
+    const dialog2 = container.querySelector('[role="alertdialog"]');
+    expect(dialog2!.textContent).toContain("删除《Why Deep Reading Matters》");
+    click(Array.from(dialog2!.querySelectorAll("button")).find((b) => b.textContent === "取消")!);
     expect(onDelete).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="alertdialog"]')).toBeNull();
   });
 
   it("空书架（无书无短文）渲染引导文案，不渲染书卡与短文行", () => {

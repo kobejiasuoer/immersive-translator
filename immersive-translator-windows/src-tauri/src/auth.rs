@@ -926,7 +926,19 @@ pub(crate) fn build_token_manager(app: &AppHandle) -> Result<Arc<TokenManager>, 
 }
 
 fn emit_auth_state(app: &AppHandle, status: &AuthStatus) {
-    if let Err(e) = app.emit("auth-state-changed", status) {
+    publish_auth_state(status, crate::learning_store::set_account, |status| {
+        app.emit("auth-state-changed", status)
+    });
+}
+
+/// 窗口收到身份变化就会立即读取学习库；先选择对应空间，再通知所有窗口。
+fn publish_auth_state(
+    status: &AuthStatus,
+    set_learning_account: impl FnOnce(Option<&str>),
+    emit: impl FnOnce(&AuthStatus) -> Result<(), tauri::Error>,
+) {
+    set_learning_account(status.user.as_ref().map(|user| user.id.as_str()));
+    if let Err(e) = emit(status) {
         eprintln!("[auth] 广播登录态失败: {e}");
     }
 }
@@ -952,7 +964,6 @@ fn after_login_success(app: &AppHandle, manager: &Arc<TokenManager>, user: &Auth
     if let Err(error) = crate::learning_store::adopt_guest(app, &user.id) {
         eprintln!("[learning] guest adoption failed; guest data retained: {error}");
     }
-    crate::learning_store::set_account(Some(&user.id));
     emit_auth_state(
         app,
         &AuthStatus {
@@ -1031,7 +1042,6 @@ pub async fn auth_logout(
     manager: tauri::State<'_, Arc<TokenManager>>,
 ) -> Result<LogoutOutcome, AuthError> {
     let outcome = manager.logout().await?;
-    crate::learning_store::set_account(None);
     // 走到这里 clear 必已成功（§5.3：失败路径直接 Err，不广播）。
     emit_auth_state(
         &app,
@@ -1791,12 +1801,73 @@ mod tests {
 
         let user = manager.prefill_from_store().await;
         assert_eq!(user, Some(fixture_user()), "启动预填内存态");
+        let namespace = std::cell::RefCell::new("guest".to_string());
+        publish_auth_state(
+            &AuthStatus {
+                logged_in: true,
+                user,
+                notice: None,
+            },
+            |user| {
+                *namespace.borrow_mut() = user
+                    .map(crate::learning_store::account_namespace)
+                    .unwrap_or_else(|| "guest".into());
+            },
+            |status| {
+                assert_eq!(
+                    *namespace.borrow(),
+                    crate::learning_store::account_namespace(&status.user.as_ref().unwrap().id),
+                    "启动登录事件的接收方必须立即读到账号学习空间"
+                );
+                Ok(())
+            },
+        );
         let err = manager.refresh().await.unwrap_err();
         assert_eq!(err.code, "network_error");
 
         let status = manager.get_status().await;
         assert!(status.logged_in, "离线时保留预填态（不回退 UI）");
         assert!(store.load().is_some(), "离线不清凭据");
+    }
+
+    /// 不改全局 namespace：本地回调验证发布顺序，允许与存储测试并行运行。
+    #[test]
+    fn auth_state_publication_selects_space_before_notifying() {
+        let namespace = std::cell::RefCell::new("guest".to_string());
+        let mut second_user = fixture_user();
+        second_user.id = "u2".into();
+        for (user, notice) in [
+            (Some(fixture_user()), None),
+            (Some(second_user), None),
+            (None, Some(AuthNotice::SessionExpired)),
+            (Some(fixture_user()), None),
+            (None, Some(AuthNotice::SessionKicked)),
+            (Some(fixture_user()), None),
+            (None, None), // 显式退出回到游客，不能继续读取原账号数据。
+        ] {
+            let status = AuthStatus {
+                logged_in: user.is_some(),
+                user,
+                notice,
+            };
+            let expected = status
+                .user
+                .as_ref()
+                .map(|user| crate::learning_store::account_namespace(&user.id))
+                .unwrap_or_else(|| "guest".into());
+            publish_auth_state(
+                &status,
+                |user| {
+                    *namespace.borrow_mut() = user
+                        .map(crate::learning_store::account_namespace)
+                        .unwrap_or_else(|| "guest".into());
+                },
+                |_| {
+                    assert_eq!(*namespace.borrow(), expected);
+                    Ok(())
+                },
+            );
+        }
     }
 
     /// §4.4：内存态空、store 有 → get_status 预填并返回 loggedIn:true。

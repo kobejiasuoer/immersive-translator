@@ -3,6 +3,7 @@ import { articleFromEntities, canonicalJson, entitiesFromArticle, initialSrs, is
 import { activeRepository, commitRepository, deviceId, flushPersist, getState, profileIdentity, replaceSyncedState, type AppState, type NoteItem } from "../store";
 import type { Article, VocabWord } from "../core/types";
 import { hydrateBookMetadata } from "../core/readingLibrary";
+import { isUnmodifiedDemoVocab } from "../core/demoVocab";
 import type { CommitInput, OutboxItem, RecordWrite, Repository } from "../core/persistence";
 import { CloudError, cloudRequest, cloudState, loadCloudConfig, type CloudConfig } from "./cloud";
 
@@ -115,11 +116,11 @@ function restore(state: AppState, collection: Collection, rows: Map<string, Mirr
     // A manifest is only visible after every referenced chunk has arrived. Never fall back to a deleted local article.
     return { articles, progress, readingCompleted };
   }
-  if (collection === "reading-vocab") return { vocab: live.flatMap(row => {
+  if (collection === "reading-vocab") return { vocab: [...live.flatMap(row => {
     const p = row.payload as Json; if (typeof p.word !== "string") return [];
     const source = object(p.source) ? p.source : {}, srs = object(p.srs) ? p.srs : {};
     return [{ ...p, id: row.id, word: p.word, generation: typeof p.generation === "string" ? p.generation : `legacy-${numeric(p.addedAt, numeric(p.createdAt))}`, senses: Array.isArray(p.senses) ? p.senses : [], dueAt: numeric(srs.dueAt, numeric(p.dueAt)), srsBaseline: p.srsBaseline ?? p.baseline ?? p.srs, baselineRecall: p.baselineRecall ?? (state.reviewEvents.some(e => e.wordId === row.id) ? undefined : p.recall) ?? {total:{pass:0,wrong:0,trap:0},byMode:{}}, sourceArticleId: String(source.articleId ?? p.sourceArticleId ?? ""), sourceSentenceIdx: numeric(source.sentenceIdx, numeric(p.sourceSentenceIdx)) } as VocabWord];
-  }) };
+  }), ...state.vocab.filter(word => !rows.has(word.id) && isUnmodifiedDemoVocab(word, state.reviewEvents, state.notes))] };
   if (collection === "review-events") {
     const reviewEvents = live.map(e => e.payload).filter(isReviewEvent);
     const vocab = state.vocab.map(word => {
@@ -185,8 +186,18 @@ export class MobileSync {
         const meta = await this.metadata(ctx.repo, collection), mirrors = await this.mirrors(ctx.repo, collection), projected = projection.get(collection)!;
         const shadow = { ...meta.shadow }; let changed = false;
         for (const [id, local] of projected) {
-          const signature = fingerprint(local); if (shadow[id] === signature) continue;
+          const signature = fingerprint(local);
           const previous = mirrors.get(id);
+          const activity = this.deps.state();
+          if (collection === "reading-vocab" && isUnmodifiedDemoVocab(local.payload, activity.reviewEvents, activity.notes)) {
+            // Keep domain data and shadow entries: omitting the row would be interpreted as a deletion.
+            if (previous?.dirty && !previous.deleted && isUnmodifiedDemoVocab(previous.payload, activity.reviewEvents, activity.notes)) {
+              records.push({ collection: mirrorCollection(collection), id, payload: { ...previous, dirty: false } });
+            }
+            if (shadow[id] !== signature) { shadow[id] = signature; changed = true; }
+            continue;
+          }
+          if (shadow[id] === signature && (collection !== "reading-vocab" || previous && (previous.dirty || previous.baseVersion > 0))) continue;
           if (previous && previous.schemaVersion > local.schemaVersion) throw new Error(`当前版本不能写回较新格式的数据：${id}`);
           const payload = withoutAudio(mergePracticePayload(previous?.payload, local.payload) ?? mergeUnknown(previous?.payload, local.payload));
           if (collection === "review-events" && previous && canonicalJson(previous.payload) !== canonicalJson(payload)) throw new Error(`复习事件 ID 内容冲突：${id}`);
@@ -290,7 +301,8 @@ export class MobileSync {
       ctx.check();
       // Capture edits made while the response or repository reads were in flight.
       const projection = project(current, this.deps.deviceId(), 262144).get(collection)!;
-      for (const [id, local] of projection) if (meta.shadow[id] !== fingerprint(local)) {
+      for (const [id, local] of projection) if (meta.shadow[id] !== fingerprint(local) || collection === "reading-vocab" && !old.has(id)) {
+        if (collection === "reading-vocab" && isUnmodifiedDemoVocab(local.payload, current.reviewEvents, current.notes)) continue;
         const previous = old.get(id), mutationId = crypto.randomUUID();
         const retained: Mirror = { ...local, payload: withoutAudio(mergePracticePayload(previous?.payload, local.payload) ?? mergeUnknown(previous?.payload, local.payload)), updatedAt: Math.max(Date.now(), (previous?.updatedAt ?? 0) + 1), baseVersion: incoming.get(id)?.baseVersion ?? (full ? 0 : previous?.baseVersion ?? 0), dirty: true, mutationId };
         merged.set(id, retainPractice(retained, merged.get(id) ?? retained) ?? retained); outbox.push({ id: `sync:${mutationId}`, payload: { type: "sync.v2", collection, entityId: id, mutationId } satisfies SyncIntent });

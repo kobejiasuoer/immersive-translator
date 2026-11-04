@@ -4,6 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import {
   loadSettingsFullAsync,
   saveSettingsFullAsync,
+  savePersistedHotkeys,
   saveVoicePrefs,
   stripVoicePrefs,
   DEFAULT_SETTINGS,
@@ -29,7 +30,7 @@ import {
   normalizeHotkey,
   RECOMMENDED_HOTKEYS,
 } from "../core/hotkeyValidator";
-import { reregisterHotkeys, testConnectivity, openOnboarding, settingsTakePendingTab, listenSettingsNavigateTab, authFetchServerConfig, authServerBaseUrl, openLoginWindow } from "../lib/tauriBridge";
+import { reregisterHotkeys, getActiveHotkeys, testConnectivity, openOnboarding, settingsTakePendingTab, listenSettingsNavigateTab, authFetchServerConfig, authServerBaseUrl, openLoginWindow } from "../lib/tauriBridge";
 import {
   enable as enableAutostart,
   disable as disableAutostart,
@@ -44,9 +45,12 @@ import {
 import {
   checkForUpdate,
   downloadAndInstall,
+  isStorePackaged,
+  type UpdateInfo,
   type UpdateProgress,
   type UpdateStage,
 } from "../lib/updater";
+import { readKnownUpdate, subscribeUpdateInfo } from "../lib/updateNoticeStore";
 import { buildSanitizedCurl, buildDiagnosticReport } from "../core/errorMessageFormatter";
 import { glossaryStats, dedupAndNormalize, mergeGlossary } from "../core/glossaryParser";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
@@ -166,29 +170,7 @@ export function Settings() {
   const platformEp = platformBase ? platformEndpoint(platformBase) : undefined;
   const loggedIn = accountStatus?.loggedIn ?? false;
 
-  // ---- 登录自动切云（语音云决策 1）----
-  // 登录成功的瞬间（loggedIn false→true）自动把 voiceProvider 写为 gateway：
-  // 即时落盘 + 语音页卡片选中态随之切换 + 一条轻提示；讯飞凭据原样保留、随时可切回。
-  // 已是 gateway 无感；启动静默续登录（null→true）不算登录瞬间，不代切。
-  const prevLoggedInRef = useRef<boolean | null>(null);
-  const [switchedNotice, setSwitchedNotice] = useState(false);
-  const switchNoticeTimer = useRef<number | null>(null);
-  useEffect(() => {
-    const prev = prevLoggedInRef.current;
-    prevLoggedInRef.current = loggedIn;
-    if (prev !== false || !loggedIn) return;
-    if (settings.voiceProvider === "gateway") return;
-    applyVoicePrefs({ voiceProvider: "gateway" });
-    setSwitchedNotice(true);
-    if (switchNoticeTimer.current !== null) window.clearTimeout(switchNoticeTimer.current);
-    switchNoticeTimer.current = window.setTimeout(() => setSwitchedNotice(false), 4000);
-  }, [loggedIn]);
-  // 卸载时清掉未触发的提示定时器
-  useEffect(() => {
-    return () => {
-      if (switchNoticeTimer.current !== null) window.clearTimeout(switchNoticeTimer.current);
-    };
-  }, []);
+  // 登录仅更新账号状态，语音服务由用户选择；云能力未开放时不能覆盖已可用的讯飞配置。
   useEffect(() => {
     if (!loggedIn) {
       setPlatformModels([]);
@@ -389,38 +371,81 @@ export function Settings() {
   const [updateMsg, setUpdateMsg] = useState<string | null>(null);
   const [updateProgress, setUpdateProgress] = useState<number | undefined>(undefined);
   const [updateAvailable, setUpdateAvailable] = useState<{ version: string } | null>(null);
+  const updateBusyRef = useRef(false);
+
+  function applyUpdateInfo(info: UpdateInfo) {
+    setUpdateProgress(undefined);
+    if (info.hasUpdate && info.newVersion) {
+      setUpdateAvailable({ version: info.newVersion });
+      setUpdateMsg(`发现新版本 v${info.newVersion}（当前 v${info.currentVersion}）`);
+      setUpdateStage("idle");
+    } else {
+      setUpdateAvailable(null);
+      setUpdateMsg(`已是最新版本 v${info.currentVersion}`);
+      setUpdateStage("done");
+    }
+  }
+
+  // 设置窗口预建后保持挂载，缓存 + storage 事件让“查看更新”直达可升级状态。
+  useEffect(() => {
+    if (!appVersion) return;
+    let active = true;
+    let authorized = false;
+    function receive(info: UpdateInfo) {
+      if (active && authorized && !updateBusyRef.current && info.currentVersion === appVersion) {
+        applyUpdateInfo(info);
+      }
+    }
+    const unsubscribe = subscribeUpdateInfo(receive);
+    void isStorePackaged().then((storePackaged) => {
+      if (!active || storePackaged) return;
+      authorized = true;
+      const known = readKnownUpdate(appVersion);
+      if (known) receive(known);
+    }).catch(() => {
+      // 后台同步失败不打扰其他设置；手动检查仍显示实际错误。
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [appVersion]);
 
   async function handleCheckUpdate() {
+    if (updateBusyRef.current) return;
+    updateBusyRef.current = true;
     setUpdateStage("checking");
     setUpdateMsg("正在检查更新…");
+    setUpdateProgress(undefined);
     setUpdateAvailable(null);
     try {
       const info = await checkForUpdate();
-      if (info.hasUpdate) {
-        setUpdateAvailable({ version: info.newVersion! });
-        setUpdateMsg(`发现新版本 v${info.newVersion}（当前 v${info.currentVersion}）`);
-        setUpdateStage("idle");
-      } else {
-        setUpdateMsg(`已是最新版本 v${info.currentVersion}`);
-        setUpdateStage("done");
-      }
+      applyUpdateInfo(info);
     } catch (e) {
       setUpdateMsg(String(e));
       setUpdateStage("error");
+    } finally {
+      updateBusyRef.current = false;
     }
   }
 
   async function handleDownloadUpdate() {
+    if (updateBusyRef.current) return;
+    updateBusyRef.current = true;
+    setUpdateProgress(undefined);
     const onProgress = (p: UpdateProgress) => {
       setUpdateStage(p.stage);
       setUpdateMsg(p.message);
       setUpdateProgress(p.progress);
+      if (p.stage === "done") setUpdateAvailable(null);
     };
     try {
       await downloadAndInstall(onProgress);
     } catch (e) {
       setUpdateMsg(`更新失败：${e}`);
       setUpdateStage("error");
+    } finally {
+      updateBusyRef.current = false;
     }
   }
 
@@ -439,11 +464,88 @@ export function Settings() {
 
   // ---- 热键互斥校验（三个热键两两不能相同）----
   const [hotkeyErrMsg, setHotkeyErrMsg] = useState<string | null>(null);
+  const [recordingHotkey, setRecordingHotkey] = useState<string | null>(null);
+  const [hotkeysApplying, setHotkeysApplying] = useState(false);
+  const [hotkeysApplied, setHotkeysApplied] = useState(false);
+  const hotkeyValues = [settings.hotkey, settings.ocrHotkey, settings.readerHotkey];
 
-  async function registerAllHotkeys(): Promise<boolean> {
-    const t = normalizeHotkey(settings.hotkey);
-    const o = normalizeHotkey(settings.ocrHotkey);
-    const r = normalizeHotkey(settings.readerHotkey);
+  useEffect(() => {
+    if (activeTab !== "hotkeys") {
+      setRecordingHotkey(null);
+      return;
+    }
+    const cancelRecording = () => setRecordingHotkey(null);
+    window.addEventListener("blur", cancelRecording);
+    return () => window.removeEventListener("blur", cancelRecording);
+  }, [activeTab]);
+
+  // ---- 热键自愈回显 ----
+  // 历史版本「立即生效」只写 Rust 侧不写 localStorage，设置页显示值可能与真实
+  // 生效键脱节（如 UI 显示 Ctrl+Shift+E、后端每次启动恢复 Ctrl+Shift+J）。
+  // 进入快捷键页读一次后端真实值：表单与快照一致（无未保存修改）且后端不同时
+  // 采纳后端值（表单+快照一起），正在编辑（dirty）时不动表单。
+  // 比较必须用 ref 里的最新提交值而非本 effect 闭包捕获值：fetch 返回时用户
+  // 可能已经键入，旧闭包值会误判「未编辑」而覆盖用户的未保存修改。
+  const latestHotkeysRef = useRef({ hotkey: "", ocrHotkey: "", readerHotkey: "" });
+  const latestSnapshotHotkeysRef = useRef<{
+    hotkey: string;
+    ocrHotkey: string;
+    readerHotkey: string;
+  } | null>(null);
+  useEffect(() => {
+    latestHotkeysRef.current = {
+      hotkey: settings.hotkey,
+      ocrHotkey: settings.ocrHotkey,
+      readerHotkey: settings.readerHotkey,
+    };
+    latestSnapshotHotkeysRef.current =
+      savedSnapshot === null
+        ? null
+        : {
+            hotkey: savedSnapshot.hotkey,
+            ocrHotkey: savedSnapshot.ocrHotkey,
+            readerHotkey: savedSnapshot.readerHotkey,
+          };
+  });
+  useEffect(() => {
+    if (activeTab !== "hotkeys") return;
+    let active = true;
+    getActiveHotkeys()
+      .then(([t, o, r]) => {
+        if (!active) return;
+        const form = latestHotkeysRef.current;
+        const snap = latestSnapshotHotkeysRef.current;
+        if (snap === null) return; // 设置尚未加载完成，无从判断是否 dirty
+        const untouched =
+          form.hotkey === snap.hotkey &&
+          form.ocrHotkey === snap.ocrHotkey &&
+          form.readerHotkey === snap.readerHotkey;
+        if (!untouched) return;
+        if (form.hotkey === t && form.ocrHotkey === o && form.readerHotkey === r) return;
+        const healed = { hotkey: t, ocrHotkey: o, readerHotkey: r };
+        setSettings((prev) => ({ ...prev, ...healed }));
+        setSavedSnapshot((prev) => (prev === null ? prev : { ...prev, ...healed }));
+      })
+      .catch(() => undefined); // invoke 不可用（如单测环境）：保持现状
+    return () => {
+      active = false;
+    };
+  }, [activeTab]);
+
+  function updateHotkey(key: "hotkey" | "ocrHotkey" | "readerHotkey", value: string) {
+    update(key, value);
+    setHotkeyErrMsg(null);
+    setHotkeysApplied(false);
+  }
+
+  async function registerAllHotkeys(
+    override?: Pick<AppSettings, "hotkey" | "ocrHotkey" | "readerHotkey">,
+  ): Promise<boolean> {
+    setHotkeysApplied(false);
+    const source = override ?? settings;
+    const t = normalizeHotkey(source.hotkey);
+    const o = normalizeHotkey(source.ocrHotkey);
+    const r = normalizeHotkey(source.readerHotkey);
     if (t === o || t === r || o === r) {
       setHotkeyErrMsg("翻译、截图 OCR、阅读室热键两两不能相同");
       return false;
@@ -456,13 +558,27 @@ export function Settings() {
       setHotkeyErrMsg(null);
       return false;
     }
+    setHotkeysApplying(true);
     try {
       await reregisterHotkeys(t, o, r);
+      // 注册成功立即写盘与 Rust 侧 hotkey.txt 同步。此前只注册不写
+      // localStorage，UI 会在下次打开设置时回退显示旧值，与真实生效键脱节。
+      savePersistedHotkeys({ hotkey: t, ocrHotkey: o, readerHotkey: r });
+      // 快照热键字段一并前移（存表单原值保持与 dirty 比较同口径），
+      // 避免下次「保存设置」把已生效键当未保存修改再重注册一遍。
+      setSavedSnapshot((prev) =>
+        prev === null
+          ? prev
+          : { ...prev, hotkey: source.hotkey, ocrHotkey: source.ocrHotkey, readerHotkey: source.readerHotkey },
+      );
       setHotkeyErrMsg(null);
+      setHotkeysApplied(true);
       return true;
     } catch (e) {
       setHotkeyErrMsg(String(e));
       return false;
+    } finally {
+      setHotkeysApplying(false);
     }
   }
 
@@ -497,12 +613,20 @@ export function Settings() {
 
   function doResetDefaults() {
     setConfirmReset(false);
+    setRecordingHotkey(null);
+    setHotkeysApplied(false);
+    setHotkeyErrMsg(null);
     const reset = { ...DEFAULT_SETTINGS };
     const resetVault: KeyVault = { [reset.providerId!]: "" };
     void saveSettingsFullAsync(reset, resetVault);
     setSettings(reset);
     setVault(resetVault);
     setSavedSnapshot(reset);
+    // 恢复默认也重注册：只重置 UI 不动后端会留下「显示默认键、实际生效旧键」
+    // 的脱节（注册失败时错误提示渲染在快捷键页，跳过去让它可见）。
+    void registerAllHotkeys(reset).then((ok) => {
+      if (!ok) setActiveTab("hotkeys");
+    });
     setSaved(false);
   }
 
@@ -564,12 +688,6 @@ export function Settings() {
           <strong>{currentTabLabel}</strong>
         </div>
         <div className="set-content" ref={contentRef}>
-        {switchedNotice && (
-          <div className="msg-bar ok" role="status" style={{ marginBottom: 14 }}>
-            <IconCheck size={14} />
-            已切换为沉浸云语音——讯飞凭据已保留，可在「语音」页随时切回
-          </div>
-        )}
         {activeTab === "provider" && (
           <>
             <header className="set-pagehead">
@@ -1143,47 +1261,63 @@ export function Settings() {
             <header className="set-pagehead">
               <div className="set-pagehead-text">
                 <h2>快捷键</h2>
-                <p>任意界面下全局生效；改完点「立即生效」或保存设置。</p>
+                <p>在任意应用中使用。点击录制组合键，也可以直接输入。</p>
               </div>
             </header>
             <div className="hotkey-list">
               <HotkeyField
+                id="hotkey-translate"
                 label="翻译热键"
                 hint="读取当前选中文字并弹出翻译浮窗"
                 value={settings.hotkey}
-                onChange={(v) => {
-                  update("hotkey", v);
-                  setHotkeyErrMsg(null);
-                }}
-                onApply={() => void registerAllHotkeys()}
+                onChange={(v) => updateHotkey("hotkey", v)}
+                otherHotkeys={[settings.ocrHotkey, settings.readerHotkey]}
+                recording={recordingHotkey === "hotkey-translate"}
+                onRecordingChange={(active) => setRecordingHotkey(active ? "hotkey-translate" : null)}
+                disabled={hotkeysApplying}
               />
               <HotkeyField
+                id="hotkey-ocr"
                 label="截图 OCR 热键"
                 hint="进入截图模式，框选区域后自动识别并翻译"
                 value={settings.ocrHotkey}
-                onChange={(v) => {
-                  update("ocrHotkey", v);
-                  setHotkeyErrMsg(null);
-                }}
-                onApply={() => void registerAllHotkeys()}
+                onChange={(v) => updateHotkey("ocrHotkey", v)}
+                otherHotkeys={[settings.hotkey, settings.readerHotkey]}
+                recording={recordingHotkey === "hotkey-ocr"}
+                onRecordingChange={(active) => setRecordingHotkey(active ? "hotkey-ocr" : null)}
+                disabled={hotkeysApplying}
               />
               <HotkeyField
+                id="hotkey-reader"
                 label="阅读室热键"
                 hint="把选中的内容送进沉浸阅读室精读"
                 value={settings.readerHotkey}
-                onChange={(v) => {
-                  update("readerHotkey", v);
-                  setHotkeyErrMsg(null);
-                }}
-                onApply={() => void registerAllHotkeys()}
+                onChange={(v) => updateHotkey("readerHotkey", v)}
+                otherHotkeys={[settings.hotkey, settings.ocrHotkey]}
+                recording={recordingHotkey === "hotkey-reader"}
+                onRecordingChange={(active) => setRecordingHotkey(active ? "hotkey-reader" : null)}
+                disabled={hotkeysApplying}
               />
             </div>
             {hotkeyErrMsg && (
-              <p className="msg-bar warn">
+              <p className="hotkey-feedback warn" role="alert">
                 <IconAlert size={14} />
                 {hotkeyErrMsg}
               </p>
             )}
+            <div className="hotkey-actions">
+              <p className={hotkeysApplied ? "hotkey-apply-note applied" : "hotkey-apply-note"} role="status">
+                {hotkeysApplied ? <><IconCheck size={14} />快捷键已生效，可保存设置同步当前配置。</> : "三个快捷键统一生效，也可点击底部「保存设置」。"}
+              </p>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => void registerAllHotkeys()}
+                disabled={hotkeysApplying || recordingHotkey !== null || hotkeyValues.some((value) => !validateHotkey(value).ok)}
+              >
+                {hotkeysApplying ? "应用中…" : "立即生效"}
+              </button>
+            </div>
           </>
         )}
 
@@ -1204,13 +1338,13 @@ export function Settings() {
                 <div className="settings-section-heading">
                   <div>
                     <h3>应用更新</h3>
-                    <p>下载后自动校验签名再安装</p>
+                    <p>有新版本会主动提醒；下载后校验签名，安装后重启</p>
                   </div>
                   <code className="version-code">v{appVersion || "…"}</code>
                 </div>
                 <div className="about-release-actions">
                   {updateAvailable && updateStage !== "downloading" && updateStage !== "installing" && (
-                    <button className="btn btn-primary btn-sm" onClick={() => void handleDownloadUpdate()}>
+                    <button className="btn btn-primary btn-sm" disabled={updateStage === "checking"} onClick={() => void handleDownloadUpdate()}>
                       <IconDownload size={13} />
                       升级到 v{updateAvailable.version}
                     </button>
@@ -1360,7 +1494,7 @@ export function Settings() {
             <IconClose size={14} />
             关闭
           </button>
-          <button className="btn btn-primary" onClick={handleSave}>
+          <button className="btn btn-primary" onClick={handleSave} disabled={hotkeysApplying || recordingHotkey !== null}>
             <IconCheck size={14} />
             保存设置
           </button>
@@ -1482,31 +1616,42 @@ function Switch({
 }
 
 /**
- * 热键录入卡：输入框 + 「录制组合键」 + 「立即生效」 + 推荐组合。
- * 单键格式/系统冲突校验在此内部完成；跨字段（两键互斥）校验由父组件做。
+ * 热键录入行：输入框 + 录制 + 按需展开的推荐组合。
+ * 单键校验在此内部完成；录制互斥与整组应用由父组件管理。
  */
 function HotkeyField({
+  id,
   label,
   hint,
   value,
   onChange,
-  onApply,
+  otherHotkeys,
+  recording,
+  onRecordingChange,
+  disabled,
 }: {
+  id: string;
   label: string;
   hint: string;
   value: string;
   onChange: (v: string) => void;
-  onApply: () => void;
+  otherHotkeys: string[];
+  recording: boolean;
+  onRecordingChange: (active: boolean) => void;
+  disabled: boolean;
 }) {
-  const [recording, setRecording] = useState(false);
-  const recordingRef = useRef(false);
-  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
   const validation = validateHotkey(value);
+  const message = recording ? recordingError ?? "请按下新的组合键，Esc 取消。" : validation.warning;
+
+  useEffect(() => {
+    if (!recording) setRecordingError(null);
+  }, [recording]);
 
   // 录制：监听下一次按键组合
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (!recordingRef.current) return;
+      if (!recording) return;
       e.preventDefault();
       e.stopPropagation();
       if (e.key === "Escape") {
@@ -1529,91 +1674,96 @@ function HotkeyField({
       const combo = [...mods, key].join("+");
       const parsed = parseHotkey(combo);
       if (!parsed) {
-        setMsg({ text: "需要至少一个修饰键 + 一个主键", ok: false });
+        setRecordingError("需要至少一个修饰键 + 一个主键");
         return;
       }
       const norm = normalizeHotkey(combo);
       const v = validateHotkey(norm);
       if (v.blocking) {
-        setMsg({ text: v.warning ?? "该组合不可用", ok: false });
+        setRecordingError(v.warning ?? "该组合不可用");
         return;
       }
       onChange(norm);
-      setMsg(
-        v.warning ? { text: `已设置 ${norm}（${v.warning}）`, ok: true } : { text: `已设置 ${norm}`, ok: true },
-      );
       stopRecording();
     }
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-    // onChange 来自父组件闭包，值变化即重新绑定；录制态由 ref 控制
-  }, [onChange]);
+  }, [recording, onChange, onRecordingChange]);
 
   function startRecording() {
-    recordingRef.current = true;
-    setRecording(true);
-    setMsg({ text: "请按下新的组合键…（Esc 取消）", ok: true });
+    setRecordingError(null);
+    onRecordingChange(true);
   }
 
   function stopRecording() {
-    recordingRef.current = false;
-    setRecording(false);
+    setRecordingError(null);
+    onRecordingChange(false);
   }
 
   return (
-    <div className="group-card hotkey-card">
+    <section className={`hotkey-card${recording ? " recording" : ""}`} aria-labelledby={`${id}-label`}>
       <div className="field-row">
         <div className="field-text">
-          <span className="field-label-v2">{label}</span>
-          <span className="field-hint">{hint}</span>
+          <label id={`${id}-label`} htmlFor={id} className="field-label-v2">{label}</label>
+          <span id={`${id}-hint`} className="field-hint">{hint}</span>
         </div>
         <div className="field-ctrl">
           <input
+            id={id}
             className="input mono hotkey-input"
             value={value}
             onChange={(e) => {
               onChange(e.target.value);
-              setMsg(null);
+              setRecordingError(null);
             }}
-            placeholder="Ctrl+Shift+Q"
+            placeholder="输入组合键"
             spellCheck={false}
+            disabled={disabled || recording}
+            aria-invalid={validation.blocking ? true : undefined}
+            aria-describedby={`${id}-hint${message ? ` ${id}-message` : ""}`}
           />
           <button
+            type="button"
             className={recording ? "btn btn-primary btn-sm" : "btn btn-secondary btn-sm"}
             onClick={recording ? stopRecording : startRecording}
+            disabled={disabled}
+            aria-label={`${recording ? "取消录制" : "录制组合键"}：${label}`}
+            aria-pressed={recording}
           >
-            {recording ? "录制中…（取消）" : "录制组合键"}
-          </button>
-          <button className="btn btn-ghost btn-sm" onClick={onApply} disabled={!validation.ok}>
-            立即生效
+            <IconKeyboard size={14} />
+            {recording ? "取消录制" : "录制组合键"}
           </button>
         </div>
       </div>
-      {msg && (
-        <p className={`msg-bar ${msg.ok ? "ok" : "warn"}`}>{msg.text}</p>
-      )}
-      {!msg && (validation.blocking || validation.warning) && (
-        <p className="msg-bar warn">
-          <IconAlert size={14} />
-          {validation.warning}
+      {message && (
+        <p id={`${id}-message`} className={`hotkey-feedback ${recording && !recordingError ? "recording-note" : "warn"}`} role={validation.blocking || recordingError ? "alert" : "status"}>
+          {recording && !recordingError ? <IconKeyboard size={14} /> : <IconAlert size={14} />}
+          <span>{message}</span>
         </p>
       )}
-      <div className="hotkey-suggest">
-        <span>推荐</span>
-        {RECOMMENDED_HOTKEYS.map((h) => (
-          <button
-            key={h}
-            type="button"
-            className="kbd-chip"
-            onClick={() => {
-              onChange(h);
-              setMsg(null);
-            }}
-          >
-            {h}
-          </button>
-        ))}
-      </div>
-    </div>
+      <details className="hotkey-recommendations">
+        <summary>推荐组合</summary>
+        <div className="hotkey-suggest">
+          {RECOMMENDED_HOTKEYS.map((h) => {
+            const usedElsewhere = otherHotkeys.some((value) => normalizeHotkey(value) === h);
+            return (
+              <button
+                key={h}
+                type="button"
+                className="kbd-chip"
+                disabled={disabled || recording || usedElsewhere}
+                title={usedElsewhere ? "已用于其他功能" : `使用 ${h}`}
+                onClick={() => {
+                  onChange(h);
+                  setRecordingError(null);
+                }}
+              >
+                {h}
+              </button>
+            );
+          })}
+        </div>
+      </details>
+    </section>
   );
 }

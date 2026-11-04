@@ -19,7 +19,8 @@ import {
   type VoiceCapabilities,
   type VoiceQuotaRemaining,
 } from "./voiceCapabilities";
-import { quotaResourceKey } from "./voiceCapabilities";
+import { asrLanguagesFor, quotaResourceKey } from "./voiceCapabilities";
+import { voiceErrorMessage } from "./voiceErrors";
 import { CAPABILITY_LABELS, CAPABILITY_SHORT } from "./gatewayViewState";
 import type { VoiceAsrLang } from "./voiceAsr";
 
@@ -61,6 +62,7 @@ export interface VoiceRouteSignals {
   ability: VoiceRouteAbility;
   /** asr 要求的具体语种;不给则只看 asrLanguages 是否为空。 */
   asrLang?: VoiceAsrLang;
+  asrMode?: "batch" | "stream";
   /** 本地跟读打分开关(voiceGatewayIseEnabled)已关闭;仅 ability=ise 时消费。 */
   iseLocalOff?: boolean;
 }
@@ -89,10 +91,19 @@ function quotaExhausted(
  */
 export function reduceVoiceRoute(s: VoiceRouteSignals): VoiceRouteDecision {
   if (!s.loggedIn) {
-    return { engine: "off", reason: "not_logged_in", hint: "登录沉浸云即用" };
+    return { engine: "off", reason: "not_logged_in", hint: "请先登录，再检查云语音是否开放；也可在「设置 → 语音」使用讯飞" };
   }
   if (s.capsError === "banned") {
     return { engine: "off", reason: "banned", hint: "账号已被封禁" };
+  }
+  if (["token_invalid", "unauthorized", "token_reused", "token_expired"].includes(s.capsError ?? "")) {
+    return { engine: "off", reason: "not_logged_in", hint: voiceErrorMessage(s.capsError ?? "token_invalid").text || "登录已失效，请重新登录" };
+  }
+  if (s.capsError === "voice_not_configured") {
+    return { engine: "off", reason: "voice_not_configured", hint: "语音功能暂未开通" };
+  }
+  if (s.capsError === "voice_account_changed") {
+    return { engine: "off", reason: "caps_unavailable", hint: "账号已切换，请重新操作" };
   }
   if (s.caps === null) {
     return {
@@ -121,11 +132,12 @@ export function reduceVoiceRoute(s: VoiceRouteSignals): VoiceRouteDecision {
       hint: "跟读打分已在设置里关闭，可在「设置 → 语音」重新开启",
     };
   }
+  const asrLanguages = asrLanguagesFor(s.caps, s.asrMode);
   const missing =
     (s.ability === "tts" && s.caps.ttsVoices.length === 0) ||
     (s.ability === "asr" &&
-      (s.caps.asrLanguages.length === 0 ||
-        (s.asrLang !== undefined && !s.caps.asrLanguages.includes(s.asrLang)))) ||
+      (asrLanguages.length === 0 ||
+        (s.asrLang !== undefined && !asrLanguages.includes(s.asrLang)))) ||
     (s.ability === "ise" && !s.caps.iseEnabled);
   if (missing) {
     return {
@@ -140,7 +152,7 @@ export function reduceVoiceRoute(s: VoiceRouteSignals): VoiceRouteDecision {
 // ---- 异步取数 ----
 
 const CAPS_TTL_MS = 30_000;
-let capsCache: { at: number; caps: VoiceCapabilities } | null = null;
+let capsCache: { at: number; accountId: string | null; caps: VoiceCapabilities } | null = null;
 
 /** 一次能力取数的结果:成功带 caps,失败带错误码(AuthError.code,网络类归
  *  network_error)。失败不缓存(下一次调用立即重试,网络恢复即恢复)。 */
@@ -151,13 +163,18 @@ interface CapsFetch {
 
 /** me/config 带 TTL 缓存;失败不缓存且错误码原样带回(banned 由归约单列成封禁文案,
  *  不再与网络失败并成一句「查网络」)。 */
-async function fetchCaps(): Promise<CapsFetch> {
-  if (capsCache !== null && Date.now() - capsCache.at < CAPS_TTL_MS) {
+async function fetchCaps(accountId: string | null): Promise<CapsFetch> {
+  if (capsCache !== null && capsCache.accountId === accountId && Date.now() - capsCache.at < CAPS_TTL_MS) {
     return { caps: capsCache.caps, errorCode: null };
   }
   try {
     const caps = await getVoiceCapabilities();
-    capsCache = { at: Date.now(), caps };
+    const currentAuth = await authGetStatus();
+    if (!currentAuth.loggedIn || (currentAuth.user?.id ?? null) !== accountId) {
+      capsCache = null;
+      return { caps: null, errorCode: "voice_account_changed" };
+    }
+    capsCache = { at: Date.now(), accountId, caps };
     return { caps, errorCode: null };
   } catch (e) {
     const code = (e as { code?: unknown } | null)?.code;
@@ -180,7 +197,7 @@ export function resetVoiceRouteForTests(): void {
  */
 export async function resolveVoiceRoute(
   ability: VoiceRouteAbility,
-  opts?: { asrLang?: VoiceAsrLang },
+  opts?: { asrLang?: VoiceAsrLang; asrMode?: "batch" | "stream" },
 ): Promise<VoiceRouteDecision> {
   // 偏好读取/推断整体兜底：拿不到生效服务商时按存量讯飞路径处理（零回归优先，
   // 与「守卫只负责拦 gateway、不负责拦存量」的边界一致）。
@@ -193,11 +210,11 @@ export async function resolveVoiceRoute(
   if (provider !== "gateway") {
     return { engine: "xfyun", reason: null, hint: null };
   }
-  const loggedIn = await authGetStatus()
-    .then((s) => s.loggedIn)
-    .catch(() => false);
+  const auth = await authGetStatus().catch(() => null);
+  const loggedIn = auth?.loggedIn === true;
+  if (!loggedIn) capsCache = null;
   // 未登录时归约必然落到 not_logged_in,不必再拉能力(省一次 me/config 往返)。
-  const fetched: CapsFetch = loggedIn ? await fetchCaps() : { caps: null, errorCode: null };
+  const fetched: CapsFetch = loggedIn ? await fetchCaps(auth?.user?.id ?? null) : { caps: null, errorCode: null };
   return reduceVoiceRoute({
     loggedIn,
     caps: fetched.caps,
@@ -206,6 +223,7 @@ export async function resolveVoiceRoute(
     quotaEvents: [],
     ability,
     asrLang: opts?.asrLang,
+    asrMode: opts?.asrMode,
     iseLocalOff: ability === "ise" && loadSettings().voiceGatewayIseEnabled === false,
   });
 }

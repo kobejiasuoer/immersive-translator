@@ -308,26 +308,53 @@ export function persistVoicePrefsField(
   readRaw: PersistedRawReader,
   writeRaw: (raw: string) => void,
 ): void {
-  let persisted: Record<string, unknown>;
+  writeRaw(JSON.stringify({ ...parsePersistedWithoutLegacySecret(readRaw), ...patch }));
+}
+
+/** 只把三个热键字段合并进已保存设置（persistVoicePrefsField 同款注入式实现，便于单测）。 */
+export function persistHotkeysField(
+  hotkeys: { hotkey: string; ocrHotkey: string; readerHotkey: string },
+  readRaw: PersistedRawReader,
+  writeRaw: (raw: string) => void,
+): void {
+  writeRaw(JSON.stringify({ ...parsePersistedWithoutLegacySecret(readRaw), ...hotkeys }));
+}
+
+/** 读出并解析已保存设置（无保存时用默认值），剥离旧版明文 apiKey。 */
+function parsePersistedWithoutLegacySecret(
+  readRaw: PersistedRawReader,
+): Record<string, unknown> {
   const raw = readRaw();
   if (raw === null) {
     const { apiKey: _ignored, ...defaults } = DEFAULT_SETTINGS;
-    persisted = defaults;
-  } else {
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("已保存的设置格式无效");
-    }
-    const { apiKey: _ignored, ...withoutLegacySecret } = parsed as Record<string, unknown>;
-    persisted = withoutLegacySecret;
+    return defaults;
   }
-  writeRaw(JSON.stringify({ ...persisted, ...patch }));
+  const parsed: unknown = JSON.parse(raw);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("已保存的设置格式无效");
+  }
+  const { apiKey: _ignored, ...withoutLegacySecret } = parsed as Record<string, unknown>;
+  return withoutLegacySecret;
 }
 
 /** 点卡即写盘：语音偏好不等「保存设置」，立即合并进 localStorage。 */
 export function saveVoicePrefs(patch: VoicePrefsPatch): void {
   persistVoicePrefsField(
     patch,
+    () => localStorage.getItem(STORAGE_KEY),
+    (raw) => localStorage.setItem(STORAGE_KEY, raw),
+  );
+}
+
+/** 「立即生效」即写盘：热键注册成功后不等「保存设置」，立即合并进 localStorage，
+ *  与 Rust 侧 hotkey.txt 同步。历史版本只写 Rust 侧，UI 与生效键脱节。 */
+export function savePersistedHotkeys(hotkeys: {
+  hotkey: string;
+  ocrHotkey: string;
+  readerHotkey: string;
+}): void {
+  persistHotkeysField(
+    hotkeys,
     () => localStorage.getItem(STORAGE_KEY),
     (raw) => localStorage.setItem(STORAGE_KEY, raw),
   );
