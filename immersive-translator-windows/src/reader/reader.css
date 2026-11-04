@@ -10692,6 +10692,13 @@ button.notes-word:hover { color: var(--accent); }
   font-size: 12px;
   color: var(--text-3);
 }
+.reader-root[data-skin='folio'] .shelf-load-state,
+.reader-root[data-skin='folio'] .shelf-load-state:hover {
+  cursor: default;
+  border-style: solid;
+  border-color: var(--border-strong);
+  color: var(--text-3);
+}
 
 /* ---------- 统计卡：今日阅读 / 今日复习 / 连续天数 ---------- */
 .reader-root[data-skin='folio'] .shelf-statcard {

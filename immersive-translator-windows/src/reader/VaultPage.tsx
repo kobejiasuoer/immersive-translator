@@ -310,7 +310,7 @@ function buildListEntries(
       kind: "word",
       key: `w:${w.id}`,
       word: w,
-      sourceLabel: title ? `《${title}》` : "划词收藏",
+      sourceLabel: w.source.articleId ? (title ? `《${title}》` : "原文不可用") : "划词收藏",
       articleId: w.source.articleId,
       pre,
       blank,
@@ -853,11 +853,11 @@ function FocusStage(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effKind, spec, current, verdict, hints, input, grade, submitCloze, props.onModeChange]);
 
-  const sourceLabel = current
-    ? current.source.articleId && props.articleTitle(current.source.articleId)
-      ? `来自《${props.articleTitle(current.source.articleId)}》`
-      : "来自划词收藏"
-    : "";
+  const sourceTitle = current?.source.articleId ? props.articleTitle(current.source.articleId) : null;
+  const sourceLabel = !current ? ""
+    : current.source.articleId
+      ? sourceTitle ? `来自《${sourceTitle}》` : "原文不可用"
+      : "来自划词收藏";
 
   const progress = due.length > 0 ? (Math.min(pos + 1, due.length) / due.length) * 100 : 0;
 

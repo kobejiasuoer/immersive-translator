@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn() }));
 vi.mock("./updater", () => ({ checkForUpdate: vi.fn(), isStorePackaged: vi.fn() }));
 vi.mock("./updateNoticeStore", () => ({ readKnownUpdate: vi.fn(), subscribeUpdateInfo: vi.fn() }));
 
-const INTERVAL = 6 * 60 * 60 * 1000;
+const INTERVAL = 2 * 60 * 60 * 1000;
 const NEW_VERSION: UpdateInfo = { hasUpdate: true, currentVersion: "0.11.1", newVersion: "0.12.0" };
 let harness: Harness | null;
 let receive: ((info: UpdateInfo) => void) | null;
@@ -131,7 +131,7 @@ describe("主窗口主动检查更新", () => {
     expect(h.container.textContent).toBe("0.12.0");
   });
 
-  it("网络失败后恢复联网会立即补查，不必等下一个六小时周期", async () => {
+  it("网络失败后恢复联网会立即补查，不必等下一个两小时周期", async () => {
     vi.mocked(checkForUpdate).mockRejectedValueOnce(new Error("network unavailable"));
     const h = mount();
     await advance(10_000);
