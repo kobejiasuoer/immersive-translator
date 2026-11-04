@@ -8,8 +8,10 @@ import {
   loadSettingsFullAsync,
   parseKeyVault,
   persistHotkeyField,
+  persistHotkeysField,
   persistSettingsTransaction,
   providerIdFor,
+  savePersistedHotkeys,
   saveSettingsFullAsync,
   type AppSettings,
 } from "./settingsStore";
@@ -294,5 +296,86 @@ describe("persistHotkeyField", () => {
 
     expect(() => persistHotkeyField("Ctrl+Alt+K", () => "not-json", writeRaw)).toThrow();
     expect(writeRaw).not.toHaveBeenCalled();
+  });
+});
+
+describe("persistHotkeysField（「立即生效」三键同步写盘）", () => {
+  const trio = { hotkey: "Ctrl+Shift+Q", ocrHotkey: "Ctrl+Shift+J", readerHotkey: "Ctrl+Shift+R" };
+
+  it("同时写入三个热键字段并保留其余设置", () => {
+    const previous = {
+      endpoint: "https://saved.example.com/v1",
+      model: "saved-model",
+      hotkey: "Ctrl+Shift+Q",
+      ocrHotkey: "Ctrl+Shift+E",
+      readerHotkey: "Ctrl+Shift+R",
+      customStyle: "saved style",
+    };
+    let written = "";
+
+    persistHotkeysField(
+      { ...trio, ocrHotkey: "Ctrl+Shift+T" },
+      () => JSON.stringify(previous),
+      (raw) => {
+        written = raw;
+      },
+    );
+
+    expect(JSON.parse(written)).toEqual({ ...previous, ocrHotkey: "Ctrl+Shift+T" });
+  });
+
+  it("storage 缺失时以默认设置为底，不写入 apiKey", () => {
+    let written = "";
+
+    persistHotkeysField(trio, () => null, (raw) => {
+      written = raw;
+    });
+
+    const parsed = JSON.parse(written);
+    expect(parsed).toMatchObject(trio);
+    expect(parsed.endpoint).toBe(DEFAULT_SETTINGS.endpoint);
+    expect(parsed).not.toHaveProperty("apiKey");
+  });
+
+  it("剥离旧版明文 apiKey", () => {
+    let written = "";
+
+    persistHotkeysField(
+      trio,
+      () => JSON.stringify({ endpoint: "https://e.com", apiKey: "plaintext" }),
+      (raw) => {
+        written = raw;
+      },
+    );
+
+    expect(JSON.parse(written)).toEqual({ endpoint: "https://e.com", ...trio });
+    expect(written).not.toContain("plaintext");
+  });
+
+  it("拒绝覆盖非法格式", () => {
+    const writeRaw = vi.fn();
+
+    expect(() => persistHotkeysField(trio, () => "not-json", writeRaw)).toThrow();
+    expect(writeRaw).not.toHaveBeenCalled();
+  });
+});
+
+describe("savePersistedHotkeys", () => {
+  it("立即写进 localStorage，不等「保存设置」", () => {
+    localStorage.clear();
+
+    savePersistedHotkeys({
+      hotkey: "Ctrl+Shift+Q",
+      ocrHotkey: "Ctrl+Shift+J",
+      readerHotkey: "Ctrl+Shift+R",
+    });
+
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}");
+    expect(parsed).toMatchObject({
+      hotkey: "Ctrl+Shift+Q",
+      ocrHotkey: "Ctrl+Shift+J",
+      readerHotkey: "Ctrl+Shift+R",
+    });
+    expect(parsed).not.toHaveProperty("apiKey");
   });
 });

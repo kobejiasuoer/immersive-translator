@@ -36,7 +36,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager,
 };
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
 /// 默认全局热键：Ctrl+Shift+Q —— 选中文字翻译；Ctrl+Shift+E —— 截图 OCR 翻译；
@@ -61,6 +61,78 @@ impl Default for ActiveHotkeys {
             Shortcut::from_str(DEFAULT_READER_HOTKEY).expect("default reader hotkey valid"),
         ]))
     }
+}
+
+/// 把后端热键转成前端设置页的展示格式（如 "Ctrl+Shift+Q"）。
+///
+/// 设置页自愈回显（get_active_hotkeys）依赖两种格式的字符串相等：
+/// 修饰键顺序须与前端 normalizeHotkey（src/core/hotkeyValidator.ts）一致
+/// （Ctrl+Alt+Shift+Super），主键命名须与 HotkeyField 录制产物一致
+/// （字母大写单字符、数字原样、F 键/箭头原样、空格为 "Space"）。
+/// 改任何键名映射必须两端同步。
+fn shortcut_display(shortcut: Shortcut) -> String {
+    let mut out = String::new();
+    if shortcut.mods.contains(Modifiers::CONTROL) {
+        out.push_str("Ctrl+");
+    }
+    if shortcut.mods.contains(Modifiers::ALT) {
+        out.push_str("Alt+");
+    }
+    if shortcut.mods.contains(Modifiers::SHIFT) {
+        out.push_str("Shift+");
+    }
+    if shortcut.mods.contains(Modifiers::SUPER) {
+        out.push_str("Super+");
+    }
+    out.push_str(&key_display(shortcut.key));
+    out
+}
+
+/// Code → 前端主键名。keyboard_types 的 Debug 名与 e.key 大多一致
+/// （F1、ArrowLeft、Enter……），只有字母/数字带前缀、标点完全不同，逐一映射；
+/// 其余罕见键（Media 键、小键盘等）回退 Debug 名，仅影响展示不影响功能。
+fn key_display(code: Code) -> String {
+    let name = format!("{code:?}");
+    if let Some(k) = name.strip_prefix("Key") {
+        if k.len() == 1 && k.as_bytes()[0].is_ascii_uppercase() {
+            return k.to_string();
+        }
+    }
+    if let Some(d) = name.strip_prefix("Digit") {
+        if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() {
+            return d.to_string();
+        }
+    }
+    match code {
+        Code::Minus => "-".into(),
+        Code::Equal => "=".into(),
+        Code::Comma => ",".into(),
+        Code::Period => ".".into(),
+        Code::Slash => "/".into(),
+        Code::Backslash => "\\".into(),
+        Code::Semicolon => ";".into(),
+        Code::Quote => "'".into(),
+        Code::BracketLeft => "[".into(),
+        Code::BracketRight => "]".into(),
+        Code::Backquote => "`".into(),
+        _ => name,
+    }
+}
+
+/// 返回当前生效的三个全局热键（翻译/OCR/阅读室，前端展示格式）。
+///
+/// 设置页用来自愈回显：历史版本「立即生效」只写 Rust 侧不写 localStorage，
+/// 设置页显示值可能与真实生效键脱节（如 UI 显示 Ctrl+Shift+E、后端实际
+/// 恢复 Ctrl+Shift+J）。打开快捷键页时读一次真实值即可显示真相。
+#[tauri::command]
+fn get_active_hotkeys(app: AppHandle) -> Result<[String; 3], String> {
+    let active = app.state::<ActiveHotkeys>();
+    let current = active.0.lock().map_err(|_| "热键状态不可用".to_string())?;
+    Ok([
+        shortcut_display(current[0]),
+        shortcut_display(current[1]),
+        shortcut_display(current[2]),
+    ])
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -936,8 +1008,26 @@ fn reregister_hotkeys(
         |all| persist_hotkeys(&app, all[0], all[1], all[2]),
     )
     .map_err(|error| format!("应用热键失败「{t} / {o} / {r}」: {error}"))?;
+    // 变更记文件日志（into_string 稳定可检索）：排查「显示键与生效键不一致」
+    // 这类问题时，成功变更此前完全不可见，只有失败才有 [hotkey] 记录。
     if switched {
+        clipboard::diag_log(&format!(
+            "[hotkey] 热键已变更: 翻译 {} → {}；OCR {} → {}；阅读室 {} → {}",
+            slots[0].current.into_string(),
+            t_shortcut.into_string(),
+            slots[1].current.into_string(),
+            o_shortcut.into_string(),
+            slots[2].current.into_string(),
+            r_shortcut.into_string(),
+        ));
         *current = [t_shortcut, o_shortcut, r_shortcut];
+    } else {
+        clipboard::diag_log(&format!(
+            "[hotkey] 热键未变更，已持久化: 翻译={} ocr={} 阅读室={}",
+            t_shortcut.into_string(),
+            o_shortcut.into_string(),
+            r_shortcut.into_string(),
+        ));
     }
     Ok("ok".into())
 }
@@ -1343,6 +1433,36 @@ mod hotkey_switch_tests {
     }
 }
 
+#[cfg(test)]
+mod hotkey_display_tests {
+    use super::*;
+
+    fn display(input: &str) -> String {
+        shortcut_display(Shortcut::from_str(input).unwrap())
+    }
+
+    #[test]
+    fn 修饰键按前端顺序排列() {
+        assert_eq!(display("Ctrl+Shift+Q"), "Ctrl+Shift+Q");
+        assert_eq!(display("shift+ctrl+KeyQ"), "Ctrl+Shift+Q");
+        assert_eq!(display("alt+shift+KeyS"), "Alt+Shift+S");
+        assert_eq!(display("super+KeyW"), "Super+W");
+        // 插件 into_string 的持久化格式（control 小写、KeyX 主键）必须能还原
+        assert_eq!(display("shift+control+KeyJ"), "Ctrl+Shift+J");
+    }
+
+    #[test]
+    fn 字母数字去前缀标点映射前端键名() {
+        assert_eq!(display("Ctrl+Digit5"), "Ctrl+5");
+        assert_eq!(display("Ctrl+F5"), "Ctrl+F5");
+        assert_eq!(display("Ctrl+Space"), "Ctrl+Space");
+        assert_eq!(display("Ctrl+ArrowLeft"), "Ctrl+ArrowLeft");
+        assert_eq!(display("Ctrl+Enter"), "Ctrl+Enter");
+        assert_eq!(display("Ctrl+Minus"), "Ctrl+-");
+        assert_eq!(display("Ctrl+Comma"), "Ctrl+,");
+    }
+}
+
 /// 当前进程是否带包身份（以 MSIX/商店版运行，如从微软商店或 Add-AppxPackage 安装）。
 /// 商店版的更新由 Microsoft Store 接管（MSIX 容器只读，自更新必然失败），
 /// 前端 updater 在检查更新前先查这里，带身份即跳过内置自更新。
@@ -1415,6 +1535,7 @@ pub fn run() {
             open_reader,
             show_ocr_result,
             reregister_hotkeys,
+            get_active_hotkeys,
             take_pending_reader_import,
             open_reader_book,
             take_pending_open_book,

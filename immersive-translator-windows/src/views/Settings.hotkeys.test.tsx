@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { Settings } from "./Settings";
 import { DEFAULT_SETTINGS, loadSettingsFullAsync } from "../lib/settingsStore";
-import { reregisterHotkeys } from "../lib/tauriBridge";
+import { reregisterHotkeys, getActiveHotkeys } from "../lib/tauriBridge";
 import { actAsync, createHarness, findButton, setInputValue, type Harness } from "./authTestHarness";
 
 vi.mock("@tauri-apps/api/app", () => ({
@@ -31,6 +31,7 @@ vi.mock("../lib/tauriBridge", async (importOriginal) => {
   return {
     ...original,
     reregisterHotkeys: vi.fn().mockResolvedValue("ok"),
+    getActiveHotkeys: vi.fn(),
     authServerBaseUrl: () => Promise.resolve(null),
     settingsTakePendingTab: () => Promise.resolve("hotkeys"),
     listenSettingsNavigateTab: () => Promise.resolve(() => undefined),
@@ -55,6 +56,8 @@ beforeEach(() => {
     vault: {},
   });
   vi.mocked(reregisterHotkeys).mockResolvedValue("ok");
+  // 默认让自愈读后端失败（等价单测环境无 invoke），个别用例自行 mockResolvedValue
+  vi.mocked(getActiveHotkeys).mockRejectedValue(new Error("invoke unavailable"));
 });
 
 afterEach(() => {
@@ -218,5 +221,72 @@ describe("快捷键设置", () => {
     expect(input(h, "translate").value).toBe("shift + ctrl + q");
     expect(input(h, "reader").value).toBe("Ctrl+Shift+R");
     expect(reregisterHotkeys).not.toHaveBeenCalled();
+  });
+});
+
+describe("热键自愈与持久化", () => {
+  it("「立即生效」把规范化后的热键立即写进 localStorage，不等「保存设置」", async () => {
+    const h = await mount();
+    edit(h, "ocr", "ctrl + shift + j");
+    await actAsync(() => findButton(h.container, "立即生效").click());
+    expect(reregisterHotkeys).toHaveBeenCalledExactlyOnceWith("Ctrl+Shift+Q", "Ctrl+Shift+J", "Ctrl+Shift+R");
+    const persisted = JSON.parse(localStorage.getItem("immersive-translator-settings") ?? "{}");
+    expect(persisted).toMatchObject({
+      hotkey: "Ctrl+Shift+Q",
+      ocrHotkey: "Ctrl+Shift+J",
+      readerHotkey: "Ctrl+Shift+R",
+    });
+  });
+
+  it("UI 与后端脱节时进入快捷键页自愈显示真实生效键，且不触发重注册", async () => {
+    // 模拟历史 bug 现场：localStorage/UI 显示默认 E，后端实际恢复 J
+    vi.mocked(getActiveHotkeys).mockResolvedValue(["Ctrl+Shift+Q", "Ctrl+Shift+J", "Ctrl+Shift+R"]);
+    const h = await mount();
+    await actAsync(() => undefined);
+    expect(input(h, "ocr").value).toBe("Ctrl+Shift+J");
+    expect(input(h, "translate").value).toBe("Ctrl+Shift+Q");
+    expect(input(h, "reader").value).toBe("Ctrl+Shift+R");
+    // 表单与快照一致（无未保存修改）→ 点「保存设置」不应把已生效键再注册一遍
+    await actAsync(() => findButton(h.container, "保存设置").click());
+    expect(reregisterHotkeys).not.toHaveBeenCalled();
+  });
+
+  it("自愈不覆盖 fetch 返回前用户的未保存编辑", async () => {
+    let resolveActive!: (value: [string, string, string]) => void;
+    vi.mocked(getActiveHotkeys).mockImplementationOnce(
+      () => new Promise((resolve) => { resolveActive = resolve; }),
+    );
+    const h = await mount();
+    edit(h, "ocr", "Ctrl+Shift+T");
+    await actAsync(() => resolveActive(["Ctrl+Shift+Q", "Ctrl+Shift+J", "Ctrl+Shift+R"]));
+    expect(input(h, "ocr").value).toBe("Ctrl+Shift+T");
+    expect(input(h, "translate").value).toBe("Ctrl+Shift+Q");
+    expect(input(h, "reader").value).toBe("Ctrl+Shift+R");
+  });
+
+  it("后端与 UI 一致时不做任何自愈动作", async () => {
+    vi.mocked(getActiveHotkeys).mockResolvedValue(["Ctrl+Shift+Q", "Ctrl+Shift+E", "Ctrl+Shift+R"]);
+    const h = await mount();
+    await actAsync(() => undefined);
+    expect(input(h, "ocr").value).toBe("Ctrl+Shift+E");
+    // setSettings 未产生新渲染即无状态变化：热键 dirty 标记保持干净
+    await actAsync(() => findButton(h.container, "保存设置").click());
+    expect(reregisterHotkeys).not.toHaveBeenCalled();
+  });
+
+  it("「恢复默认」也重注册后端热键，不留下 UI/后端脱节", async () => {
+    const h = await mount();
+    act(() => findButton(h.container, "关于").click());
+    act(() => findButton(h.container, "恢复默认").click());
+    const dialog = h.container.querySelector('[role="alertdialog"]');
+    if (!dialog) throw new Error("reset confirm dialog not found");
+    await actAsync(() => findButton(dialog as HTMLElement, "恢复默认").click());
+    expect(reregisterHotkeys).toHaveBeenCalledExactlyOnceWith("Ctrl+Shift+Q", "Ctrl+Shift+E", "Ctrl+Shift+R");
+    const persisted = JSON.parse(localStorage.getItem("immersive-translator-settings") ?? "{}");
+    expect(persisted).toMatchObject({
+      hotkey: "Ctrl+Shift+Q",
+      ocrHotkey: "Ctrl+Shift+E",
+      readerHotkey: "Ctrl+Shift+R",
+    });
   });
 });
