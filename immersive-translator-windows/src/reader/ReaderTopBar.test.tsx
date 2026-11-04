@@ -67,6 +67,21 @@ function key(element: HTMLElement, value: string, options: KeyboardEventInit = {
   return event;
 }
 
+describe("ReaderTopBar 更新提示插槽", () => {
+  it("无提示时保留原有工具，有提示时放在工具区并保持检索入口", () => {
+    render();
+    const tools = container.querySelector(".shell-tools")!;
+    expect(tools.querySelectorAll("button")).toHaveLength(3);
+
+    render({ updateNotice: <button type="button">新版本</button> });
+
+    expect(tools.firstElementChild?.textContent).toBe("新版本");
+    expect(tools.querySelector('button[aria-label="全文检索"]')).not.toBeNull();
+    click(tools.querySelector<HTMLButtonElement>('button[aria-label="全文检索"]')!);
+    expect(tools.querySelector('input[aria-label="在本文中检索"]')).not.toBeNull();
+  });
+});
+
 describe("ReaderTopBar 主题选择", () => {
   it.each<{ initial: ReaderTheme; selected: ReaderTheme; label: string }>([
     { initial: "dark", selected: "light", label: "纸书" },

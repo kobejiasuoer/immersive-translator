@@ -21,6 +21,8 @@ import {
   authGetStatus,
 } from "../lib/tauriBridge";
 import { syncLearningRecordsSilently } from "../lib/learningRelay";
+import { useProactiveUpdate } from "../lib/useProactiveUpdate";
+import { UpdateNotice } from "../ui/UpdateNotice";
 import { loadSettingsAsync, hasValidSettings, loadSettings } from "../lib/settingsStore";
 import { classifyTtsError } from "../lib/ttsError";
 import {
@@ -250,6 +252,7 @@ function quotaFallbackDecision(error: unknown): VoiceRouteDecision {
 }
 
 export function ReaderApp() {
+  const availableUpdate = useProactiveUpdate();
   // ---- 数据 ----
   const [globalSettings, setGlobalSettings] = useState<ReaderSettings>(DEFAULT_READER_SETTINGS);
   const [articleList, setArticleList] = useState<ArticleSummary[]>([]);
@@ -2438,6 +2441,7 @@ export function ReaderApp() {
       style={rootStyle}
     >
       <ReaderTopBar
+        updateNotice={<UpdateNotice info={availableUpdate} />}
         articleName={
           view === "shelf"
             ? null
