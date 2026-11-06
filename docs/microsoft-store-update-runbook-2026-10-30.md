@@ -45,7 +45,7 @@
 
 | 坑 | 现象 / 解法 |
 |---|---|
-| **VC++ 运行时缺失 → 认证被拒（2026-10-30 实际被拒）** | 干净机器（无 VC++ Redistributable）上 MSIX 启动即挂：缺 `MSVCP140.dll`/`VCRUNTIME140_1.dll`，条款 10.1.2.10（功能性）+ 10.2.4.1（未披露依赖）。修复：`msvcp140.dll`/`vcruntime140.dll`/`vcruntime140_1.dll` 三个 DLL 放 `src-tauri/`、经 bundle.resources 进包与 exe 同目录（微软官方 app-local deployment，redist 许可允许随应用分发）；pack-msix.ps1 对缺失会直接 throw。**EXE/NSIS 通道同样受益**（裸机用户原先也会挂） |
+| **VC++ 运行时缺失 → 认证被拒（已中两次：0.11.1 缺 vcruntime140_1；0.12.1 缺 msvcp140_1）** | 干净机器上 MSIX 启动即挂，条款 10.1.2.10 + 10.2.4.1。**最终修复是四件套**：`msvcp140.dll`/`msvcp140_1.dll`/`vcruntime140.dll`/`vcruntime140_1.dll` 全部放 `src-tauri/` 经 bundle.resources 进包与 exe 同目录（pack-msix.ps1 对缺失直接 throw）。**教训：改构建工具链后必须用 PE 导入表解析重新核对 exe 依赖**（0.15.x 的 exe 新增了 msvcp140_1 导入，三件套不够）。另外 10.2.4.1 要求：若披露依赖，必须写在**商店描述前两行**（中英描述均已加披露句） |
 | 产品类型选错 | 选成「EXE 或 MSI」→ 触发 10.2.9 签名要求。**只能删除产品重建**（「MSIX 或 PWA」），商店分配的身份会变，需同步改 `msix/Package.appxmanifest` |
 | runFullTrust 说明超字数 | 提交选项页标「未完成」但无显眼红字。硬上限 **500 字**（当前合规版 482 字），超限时提交按钮置灰 |
 | makeappx 报 0x80080203 | 包内清单文件名必须是 **`AppxManifest.xml`**（`Package.appxmanifest` 只是源模板名） |
