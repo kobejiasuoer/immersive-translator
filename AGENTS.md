@@ -20,6 +20,7 @@
 ## 硬性约束（违反会出事故）
 
 - **四个 VC 运行时 DLL（msvcp140 / msvcp140_1 / vcruntime140 / vcruntime140_1）是包必备资产**：必须在 `bundle.resources` 且与 exe 同目录进包，缺一启动即挂。exe 的 PE 导入表同时依赖四件（2026-10-30 缺 vcruntime140_1 被拒一次、2026-11-05 缺 msvcp140_1 又被拒一次——改构建工具链后必须用 PE 导入表解析重新核对）。商店描述前两行需披露 VC 依赖（10.2.4.1）。
+- **商店属性页的「应用网站」「支持联系」必须填自有域名 `https://prismspace.online`**：不许填 GitHub 仓库/issues 链接。GitHub 对匿名访客时有超时事故（2026-11-08/09 官方 status 有记录），认证员恰在事故窗口点链接判定「URL 不可用」以 10.1.2.7 拒审一次（2026-11-09 实测被拒）。
 - **商店版禁用应用内自更新**：`is_store_packaged()` 命令 + updater 短路是刻意的（商店政策 10.2.5 + 签名体系不同），不许移除或绕过。
 - **runFullTrust 受限功能说明 ≤500 字**：超限 Partner Center 会静默卡住「提交选项」为未完成。
 - **pack-msix.ps1 / 任何 PS 5.1 脚本读 UTF-8 文件必须显式 `-Encoding UTF8`**：否则中文按 GBK 误读，`tauri.conf.json` 直接解析失败。
