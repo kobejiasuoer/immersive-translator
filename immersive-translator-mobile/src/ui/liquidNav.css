@@ -1,0 +1,34 @@
+/* Optical content is rendered by LiquidLens; this housing only samples the page.
+   Keep this selector above the legacy product.css material in specificity. */
+.glass-nav.learning-nav.tabbar[data-glass-phase] {
+  overflow:visible;
+  background:color-mix(in srgb,var(--surface) 64%,transparent);
+  border-color:color-mix(in srgb,var(--ink) 10%,transparent);
+  box-shadow:inset 0 1px 0 var(--nav-glass-highlight),inset 0 -1px 0 color-mix(in srgb,var(--ink) 6%,transparent),0 8px 24px var(--nav-glass-shadow);
+  backdrop-filter:blur(14px) saturate(1.25);
+  -webkit-backdrop-filter:blur(14px) saturate(1.25);
+  -webkit-touch-callout:none;
+}
+.glass-nav.learning-nav.tabbar .glass-bubble {
+  background:color-mix(in srgb,var(--accent-soft) 48%,transparent);
+  border-color:color-mix(in srgb,var(--nav-glass-highlight) 62%,transparent);
+  box-shadow:inset 0 1px 1px var(--nav-glass-highlight),inset 0 -1px 1px color-mix(in srgb,var(--ink) 12%,transparent),0 2px 5px var(--nav-glass-shadow);
+  will-change:auto;
+}
+.glass-nav.learning-nav.tabbar[data-glass-phase=dragging] .glass-bubble,
+.glass-nav.learning-nav.tabbar[data-glass-phase=settling] .glass-bubble { will-change:transform; }
+.glass-nav.learning-nav.tabbar .tab:active { opacity:1; }
+.glass-nav-content { position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:3px 2px;pointer-events:none; }
+.glass-nav-content > svg { width:22px;height:22px;flex:none; }
+.glass-nav.learning-nav.tabbar .tab[data-pressed] { color:var(--accent); }
+@media(prefers-reduced-transparency:reduce),(prefers-contrast:more) {
+  .glass-nav.learning-nav.tabbar[data-glass-phase] {
+    background:var(--surface);backdrop-filter:none;-webkit-backdrop-filter:none;
+    border-color:var(--hairline-strong);box-shadow:none;
+  }
+  .glass-nav.learning-nav.tabbar .glass-bubble { background:var(--accent-soft);border-color:var(--accent-line);box-shadow:none; }
+}
+@media(prefers-contrast:more) {
+  .glass-nav.learning-nav.tabbar .tab { color:var(--ink); }
+  .glass-nav.learning-nav.tabbar .glass-bubble { border:1px solid var(--accent); }
+}

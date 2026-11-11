@@ -6,13 +6,14 @@
  * 今日复习卡与完成页的提醒行共用本抽屉；既有 push 设置页（setRemind）不动。
  */
 import { useEffect, useState } from "react";
-import { actions, toast, useApp } from "../../store";
+import { actions, activeRepository, toast, useApp } from "../../store";
 import { ReadingDrawer } from "../reading/Drawer";
 import { enableStudyReminder, reconcileStudyNotifications, refreshNotificationStatus, useNotificationStatus } from "../../services/studyNotifications";
 import { openAppSettings } from "../../services/device";
 import { reminderTime } from "../../services/reminderPlan";
 
 export function ReminderSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const repository = activeRepository();
   const settings = useApp((s) => s.settings);
   const words = useApp((s) => s.vocab);
   const status = useNotificationStatus();
@@ -32,7 +33,7 @@ export function ReminderSheet({ open, onClose }: { open: boolean; onClose: () =>
     setBusy(true);
     try {
       const next = { ...settings, remindTime: time, daily: true };
-      if (!(await enableStudyReminder(next, words))) return;
+      if (!(await enableStudyReminder(next, words, () => activeRepository() === repository))) return;
       actions.setSettings({ remindTime: time, daily: true });
       const actual = reminderTime(next).map(value => String(value).padStart(2, "0")).join(":");
       toast(words.some(word => !word.paused) ? `每日 ${actual} 的系统提醒已开启` : "提醒已开启，收藏表达后会自动安排");
@@ -43,8 +44,8 @@ export function ReminderSheet({ open, onClose }: { open: boolean; onClose: () =>
     if (busy || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return;
     setBusy(true);
     try {
-      const result = await reconcileStudyNotifications({ ...settings, remindTime: time }, words);
-      if (result.error) return;
+      const result = await reconcileStudyNotifications({ ...settings, remindTime: time }, words, () => activeRepository() === repository);
+      if (result.error || activeRepository() !== repository) return;
       actions.setSettings({ remindTime: time });
       onClose();
     } finally { setBusy(false); }
@@ -86,10 +87,12 @@ export function ReminderSheet({ open, onClose }: { open: boolean; onClose: () =>
           onClick={async () => {
             if (busy) return;
             setBusy(true);
-            actions.setSettings({ daily: false });
-            const result = await reconcileStudyNotifications({ ...settings, daily: false }, words);
+            const result = await reconcileStudyNotifications({ ...settings, daily: false }, words, () => activeRepository() === repository);
             setBusy(false);
-            if (!result.error) onClose();
+            if (!result.error && result.scheduled === 0 && activeRepository() === repository) {
+              actions.setSettings({ daily: false });
+              onClose();
+            }
           }}
         >
           关闭学习提醒

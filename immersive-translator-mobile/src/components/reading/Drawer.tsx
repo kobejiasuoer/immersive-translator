@@ -1,3 +1,4 @@
+import { GlassSwitch } from "../../ui/GlassSwitch";
 /**
  * 阅读域抽屉底座（reading-parity）。
  * 为什么不走全局 SheetHost：新抽屉 kind 的渲染开关在 ui/sheets.tsx（本阶段文件范围外），
@@ -9,11 +10,13 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useNav } from "../../ui/nav";
 import { Icon } from "../../ui/icons";
 import { attachSheetDrag } from "../../ui/sheetDrag";
+import { attachModalFocus } from "../../ui/modalFocus";
 
 export function ReadingDrawer({
-  open,
+  open: requestedOpen,
   onClose,
   label,
   layer,
@@ -27,6 +30,8 @@ export function ReadingDrawer({
   layer?: "account";
   children: ReactNode;
 }) {
+  const nav = useNav();
+  const open = requestedOpen && nav.active !== false;
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -38,18 +43,8 @@ export function ReadingDrawer({
 
   useEffect(() => {
     const panel = panelRef.current;
-    if (!open || !panel || layer !== "account") return;
-    const previous = document.activeElement as HTMLElement | null;
-    panel.querySelector<HTMLElement>("button,input,select")?.focus({ preventScroll: true });
-    const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeRef.current(); return; }
-      if (event.key !== "Tab") return;
-      const controls = [...panel.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]')];
-      if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls.at(-1)?.focus(); }
-      else if (!event.shiftKey && document.activeElement === controls.at(-1)) { event.preventDefault(); controls[0]?.focus(); }
-    };
-    panel.addEventListener("keydown", key);
-    return () => { panel.removeEventListener("keydown", key); previous?.focus({ preventScroll: true }); };
+    if (!open || !panel) return;
+    return attachModalFocus(panel, () => closeRef.current());
   }, [open, layer, host]);
 
   useEffect(() => {
@@ -67,6 +62,7 @@ export function ReadingDrawer({
         role="dialog"
         aria-modal="true"
         aria-label={label}
+        tabIndex={-1}
         className={`sheet ${open ? "on" : ""}`}
         style={{ zIndex: layer === "account" ? 131 : 43 }}
         inert={!open || undefined}
@@ -102,13 +98,6 @@ export function DrawerTabs<T extends string>({
   /** 附加样式（如 sh-tabs：胶囊容器 + 白底浮起选中态，原型 .sh-tabs）。 */
   className?: string;
 }) {
-  return (
-    <div className={`learning-seg${className ? ` ${className}` : ""}`} role="tablist" aria-label={ariaLabel}>
-      {items.map(([v, labelText]) => (
-        <button key={v} role="tab" aria-selected={value === v} className={value === v ? "on" : ""} onClick={() => onChange(v)}>
-          {labelText}
-        </button>
-      ))}
-    </div>
-  );
+  return <GlassSwitch className={`learning-seg${className ? ` ${className}` : ""}`} role="tablist" ariaLabel={ariaLabel} value={value} onChange={onChange}
+    items={items.map(([value,label]) => ({value,label}))} />;
 }

@@ -1,0 +1,243 @@
+/* Apple-oriented collection surfaces: one task, then content and grouped rows.
+   These are accessible WebView controls, not UIKit components. */
+.vault-body .vault-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  margin: 0 0 28px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+.vault-body .vault-tabs button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 4px;
+  border-radius: 7px;
+  color: var(--ink-2);
+  font: 500 calc(13px * var(--fs-scale,1))/1.35 var(--font-sans);
+  background: transparent;
+  overflow-wrap: anywhere;
+}
+.vault-body .vault-tabs button.on {
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 650;
+  box-shadow: 0 1px 3px rgb(0 0 0 / .09);
+}
+.vault-body .vault-tabs button.on::after { display: none; }
+.vault-body .vault-review-task {
+  padding: 0 0 26px;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.vault-task-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ink-3);
+  font: calc(13px * var(--fs-scale,1))/1.4 var(--font-sans);
+}
+.vault-task-heading > span:first-child { font-weight: 500; }
+.vault-review-task h2.vault-due-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin: 12px 0 7px;
+  font: 650 calc(24px * var(--fs-scale,1))/1.35 var(--font-sans);
+  letter-spacing: -.025em;
+}
+.vault-due-title > span:last-child { font-size: calc(20px * var(--fs-scale,1)); letter-spacing: -.015em; }
+.vault-due-title .vault-due-number {
+  font: 650 calc(34px * var(--fs-scale,1))/1.1 var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.035em;
+  color: var(--ink);
+}
+.vault-body .vault-review-task > p { color: var(--ink-3); font-size: calc(15px * var(--fs-scale,1)); line-height: 1.55; }
+.vault-review-task .v2-review-modes { gap: 1px; margin-top: 22px; padding: 3px; border-radius: 9px; background: var(--surface-2); }
+.vault-review-task .v2-review-modes .learning-chip {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  flex-direction: row;
+  gap: 5px;
+  padding: 8px 3px;
+  border: 0;
+  border-radius: 7px;
+  font-size: calc(12px * var(--fs-scale,1));
+  line-height: 1.4;
+  color: var(--ink-2);
+  background: transparent;
+  white-space: normal;
+}
+.vault-review-task .v2-review-modes .learning-chip svg { flex: none; width: 15px; height: 15px; }
+.vault-review-task .v2-review-modes .learning-chip.on { color: var(--ink); background: var(--surface); box-shadow: 0 1px 3px rgb(0 0 0 / .09); }
+.vault-review-task .v2-mode-description { margin: 10px 0 18px; }
+.vault-review-task .btn { margin-top: 18px; min-height: 48px; font-size: calc(17px * var(--fs-scale,1)); }
+.vault-review-task .vault-text-link { display: flex; justify-content: center; align-items: center; gap: 5px; min-height: 44px; width: 100%; margin-top: 7px; color: var(--accent); font-size: calc(15px * var(--fs-scale,1)); }
+.vault-body .v2-resume-review { margin: 0 0 24px; padding: 14px 0; border: 0; border-bottom: 1px solid var(--hairline); border-radius: 0; background: transparent; font-size: calc(15px * var(--fs-scale,1)); }
+.vault-body .v2-resume-review > b { font-weight: 400; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.vault-section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 24px 0 6px; }
+.vault-body .vault-section-heading h2 { font: 650 calc(20px * var(--fs-scale,1))/1.4 var(--font-sans); letter-spacing: -.02em; }
+.vault-section-heading > button { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; font-size: calc(15px * var(--fs-scale,1)); color: var(--accent); flex-shrink: 0; }
+.vault-section-heading > span { font-size: calc(13px * var(--fs-scale,1)); color: var(--ink-3); }
+.vault-body .vault-progress { display: block; margin: 0; padding: 0 16px; border: 0; border-radius: 12px; background: var(--surface); }
+.vault-body .vault-progress button { display: flex; align-items: center; width: 100%; min-height: 52px; padding: 12px 0; gap: 10px; text-align: left; font: calc(17px * var(--fs-scale,1))/1.4 var(--font-sans); }
+.vault-body .vault-progress button + button { border-top: 1px solid var(--hairline); }
+.vault-body .vault-progress button > span { flex: 1; min-width: 0; }
+.vault-body .vault-progress b { font: inherit; font-weight: 400; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.vault-body .vault-progress svg { color: var(--ink-3); flex: none; }
+.vault-body .vault-progress-caption { margin: 10px 16px 0; font-size: calc(13px * var(--fs-scale,1)); line-height: 1.5; color: var(--ink-3); }
+.vault-body .vault-expression-preview { padding: 0; margin: 0; }
+.vault-expression-preview button { gap: 16px; padding: 15px 0; min-height: 76px; border-bottom: 1px solid var(--hairline); }
+.vault-expression-preview button > span:first-child { min-width: 0; }
+.vault-expression-preview b { font: 600 calc(19px * var(--fs-scale,1))/1.35 var(--font-serif); }
+.vault-expression-preview small { font-size: calc(15px * var(--fs-scale,1)); line-height: 1.5; margin-top: 5px; }
+.vault-expression-preview .learning-tag { font-size: calc(12px * var(--fs-scale,1)); color: var(--ink-3); background: transparent; padding: 0; text-align: right; }
+.vault-body .v2-next-review { border: 0; border-radius: 0; padding: 16px 0; background: transparent; border-bottom: 1px solid var(--hairline); }
+.vault-body .v2-next-review b { font-size: calc(17px * var(--fs-scale,1)); font-weight: 500; }
+.vault-body .v2-next-review small { font-size: calc(13px * var(--fs-scale,1)); }
+.vault-body .v2-reinforcement { padding: 18px 0; background: transparent; border: 0; border-radius: 0; border-bottom: 1px solid var(--hairline); box-shadow: none; }
+.vault-body .v2-reinforcement .v2-learning-title b { color: var(--warn); }
+.vault-body .v2-reminder-row { min-height: 52px; margin-top: 20px; padding: 16px 0; font-size: calc(15px * var(--fs-scale,1)); line-height: 1.5; }
+.vault-body .v2-reminder-row > span { flex: 1; }
+
+/* Search, menus and content are separate visual levels. Select opens the
+   platform picker inside WKWebView, with browser-native fallbacks elsewhere. */
+.vault-search { margin-top: 0; border: 0; border-radius: 10px; background: var(--surface-2); padding: 0 11px; min-height: 44px; }
+.vault-search .input { font-size: calc(17px * var(--fs-scale,1)); min-width: 0; padding: 10px 0; background: transparent; }
+.vault-search > svg { flex: none; width: 18px; height: 18px; }
+.vault-search > button { min-width: 44px; min-height: 44px; }
+.vault-wordbook .v2-word-tools { margin: 10px 0 2px; gap: 12px; flex-wrap: wrap; }
+.vault-wordbook .v2-word-tools label { font-size: calc(13px * var(--fs-scale,1)); gap: 5px; }
+.vault-wordbook .v2-word-tools select { border: 0; background: transparent; font-size: calc(15px * var(--fs-scale,1)); max-width: none; color: var(--accent); padding: 6px 2px; }
+.vault-wordbook .v2-word-tools .v2-word-add { background: transparent; color: var(--accent); border: 0; padding-right: 0; font-size: calc(15px * var(--fs-scale,1)); font-weight: 500; }
+.vault-filter-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.vault-filter-row label { flex: 1; min-width: 110px; }
+.vault-filter-row select { width: 100%; min-height: 44px; padding: 9px 10px; border: 0; border-radius: 8px; background: var(--surface-2); font: calc(15px * var(--fs-scale,1))/1.4 var(--font-sans); color: var(--ink-2); }
+.vault-filter-row .v2-clear-filters { min-height: 44px; padding: 8px 4px; margin: 0; font-size: calc(15px * var(--fs-scale,1)); color: var(--accent); }
+.vault-wordbook .v2-result-count { font-size: calc(13px * var(--fs-scale,1)); margin: 18px 0 0; padding-bottom: 8px; border-bottom: 1px solid var(--hairline); }
+.vault-wordbook .vault-expression-list { padding: 0; margin: 0; }
+.vault-wordbook .v2-word-item { padding: 18px 0; }
+.vault-wordbook .v2-word-line > b { font: 600 calc(22px * var(--fs-scale,1))/1.3 var(--font-serif); letter-spacing: -.01em; }
+.vault-wordbook .v2-word-meta > .en { font-family: var(--font-sans); font-size: calc(13px * var(--fs-scale,1)); }
+.vault-wordbook .v2-word-meta .learning-tag { background: transparent; padding: 0; font-size: calc(12px * var(--fs-scale,1)); }
+.vault-wordbook .v2-word-definition { font-size: calc(15px * var(--fs-scale,1)); line-height: 1.55; margin-top: 8px; }
+.vault-wordbook .v2-word-origin { font-size: calc(13px * var(--fs-scale,1)); line-height: 1.5; margin-top: 7px; color: var(--ink-3); }
+.vault-wordbook .v2-word-origin,
+.vault-wordbook .v2-word-definition { overflow-wrap: anywhere; }
+.vault-body .vault-notes-heading { margin-top: 0; margin-bottom: 12px; }
+.vault-body .vault-notes-heading h2 { font-size: calc(17px * var(--fs-scale,1)); font-weight: 500; color: var(--ink-3); }
+.vault-notes .v2-note-toolbar { margin: 10px 0 4px; }
+.vault-notes .v2-learning-filters { gap: 4px; flex-wrap: wrap; }
+.vault-notes .v2-learning-filters .learning-chip { border: 0; border-radius: 8px; min-height: 44px; padding: 7px 10px; font-size: calc(13px * var(--fs-scale,1)); color: var(--ink-3); background: transparent; }
+.vault-notes .v2-learning-filters .learning-chip.on { color: var(--accent); background: var(--accent-soft); }
+.vault-notes .vault-note-list { margin: 0; padding: 0; }
+.vault-notes .v2-note-item { padding: 20px 0; }
+.vault-notes .v2-note-item > b { font: 600 calc(17px * var(--fs-scale,1))/1.45 var(--font-sans); margin: 8px 0 6px; }
+.vault-notes .v2-note-item > b.en { font: 600 calc(20px * var(--fs-scale,1))/1.4 var(--font-serif); }
+.vault-notes .v2-note-item > p { font-size: calc(15px * var(--fs-scale,1)); line-height: 1.6; -webkit-line-clamp: 2; }
+.vault-notes .v2-note-h { font-size: calc(13px * var(--fs-scale,1)); }
+.vault-notes .v2-note-h .learning-tag { font-size: inherit; background: transparent; color: var(--ink-3); padding: 0; }
+.vault-notes .v2-note-link { font-size: calc(13px * var(--fs-scale,1)); margin-top: 10px; color: var(--ink-3); }
+.vault-wordbook .v2-empty-card,
+.vault-notes .v2-empty-card { padding: 32px 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.vault-wordbook .v2-empty-card h3,
+.vault-notes .v2-empty-card h3 { font: 600 calc(22px * var(--fs-scale,1))/1.4 var(--font-sans); }
+.vault-wordbook .v2-empty-card p,
+.vault-notes .v2-empty-card p { margin-top: 8px; font-size: calc(15px * var(--fs-scale,1)); line-height: 1.65; }
+
+/* A word detail is a reading surface; only schedules use grouped backgrounds. */
+.vault-word-detail .v2-word-hero .v2-word-line > b { font: 600 calc(28px * var(--fs-scale,1))/1.3 var(--font-serif); letter-spacing: -.02em; }
+.vault-word-detail .v2-word-hero > p { font-size: calc(17px * var(--fs-scale,1)); line-height: 1.6; }
+.vault-word-detail > .v2-word-practice { margin: 0 0 24px; }
+.vault-word-detail .v2-learning-title { margin-top: 24px; }
+.vault-word-detail .v2-learning-title > b { font-size: calc(17px * var(--fs-scale,1)); }
+.vault-word-detail .v2-word-context { border: 0; border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); background: transparent; border-radius: 0; padding: 18px 0; }
+.vault-word-detail .v2-word-context > .en { font-size: calc(20px * var(--fs-scale,1)); font-weight: 400; line-height: 1.7; }
+.vault-word-detail .v2-word-context .btn-ghost { min-height: 44px; height: auto; padding: 10px 12px; line-height: 1.5; text-align: left; }
+.vault-word-detail .v2-word-personal { padding: 0; border: 0; background: transparent; }
+.vault-word-detail .v2-word-personal > p { font-size: calc(15px * var(--fs-scale,1)); }
+.vault-word-detail .v2-word-schedule { background: var(--surface-2); border: 0; padding: 16px; }
+.vault-word-detail .v2-tl-node { flex-wrap: wrap; font-size: calc(13px * var(--fs-scale,1)); }
+.vault-word-detail .v2-learning-filters .learning-chip { font-size: calc(13px * var(--fs-scale,1)); border-radius: 8px; }
+.vault-word-detail .v2-learning-filters .learning-chip.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+.vault-word-detail .v2-word-remove { margin-top: 24px; background: transparent; }
+
+/* Quiet, continuous review paper. The navigation and question own separate
+   levels; neither needs a nested rounded card or decorative striped blank. */
+.rv-top.vault-review-top { padding: calc(var(--safe-top) + 8px) max(12px,var(--safe-right)) 8px max(12px,var(--safe-left)); background: var(--bg); }
+.rv-top.vault-review-top .ttl { font: 600 calc(17px * var(--fs-scale,1))/1.4 var(--font-sans); margin: 0; }
+.rv-top.vault-review-top .nt small { font-size: calc(13px * var(--fs-scale,1)); line-height: 1.4; }
+.rv-top.vault-review-top .star { border: 0; background: transparent; color: var(--accent); }
+.vault-review-top + .rv-progress { height: 2px; border-radius: 0; margin: 0 0 12px; }
+.review-workspace.rv-stage,
+.review-workspace.qk-stage { padding: 12px max(20px,var(--safe-right)) calc(32px + var(--safe-bottom)) max(20px,var(--safe-left)); }
+.review-workspace .rv-card { width: 100%; max-width: 640px; margin: auto; padding: 16px 0 24px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.review-workspace .v2-review-card .rv-sent { font-size: calc(24px * var(--fs-scale,1)); line-height: 1.65; font-weight: 400; overflow-wrap: anywhere; }
+.review-workspace .v2-review-card .v2-note-h { margin-bottom: 28px; font-size: calc(13px * var(--fs-scale,1)); }
+.review-workspace .v2-review-card .v2-note-h > span:last-child { overflow-wrap: anywhere; }
+.review-workspace .v2-eyebrow { font: 500 calc(13px * var(--fs-scale,1))/1.5 var(--font-sans); letter-spacing: 0; color: var(--ink-3); }
+.review-workspace .rv-word { font: 600 calc(32px * var(--fs-scale,1))/1.3 var(--font-serif); letter-spacing: -.02em; overflow-wrap: anywhere; }
+.review-workspace .blank.tape { border-radius: 3px; background: var(--surface-2); box-shadow: none; border-bottom: 2px solid var(--accent); }
+.review-workspace .v2-learning-copy { font-size: calc(15px * var(--fs-scale,1)); line-height: 1.6; }
+.review-workspace .v2-hint-box { background: transparent; border: 0; border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); border-radius: 0; padding: 14px 0; }
+.review-workspace .v2-hint-box > button { min-height: 44px; font-size: calc(15px * var(--fs-scale,1)); }
+.review-workspace .v2-hint-box > button span { font-size: calc(12px * var(--fs-scale,1)); }
+.review-workspace .v2-self-grade { margin-top: 26px; }
+.review-workspace .v2-review-grades .grade { min-height: 66px; padding: 12px 5px; border-radius: 10px; }
+.review-workspace .v2-review-grades .g1 { font-size: calc(15px * var(--fs-scale,1)); }
+.review-workspace .v2-review-grades .g2 { font-size: calc(12px * var(--fs-scale,1)); }
+.review-workspace .v2-review-switch { flex-wrap: wrap; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--hairline); }
+.review-workspace .v2-review-switch .btn-ghost { background: transparent; font-size: calc(15px * var(--fs-scale,1)); min-width: 115px; }
+.review-workspace .v2-review-done { max-width: 540px; width: 100%; margin: 0 auto; padding-top: 20px; }
+.review-workspace .v2-review-done h3 { font: 650 calc(26px * var(--fs-scale,1))/1.4 var(--font-sans); }
+.review-workspace .v2-review-tally { border: 0; background: transparent; border-bottom: 1px solid var(--hairline); border-radius: 0; }
+.review-workspace .v2-review-tally b { font-family: var(--font-sans); font-weight: 550; }
+.review-workspace .v2-review-followup { border: 0; background: var(--surface-2); border-radius: 12px; }
+.review-workspace > .serif,
+.review-workspace .qk-done .big { font-family: var(--font-sans); }
+.qk-top.vault-quick-top { min-height: 60px; padding: calc(var(--safe-top) + 8px) max(20px,var(--safe-right)) 8px max(20px,var(--safe-left)); }
+.vault-quick-top h1 { font: 600 calc(17px * var(--fs-scale,1))/1.4 var(--font-sans); }
+.vault-quick-top .qk-src { font-size: calc(13px * var(--fs-scale,1)); line-height: 1.4; margin-top: 3px; }
+.vault-quick-top .tlink { min-height: 44px; font-size: calc(17px * var(--fs-scale,1)); }
+.review-workspace .grades { gap: 8px; }
+.review-workspace .grade { min-height: 64px; }
+.review-workspace .tlink,
+.review-workspace button.meta { min-height: 44px; }
+.notes-workspace > .serif,
+.notes-workspace .notes-title { font: 650 calc(26px * var(--fs-scale,1))/1.4 var(--font-sans); letter-spacing: -.025em; margin-top: 8px; }
+.notes-workspace .note-body { font-size: calc(17px * var(--fs-scale,1)); line-height: 1.8; }
+.notes-workspace .note-body p + p { margin-top: 1.1em; }
+.notes-workspace .note-stream { background: transparent; padding: 0; border: 0; border-radius: 0; }
+.notes-workspace .insight { border: 0; border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); border-radius: 0; background: transparent; padding: 16px 0; font-size: calc(15px * var(--fs-scale,1)); line-height: 1.65; }
+.notes-workspace .row { min-height: 68px; padding-top: 18px; padding-bottom: 18px; width: 100%; text-align: left; }
+.notes-workspace .note-row-title { display: block; font: 600 calc(17px * var(--fs-scale,1))/1.4 var(--font-sans); overflow-wrap: anywhere; }
+.notes-workspace .row .sub { font-size: calc(15px * var(--fs-scale,1)); margin-top: 5px; }
+
+@media (max-width: 360px) {
+  .vault-review-task .v2-review-modes .learning-chip { flex-direction: column; gap: 4px; }
+  .vault-body .v2-resume-review { flex-wrap: wrap; gap: 8px; }
+  .vault-section-heading { flex-wrap: wrap; gap: 0 12px; }
+  .review-workspace.rv-stage,
+  .review-workspace.qk-stage { padding-left: 16px; padding-right: 16px; }
+  .review-workspace .grades:not(.v2-review-grades) { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vault-body { scroll-behavior: auto; }
+  .review-workspace .rv-card,
+  .review-workspace .rv-flip { animation: none; }
+  .review-workspace .ring { transition: none; }
+}
+@media (prefers-contrast: more) {
+  .vault-body .vault-tabs button.on,
+  .vault-review-task .v2-review-modes .learning-chip.on { outline: 1px solid var(--ink); outline-offset: -1px; }
+}

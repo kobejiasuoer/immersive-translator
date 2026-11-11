@@ -14,6 +14,8 @@ import { norm } from "../../core/judge";
 import type { Article, ArticleTerm, VocabWord } from "../../core/types";
 import { ReadingDrawer, DrawerTabs } from "./Drawer";
 import { parseSentence, type SentenceParse } from "./sentenceParse";
+import { EnglishHelp } from "./EnglishHelp";
+import { vocabMeaning } from "../../core/vocabMeaning";
 
 type Tab = "parse" | "words" | "vocab";
 
@@ -31,6 +33,9 @@ export function SentenceSheet({
   onManualLookup,
   onTranslate,
   translating,
+  translationError,
+  translationDraft,
+  translationUnconfigured,
 }: {
   open: boolean;
   onClose: () => void;
@@ -46,6 +51,9 @@ export function SentenceSheet({
   /** 无译文句的机器翻译入口（正文不再插逐句链接，入口收进点句抽屉）。 */
   onTranslate?: () => void;
   translating?: boolean;
+  translationError?: string;
+  translationDraft?: string;
+  translationUnconfigured?: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("parse");
   const sentence = article.sentences[sentIdx];
@@ -150,60 +158,32 @@ export function SentenceSheet({
   }
 
   return (
-    <ReadingDrawer open={open} onClose={onClose} label="句子解析">
-      <span className="v2-eyebrow">
-        第 {sentIdx + 1} 句 · {article.title}
-      </span>
-      <p className="serif" style={{ fontSize: 17, lineHeight: 1.6, margin: "6px 0 0", overflowWrap: "anywhere" }}>
-        {sentence.en}
-      </p>
-      {zh ? (
-        mask && !revealed ? (
-          <button className="sheet-mask" onClick={onReveal}>
-            <Icon name="eye" size={15} />
-            点开看译文
-          </button>
-        ) : (
-          <button className="sheet-mask open" onClick={mask ? onReveal : undefined}>
-            {zh}
-          </button>
-        )
-      ) : translating ? (
-        <div role="status" style={{ margin: "10px 0" }}>
-          <div className="skel" style={{ width: "78%" }} />
-          <div className="skel" style={{ width: "52%" }} />
-        </div>
-      ) : onTranslate ? (
-        <button className="tlink" style={{ fontSize: 13 }} onClick={onTranslate}>
-          翻译这句
-        </button>
+    <ReadingDrawer open={open} onClose={onClose} label="阅读帮助">
+      <div className="reader-sentence-help">
+      <div className="reader-help-heading"><h2>理解这句</h2><small>第 {sentIdx + 1} 句</small></div>
+      <p className="reader-help-sentence" lang="en">{sentence.en}</p>
+      <EnglishHelp request={{ kind: "sentence", text: sentence.en, sentence: sentence.en, articleId: article.id }} />
+      {zh && (mask && !revealed ? (
+        <button className="reader-translation-toggle" onClick={onReveal}><Icon name="translate" size={16}/>查看中文意思</button>
       ) : (
-        <p className="sheet-note" style={{ margin: "8px 0 2px" }}>
-          这句还没有译文，可以点「修改译文」补充自己的理解。
-        </p>
-      )}
-      {zh && onTranslate && <button className="tlink" disabled={translating} style={{ fontSize: 13 }} onClick={onTranslate}>{translating ? "正在重新翻译…" : "重新翻译"}</button>}
+        <div className="reader-help-translation"><p lang="zh">{zh}</p>{mask && <button className="reader-translation-toggle" onClick={onReveal}>收起中文意思</button>}</div>
+      ))}
+      {translating && <div className="reader-translation-status" role="status">正在翻译这句…{translationDraft && <p className="reader-translation-draft">{translationDraft}</p>}</div>}
+      {translationError && <p className="reader-translation-error" role="alert">{translationError}</p>}
+      {translationUnconfigured && <p className="reader-translation-status" role="status">尚未设置翻译服务，可在账号与设置中配置。</p>}
+      {onTranslate && <button className="reader-translation-toggle" disabled={translating} onClick={onTranslate}>{translating ? "正在翻译…" : translationError || translationUnconfigured ? "重试翻译" : zh ? "重新翻译" : "翻译这句"}</button>}
       {zhOverride?.[String(sentIdx)] && <p className="sheet-note">你的修改优先显示；重新翻译会保留这份修改。</p>}
-      <div style={{ display: "flex", gap: 8, margin: "12px 0 4px", flexWrap: "wrap" }}>
-        <button className="btn-ghost" style={{ border: "1px solid var(--hairline-strong)", flex: 1, minWidth: 96 }} onClick={onHear}>
-          <Icon name="speaker" size={15} />
-          听原句
-        </button>
-        <button className="btn" style={{ flex: 1, minWidth: 96 }} onClick={onFollow}>
-          <Icon name="wave" size={15} />
-          跟读这句
-        </button>
-        <button className="btn-ghost" style={{ border: "1px solid var(--hairline-strong)", flex: 1, minWidth: 96 }} onClick={onEdit}>
-          <Icon name="pen" size={15} />
-          修改译文
-        </button>
+      <div className="reader-help-actions">
+        <button onClick={onHear}><Icon name="speaker" size={15}/>听原句</button>
+        <button onClick={onFollow}><Icon name="wave" size={15}/>跟读这句</button>
+        <button onClick={onEdit}><Icon name="pen" size={15}/>修改译文</button>
       </div>
 
       <DrawerTabs
         className="sh-tabs"
         value={tab}
         items={[
-          ["parse", "句子解析"],
+          ["parse", "句子结构"],
           ["words", "本句生词"],
           ["vocab", "本篇词汇"],
         ]}
@@ -249,7 +229,7 @@ export function SentenceSheet({
                 <div>
                   {/* 原句已在抽屉头部展示（原型 fail 态不再重复「原句」卡），仅保留引导 + 重试 */}
                   <p className="sheet-note">
-                    {(error || "解析暂不可用").replace(/。+$/, "")}。先按句意阅读；需要时可点词查词或补充译文。
+                    {(error || "解析暂不可用").replace(/。+$/, "")}。先按句意阅读；需要时可在正文中选中词组，再点「解释」，或补充自己的译文。
                   </p>
                   <button className="btn-ghost" style={{ border: "1px solid var(--hairline-strong)", marginTop: 8 }} onClick={request}>
                     重试解析
@@ -302,12 +282,12 @@ export function SentenceSheet({
               <b className="serif">{w.word}</b>
               <Icon name="chevr" size={15} />
               <span className="def">
-                {((w.senses[0]?.pos ? `${w.senses[0].pos} ` : "") + w.senses.map((s) => s.cn).join("；")) || "查看释义"}
+                {vocabMeaning(w)}
               </span>
             </button>
           ))}
           {!sentenceTerms.length && !sentenceWords.length && (
-            <p className="sheet-note">这句没有已收藏的生词。可以点正文里的词收藏，或用「查一个词或词块」选择自己的表达。</p>
+            <p className="sheet-note">这句没有已收藏的生词。在正文中选中词或词组，再点「解释」即可查看并收藏，也可用「查一个词或词块」手动查询。</p>
           )}
           <button className="btn-ghost" style={{ border: "1px solid var(--hairline-strong)", width: "100%", marginTop: 10 }} onClick={onManualLookup}>
             查一个词或词块
@@ -331,17 +311,18 @@ export function SentenceSheet({
               <b className="serif">{w.word}</b>
               <Icon name="check" size={15} />
               <span className="def">
-                {(w.senses[0]?.pos ? `${w.senses[0].pos} ` : "") + (w.senses.map((s) => s.cn).join("；") || "查看释义")}
+                {vocabMeaning(w)}
               </span>
             </button>
           ))}
           {!terms.length && !vocabOnlyWords.length && (
             <p className="sheet-note" style={{ margin: 0 }}>
-              这篇还没有收藏的表达。阅读时点一个词或词块，收藏后就能在这里复习。
+              这篇还没有收藏的表达。阅读时选中词或词组，再点「解释」查看并收藏，就能在这里复习。
             </p>
           )}
         </div>
       )}
+      </div>
     </ReadingDrawer>
   );
 }

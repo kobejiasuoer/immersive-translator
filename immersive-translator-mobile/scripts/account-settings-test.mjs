@@ -21,6 +21,7 @@ for (const key of ['window', 'document', 'localStorage', 'Event', 'CustomEvent',
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: w.navigator });
 globalThis.indexedDB = indexedDB; globalThis.IDBKeyRange = IDBKeyRange;
 globalThis.requestAnimationFrame = w.requestAnimationFrame.bind(w); globalThis.cancelAnimationFrame = w.cancelAnimationFrame.bind(w);
+globalThis.getComputedStyle = w.getComputedStyle.bind(w);
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 w.matchMedia = query => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} });
 const originalFetch = globalThis.fetch;

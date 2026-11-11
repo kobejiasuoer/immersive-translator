@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./icons";
+import { GlassSwitch } from "./GlassSwitch";
 import { haptic } from "../services/device";
 
 /* ---------- push 顶栏 ---------- */
@@ -22,7 +23,7 @@ export function PNav({
     <div className="pnav">
       <div className="side l">
         {onBack ? (
-          <button className="iconbtn" aria-label="返回" onClick={onBack}>
+          <button className="iconbtn" aria-label="返回" data-nav-back onClick={onBack}>
             <Icon name="left" size={20} />
           </button>
         ) : (
@@ -53,15 +54,8 @@ export function Seg<V extends string>({
   /** 读屏名称（U-28：互斥组用 radiogroup/radio + aria-checked，VoiceOver 播报「已选中」） */
   ariaLabel?: string;
 }) {
-  return (
-    <div className={`seg ${className || ""}`} role="radiogroup" aria-label={ariaLabel}>
-      {items.map(([v, label]) => (
-        <button key={v} role="radio" aria-checked={value === v} className={value === v ? "on" : ""} onClick={() => onChange(v)}>
-          {label}
-        </button>
-      ))}
-    </div>
-  );
+  return <GlassSwitch value={value} items={items.map(([itemValue, label]) => ({ value: itemValue, label }))}
+    onChange={onChange} className={`seg ${className || ""}`} ariaLabel={ariaLabel} role="radiogroup" />;
 }
 
 /* ---------- iOS 开关（on = 墨蓝，§1.3） ---------- */

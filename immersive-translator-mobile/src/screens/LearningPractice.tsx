@@ -1,41 +1,32 @@
 import { useEffect, useRef, useState } from "react";
-import { actions, activeRepository, deviceId, getState, stopSpeak, toast, useApp } from "../store";
+import { actions, activeRepository, deviceId, getState, speak, stopSpeak, toast, useApp } from "../store";
 import { Icon } from "../ui/icons";
 import { useNav } from "../ui/nav";
 import { ensureAccount } from "../services/authGate";
 import { cloudState, useCloud } from "../services/cloud";
-import { assessRecording, expressionFeedback, isUnknownRequest, playOriginal, practiceError, practiceHints, practiceId, startDurableRecording, taskReference, transcribeRecording, type DurableRecording, type PracticeAttempt, type PracticeHints, type PracticeTask } from "../services/practice";
+import { assessRecording, expressionFeedback, isUnknownRequest, playOriginal, practiceError, practiceHints, practiceId, RecordingContentError, startDurableRecording, taskReference, taskSentenceIndex, transcribeRecording, type DurableRecording, type PracticeAttempt, type PracticeHints, type PracticeTask } from "../services/practice";
 import { ReadingDrawer } from "../components/reading/Drawer";
 import { CorrectionDetail } from "../components/vault/CorrectionDetail";
-import { MicPermissionSheet } from "../components/speaking/MicPermissionSheet";
+import { createSpeechEndpoint } from "../services/speechEndpoint";
 import { PronunciationSheet, notifyPronunciationReturn, usePronunciationReturn } from "../components/speaking/PronunciationSheet";
-import { speakDemo } from "../components/speaking/demoVoice";
+import { readDemoVoice, speakDemo } from "../components/speaking/demoVoice";
 import { sceneStepMeta } from "../components/speaking/scenes";
 import { openPractice, when } from "./LearningHome";
 import type { Repository } from "../core/persistence";
 import { useLocalRecording } from "../core/useLocalRecording";
+import "./practiceConversation.css";
 
-/* 时钟（原型 I('clock')）：icons.tsx 暂无该条目，口语域内联一份同规格线性图标（1.8 描边）。 */
-function Clock({ size = 20 }: { size?: number }) {
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M12 7.5V12l3 2" />
-  </svg>;
-}
-
-/* 口语练习页（speaking-parity · 原型 VIEWS.practice / practiceRecap / sessionDetail）。
-   结构对齐原型 html:2625-2654：nhead（标题+副标+结束）→ 细进度条 → notice/上一步回答 →
-   任务卡（衬线例句 + 听一遍/看看中文/发音要点 文字链 + 虚线提示盒）→ 回答区 →
-   四态 dock（录音中 / 评测中 spinner / 反馈 / 草稿 / 作答三段）；
-   反馈＝我的回答 voice-soft 气泡 + verdict + 白卡纠偏（或 no-fix 卡）；
-   复盘＝圆标 hero + 三格统计 + 步骤结果 + 回合卡（第 N 次 · 回答/重说）。 */
+/* Practice state and persistence stay in the existing controller. This screen only
+   presents the current task, response and voice state with a quieter hierarchy. */
 export function LearningPractice({ taskId }: { taskId: string }) {
   const nav = useNav(); const tasks = useApp(s => s.tasks); const task = tasks.find(t => t.id === taskId);
   const articles = useApp(s => s.articles); const vocabWords = useApp(s => s.vocab);
   const cloud = useCloud();
-  const [busy, setBusy] = useState(""); const [error, setError] = useState(""); const [exit, setExit] = useState(false);
-  const [skipAsk, setSkipAsk] = useState(false); const [pron, setPron] = useState(false); const [micAsk, setMicAsk] = useState(false);
+  const [busy, setBusy] = useState(""); const [error, setError] = useState("");
+  const [skipAsk, setSkipAsk] = useState(false); const [pron, setPron] = useState(false);
   const [recording, setRecording] = useState(false); const [seconds, setSeconds] = useState(0);
+  const [audioLevel, setAudioLevel] = useState(0); const [speechStarted, setSpeechStarted] = useState(false);
+  const [questionPlaying, setQuestionPlaying] = useState(false); const questionPlayback = useRef(0);
   /* 三级提示（speaking-parity）：0 收起；①中文思路静态 ②英文句式 ③听一个示例（word/scenario 走 LLM，follow 用静态文案+原句）。 */
   const [hintLevel, setHintLevel] = useState(0);
   const [hints, setHints] = useState<PracticeHints | null>(null); const [hintPhase, setHintPhase] = useState<"idle" | "loading" | "done" | "fail">("idle"); const [hintError, setHintError] = useState("");
@@ -53,14 +44,49 @@ export function LearningPractice({ taskId }: { taskId: string }) {
   /* 详情/复盘切换共用同一 <main>：切换时滚回顶部，meta 行与首回合不被复盘页残留的滚动位置切出视口 */
   const bodyRef = useRef<HTMLElement>(null);
   useEffect(() => { bodyRef.current?.scrollTo({ top: 0 }); }, [detailOpen]);
+  // Keep a focused answer above the composer when the keyboard or window reduces the scroll area.
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    let frame = 0;
+    const revealAnswer = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (window.visualViewport && window.visualViewport.scale > 1) return;
+        const input = body.querySelector<HTMLTextAreaElement>("#practice-answer");
+        if (!input || document.activeElement !== input) return;
+        const visible = body.getBoundingClientRect(), answer = input.getBoundingClientRect();
+        if (answer.height > visible.height - 24 || answer.top < visible.top + 12) body.scrollTop += answer.top - visible.top - 12;
+        else if (answer.bottom > visible.bottom - 12) body.scrollTop += answer.bottom - visible.bottom + 12;
+      });
+    };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(revealAnswer);
+    observer?.observe(body);
+    body.addEventListener("focusin", revealAnswer);
+    window.addEventListener("resize", revealAnswer);
+    window.visualViewport?.addEventListener("resize", revealAnswer);
+    return () => {
+      cancelAnimationFrame(frame); observer?.disconnect();
+      body.removeEventListener("focusin", revealAnswer);
+      window.removeEventListener("resize", revealAnswer);
+      window.visualViewport?.removeEventListener("resize", revealAnswer);
+    };
+  }, [task?.id]);
   /* 看看中文：follow 按原型默认展开译文（html:2367 showCN 默认）。 */
   const [showCN, setShowCN] = useState(task?.mode === "follow");
   const [draft, setDraft] = useState(task?.draft ?? "");
-  const current = useRef<{ session: DurableRecording; repo: Repository; attemptId: string; generation: number; startedAt: number } | null>(null);
+  const current = useRef<{ session: DurableRecording; repo: Repository; taskId: string; attemptId: string; generation: number; startedAt: number; step: number; speechStarted: boolean } | null>(null);
+  const recordingSave = useRef<Promise<unknown> | null>(null);
+  const unsavedRecording = useRef<typeof current.current>(null);
+  const leaving = useRef(false);
+  const backButton = useRef<HTMLButtonElement>(null);
   const request = useRef<AbortController | null>(null); const playing = useRef<(() => void) | null>(null);
   const hintRequest = useRef<AbortController | null>(null); const hintGen = useRef(0); const hintInFlight = useRef(false);
   const pronContext = useRef<{ word?: string; sentence: string } | null>(null);
   const mounted = useRef(true); const finishRef = useRef<() => void>(() => {}); const lock = useRef(false);
+  const operation = useRef(0);
+  const answerOperation = useRef(false);
+  const nextRecording = useRef<{ taskId: string; step: number; identity: string; generation: number } | null>(null);
   const mutations = useRef<Promise<void>>(Promise.resolve());
   const latestAttempt = task?.attempts.filter(a => a.step === task.step).at(-1);
   const localRecording = useLocalRecording(activeRepository(), latestAttempt?.deviceId === deviceId() ? latestAttempt.clipId : undefined, latestAttempt?.status);
@@ -74,20 +100,50 @@ export function LearningPractice({ taskId }: { taskId: string }) {
     mutations.current = pending.catch(() => undefined); return pending;
   };
   const updateAttempt = (id: string, patch: Partial<PracticeAttempt>, draft?: string) => update(t => ({ ...t, ...(draft === undefined ? {} : { draft }), attempts: t.attempts.map(a => a.id === id ? { ...a, ...patch } : a) }));
-  const guard = async (label: string, work: () => Promise<void>) => {
-    if (lock.current) return; lock.current = true; setBusy(label); setError("");
-    try { await mutations.current; await work(); } catch (failure) { if (mounted.current) setError(practiceError(failure)); }
-    finally { lock.current = false; if (mounted.current) setBusy(""); }
+  async function preserveRecording(active: NonNullable<typeof current.current>) {
+    unsavedRecording.current = active;
+    const pending = active.session.stop().then(async result => {
+      if (active.repo.identity === activeRepository().identity && active.generation === cloudState().generation) await updateAttempt(active.attemptId, { status: "recorded" });
+      if (unsavedRecording.current === active) unsavedRecording.current = null;
+      return result;
+    });
+    recordingSave.current = pending;
+    try { return await pending; }
+    catch (failure) {
+      if (failure instanceof RecordingContentError) {
+        if (active.repo.identity === activeRepository().identity && active.generation === cloudState().generation) await updateAttempt(active.attemptId, {
+          status: "interrupted", error: practiceError(failure), ...(failure.kind === "empty" ? { clipId: undefined } : {}),
+        });
+        if (unsavedRecording.current === active) unsavedRecording.current = null;
+      }
+      throw failure;
+    }
+    finally { if (recordingSave.current === pending) recordingSave.current = null; }
+  }
+  const pendingAttemptIds = () => getState().tasks.find(t => t.id === taskId)?.attempts.filter(a => ["recording", "recognizing", "submitting"].includes(a.status)).map(a => a.id) ?? [];
+  async function recoverInterrupted(ids: string[], identity: string) {
+    await mutations.current;
+    if (!ids.length || activeRepository().identity !== identity || !getState().tasks.some(t => t.id === taskId)) return;
+    await update(t => ({ ...t, attempts: t.attempts.map(a => ids.includes(a.id) && ["recording", "recognizing", "submitting"].includes(a.status) ? { ...a, status: a.text ? "draft" : "interrupted", error: "上次处理已中断，已有录音和文字仍保留。" } : a) }));
+  }
+  const guard = async (label: string, work: (valid: () => boolean) => Promise<void>, cancellable = false) => {
+    if (lock.current) return; const ticket = ++operation.current; lock.current = true; answerOperation.current = cancellable; setBusy(label); setError("");
+    const valid = () => mounted.current && ticket === operation.current;
+    try { await mutations.current; if (valid()) await work(valid); } catch (failure) { if (valid()) setError(practiceError(failure)); }
+    finally { if (ticket === operation.current) { lock.current = false; answerOperation.current = false; if (mounted.current) setBusy(""); } }
   };
   useEffect(() => {
     mounted.current = true;
     return () => {
-      mounted.current = false; request.current?.abort(); hintRequest.current?.abort(); playing.current?.(); stopSpeak();
-      const active = current.current; current.current = null; if (active) void active.session.stop().catch(() => undefined);
+      const ids = pendingAttemptIds(), identity = activeRepository().identity;
+      mounted.current = false; nextRecording.current = null; operation.current++; request.current?.abort(); hintRequest.current?.abort(); playing.current?.(); stopSpeak();
+      const active = current.current; current.current = null;
+      void (active ? active.session.stop().catch(() => undefined) : Promise.resolve()).then(() => recoverInterrupted(ids, identity)).catch(() => undefined);
       /* 发音要点抽屉里开的跟读练习：退出时通知下层复盘页重开抽屉（回到本抽屉）。 */
       if (getState().tasks.find(t => t.id === taskId)?.pronunciationReturn) notifyPronunciationReturn();
     };
-  }, []);
+  }, [taskId]);
+  useEffect(() => { void recoverInterrupted(pendingAttemptIds(), activeRepository().identity).catch(() => undefined); }, [taskId]);
   useEffect(() => { setDraft(task?.draft ?? ""); }, [taskId, task?.step, task?.attempts.at(-1)?.id, task?.attempts.at(-1)?.text]);
   useEffect(() => {
     if (!recording) return;
@@ -95,9 +151,22 @@ export function LearningPractice({ taskId }: { taskId: string }) {
     return () => window.clearInterval(timer);
   }, [recording]);
   useEffect(() => {
-    request.current?.abort(); const active = current.current;
-    if (active && active.generation !== cloud.generation) { current.current = null; setRecording(false); void active.session.stop().catch(() => undefined); }
-  }, [cloud.generation]);
+    operation.current++; answerOperation.current = false; lock.current = false; setBusy(""); request.current?.abort(); questionPlayback.current++; setQuestionPlaying(false); stopSpeak(); const active = current.current;
+    if (active && (active.generation !== cloud.generation || active.taskId !== taskId || active.step !== task?.step)) { current.current = null; setRecording(false); void active.session.stop().catch(() => undefined); }
+  }, [cloud.generation, taskId, task?.step]);
+  useEffect(() => {
+    const requested = nextRecording.current;
+    if (!requested || requested.taskId !== taskId || requested.step !== task?.step) return;
+    nextRecording.current = null;
+    if (requested.identity === activeRepository().identity && requested.generation === cloudState().generation && document.visibilityState !== "hidden" && !bodyRef.current?.closest("[inert]")) void startRecord();
+  }, [taskId, task?.step]);
+  useEffect(() => {
+    const hide = () => { if (document.visibilityState === "hidden" || bodyRef.current?.closest("[inert]")) { nextRecording.current = null; cancelProcessing(); void cancelRecord(); playing.current?.(); questionPlayback.current++; setQuestionPlaying(false); stopSpeak(); } };
+    document.addEventListener("visibilitychange", hide);
+    const page = bodyRef.current?.closest(".push"), observer = new MutationObserver(hide);
+    if (page) observer.observe(page, { attributes: true, attributeFilter: ["inert"] });
+    return () => { document.removeEventListener("visibilitychange", hide); observer.disconnect(); };
+  }, [taskId]);
   /* 三级提示：换任务/换步作废在途请求与缓存；②级可见时自动发起，失败按级重试（不回退假数据）。 */
   useEffect(() => {
     hintGen.current++; hintRequest.current?.abort(); hintRequest.current = null; hintInFlight.current = false;
@@ -127,90 +196,162 @@ export function LearningPractice({ taskId }: { taskId: string }) {
   }, [hintLevel, hintPhase, task?.mode, task?.step, taskId]);
   /* 发音要点里「跟读这个表达」开的练习退出后，回到本抽屉。 */
   usePronunciationReturn(() => { if (pronContext.current) setPron(true); });
+  function listenQuestion() {
+    const ticket = ++questionPlayback.current;
+    playing.current?.(); stopSpeak();
+    if (questionPlaying) { setQuestionPlaying(false); return; }
+    setQuestionPlaying(true);
+    const done = () => { if (mounted.current && ticket === questionPlayback.current) setQuestionPlaying(false); };
+    speak(taskReference(getTask()), readDemoVoice().speed, done, "en", done);
+  }
 
+  const liveAnswer = (valid: () => boolean, repo: Repository, generation: number, step: number) =>
+    valid() && document.visibilityState !== "hidden" && !bodyRef.current?.closest("[inert]") && repo.identity === activeRepository().identity && generation === cloudState().generation && getState().tasks.find(t => t.id === taskId)?.step === step;
   async function startRecord() {
-    await guard("正在准备录音", async () => {
-      if (!await ensureAccount({ taskId })) return;
-      const latest = getTask(); const repo = activeRepository(); const id = practiceId("attempt"); const clipId = practiceId("clip");
-      playing.current?.(); stopSpeak();
+    if (current.current || lock.current) return;
+    await guard("正在打开麦克风", async valid => {
+      if (!await ensureAccount({ taskId }) || !valid()) return;
+      const latest = getTask(); const repo = activeRepository(); const generation = cloudState().generation;
+      const id = practiceId("attempt"), clipId = practiceId("clip");
+      const live = () => liveAnswer(valid, repo, generation, latest.step);
+      playing.current?.(); questionPlayback.current++; setQuestionPlaying(false); stopSpeak();
       const attempt: PracticeAttempt = { id, step: latest.step, text: "", clipId, deviceId: deviceId(), status: "recording", createdAt: Date.now(), reference: taskReference(latest) };
       await update(t => ({ ...t, status: "active", attempts: [...t.attempts, attempt] }));
+      if (!live()) return;
+      const endpoint = createSpeechEndpoint(); let heardSpeech = false;
+      setAudioLevel(0); setSpeechStarted(false);
+      const controller = new AbortController(); request.current = controller;
       try {
-        const session = await startDurableRecording(repo, clipId, { taskId, attemptId: id, reference: attempt.reference }, () => { /* 电平不进 UI（原型录音态为波形+计时） */ });
-        if (!mounted.current || repo.identity !== activeRepository().identity) { await session.stop(); return; }
-        current.current = { session, repo, attemptId: id, generation: cloudState().generation, startedAt: Date.now() };
-        setSeconds(0); setRecording(true); setMicAsk(false); setNotice(""); setRetrying(false); setTextOpen(false);
-      } catch (failure) { if (repo.identity === activeRepository().identity) await updateAttempt(id, { status: "failed", clipId: undefined, error: practiceError(failure) }); if (mounted.current) setMicAsk(false); throw failure; }
-    });
+        const session = await startDurableRecording(repo, clipId, { taskId, attemptId: id, reference: attempt.reference }, level => {
+          if (!live()) return;
+          const end = endpoint.sample(level); heardSpeech = end.speechStarted;
+          setAudioLevel(Math.min(1, Math.max(0, level) * 12)); setSpeechStarted(end.speechStarted);
+          if (current.current?.attemptId === id) current.current.speechStarted = end.speechStarted;
+          if (latest.mode === "scenario" && end.shouldStop && current.current?.attemptId === id && !lock.current) void stopRecord(true);
+        }, controller.signal);
+        if (!live()) {
+          await session.stop();
+          if (repo.identity === activeRepository().identity && generation === cloudState().generation) await updateAttempt(id, { status: "interrupted" });
+          return;
+        }
+        current.current = { session, repo, taskId, attemptId: id, generation, startedAt: Date.now(), step: latest.step, speechStarted: heardSpeech };
+        setSeconds(0); setRecording(true); setNotice(""); setRetrying(false); setTextOpen(false);
+      } catch (failure) {
+        if (repo.identity === activeRepository().identity && generation === cloudState().generation) await updateAttempt(id, { status: "failed", clipId: undefined, error: practiceError(failure) });
+        if (live()) setTextOpen(true);
+        throw failure;
+      } finally { if (request.current === controller) request.current = null; }
+    }, true);
   }
-  async function stopRecord() {
+  async function stopRecord(automatic = false) {
     if (!current.current || lock.current) return;
-    await guard("正在保存原声", async () => {
+    await guard("正在保存录音", async valid => {
       const active = current.current!; current.current = null; setRecording(false);
+      const live = () => liveAnswer(valid, active.repo, active.generation, active.step);
       let recorded = false;
       try {
-        const result = await active.session.stop();
-        if (active.generation !== cloudState().generation) return;
-        await updateAttempt(active.attemptId, { status: "recorded" });
+        const result = await preserveRecording(active);
+        if (active.repo.identity !== activeRepository().identity || active.generation !== cloudState().generation) return;
         recorded = true;
-        if (result.peak < .01 || result.ms < 350) { setError("声音太轻或录音太短，原声已保留。可以重新录一句，或输入回答。"); return; }
-        await recognize(active.attemptId, active.repo);
-      } catch (failure) { if (!recorded && active.generation === cloudState().generation) await updateAttempt(active.attemptId, { status: "interrupted", error: practiceError(failure) }); throw failure; }
+        if (!live()) return;
+        if (result.peak < .01 || result.ms < 350 || automatic && !active.speechStarted) {
+          setError("没有听清这次回答，录音已保留。可以重新说，或用文字回答。"); setTextOpen(true); return;
+        }
+        await recognize(active.attemptId, active.repo, live, getTask().mode === "scenario");
+      } catch (failure) {
+        if (live()) { if (!recorded) await updateAttempt(active.attemptId, { status: "interrupted", error: practiceError(failure) }); setTextOpen(true); }
+        throw failure;
+      }
+    }, true);
+  }
+  finishRef.current = () => { void stopRecord(true); };
+  async function cancelRecord() {
+    const active = current.current; if (!active) return;
+    current.current = null; setRecording(false);
+    await guard("正在保留录音", async valid => {
+      try {
+        await preserveRecording(active);
+        if (valid()) { setNotice("录音已保留，没有发送。可以重说或改用文字。"); setTextOpen(true); }
+      } catch (failure) {
+        if (active.repo.identity === activeRepository().identity && active.generation === cloudState().generation) await updateAttempt(active.attemptId, { status: "interrupted", error: practiceError(failure) });
+        throw failure;
+      }
     });
   }
-  finishRef.current = () => { void stopRecord(); };
-  async function discardRecord() {
-    if (!current.current) return;
-    await guard("正在取消录音", async () => {
-      const active = current.current!; current.current = null; setRecording(false); await active.session.discard();
-      if (active.generation === cloudState().generation) await update(t => ({ ...t, attempts: t.attempts.filter(a => a.id !== active.attemptId), removedAttemptIds: [...new Set([...(t.removedAttemptIds ?? []), active.attemptId])] }));
-    });
+  function cancelProcessing() {
+    if (!answerOperation.current) return;
+    operation.current++; answerOperation.current = false; lock.current = false;
+    request.current?.abort(); request.current = null;
+    setBusy(""); setTextOpen(true); setNotice("已停止处理。已有录音和文字仍保留，修改后可重新发送。");
+    const latest = getState().tasks.find(t => t.id === taskId);
+    const pending = latest?.attempts.filter(a => a.step === latest.step && ["recognizing", "submitting"].includes(a.status)).at(-1);
+    if (pending) void updateAttempt(pending.id, { status: pending.text ? "draft" : "recorded", error: undefined }).catch(() => undefined);
   }
-  async function recognize(id: string, repo = activeRepository()) {
-    if (!await ensureAccount({ taskId })) return;
-    const attempt = getTask().attempts.find(a => a.id === id); if (!attempt?.clipId) throw new Error("这次回答没有录音");
-    const generation = cloudState().generation; const controller = new AbortController(); request.current = controller;
+  async function recognize(id: string, repo: Repository, valid: () => boolean, autoSubmit = false) {
+    if (!valid() || repo.identity !== activeRepository().identity || !await ensureAccount({ taskId }) || !valid()) return;
+    const latest = getTask(), attempt = latest.attempts.find(a => a.id === id); if (!attempt?.clipId) throw new Error("这次回答没有录音");
+    const generation = cloudState().generation; const live = () => liveAnswer(valid, repo, generation, latest.step);
+    const controller = new AbortController(); request.current = controller;
+    let text: string;
+    setBusy("正在识别你说的话");
     await updateAttempt(id, { status: "recognizing", error: undefined });
     try {
-      const text = await transcribeRecording(repo, attempt.clipId, controller.signal);
-      if (generation === cloudState().generation) { await updateAttempt(id, { status: "draft", text }, text); if (mounted.current) { setTextOpen(true); setDraft(text); } }
+      if (!live()) return;
+      text = await transcribeRecording(repo, attempt.clipId, controller.signal);
+      if (!live() || controller.signal.aborted) return;
+      await updateAttempt(id, { status: "draft", text }, text);
+      if (!live()) return;
+      setDraft(text); setTextOpen(!autoSubmit);
     } catch (failure) {
-      if (generation === cloudState().generation) await updateAttempt(id, { status: isUnknownRequest(failure) ? "unknown" : "failed", error: practiceError(failure) });
+      if (!live() || controller.signal.aborted) return;
+      await updateAttempt(id, { status: isUnknownRequest(failure) ? "unknown" : "failed", error: practiceError(failure) }); setTextOpen(true);
+      throw failure;
+    } finally { if (request.current === controller) request.current = null; }
+    if (autoSubmit && live()) {
+      setBusy("正在发送回答");
+      try { await sendAnswer(text!, live, id); } catch (failure) { if (live()) setTextOpen(true); throw failure; }
+    }
+  }
+  async function sendAnswer(answer: string, valid: () => boolean, existingId?: string) {
+    if (!valid()) return;
+    const latest = getTask(), repo = activeRepository(), generation = cloudState().generation;
+    const live = () => liveAnswer(valid, repo, generation, latest.step);
+    const text = answer.trim(); if (!text) throw new Error("先说一句，或写下你想说的话。");
+    if ((latest.minAnswerWords ?? 0) > 0 && text.split(/\s+/).filter(token => /[A-Za-z]/.test(token)).length < (latest.minAnswerWords ?? 0)) throw new Error(`围绕这个场景多说一点：至少 ${latest.minAnswerWords} 个英文单词再发送。`);
+    await update(t => ({ ...t, draft: text })); if (!live()) return;
+    const last = existingId ? latest.attempts.find(a => a.id === existingId) : [...latest.attempts].reverse().find(a => a.step === latest.step && !a.feedback && a.status !== "recording");
+    const id = last?.id ?? practiceId("attempt");
+    if (last) await updateAttempt(id, { text, status: "submitting", error: undefined });
+    else await update(t => ({ ...t, attempts: [...t.attempts, { id, step: t.step, text, deviceId: deviceId(), status: "submitting", createdAt: Date.now(), reference: taskReference(t) }] }));
+    if (!live()) return;
+    setNotice(""); setRetrying(false);
+    const controller = new AbortController(); request.current = controller;
+    try {
+      const feedback = await expressionFeedback(latest, text, controller.signal);
+      if (live() && !controller.signal.aborted) await updateAttempt(id, { feedback, status: "feedback" });
+    } catch (failure) {
+      if (!live() || controller.signal.aborted) return;
+      await updateAttempt(id, { status: isUnknownRequest(failure) ? "unknown" : "failed", error: practiceError(failure) });
       throw failure;
     } finally { if (request.current === controller) request.current = null; }
   }
   async function submit() {
-    await guard("正在查看这次回答", async () => {
-      if (!await ensureAccount({ taskId })) return;
-      const latest = getTask(); const text = draft.trim(); if (!text) throw new Error("先说一句，或写下你想说的话。");
-      /* 自定义场景：回答至少说满 minAnswerWords 个英文单词（speaking-parity 校验）。 */
-      if ((latest.minAnswerWords ?? 0) > 0 && text.split(/\s+/).filter(token => /[A-Za-z]/.test(token)).length < (latest.minAnswerWords ?? 0)) throw new Error(`围绕这个场景多说一点：至少 ${latest.minAnswerWords} 个英文单词再发送。`);
-      await update(t => ({ ...t, draft: text }));
-      const last = [...latest.attempts].reverse().find(a => a.step === latest.step && !a.feedback && a.status !== "recording");
-      const id = last?.id ?? practiceId("attempt");
-      if (last) await updateAttempt(id, { text, status: "submitting", error: undefined });
-      else await update(t => ({ ...t, attempts: [...t.attempts, { id, step: t.step, text, deviceId: deviceId(), status: "submitting", createdAt: Date.now(), reference: taskReference(t) }] }));
-      setNotice(""); setRetrying(false);
-      const generation = cloudState().generation; const controller = new AbortController(); request.current = controller;
-      try {
-        const feedback = await expressionFeedback(latest, text, controller.signal);
-        if (generation === cloudState().generation) await updateAttempt(id, { feedback, status: "feedback" });
-      } catch (failure) {
-        if (generation === cloudState().generation) await updateAttempt(id, { status: isUnknownRequest(failure) ? "unknown" : "failed", error: practiceError(failure) });
-        throw failure;
-      } finally { if (request.current === controller) request.current = null; }
-    });
+    await guard("正在发送回答", async valid => {
+      if (!await ensureAccount({ taskId }) || !valid()) return;
+      await sendAnswer(draft, valid);
+    }, true);
   }
   async function pronunciation(attempt: PracticeAttempt) {
-    await guard("正在评测这次跟读", async () => {
-      if (!await ensureAccount({ taskId })) return;
+    await guard("正在评测这次跟读", async valid => {
+      if (!await ensureAccount({ taskId }) || !valid()) return;
       if (!attempt.clipId || attempt.deviceId !== deviceId()) throw new Error("只有录制原声的设备可以评测这段音频。");
       const generation = cloudState().generation; const controller = new AbortController(); request.current = controller;
       await updateAttempt(attempt.id, { pronunciationStatus: "submitting", error: undefined });
       try {
         const result = await assessRecording(activeRepository(), attempt.clipId, attempt.reference ?? getTask().reference, controller.signal);
-        if (generation === cloudState().generation) await updateAttempt(attempt.id, { pronunciation: result, pronunciationStatus: "ready" });
+        if (valid() && !controller.signal.aborted && generation === cloudState().generation) await updateAttempt(attempt.id, { pronunciation: result, pronunciationStatus: "ready" });
       } catch (failure) {
+        if (!valid() || controller.signal.aborted) return;
         if (generation === cloudState().generation) await updateAttempt(attempt.id, { pronunciationStatus: isUnknownRequest(failure) ? "unknown" : "failed", error: practiceError(failure, "pronunciation") });
         throw failure;
       } finally { if (request.current === controller) request.current = null; }
@@ -227,25 +368,82 @@ export function LearningPractice({ taskId }: { taskId: string }) {
       toast("已保存到口语纠偏，可以回看和再练。");
     }
   });
-  const returnToSource = () => { setExit(false); nav.pop(); };
+  const returnToSource = () => { nav.pop(); };
   /* 复盘 dock：有来源则带回源句号定位（原型 v2-sp-return → 回到原文第 N 句，html:2647/1668）。 */
   const returnFromRecap = () => {
-    setExit(false);
     const source = task?.source;
-    if (source) {
+    if (source && task) {
       nav.pop();
-      actions.locateReader(source.articleId, source.sentenceIdx + (task?.step ?? 0));
+      actions.locateReader(source.articleId, taskSentenceIndex(task));
       nav.push("reader", { articleId: source.articleId });
     } else returnToSource();
   };
-  const pause = () => guard("正在保留进度", async () => { await update(t => ({ ...t, status: t.status === "completed" ? "completed" : "paused" })); returnToSource(); });
-  const finish = () => guard("正在保存本轮记录", async () => { await update(t => ({ ...t, status: "completed" })); setExit(false); });
+  /* Returning is a navigation action: retain the draft and any original audio
+     automatically. Invalidate cloud work before saving, so leaving never sends
+     an unfinished answer or waits for a network response. */
+  async function leavePractice(endRound = false) {
+    if (leaving.current) return;
+    leaving.current = true;
+    const returningButton = backButton.current;
+    returningButton?.setAttribute("data-nav-back-pending", "true");
+    const identity = activeRepository().identity, generation = cloudState().generation;
+    const departingStep = task?.step, departingDraft = draft;
+    const ticket = ++operation.current;
+    const valid = () => mounted.current && identity === activeRepository().identity && generation === cloudState().generation;
+    let returned = false;
+    answerOperation.current = false; lock.current = true; nextRecording.current = null;
+    request.current?.abort(); request.current = null;
+    hintGen.current++; hintRequest.current?.abort(); hintInFlight.current = false;
+    playing.current?.(); questionPlayback.current++; setQuestionPlaying(false); stopSpeak();
+    setBusy("正在保留进度"); setError("");
+    const active = current.current; current.current = null; setRecording(false);
+    try {
+      let audioNotice = "";
+      try {
+        if (active) await preserveRecording(active);
+        else if (recordingSave.current) await recordingSave.current;
+        else if (unsavedRecording.current) await preserveRecording(unsavedRecording.current);
+      } catch (failure) {
+        if (!(failure instanceof RecordingContentError)) throw failure;
+        audioNotice = failure.kind === "empty" ? "这次没有录到声音，练习进度已保留。" : "录音未完整保存，已有片段和练习进度已保留。";
+      }
+      await mutations.current;
+      if (!valid()) return;
+      let completedRound = false;
+      await update(t => {
+        completedRound = endRound && (t.attempts.some(a => a.feedback) || Boolean(t.skippedSteps?.length));
+        return { ...t, draft: t.step === departingStep ? departingDraft : t.draft,
+          status: t.status === "completed" || completedRound ? "completed" : "paused",
+          attempts: t.attempts.map(a => ({ ...a,
+            ...(["recording", "recognizing", "submitting"].includes(a.status)
+              ? { status: a.text ? "draft" as const : a.clipId && a.status !== "recording" ? "recorded" as const : "interrupted" as const, error: undefined } : {}),
+            ...(a.pronunciationStatus === "submitting" ? { pronunciationStatus: "unknown" as const } : {}) })) };
+      });
+      if (valid()) {
+        if (!completedRound) { returned = true; returnToSource(); }
+        if (audioNotice) toast(audioNotice);
+      }
+    } catch (failure) {
+      if (valid()) setError(practiceError(failure));
+    } finally {
+      returningButton?.removeAttribute("data-nav-back-pending");
+      if (ticket === operation.current) { lock.current = false; if (mounted.current) setBusy(""); }
+      // Keep duplicate taps from popping the source page during its transition.
+      leaving.current = returned;
+    }
+  }
   const next = (skip = false) => guard("正在保存进度", async () => {
     const latest = getTask(); const count = latest.steps?.length || 1;
     await update(t => ({ ...t, skippedSteps: skip ? [...new Set([...(t.skippedSteps ?? []), t.step])] : t.skippedSteps, draft: "", step: Math.min(t.step + 1, count - 1), status: t.step + 1 >= count ? "completed" : "active" }));
     setHintLevel(0); setSkipAsk(false); setTextOpen(false); setNotice(""); setRetrying(false); setShowCN(latest.mode === "follow");
     setDraft("");
   });
+  async function answerNextQuestion() {
+    const step = getTask().step + 1;
+    nextRecording.current = { taskId, step, identity: activeRepository().identity, generation: cloudState().generation };
+    await next();
+    if (getState().tasks.find(t => t.id === taskId)?.step !== step) nextRecording.current = null;
+  }
   /* 跳过：有未发送草稿先确认（跳过后标为待练），空草稿直接跳过（原型 SHEETS.skipStep）。 */
   const askSkip = () => { if (draft.trim()) setSkipAsk(true); else void next(true); };
   const openPronunciation = () => { const latest = getTask(); pronContext.current = { word: latest.word, sentence: taskReference(latest) }; setPron(true); };
@@ -261,10 +459,10 @@ export function LearningPractice({ taskId }: { taskId: string }) {
     const word = getTask().word?.trim(); if (!word) return;
     const kind: "word" | "chunk" = /\s/.test(word) ? "chunk" : "word";
     const latest = getTask();
-    actions.saveWord({ word, kind, senses: [] }, kind, latest.source ? { articleId: latest.source.articleId, sentIdx: latest.source.sentenceIdx } : undefined);
+    actions.saveWord({ word, kind, senses: [] }, kind, latest.source ? { articleId: latest.source.articleId, sentIdx: taskSentenceIndex(latest) } : undefined);
   };
 
-  if (!task) return <><header className="learning-head nhead"><button className="tlink" aria-label="返回" onClick={() => nav.pop()}><Icon name="left" size={18} /></button><div className="nt"><h1>口语练习</h1></div><span /></header><main className="pbody"><p>未找到这次练习记录，请回到来源重新选择。</p></main></>;
+  if (!task) return <><header className="learning-head nhead"><button className="tlink" data-nav-back aria-label="返回" onClick={() => nav.pop()}><Icon name="left" size={18} /></button><div className="nt"><h1>口语练习</h1></div><span /></header><main className="pbody"><p>未找到这次练习记录，请回到来源重新选择。</p></main></>;
   const count = task.steps?.length || 1;
   const attempts = task.attempts.filter(a => a.step === task.step); const latest = attempts.at(-1);
   const answered = new Set(task.attempts.filter(a => a.feedback).map(a => a.step)).size;
@@ -287,9 +485,9 @@ export function LearningPractice({ taskId }: { taskId: string }) {
   /* 看看中文：follow/word 取出处文章原句译文，场景取原型步骤译文（scenes.ts），无译文不显示入口。 */
   const sourceArticle = task.source ? articles.find(a => a.id === task.source?.articleId) : undefined;
   const cnText = task.mode === "follow"
-    ? sourceArticle?.sentences.find(s => s.idx === (task.source?.sentenceIdx ?? 0) + task.step)?.zh ?? null
+    ? sourceArticle?.sentences.find(s => s.idx === taskSentenceIndex(task))?.zh ?? null
     : task.mode === "word"
-      ? sourceArticle?.sentences.find(s => s.idx === (task.source?.sentenceIdx ?? 0))?.zh ?? null
+      ? sourceArticle?.sentences.find(s => s.idx === taskSentenceIndex(task, 0))?.zh ?? null
       : stepMeta?.cn ?? null;
   /* 页头标题/副标（原型 nhead，html:2631/2638）：word=用一个表达，说一句/只练这一个表达；
      follow=跟读原文（纠偏再练=再练这句表达）/第 N / M · 原文第 X 句（纠偏再练=这次试试更自然的表达，
@@ -300,12 +498,12 @@ export function LearningPractice({ taskId }: { taskId: string }) {
   const headSub = task.status === "completed"
     ? task.mode === "word" ? "用一个表达，说一句" : task.mode === "follow" && !correctionRetry && !task.pronunciationReturn ? "跟读原文" : task.title
     : task.mode === "word" ? "只练这一个表达"
-      : task.mode === "follow" ? `${task.step + 1} / ${count} · ${correctionRetry || task.pronunciationReturn ? "这次试试更自然的表达" : task.source ? `原文第 ${(task.source.sentenceIdx ?? 0) + task.step + 1} 句` : "跟读这句原文"}`
+      : task.mode === "follow" ? `${task.step + 1} / ${count} · ${correctionRetry || task.pronunciationReturn ? "这次试试更自然的表达" : task.source ? `原文第 ${taskSentenceIndex(task) + 1} 句` : "跟读这句原文"}`
         : stepMeta ? `${task.step + 1} / ${count} · ${stepMeta.title}` : `${task.step + 1} / ${count}`;
   /* 任务卡 overline（原型 step.title，html:2634）：场景=步骤名；follow=原文第 N 句
      （原型 v2SpBuild html:2341 的步骤名），无出处回退引导语；其余按模式给固定引导语。 */
   const stepLabel = stepMeta?.title ?? (correctionRetry ? "这次试试更自然的表达"
-    : task.mode === "follow" ? (task.source ? `原文第 ${(task.source.sentenceIdx ?? 0) + task.step + 1} 句` : "跟读这句原文")
+    : task.mode === "follow" ? (task.source ? `原文第 ${taskSentenceIndex(task) + 1} 句` : "跟读这句原文")
       : task.mode === "word" ? "试着用上这个表达" : "这一步的沟通任务");
   /* 纠偏卡（原型 v2SpCorrection，html:2589-2595）：反馈态（active=带「重说一次」与 follow 评测）、
      复盘纠偏区与回合历史卡共用同一结构（原型 practiceRecap/sessionDetail 直接渲染 v2SpCorrection）。 */
@@ -321,7 +519,7 @@ export function LearningPractice({ taskId }: { taskId: string }) {
       <p className="v2-sp-improved" lang="en">{feedback.improved}</p>
       <p className="v2-sp-explain">{feedback.explanation}</p>
       <div className="v2-sp-actions">
-        <button className="btn-ghost v2-sp-compact" onClick={() => speakDemo(feedback.improved)}><Icon name="speaker" size={15} />听示范</button>
+        <button className="btn-ghost v2-sp-compact" disabled={recording || Boolean(busy)} onClick={() => speakDemo(feedback.improved)}><Icon name="speaker" size={15} />听示范</button>
         {canPlayOriginal && <button className="btn-ghost v2-sp-compact" disabled={Boolean(busy)} onClick={() => void listenOriginal(attempt)}><Icon name="speaker" size={15} />听我的回答</button>}
       </div>
       {/* follow 模式真实发音评测（原句固定 reference，修改识别文字不影响评分）；只在反馈态提供。 */}
@@ -346,6 +544,7 @@ export function LearningPractice({ taskId }: { taskId: string }) {
     return <section className="v2-sp-feedback" key={attempt.id}>
       <div className="v2-sp-overline">我的回答</div>
       <div className="v2-sp-answer" lang="en">{attempt.text || "这次录音尚未确认文字"}</div>
+      {active && task.mode === "scenario" && <button className="v2-sp-text-action" onClick={() => { setRetrying(true); setTextOpen(true); setDraft(attempt.text); setNotice("修改这句文字后重新发送，原回答和录音仍保留。"); }}>修改这句文字</button>}
       <div className={`v2-sp-verdict${attemptedNoFix ? " v2-sp-good" : ""}`}><Icon name={attemptedNoFix ? "check" : "info"} size={14} /><span>{feedback.message}</span></div>
       {attemptedNoFix ? <div className="card v2-sp-no-fix">
         <b>这句可以先留在这里</b>
@@ -394,7 +593,7 @@ export function LearningPractice({ taskId }: { taskId: string }) {
     const matchedCount = task.mode === "word" ? usedCount : 0;
     return <>
       <article className="card v2-sp-recap-hero">
-        <div className="v2-sp-recap-icon">{allDone ? <Icon name="check" size={20} /> : <Clock size={20} />}</div>
+        <div className="v2-sp-recap-icon">{allDone ? <Icon name="check" size={20} /> : <Icon name="clock" size={20} />}</div>
         <h3>{achievement}</h3>
         <p>{answered} 次已回答 · {recapDuration}{skipped ? ` · ${skipped} 步已跳过` : ""}</p>
         <div className="v2-sp-summary-grid">
@@ -410,9 +609,9 @@ export function LearningPractice({ taskId }: { taskId: string }) {
           const stepDone = stepAttempts.some(a => a.feedback);
           const stepSkipped = task.skippedSteps?.includes(i) ?? false;
           const matched = task.mode === "word" ? stepAttempts.some(a => a.feedback?.usedTarget) : false;
-          const name = task.mode === "follow" ? `原文第 ${(task.source?.sentenceIdx ?? 0) + i + 1} 句` : task.mode === "word" ? task.word : `第 ${i + 1} 步`;
+          const name = task.mode === "follow" ? `原文第 ${taskSentenceIndex(task, i) + 1} 句` : task.mode === "word" ? task.word : `第 ${i + 1} 步`;
           return <div className="learning-row" style={{ borderBottom: i < count - 1 ? "1px solid var(--hairline)" : "none", minHeight: 72 }} key={i}>
-            <span className={`v2-sp-result-icon${matched ? " v2-sp-good" : ""}`}>{stepSkipped || !stepDone || !matched ? <Clock size={15} /> : <Icon name="check" size={15} />}</span>
+            <span className={`v2-sp-result-icon${matched ? " v2-sp-good" : ""}`}>{stepSkipped || !stepDone || !matched ? <Icon name="clock" size={15} /> : <Icon name="check" size={15} />}</span>
             <span className="tx" style={{ flex: 1, minWidth: 0 }}>
               <b>{name}</b>
               <small>{stepSkipped ? "已跳过，留作待练" : !stepDone ? "还没有回答" : matched ? "本次回答已用上" : "已经回答，还可以再改进"}</small>
@@ -449,13 +648,13 @@ export function LearningPractice({ taskId }: { taskId: string }) {
     {notice && <div className="v2-sp-notice" role="status"><Icon name="info" size={14} /><span>{notice}</span></div>}
     {previous && previous.text && <div className="v2-sp-previous"><small>上一步，我说了</small><p lang="en">{previous.text}</p></div>}
     <article className="card v2-sp-prompt">
-      <div className="v2-sp-overline">{stepLabel}</div>
+      <div className="v2-sp-overline practice-task-label"><Icon name={task.mode === "follow" ? "bookopen" : task.mode === "scenario" ? "chat" : "mic"} size={16} /><span>{stepLabel}</span></div>
       {task.word && <div className="v2-sp-target" lang="en">{task.word}</div>}
       <p className="v2-sp-question" lang="en">{taskReference(task)}</p>
       <div className="v2-sp-prompt-tools">
-        <button className="v2-sp-audio-link" onClick={() => speakDemo(taskReference(task))}><Icon name="speaker" size={15} />听一遍</button>
-        {cnText && <button className="v2-sp-audio-link" onClick={() => setShowCN(!showCN)}>{showCN ? "收起中文" : "看看中文"}</button>}
-        <button className="v2-sp-audio-link" onClick={openPronunciation}><Icon name="wave" size={15} />发音要点</button>
+        {task.mode !== "scenario" && (showFeedback || textOpen) && <button className="v2-sp-audio-link" aria-pressed={questionPlaying} disabled={recording || Boolean(busy)} onClick={listenQuestion}><Icon name="speaker" size={15} />{questionPlaying ? "停止试听" : "听一遍"}</button>}
+        {cnText && <button className="v2-sp-audio-link" aria-expanded={showCN} onClick={() => setShowCN(!showCN)}>{showCN ? "收起中文" : "看看中文"}</button>}
+        <button className="v2-sp-audio-link" disabled={recording || Boolean(busy)} onClick={openPronunciation}><Icon name="wave" size={15} />发音要点</button>
       </div>
       {showCN && cnText && <p className="v2-sp-cn">{cnText}</p>}
     </article>
@@ -463,58 +662,59 @@ export function LearningPractice({ taskId }: { taskId: string }) {
       {retryTurn?.feedback && <div className="v2-sp-retry-guide">
         <small>这次试试这样说</small>
         <p lang="en">{retryTurn.feedback.improved}</p>
-        <button className="v2-sp-audio-link" onClick={() => speakDemo(retryTurn.feedback!.improved)}><Icon name="speaker" size={15} />再听示范</button>
+        <button className="v2-sp-audio-link" disabled={recording || Boolean(busy)} onClick={() => speakDemo(retryTurn.feedback!.improved)}><Icon name="speaker" size={15} />再听示范</button>
       </div>}
       <div className="v2-sp-hints">
-        <button className="v2-sp-hint-toggle" onClick={() => setHintLevel(hintLevel >= 3 ? 0 : hintLevel + 1)}><Icon name="info" size={15} /><span>{hintLevel === 0 ? "给点提示" : hintLevel < 3 ? "再给一点提示" : "收起提示"}</span><small>{hintLevel ? `${hintLevel} / 3` : "从中文思路开始"}</small></button>
+        <button className="v2-sp-hint-toggle" aria-expanded={hintLevel > 0} onClick={() => setHintLevel(hintLevel >= 3 ? 0 : hintLevel + 1)}><Icon name="info" size={15} /><span>{hintLevel === 0 ? "给点提示" : hintLevel < 3 ? "再给一点提示" : "收起提示"}</span><small>{hintLevel ? `${hintLevel} / 3` : "从中文思路开始"}</small></button>
         {hintLevel >= 1 && <div className="v2-sp-hint-line"><small>① 中文思路</small><p>{thought}</p></div>}
         {hintLevel >= 2 && <div className="v2-sp-hint-line"><small>② 英文句式</small>{task.mode === "follow" ? <p>{followPattern}</p> : hintPhase === "fail" ? <><p className="v2-sp-error" role="alert">{hintError || "提示暂时拿不到。"}</p><button className="btn-ghost v2-sp-compact" onClick={() => void loadHints()}>重试这一级</button></> : hintPhase === "done" && hints ? <p className="en">{hints.pattern}</p> : <p role="status">正在生成这一步的句式…</p>}</div>}
-        {hintLevel >= 3 && <div className="v2-sp-hint-line"><small>③ 听一个示例</small>{task.mode === "follow" ? <><p className="en">{taskReference(task)}</p><button className="btn-ghost v2-sp-compact" onClick={() => speakDemo(taskReference(task))}><Icon name="speaker" size={15} />听示例</button></> : hintPhase === "done" && hints ? <><p className="en">{hints.example}</p><button className="btn-ghost v2-sp-compact" onClick={() => speakDemo(hints.example)}><Icon name="speaker" size={15} />听示例</button></> : hintPhase === "fail" ? <p>先重试上一级，示例句会和句式一起返回。</p> : <p role="status">示例句和句式一起返回…</p>}</div>}
+        {hintLevel >= 3 && <div className="v2-sp-hint-line"><small>③ 听一个示例</small>{task.mode === "follow" ? <><p className="en">{taskReference(task)}</p><button className="btn-ghost v2-sp-compact" disabled={recording || Boolean(busy)} onClick={() => speakDemo(taskReference(task))}><Icon name="speaker" size={15} />听示例</button></> : hintPhase === "done" && hints ? <><p className="en">{hints.example}</p><button className="btn-ghost v2-sp-compact" disabled={recording || Boolean(busy)} onClick={() => speakDemo(hints.example)}><Icon name="speaker" size={15} />听示例</button></> : hintPhase === "fail" ? <p>先重试上一级，示例句会和句式一起返回。</p> : <p role="status">示例句和句式一起返回…</p>}</div>}
       </div>
       {(textOpen || processing) && <div className="v2-sp-draft">
         <label htmlFor="practice-answer">{latest?.clipId && ["draft", "recorded", "recognizing"].includes(latest.status) ? "这次录到的回答 · 可以修改" : "我想这样说"}</label>
         <textarea id="practice-answer" className="input v2-inp v2-sp-answer-input" maxLength={900} rows={3} value={draft} disabled={Boolean(busy) || processing} placeholder="用英语写下你想说的一句…" onChange={event => { const next = event.target.value; setDraft(next); void update(t => ({ ...t, draft: next })).catch(failure => setError(practiceError(failure))); }} />
         {error && <p className="v2-sp-error" role="alert">{error}</p>}
       </div>}
-      {latest && localRecording && !showFeedback && ["recorded", "failed", "interrupted", "unknown"].includes(latest.status) && !processing && <button className="v2-sp-text-action" disabled={Boolean(busy)} onClick={() => void guard("正在识别这次录音", () => recognize(latest.id))}>{localRecording.status === "ready" ? "重新识别已保存的原声" : "尝试恢复并识别原声"}</button>}
+      {latest && localRecording && !showFeedback && ["recorded", "failed", "interrupted", "unknown"].includes(latest.status) && !processing && <button className="v2-sp-text-action" disabled={Boolean(busy)} onClick={() => void guard("正在识别这次录音", valid => recognize(latest.id, activeRepository(), valid), true)}>{localRecording.status === "ready" ? "重新识别已保存的原声" : "尝试恢复并识别原声"}</button>}
       {!processing && !recording && <button className="v2-sp-skip" disabled={Boolean(busy)} onClick={askSkip}>{task.mode === "follow" ? "这句先跳过，留待下次练" : "这一步先跳过"}</button>}
     </>}
   </>;
   /* ---- dock（原型 v2SpComposer，html:2603-2608）：录音 / 评测中 / 反馈 / 草稿 / 作答五态 ---- */
   const composer = (() => {
-    if (recording) return <footer className="v2-sp-dock">
-      <div className="v2-sp-wave" aria-hidden="true">{[8, 16, 23, 12, 27, 19, 9, 21, 15].map((h, i) => <i key={i} style={{ height: h, animationDelay: `${i * .07}s` }} />)}</div>
+    if (recording) return <footer data-voice-state="recording" className={`v2-sp-dock practice-workspace-dock${task.mode === "scenario" ? " practice-conversation-dock" : ""}`}>
+      <div className="practice-listening" role="status"><span className="practice-level" aria-hidden="true">{[.35,.6,.85,1,.85,.6,.35].map((scale,i)=><i key={i} style={{height:4 + audioLevel * scale * 24}}/>)}</span><b>{speechStarted ? "录音中 · 正在听你说" : "录音中 · 请开始说话"}</b></div>
       <div className="v2-sp-mic-row">
-        <button className="btn-ghost v2-sp-compact" disabled={Boolean(busy)} onClick={() => void discardRecord()}>取消</button>
+        <button className="btn-ghost v2-sp-compact" disabled={Boolean(busy)} onClick={() => void cancelRecord()}>取消</button>
         <button className="v2-sp-mic v2-sp-mic-rec" aria-label="结束录音" disabled={Boolean(busy)} onClick={() => void stopRecord()}><span className="v2-sp-stop" /></button>
-        <span className="v2-sp-timer">{seconds}s</span>
+        <span className="v2-sp-timer" aria-label={`已录制 ${seconds} 秒`}>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}</span>
       </div>
-      <p>说完点一下，停下后可以修改</p>
+      <p>{task.mode === "scenario" ? "停顿约 2 秒自动发送，也可以点停止" : "说完点停止，再查看识别结果"}</p>
     </footer>;
-    if (processing || busy) return <footer className="v2-sp-dock v2-sp-checking" role="status">
+    if (processing || busy) return <footer data-voice-state="processing" className={`v2-sp-dock practice-workspace-dock v2-sp-checking${task.mode === "scenario" ? " practice-conversation-dock" : ""}`} role="status">
       <span className="v2-sp-spinner" aria-hidden="true" />
-      <b>{busy || "正在查看这次回答…"}</b>
-      <p>你的文字会和当前练习一起保存</p>
+      <b>{busy || "正在处理这次回答"}</b>
+      <p>录音和识别文字会保留</p>
+      {answerOperation.current && <button className="v2-sp-text-action" onClick={cancelProcessing}>取消处理，改用文字</button>}
     </footer>;
-    if (showFeedback && !retrying) return <footer className="v2-sp-dock">
-      <button className="btn" disabled={Boolean(busy)} onClick={() => void next()}>{task.step + 1 < count ? "继续下一步" : "完成这一轮 · 看复盘"}<Icon name="right" size={15} /></button>
+    if (showFeedback && !retrying) return <footer data-voice-state="feedback" className={`v2-sp-dock practice-workspace-dock${task.mode === "scenario" ? " practice-conversation-dock" : ""}`}>
+      <button className="btn" disabled={Boolean(busy)} onClick={() => void (task.mode === "scenario" && task.step + 1 < count ? answerNextQuestion() : next())}>{task.step + 1 < count ? task.mode === "scenario" ? "回答下一问" : "继续下一步" : "查看本轮回顾"}<Icon name={task.mode === "scenario" && task.step + 1 < count ? "mic" : "right"} size={15} /></button>
       <p>{noFix ? "本次回答已记录" : "可以先继续，待改进的地方会留在复盘里"}</p>
     </footer>;
-    if (textOpen) return <footer className="v2-sp-dock">
+    if (textOpen) return <footer data-voice-state="draft" className={`v2-sp-dock practice-workspace-dock${task.mode === "scenario" ? " practice-conversation-dock" : ""}`}>
       <div className="v2-sp-actions">
-        <button className="btn-ghost" disabled={Boolean(busy) || processing} onClick={() => { setTextOpen(false); setNotice(""); setMicAsk(true); }}><Icon name="mic" size={15} />重新录一句</button>
+        <button className="btn-ghost" disabled={Boolean(busy) || processing} onClick={() => { setTextOpen(false); setNotice(""); void startRecord(); }}><Icon name="mic" size={15} />重新录一句</button>
         {/* 原型发送回答为常可点的 voice 实底（html:2607），空草稿在提交时校验报错（html:2515-2516），不置灰。 */}
         <button className="btn voice" disabled={Boolean(busy) || processing} onClick={() => void submit()}><Icon name="check" size={15} />发送回答</button>
       </div>
       <p>按你的意思修改后，直接发送就好</p>
     </footer>;
-    return <footer className="v2-sp-dock">
+    return <footer data-voice-state="ready" className={`v2-sp-dock practice-workspace-dock${task.mode === "scenario" ? " practice-conversation-dock" : ""}`}>
       <div className="v2-sp-mic-row">
-        <button className="btn-ghost v2-sp-compact" onClick={() => speakDemo(taskReference(task))}><Icon name="speaker" size={15} />听一遍</button>
-        <button className="v2-sp-mic" aria-label="开始回答录音" disabled={Boolean(busy)} onClick={() => setMicAsk(true)}><Icon name="mic" size={26} /></button>
+        <button className="btn-ghost v2-sp-compact" aria-pressed={questionPlaying} onClick={listenQuestion}><Icon name="speaker" size={15} />{questionPlaying ? "停止试听" : task.mode === "scenario" ? "听问题" : "听一遍"}</button>
+        <button className="v2-sp-mic" aria-label="开始回答录音" aria-describedby="practice-record-hint" disabled={Boolean(busy)} onClick={() => void startRecord()}><Icon name="mic" size={26} /></button>
         <button className="btn-ghost v2-sp-compact" onClick={() => { setTextOpen(true); setNotice("先把想说的话写下来，也是一种开始。"); }}>文字回答</button>
       </div>
-      <p>点一下，先说一句短回答</p>
+      <p id="practice-record-hint">{task.mode === "scenario" ? "点麦克风回答，说完会自动发送" : task.mode === "follow" ? "听清原句后，点麦克风跟读" : "点麦克风，用这个表达说一句"}</p>
     </footer>;
   })();
 
@@ -525,51 +725,35 @@ export function LearningPractice({ taskId }: { taskId: string }) {
     <header className="learning-head nhead sp-nhead">
       {/* 复盘页页头返回＝原路退回（nav.pop）；带回源跳转只在 dock 主按钮「回到原文第 N 句」（原型 html:2647）。
           详情态返回＝回到复盘（原型 sessionDetail 由复盘「查看本次完整回答」进入）。 */}
-      <button className="tlink" aria-label="返回" onClick={() => { if (recording) setError("请先结束或取消这次录音，保存后可以离开。"); else if (showDetail) setDetailOpen(false); else if (completed) returnToSource(); else setExit(true); }}><Icon name="left" size={18} /></button>
+      <button ref={backButton} className="tlink" data-nav-back aria-label="返回" onClick={() => { if (showDetail) setDetailOpen(false); else if (completed) returnToSource(); else void leavePractice(); }}><Icon name="left" size={18} /></button>
       <div className="nt"><h1>{showDetail ? task.title : headTitle}</h1><small>{showDetail ? `${when(task.updatedAt)} · 本轮完成` : headSub}</small></div>
       {/* 原型复盘页 nhead 无右侧动作（html:2643 nhead('本轮复盘', s.title) 两参形态）：
           复盘/详情态第三列留空，退出走 dock「回到口语首页」 */}
-      {showDetail || completed ? <span /> : <button className="v2-sp-end" disabled={recording || Boolean(busy)} onClick={() => setExit(true)}>结束</button>}
+      {showDetail || completed ? <span /> : <button className="v2-sp-end" disabled={recording || Boolean(busy)} onClick={() => void leavePractice(true)}>结束</button>}
     </header>
     {/* 细进度条只挂在进行中练习（原型复盘页 nhead 后直接进 hero，无进度条，html:2638-2643）。 */}
     {!completed && <div className="v2-sp-progress">
-      <div className="v2-pbar"><i style={{ width: `${Math.round(answered / count * 100)}%` }} /></div>
+      <div className="v2-pbar" role="progressbar" aria-label="已回答的练习步骤" aria-valuemin={0} aria-valuemax={count} aria-valuenow={answered}><i style={{ width: `${Math.round(answered / count * 100)}%` }} /></div>
       <span>已回答 {answered} / {count}</span>
     </div>}
-    <main ref={bodyRef} className={`pbody ${completed ? "sp-recap-body" : "sp-has-dock"}`}>
+    <main ref={bodyRef} data-mode={task.mode} className={`pbody practice-workspace ${completed ? "sp-recap-body" : "sp-has-dock"}${task.mode === "scenario" ? " practice-conversation" : ""}`}>
       {error && !textOpen && !processing && <p className="v2-sp-error" role="alert">{error}</p>}
       {showDetail ? detailView : completed ? recapView : practiceView}
     </main>
     {!completed && composer}
     {/* 详情 dock（原型 html:2655）：「同一主题再练」= 同一 config 重开一轮；复盘 dock 为回到来源 */}
-    {showDetail && <footer className="v2-sp-dock">
+    {showDetail && <footer className={`v2-sp-dock practice-workspace-dock${task.mode === "scenario" ? " practice-conversation-dock" : ""}`}>
       <button className="btn" disabled={Boolean(busy)} onClick={() => void restart()}><Icon name="mic" size={15} />同一主题再练</button>
     </footer>}
-    {completed && !showDetail && <footer className="v2-sp-dock">
-      <button className="btn" disabled={Boolean(busy)} onClick={returnFromRecap}><Icon name="left" size={15} />{task.source ? `回到原文第 ${(task.source.sentenceIdx ?? 0) + task.step + 1} 句` : "回到口语首页"}</button>
+    {completed && !showDetail && <footer className={`v2-sp-dock practice-workspace-dock${task.mode === "scenario" ? " practice-conversation-dock" : ""}`}>
+      <button className="btn" disabled={Boolean(busy)} onClick={returnFromRecap}><Icon name="left" size={15} />{task.source ? `回到原文第 ${taskSentenceIndex(task) + 1} 句` : "回到口语首页"}</button>
     </footer>}
-    {/* 退出确认抽屉（原型 SHEETS.practiceExit，html:2666-2669） */}
-    <PracticeExitSheet
-      open={exit}
-      onClose={() => setExit(false)}
-      answered={answered} skipped={skipped} total={count}
-      busy={Boolean(busy)}
-      onPause={() => void pause()}
-      onFinish={() => void finish()}
-    />
     {/* 跳过确认抽屉（原型 SHEETS.skipStep，html:2670） */}
     <SkipStepSheet
       open={skipAsk}
       onClose={() => setSkipAsk(false)}
       busy={Boolean(busy)}
       onSkip={() => void next(true)}
-    />
-    {/* 麦克风授权抽屉（原型 SHEETS.micPermission；允许后走既有 startRecord 真实链路） */}
-    <MicPermissionSheet
-      open={micAsk}
-      onClose={() => setMicAsk(false)}
-      onAllow={() => { setMicAsk(false); void startRecord(); }}
-      onText={() => { setMicAsk(false); setTextOpen(true); setNotice("先把想说的话写下来，也是一种开始。"); }}
     />
     {/* 发音要点抽屉（speaking-parity）：练习内=回去重说这句；复盘态=跟读这个表达（结束后回到本抽屉） */}
     <PronunciationSheet
@@ -581,7 +765,7 @@ export function LearningPractice({ taskId }: { taskId: string }) {
       answerLabel={lastClipped ? "听我刚才的回答" : undefined}
       onPlayAnswer={lastClipped ? () => { setPron(false); void listenOriginal(lastClipped); } : undefined}
       inPractice={task.status !== "completed"}
-      onRepeat={() => { setPron(false); if (showFeedback && !retrying) beginRetry(); else setMicAsk(true); }}
+      onRepeat={() => { setPron(false); if (showFeedback && !retrying) beginRetry(); else void startRecord(); }}
       onFollowExpression={() => {
         try {
           const latestTask = getTask();
@@ -589,7 +773,9 @@ export function LearningPractice({ taskId }: { taskId: string }) {
           setPron(false);
           /* 原型 v2-sp-pron-repeat（html:2739）：以表达/句子开跟读（config.text → title「再练这句表达」），
              结束后回到本抽屉（pronunciationReturn）。 */
-          void openPractice(nav, { mode: "follow", title: "再练这句表达", reference: latestTask.word || taskReference(latestTask), ...(latestTask.source ? { source: latestTask.source } : {}), pronunciationReturn: true });
+          const sentenceIdx = taskSentenceIndex(latestTask);
+          const source = latestTask.source ? { ...latestTask.source, sentenceIdx, ...(latestTask.source.sentenceIndices ? { sentenceIndices: [sentenceIdx] } : {}) } : undefined;
+          void openPractice(nav, { mode: "follow", title: "再练这句表达", reference: latestTask.word || taskReference(latestTask), ...(source ? { source } : {}), pronunciationReturn: true });
         } catch (failure) { setError(practiceError(failure)); }
       }}
     />
@@ -598,23 +784,6 @@ export function LearningPractice({ taskId }: { taskId: string }) {
       <CorrectionDetail task={task} attempt={latest} onBack={() => setCorrectionOpen(false)} />
     </div>}
   </>;
-}
-
-/* 退出确认抽屉（原型 SHEETS.practiceExit）：计数进文案；按钮纵排；第三钮有回答/跳过才出现。 */
-function PracticeExitSheet({ open, onClose, answered, skipped, total, busy, onPause, onFinish }: {
-  open: boolean; onClose: () => void; answered: number; skipped: number; total: number; busy: boolean; onPause: () => void; onFinish: () => void;
-}) {
-  return <ReadingDrawer open={open} onClose={onClose} label="退出练习">
-    <div className="sp-sheet-head">
-      <h3>{answered ? "这次先练到这里？" : "这一句还没有发送"}</h3>
-      <p className="sp-sheet-copy">已回答 {answered} / {total} 步{skipped ? `，跳过 ${skipped} 步` : ""}。{answered ? "可以看本轮记录，也可以保留进度稍后继续。" : "保留进度后，下次可以从这里接着练。"}</p>
-    </div>
-    <div className="sp-sheet-body">
-      <button className="btn" onClick={onClose}>继续练这句</button>
-      <button className="btn-ghost" style={{ marginTop: 10 }} disabled={busy} onClick={onPause}>保留进度，回到来源</button>
-      {(answered > 0 || skipped > 0) && <button className="v2-sp-text-action" disabled={busy} onClick={onFinish}>结束这一轮，查看复盘</button>}
-    </div>
-  </ReadingDrawer>;
 }
 
 /* 跳过确认抽屉（原型 SHEETS.skipStep）：primary 继续写这句 / outline 跳过这句，纵排全宽。 */

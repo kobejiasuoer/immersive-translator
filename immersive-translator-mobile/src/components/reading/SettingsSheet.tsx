@@ -24,7 +24,7 @@ function nearest(value: number, tiers: number[]): number {
 }
 
 const TOPIC_CHOICES: [string, string, string][] = [
-  ["paper", "护眼灰绿", "v2-swatch-paper"],
+  ["paper", "纯净白", "v2-swatch-paper"],
   ["sepia", "纸书暖黄", "v2-swatch-sepia"],
   ["black", "夜间深色", "v2-swatch-black"],
 ];
@@ -37,18 +37,13 @@ export function SettingsSheet({ open, onClose, layer }: { open: boolean; onClose
   const lh = LH_TIERS.some(([v]) => v === prefs.lh) ? prefs.lh : 1.78;
   return (
     <ReadingDrawer open={open} onClose={onClose} label="阅读设置" layer={layer}>
-      <div className="sheet-title plain">阅读设置</div>
+      <div className="reader-settings">
+      <div className="sheet-title plain">排版与朗读</div>
       <p className="sheet-note" style={{ margin: "2px 0 12px" }}>
         让文字和声音适合你。
       </p>
-      {/* 实时样例：字号/行距档位即时生效预览（原型 .v2-reading-sample） */}
-      <div style={{ border: "1px solid var(--hairline)", borderRadius: 12, padding: 14, background: "var(--surface-2)" }} aria-hidden="true">
-        <span className="serif" style={{ fontSize: prefs.fs * scale, lineHeight: prefs.lh, display: "block", overflowWrap: "anywhere" }} lang="en">
-          A short pause helps me clear my head.
-        </span>
-        <small style={{ display: "block", fontSize: prefs.mode === "zh" ? prefs.fs * scale : Math.max(17, prefs.fs * scale * .9), lineHeight: prefs.lh, color: "var(--ink-2)", marginTop: 8 }}>
-          短暂停顿，思路会更清晰。
-        </small>
+      <div className="reader-type-sample" aria-hidden="true" style={{ fontSize: prefs.fs * scale, lineHeight: prefs.lh }} lang="en">
+        A short pause helps me clear my head. I leave my phone on the desk and walk outside.
       </div>
       <div className="rd-set-h">主题</div>
       <div className="v2-theme-options" role="radiogroup" aria-label="阅读主题">
@@ -89,26 +84,10 @@ export function SettingsSheet({ open, onClose, layer }: { open: boolean; onClose
         items={RATE_TIERS.map((v) => [String(v), `${v}×`] as [string, string])}
         onChange={(v) => actions.setReaderPrefs({ rate: Number(v) })}
       />
-      {/* 原型 SHEETS.readingSettings（html:2036）在语速后仅剩「先读英文」行 + 完成设置：
-          「显示（对照/英文/中文）」「词块标注」与底部说明行为 App 旧排版面板遗留，不在原型内 */}
-      <div className="lst v2-setting-bottom" style={{ marginTop: 6 }}>
-        <button
-          className="v2-mask-toggle"
-          role="switch"
-          aria-checked={prefs.mask}
-          onClick={() => actions.setReaderPrefs({ mask: !prefs.mask })}
-          style={{ justifyContent: "space-between", width: "100%", padding: "0 2px" }}
-        >
-          <span>
-            <b style={{ display: "block", fontSize: 14 }}>双语模式下先隐藏译文</b>
-            <small style={{ display: "block", color: "var(--ink-3)", fontSize: 12, marginTop: 2 }}>逐句点开中文；中文模式始终显示译文</small>
-          </span>
-          <span className={`sw${prefs.mask ? " on" : ""}`} />
-        </button>
-      </div>
       <button className="btn" style={{ marginTop: 19 }} onClick={onClose}>
         完成设置
       </button>
+      </div>
     </ReadingDrawer>
   );
 }

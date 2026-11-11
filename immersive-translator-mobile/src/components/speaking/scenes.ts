@@ -4,7 +4,7 @@
  * 练习中的②英文句式/③示例句不在这里预置——由 practice.ts 的 LLM 通道按步生成，
  * 失败在页面按级重试，绝不回退到这里的静态内容冒充生成结果。
  */
-import type { PracticeTask } from "../../services/practice";
+import { taskSentenceIndex, type PracticeTask } from "../../services/practice";
 
 export interface SceneStep {
   /** 步骤名（overline / 页头副标，如「点一份主菜」）。 */
@@ -114,7 +114,7 @@ export function practiceStepTitle(task: Pick<PracticeTask, "mode" | "steps" | "s
   if (task.mode === "scenario") return sceneStepMeta(task.steps, task.step)?.title ?? `第 ${task.step + 1} 步`;
   if (task.mode === "follow") {
     if (task.title === "再练这句表达") return "这次试试更自然的表达";
-    return task.source ? `原文第 ${(task.source.sentenceIdx ?? 0) + task.step + 1} 句` : `第 ${task.step + 1} / ${count} 步`;
+    return task.source ? `原文第 ${taskSentenceIndex(task) + 1} 句` : `第 ${task.step + 1} / ${count} 步`;
   }
   return task.word ? "试着用上这个表达" : `第 ${task.step + 1} / ${count} 步`;
 }

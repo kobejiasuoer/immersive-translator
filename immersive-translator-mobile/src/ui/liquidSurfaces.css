@@ -1,0 +1,20 @@
+/* Large modal planes keep text opaque. Depth comes from their top edge and
+   scrim, without another full-viewport backdrop capture during sheet motion. */
+.account-overlay { background:rgba(20,27,24,.32);backdrop-filter:none;-webkit-backdrop-filter:none; }
+.account-overlay > .account-panel,
+.sheet[role=dialog],
+.sheet-panel[role=dialog] {
+  border-top:.5px solid var(--nav-glass-highlight);
+  box-shadow:inset 0 1px 0 var(--nav-glass-highlight),0 -8px 32px var(--nav-glass-shadow);
+}
+/* The reader's compact selection capsule shares the glass edge; its reading
+   theme owns the text/paper colours. No moving distortion on reading content. */
+.push[data-view=reader] .reader-selection {
+  border-radius:26px;
+  background:color-mix(in srgb,var(--reader-paper) 88%,transparent);
+  box-shadow:inset 0 1px 0 var(--nav-glass-highlight),inset 0 -1px 0 var(--reader-line),0 4px 14px var(--nav-glass-shadow);
+}
+@media(prefers-reduced-transparency:reduce),(prefers-contrast:more),(forced-colors:active) {
+  .push[data-view=reader] .reader-selection { background:var(--reader-paper);box-shadow:none;border-color:var(--reader-ink); }
+  .account-overlay > .account-panel,.sheet[role=dialog],.sheet-panel[role=dialog] { border-color:var(--hairline-strong);box-shadow:none; }
+}

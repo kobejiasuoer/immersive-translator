@@ -5,6 +5,7 @@
 import { norm } from "./judge";
 import { CLOZE_FALLBACK } from "./demo";
 import type { Article, VocabWord } from "./types";
+import { vocabMeaning } from "./vocabMeaning";
 
 /** spoken = 开口使用卡（vault-review-parity）：录音试说 + 人工三档自评（forgot/hard/easy），
  *  无自动判分；复习事件 mode 记 "spoken"（reviewEvents.mode 本就是自由字符串，不改协议）。 */
@@ -31,7 +32,7 @@ export interface ReviewCard {
 }
 
 function sensesCn(v: VocabWord): string {
-  return v.senses[0]?.cn || "（暂无释义）";
+  return vocabMeaning(v);
 }
 
 function findSentence(articles: Article[], articleId: string, sentIdx: number) {

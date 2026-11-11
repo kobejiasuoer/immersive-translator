@@ -265,6 +265,13 @@ export async function startPcmCapture(opts: CaptureOpts = {}): Promise<Capture |
     });
   } catch (err) {
     console.warn("[audio] 麦克风不可用（拒权或约束失败）", err);
+    const name = err && typeof err === "object" && "name" in err ? String(err.name) : "";
+    // A permission denial or device failure is not an unsupported constraint.
+    // Retry only constraints; otherwise a second request can ask again after no.
+    if (name !== "OverconstrainedError" && name !== "ConstraintNotSatisfiedError") {
+      releaseRecording();
+      return null;
+    }
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {

@@ -1,6 +1,6 @@
 /** 移动端学习偏好与账号服务设置。 */
 import { useEffect, useState } from "react";
-import { actions, toast, useApp } from "../store";
+import { actions, activeRepository, toast, useApp } from "../store";
 import { Icon } from "../ui/icons";
 import { PNav, Seg, Switch } from "../ui/kit";
 import { useNav } from "../ui/nav";
@@ -83,6 +83,7 @@ export function SetVoiceScreen() {
 
 export function SetRemindScreen() {
   const nav = useNav();
+  const repository = activeRepository();
   const settings = useApp((s) => s.settings);
   const words = useApp((s) => s.vocab);
   const status = useNotificationStatus();
@@ -96,11 +97,12 @@ export function SetRemindScreen() {
   async function toggleReminder() {
     if (busy) return;
     setBusy(true);
+    const isCurrent = () => activeRepository() === repository;
     try {
       if (settings.daily && status.permission === "granted") {
-        actions.setSettings({ daily: false });
-        await reconcileStudyNotifications({ ...settings, daily: false }, words);
-      } else if (await enableStudyReminder(settings, words)) {
+        const next = await reconcileStudyNotifications({ ...settings, daily: false }, words, isCurrent);
+        if (!next.error && next.scheduled === 0 && isCurrent()) actions.setSettings({ daily: false });
+      } else if (await enableStudyReminder(settings, words, isCurrent)) {
         actions.setSettings({ daily: true });
       }
     } finally { setBusy(false); }
@@ -140,7 +142,7 @@ export function SetRemindScreen() {
         </div>
         {status.supported && status.permission === "prompt" && <button className="btn-ghost" disabled={busy} style={{ marginTop: 14 }} onClick={() => void toggleReminder()}>允许系统通知</button>}
         {status.supported && status.permission === "denied" && <button className="btn-ghost" style={{ marginTop: 14 }} onClick={() => void openAppSettings().then(ok => { if (!ok) toast("请在系统设置中允许沉浸口语发送通知"); })}>打开系统通知设置</button>}
-        {(status.error || missingSchedule) && <button className="btn-ghost" style={{ marginTop: 14 }} onClick={() => void reconcileStudyNotifications(settings, words)}>重试保存提醒</button>}
+        {(status.error || missingSchedule) && <button className="btn-ghost" disabled={busy} style={{ marginTop: 14 }} onClick={() => void reconcileStudyNotifications(settings, words, () => activeRepository() === repository)}>重试保存提醒</button>}
         <div className="meta" style={{ marginTop: 12, lineHeight: 1.7 }}>
           这是每日学习提醒，不是即时到期警报。关闭 App 也能持续收到；使用 App 时不会弹出复习提示。点系统通知即可开始复习。
         </div>
@@ -195,7 +197,7 @@ export function SetLookScreen() {
           </div>
         </div>
         <div className="meta" style={{ marginTop: 12 }}>
-          字号影响正文与列表文字；阅读页里还有「纸色 / 暖黄 / 纯黑」三种阅读主题——暖黄会换成整应用的纸书配色，纯黑只影响正文。
+          字号影响正文与列表文字；阅读页里还有「纸色 / 暖黄 / 纯黑」三种阅读主题——阅读主题仅影响阅读器，不会改变应用的浅色或深色外观。
         </div>
       </div>
     </>

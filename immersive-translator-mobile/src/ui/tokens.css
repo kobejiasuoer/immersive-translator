@@ -1,72 +1,100 @@
-/* ============================================================
-   v3 设计令牌 —— docs/mobile-v3-design-2026-09-24.md §1 定稿
-   候选 A「静气 · 纸感编辑风」：暖纸 / 暖炭，零渐变。
-   ⚠ iOS 16 兼容：禁渐进色函数与宽色域函数（见原型头注 §1.1）；
-   半透明面一律每主题显式 rgba（--tb-bg 等）。值 = §1.1 / §1.2 直接可用。
-   ============================================================ */
-
-:root,
-[data-theme="light"] {
-  color-scheme: light; /* U-26：系统键盘/滚轮/表单控件随主题（深色下不再浅色割裂） */
-  --bg: #faf8f3;            /* 全局纸底 */
-  --surface: #ffffff;       /* sheet、菜单、模态 */
-  --surface-2: #f3f0e9;     /* 按压态、分段轨道、输入框底 */
-  --ink: #201d18;           /* 主文字、主按钮底（15.8:1） */
-  --ink-2: #565147;         /* 次级文字（7.4:1） */
-  --ink-3: #736c5f;         /* 辅助文字、meta、overline（4.9:1） */
-  --ink-4: #b4ac9e;         /* 禁用、装饰；仅大号/装饰用（2.1:1） */
-  --hairline: #e7e2d6;
-  --hairline-strong: #d8d2c2;
-  --accent: #2b567f;        /* 墨蓝点缀（7.2:1） */
-  --accent-soft: rgba(43, 86, 127, 0.1);
-  --on-ink: #faf8f3;        /* 墨底文字 */
-  --ok: #3f7050;
-  --ok-soft: rgba(63, 112, 80, 0.1);
-  --warn: #96631c;
-  --warn-soft: rgba(150, 99, 28, 0.1);
-  --err: #ae4a3c;
-  --err-soft: rgba(174, 74, 60, 0.1);
-  --tb-bg: rgba(250, 248, 243, 0.86); /* tab bar/顶栏毛玻璃底（显式 rgba 兜底） */
-  --shadow-sheet: 0 -8px 40px rgba(32, 29, 24, 0.14);
-  --shadow-pop: 0 10px 30px rgba(32, 29, 24, 0.16);
+/* Shared product tokens. Reader paper choices are scoped in readerExperience.css.
+   All colours use explicit sRGB values for the iOS 16 WebView target. */
+:root, [data-theme="light"] {
+  color-scheme: light;
+  --bg: #f2f2f7;
+  --surface: #ffffff;
+  --surface-2: #e9e9ee;
+  --ink: #1c1c1e;
+  --ink-2: #48484a;
+  --ink-3: #6c6c70;
+  --ink-4: #8e8e93;
+  --hairline: #dedee3;
+  --hairline-strong: #c6c6cc;
+  --accent: #246b52;
+  --accent-hover: #18533e;
+  --accent-soft: #e8f1ec;
+  --accent-line: #bbd2c6;
+  --on-accent: #ffffff;
+  --on-ink: #ffffff;
+  --ok: #29704c;
+  --ok-soft: #e7f3eb;
+  --warn: #946218;
+  --warn-soft: #faf0dd;
+  --bad: #b4423a;
+  --bad-soft: #fbeae8;
+  --err: var(--bad);
+  --err-soft: var(--bad-soft);
+  --voice: var(--accent);
+  --voice-soft: var(--accent-soft);
+  --voice-hl: #d2e7dc;
+  --tape: #ede6d4;
+  --tape-line: #d1c6aa;
+  --sel: rgba(23,107,87,.2);
+  --tb-bg: rgba(249,249,251,.92);
+  --shadow-sheet: 0 -8px 40px rgba(23,35,31,.12);
+  --shadow-pop: 0 10px 30px rgba(23,35,31,.14);
 }
-
+[data-theme="sepia"] {
+  color-scheme: light;
+  --bg: #f5f1e8;
+  --surface: #fffcf5;
+  --surface-2: #ede8dc;
+  --ink: #302b22;
+  --ink-2: #595143;
+  --ink-3: #756a59;
+  --ink-4: #9c907d;
+  --hairline: #e3dccb;
+  --hairline-strong: #cfc5b0;
+  --accent: #236451;
+  --accent-hover: #1d5343;
+  --accent-soft: #e2ede6;
+  --accent-line: #b8d1c3;
+  --tb-bg: rgba(245,241,232,.96);
+}
 [data-theme="dark"] {
   color-scheme: dark;
-  --bg: #1a1815;
-  --surface: #24211d;
-  --surface-2: #2e2a25;
-  --ink: #ece7dd;
-  --ink-2: #bfb8aa;
-  --ink-3: #938b7c; /* 5.3:1 */
-  --ink-4: #6b655a;
-  --hairline: #35312a;
-  --hairline-strong: #453f36;
-  --accent: #8fb3d4; /* 8.1:1 */
-  --accent-soft: rgba(143, 179, 212, 0.14);
-  --on-ink: #1a1815; /* 深色下主按钮=纸底 */
-  --ok: #85ac90;
-  --ok-soft: rgba(133, 172, 144, 0.14);
-  --warn: #c9a15c;
-  --warn-soft: rgba(201, 161, 92, 0.14);
-  --err: #d98376;
-  --err-soft: rgba(217, 131, 118, 0.14);
-  --tb-bg: rgba(26, 24, 21, 0.86);
-  --shadow-sheet: 0 -8px 40px rgba(0, 0, 0, 0.5);
-  --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.55);
+  --bg: #000000;
+  --surface: #1c1c1e;
+  --surface-2: #2c2c2e;
+  --ink: #f2f2f7;
+  --ink-2: #d1d1d6;
+  --ink-3: #aeaeb2;
+  --ink-4: #8e8e93;
+  --hairline: #38383a;
+  --hairline-strong: #545458;
+  --accent: #91cfad;
+  --accent-hover: #b1dec3;
+  --accent-soft: #1d3528;
+  --accent-line: #476a54;
+  --on-accent: #14291f;
+  --on-ink: #000000;
+  --ok: #99c6a8;
+  --ok-soft: #273e2e;
+  --warn: #dbb070;
+  --warn-soft: #3b301e;
+  --bad: #f29a90;
+  --bad-soft: #442a28;
+  --voice-hl: #35533f;
+  --tape: #4a422f;
+  --tape-line: #6b5f43;
+  --sel: rgba(145,210,181,.25);
+  --tb-bg: rgba(28,28,30,.94);
+  --shadow-sheet: 0 -8px 40px rgba(0,0,0,.4);
+  --shadow-pop: 0 10px 30px rgba(0,0,0,.45);
 }
 
-/* ---------- 字体栈：与已确认移动原型一致，未安装 Source Serif 4 时使用 Georgia ---------- */
+/* System UI and editorial reading are distinct; no Apple font is bundled. */
 :root {
-  --font-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
-  --font-sans: -apple-system, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
+  --font-serif: ui-serif, "New York", Georgia, serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
   /* §1.4 字阶 token（U-46 落地，值 = style-spec §4.1 表）；全部随 --fs-scale 缩放
      （U-15/WCAG 1.4.4：外观页「字号」档写 --fs-scale 到 :root，store.applyFsDom） */
-  --fs-display: calc(32px * var(--fs-scale, 1));
-  --lh-display: calc(38px * var(--fs-scale, 1));
-  --fs-numeral: calc(62px * var(--fs-scale, 1));
+  --fs-display: calc(34px * var(--fs-scale, 1));
+  --lh-display: calc(41px * var(--fs-scale, 1));
+  --fs-numeral: calc(44px * var(--fs-scale, 1));
   --fs-title: calc(20px * var(--fs-scale, 1));
   --lh-title: calc(28px * var(--fs-scale, 1));
   --fs-headline: calc(17px * var(--fs-scale, 1));
@@ -117,4 +145,20 @@
   --ok: #85ac90;
   --warn: #c9a15c;
   --err: #d98376;
+}
+
+/* User-preferred draggable glass navigation. A WebView material, not native Liquid Glass. */
+:root, [data-theme="light"], [data-theme="sepia"] {
+  --nav-glass: rgba(250,250,252,.86);
+  --nav-line: rgba(255,255,255,.8);
+  --nav-glass-highlight: rgba(255,255,255,.95);
+  --nav-glass-shadow: rgba(20,24,30,.1);
+  --nav-active-fill: rgba(228,239,232,.88);
+}
+[data-theme="dark"] {
+  --nav-glass: rgba(35,35,38,.88);
+  --nav-line: rgba(255,255,255,.13);
+  --nav-glass-highlight: rgba(255,255,255,.18);
+  --nav-glass-shadow: rgba(0,0,0,.3);
+  --nav-active-fill: rgba(75,91,81,.8);
 }

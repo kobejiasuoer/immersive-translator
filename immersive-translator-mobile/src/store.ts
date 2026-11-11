@@ -14,6 +14,8 @@ import type { SpeakSession } from "./core/sessions";
 import type { GlossaryPair } from "./core/glossary";
 import { DEMO_STARTER, type ChatTurn } from "./core/demo";
 import { curatedFeedDocs } from "./core/curated";
+import { sourceBookTitleOf } from "./core/readingLibrary";
+import { repairSentenceBoundaries, sentenceBoundaryKey } from "./core/repairSentenceBoundaries";
 import { type ReviewGrade } from "./core/srs";
 import { haptic, isTauri, reportDiag } from "./services/device";
 import { prepareAudioPlayback, speakCloud, voiceErrorText } from "./services/voice";
@@ -25,6 +27,7 @@ export type ThemePref = Theme | "system";
 export type Tab = "today" | "practice" | "shelf" | "vocab" | "me";
 
 export interface ReaderPrefs {
+  /** 历史对照偏好保留用于兼容；新版正文始终英文，译文按需在帮助中展示。 */
   mode: "bi" | "en" | "zh";
   mask: boolean;
   fs: number;
@@ -132,7 +135,6 @@ export type Sheet =
   | { kind: "rate" }
   | { kind: "more" }
   | { kind: "search" }
-  | { kind: "confirm" }
   | { kind: "summary"; sceneId: string; scene: string; turns: number; secs: number; me: number; chat: ChatTurn[] }
   | { kind: "export"; cards: { t: string; en: string; zh: string }[]; secs: number }
   | { kind: "import"; tab: "lib" | "paste" | "link" | "file" }
@@ -282,7 +284,7 @@ function demoState(): AppState {
     notes: [],
     stats: { clearedToday: 0, clearedIds: [], streak: 0, week: { review: 0, add: 0, trap: 0 }, day: todayKey(), weekKey: isoWeekKey() },
     /* rate 默认 0.85×：原型 createState settings.speed（html:1578）与播放条语速胶囊一致 */
-    reader: { mode: "bi", mask: true, fs: 18, topic: "paper", chunkMark: true, rate: 0.85, lh: 1.78 },
+    reader: { mode: "en", mask: false, fs: 20, topic: "paper", chunkMark: false, rate: 0.85, lh: 1.78 },
     sheet: null,
     trash: null,
     /* 剪贴板默认空（§3.1「检测到新文本才显示」）——不再无条件塞演示 CLIP，空态今天页剪贴板块随之隐藏（治 P-06） */
@@ -440,16 +442,55 @@ export function commitRepository(input: Omit<CommitInput, "expectedRevision">): 
     revision = result.revision;
   }, target);
 }
+
+/** Save each proven boundary repair and its recovery data in the same transaction. */
+function prepareSentenceRepairs(candidate: AppState, previousState?: AppState) {
+  const result = repairSentenceBoundaries(candidate);
+  if (!result.repairs.length) return { state: candidate, records: [] as NonNullable<CommitInput["records"]> };
+  const now = Date.now();
+  const patch = { ...result.patch };
+  // A legacy article may arrive again without replacing local-only overlays.
+  // Those overlays already use the repaired boundaries and must not shift twice.
+  for (const repair of result.repairs) {
+    const previousArticle = previousState?.articles.find(article => article.id === repair.articleId);
+    if (!previousState || !previousArticle || sentenceBoundaryKey(previousArticle) !== repair.toBoundaryKey) continue;
+    const id = repair.articleId;
+    if (patch.progress && candidate.progress === previousState.progress) patch.progress[id] = previousState.progress[id];
+    if (patch.sentenceZh && candidate.sentenceZh[id] === previousState.sentenceZh[id]) {
+      if (previousState.sentenceZh[id]) patch.sentenceZh[id] = previousState.sentenceZh[id]; else delete patch.sentenceZh[id];
+    }
+    if (patch.sentenceParseCache && candidate.sentenceParseCache[id] === previousState.sentenceParseCache[id]) {
+      if (previousState.sentenceParseCache[id]) patch.sentenceParseCache[id] = previousState.sentenceParseCache[id]; else delete patch.sentenceParseCache[id];
+    }
+    if (patch.readLog && candidate.readLog.seen[id] === previousState.readLog.seen[id]) {
+      if (previousState.readLog.seen[id]) patch.readLog.seen[id] = previousState.readLog.seen[id]; else delete patch.readLog.seen[id];
+    }
+  }
+  if (patch.readLog) patch.readLog.count = Object.values(patch.readLog.seen).reduce((count, indices) => count + indices.length, 0);
+  if (patch.articles) patch.articles = patch.articles.map(article => article === candidate.articles.find(old => old.id === article.id) ? article : { ...article, updatedAt: now });
+  if (patch.vocab) patch.vocab = patch.vocab.map(word => word === candidate.vocab.find(old => old.id === word.id) ? word : { ...word, updatedAt: now });
+  if (patch.notes) patch.notes = patch.notes.map(note => note === candidate.notes.find(old => old.id === note.id) ? note : { ...note, updatedAt: now });
+  if (patch.tasks) patch.tasks = patch.tasks.map(task => {
+    const previous = candidate.tasks.find(old => old.id === task.id);
+    return task === previous ? task : { ...stampPracticeTask(previous, task, now), attempts: task.attempts };
+  });
+  return {
+    state: { ...candidate, ...patch },
+    records: result.repairs.map(repair => ({ collection: "reader.sentence-repairs", id: `${repair.articleId}:${repair.fromBoundaryKey}:${crypto.randomUUID()}`, payload: { ...repair, repairedAt: now } })),
+  };
+}
 export function replaceSyncedState(patch: Partial<AppState> | ((current: AppState) => Partial<AppState>), extra: Omit<CommitInput, "expectedRevision" | "state"> = {}, applyIf?: () => boolean): Promise<void> {
   const target = activeRepository();
   return enqueue(async () => {
     if (applyIf && !applyIf()) return;
     const previous = state;
-    const changes = typeof patch === "function" ? patch(previous) : patch;
-    const next = { ...previous, ...changes };
+    const requested = typeof patch === "function" ? patch(previous) : patch;
+    const repaired = prepareSentenceRepairs({ ...previous, ...requested }, previous);
+    const next = repaired.state;
+    const changes = Object.fromEntries(Object.keys(next).filter(key => next[key as keyof AppState] !== previous[key as keyof AppState]).map(key => [key, next[key as keyof AppState]])) as Partial<AppState>;
     state = next;
     try {
-      const result = await target.commit({ ...extra, expectedRevision: revision, state: persistable(next) });
+      const result = await target.commit({ ...extra, ...(repaired.records.length ? { records: [...(extra.records ?? []), ...repaired.records] } : {}), expectedRevision: revision, state: persistable(next) });
       revision = result.revision; listeners.forEach(fn => fn());
     } catch (error) {
       // Preserve later user edits; undo only fields still owned by this failed patch.
@@ -524,6 +565,11 @@ async function initializeStoreNow(identity: string, options: ProfileSwitchOption
     // profile during that time before closing it and resetting the queue.
     if (repository) await flushPersist();
     if (options.valid && !options.valid()) throw new DOMException("资料切换已取消", "AbortError");
+    const repaired = prepareSentenceRepairs(loaded);
+    if (repaired.records.length) {
+      const saved = await next.commit({ expectedRevision: nextRevision, state: persistable(repaired.state), records: repaired.records });
+      loaded = repaired.state; nextRevision = saved.revision;
+    }
     const previous = repository ? state : null;
     const retained = options.retainSheet;
     if (retained && state.sheet === retained.sheet && retained.valid()) loaded.sheet = retained.sheet;
@@ -892,9 +938,10 @@ export const actions = {
     const docs = curatedFeedDocs(id);
     const existing = new Set(state.articles.map((a) => a.id));
     const incoming = docs.filter((d) => !existing.has(d.id));
-    if (incoming.length) state = { ...state, articles: [...incoming, ...state.articles] };
+    const ids = new Set(docs.map(d => d.id));
+    state = { ...state, articles: [...incoming, ...state.articles.map(a => ids.has(a.id) && a.archived ? { ...a, archived: false, updatedAt: Date.now() } : a)] };
     emit();
-    toast("已订阅，可以开始阅读");
+    toast("已加入这组短文，可以开始阅读");
   },
   unsubscribeCuratedFeed(id: string) {
     state = { ...state, curatedFeeds: state.curatedFeeds.filter((f) => f !== id) };
@@ -917,6 +964,7 @@ export const actions = {
       phonetic?: string;
       senses: DictSenses[];
       example?: string;
+      contextExplanation?: VocabWord["contextExplanation"];
       pattern?: string;
       trap?: string;
     },
@@ -925,12 +973,14 @@ export const actions = {
   ) {
     const existing = state.vocab.find(v => v.word.trim().toLowerCase() === entry.word.trim().toLowerCase());
     if (existing) {
-      if (entry.senses.length) {
-        state = { ...state, vocab: state.vocab.map(v => v.id === existing.id ? { ...v, senses: entry.senses, phonetic: entry.phonetic || v.phonetic, example: entry.example || v.example, updatedAt: Date.now() } : v) };
+      if (entry.senses.length || entry.contextExplanation) {
+        state = { ...state, vocab: state.vocab.map(v => v.id === existing.id ? { ...v, senses: entry.senses.length ? entry.senses : v.senses, phonetic: entry.phonetic || v.phonetic, example: entry.example || v.example, contextExplanation: entry.contextExplanation || v.contextExplanation, updatedAt: Date.now() } : v) };
         emit();
       }
       return;
     }
+    const sourceArticleId = source?.articleId || state.readingArticleId || "";
+    const sourceArticle = state.articles.find(article => article.id === sourceArticleId);
     const w: VocabWord = {
       id: entry.word.toLowerCase().replace(/[^a-z0-9]+/g, "-") + "-" + Math.random().toString(36).slice(2, 6),
       word: entry.word,
@@ -939,10 +989,12 @@ export const actions = {
       phonetic: entry.phonetic,
       senses: entry.senses.length ? entry.senses : [{ pos: "", cn: "（暂无释义，待下次查询补上）" }],
       example: entry.example,
+      contextExplanation: entry.contextExplanation,
       pattern: entry.pattern,
       trap: entry.trap,
-      sourceArticleId: source?.articleId || state.readingArticleId || "",
+      sourceArticleId,
       sourceSentenceIdx: source?.sentIdx ?? 0,
+      ...(sourceArticle ? { sourceBoundaryKey: sentenceBoundaryKey(sourceArticle) } : {}),
       dueAt: Date.now(), createdAt: Date.now(), updatedAt: Date.now(), generation: crypto.randomUUID(), srs: initialSrs(Date.now()),
     };
     state = {
@@ -1187,7 +1239,7 @@ export const actions = {
   renameBook(bookId: string, title: string) {
     const value = title.trim().slice(0, 160);
     if (!value) throw new Error("请输入书名");
-    state = { ...state, articles: state.articles.map(a => a.bookId === bookId ? { ...a, bookTitle: value, updatedAt: Date.now() } : a) };
+    state = { ...state, articles: state.articles.map(a => a.bookId === bookId ? { ...a, sourceBookTitle: sourceBookTitleOf(a) || undefined, bookTitle: value, updatedAt: Date.now() } : a) };
     emit();
   },
   /** 段级翻译回填（#35：导入文章 zh=null → 翻译管线逐句补齐）。 */
@@ -1225,7 +1277,13 @@ export const actions = {
     emit();
   },
   async upsertTask(task: PracticeTask): Promise<void> {
-    await replaceSyncedState(current => ({ tasks: [stampPracticeTask(current.tasks.find(t => t.id === task.id), task, Date.now()), ...current.tasks.filter(t => t.id !== task.id)] }));
+    await replaceSyncedState(current => {
+      const previous = current.tasks.find(t => t.id === task.id);
+      const article = task.source && current.articles.find(item => item.id === task.source!.articleId);
+      const next = !previous && task.source && article && !task.source.boundaryKey
+        ? { ...task, source: { ...task.source, boundaryKey: sentenceBoundaryKey(article) } } : task;
+      return { tasks: [stampPracticeTask(previous, next, Date.now()), ...current.tasks.filter(t => t.id !== task.id)] };
+    });
     window.dispatchEvent(new Event("mobile-state-change"));
   },
   updateWord(id: string, patch: Partial<VocabWord>) {

@@ -29,6 +29,8 @@ export type PushName =
 export type PushProps = Record<string, unknown>;
 
 export interface Nav {
+  /** Portalled presentation is suppressed while its owning section is hidden. */
+  active?: boolean;
   push: (name: PushName, props?: PushProps) => void;
   pop: () => void;
   popAll: () => void;

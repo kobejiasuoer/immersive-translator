@@ -1,6 +1,7 @@
 import { openPractice } from "../screens/LearningHome";
 import { startKeyboardViewportSync } from "./keyboardViewport";
 import { attachSheetDrag } from "./sheetDrag";
+import { attachModalFocus } from "./modalFocus";
 /**
  * 底部 sheet 集（§2.2）——词典/词块卡（两级查询 #40/#41）、Aa 面板、语速、
  * 本篇菜单、文内搜索、退出复习确认、陪练小结、直译导出、导入四路、只练差词。
@@ -14,6 +15,8 @@ import { useNav } from "./nav";
 import { chatStream, llmConfigured, lookupWord, type DictLookup } from "../services/translate";
 import { useCloud } from "../services/cloud";
 import { canContinueDictionaryLogin } from "../services/authGate";
+import { EnglishHelp } from "../components/reading/EnglishHelp";
+import { cachedReadingHelp, savedReadingHelp, type ReadingHelpResult } from "../services/readingHelp";
 import { isTauri, readClipboard, shareText, writeClipboard } from "../services/device";
 import { norm } from "../core/judge";
 import { EXAM_TAGS, LIB_ARTICLES, libMeta, libToday, libToArticle, type LibArticle } from "../core/library";
@@ -57,7 +60,6 @@ const SHEET_TITLES: Record<Sheet["kind"], string> = {
   rate: "语速",
   more: "本篇菜单",
   search: "文内搜索",
-  confirm: "退出复习",
   summary: "陪练小结",
   export: "导出双语记录",
   import: "导入",
@@ -75,10 +77,15 @@ export function SheetHost({ inert = false }: { inert?: boolean }) {
   }, [sheet, inert]);
 
   const open = sheet !== null;
+  useEffect(() => {
+    const panel = sheetElRef.current;
+    if (!panel || !open || inert) return;
+    return attachModalFocus(panel, () => actions.setSheet(null));
+  }, [open, inert]);
   return (
     <>
       <div className={`sheet-dim ${open ? "on" : ""}`} aria-hidden="true" onClick={() => actions.setSheet(null)} />
-      <div ref={sheetElRef} inert={inert || undefined} role="dialog" aria-modal="true" aria-label={sheet ? SHEET_TITLES[sheet.kind] : undefined} className={`sheet ${open ? "on" : ""}`}>
+      <div ref={sheetElRef} inert={inert || !open || undefined} role="dialog" aria-modal="true" aria-label={sheet ? SHEET_TITLES[sheet.kind] : undefined} tabIndex={-1} className={`sheet ${open ? "on" : ""}`}>
         {/* 抽屉基座头部：grab + 右上 X 关闭钮（proto-parity：与原型各抽屉头部一致） */}
         <div className="sheet-top">
           <div className="sheet-grab" aria-hidden="true">
@@ -106,8 +113,6 @@ function SheetContent({ sheet }: { sheet: Sheet }) {
       return <MoreSheet />;
     case "search":
       return <SearchSheet />;
-    case "confirm":
-      return <ConfirmSheet />;
     case "summary":
       return <SummarySheet sceneId={sheet.sceneId} scene={sheet.scene} turns={sheet.turns} secs={sheet.secs} me={sheet.me} chat={sheet.chat} />;
     case "export":
@@ -138,7 +143,13 @@ function DictSheet({ entry }: { entry: DictEntry }) {
   const [llmDone, setLlmDone] = useState(false);
   const [llmRes, setLlmRes] = useState<DictLookup | null>(null);
   const [lookupError, setLookupError] = useState("");
-  useEffect(() => { setLlm(false); setLlmDone(false); setLlmRes(null); setLookupError(""); }, [entry]);
+  const [showChinese, setShowChinese] = useState(false);
+  const [englishResult, setEnglishResult] = useState<ReadingHelpResult | null>(null);
+  useEffect(() => {
+    setLlm(false); setLlmDone(false); setLlmRes(null); setLookupError(""); setShowChinese(false);
+    const sentence = entry.sentence?.trim() || "", word = getState().vocab.find(value => norm(value.word) === norm(entry.word));
+    setEnglishResult(sentence ? savedReadingHelp(word?.contextExplanation, sentence) ?? cachedReadingHelp({ kind: "word", text: entry.word, sentence, articleId: entry.articleId }) : null);
+  }, [entry]);
 
   const savedEntry = vocab.find((v) => norm(v.word) === norm(entry.word));
   const saved = entry.saved || !!savedEntry;
@@ -146,6 +157,10 @@ function DictSheet({ entry }: { entry: DictEntry }) {
   const missing = !senses.some(s => s.cn.trim() && !/^（(?:暂无释义|查询失败|词典服务未返回)/.test(s.cn));
   const example = llmRes?.ex ?? entry.example ?? (typeof savedEntry?.example === "string" ? savedEntry.example : undefined);
   const article: Article | undefined = entry.articleId ? articles.find((a) => a.id === entry.articleId) : undefined;
+  const contextSentence = entry.sentence?.trim() || "";
+  const savedEnglish = contextSentence ? savedReadingHelp(savedEntry?.contextExplanation, contextSentence) : null;
+  const englishChanged = !!englishResult && JSON.stringify(englishResult) !== JSON.stringify(savedEnglish);
+  const canCollectMeaning = !missing || !!englishResult;
 
   function collect() {
     actions.saveWord(
@@ -158,6 +173,7 @@ function DictSheet({ entry }: { entry: DictEntry }) {
         example,
         pattern: entry.pattern,
         trap: entry.trap,
+        ...(englishResult && contextSentence ? { contextExplanation: { sentence: contextSentence, ...englishResult } } : {}),
       },
       entry.type === "chunk" ? "chunk" : "word",
       entry.articleId ? { articleId: entry.articleId, sentIdx: entry.sentIdx ?? 0 } : undefined,
@@ -168,6 +184,7 @@ function DictSheet({ entry }: { entry: DictEntry }) {
   function runLlm() {
     if (requests.current.size) return;
     const controller = new AbortController(); requests.current.add(controller);
+    setShowChinese(true);
     setLlm(true); setLlmDone(false); setLookupError("");
     void lookupWord(entry.word, controller.signal, entry).then(result => {
       if (controller.signal.aborted) return;
@@ -180,16 +197,18 @@ function DictSheet({ entry }: { entry: DictEntry }) {
     <>
       {/* 头部（原型 SHEETS.lookup，html:1815-1818）：accent eyebrow + 大衬线词 + 音标/听发音 pill */}
       <span className="v2-eyebrow">原句里的表达</span>
-      {missing ? (
-        <>
-          <h2 className="serif v2-lookup-title">{entry.word}</h2>
-          <div className="v2-lookup-pronunciation">
-            <span>还没有释义</span>
-            <button className="v2-lookup-listen" aria-label="听发音" onClick={() => speak(entry.word, 0.9)}>
-              <Icon name="speaker" size={14} />
-              听发音
-            </button>
-          </div>
+      <h2 className="serif v2-lookup-title">{entry.word}</h2>
+      <div className="v2-lookup-pronunciation">
+        {entry.phonetic ? <span className="dict-pho" style={{ marginTop: 0 }}>{entry.phonetic}</span> : <span>{!contextSentence && missing ? "还没有释义" : ""}</span>}
+        <button className="v2-lookup-listen" aria-label="听发音" onClick={() => speak(entry.word, 0.9)}><Icon name="speaker" size={14} />听发音</button>
+      </div>
+      {contextSentence && <>
+        <EnglishHelp request={{ kind: "word", text: entry.word, sentence: contextSentence, articleId: entry.articleId }} dictionary={entry} saved={savedEnglish} onResult={setEnglishResult} />
+        <button className="reader-chinese-toggle" disabled={llm && !llmDone} onClick={() => missing ? runLlm() : setShowChinese(value => !value)}>
+          {llm && !llmDone ? "正在查询中文释义…" : lookupError ? "重试中文释义" : missing ? "查询中文释义" : showChinese ? "收起中文释义" : "查看中文释义"}
+        </button>
+      </>}
+      {(!contextSentence || showChinese) && (missing ? <>
           <div className="hintbox">查询这个表达的含义，或先收藏后补充自己的理解。</div>
           {lookupError ? <p className="sheet-note" role="alert">{lookupError}</p> : llm && !llmDone ? (
             <>
@@ -197,19 +216,7 @@ function DictSheet({ entry }: { entry: DictEntry }) {
               <div className="skel" style={{ width: "70%" }} />
             </>
           ) : null}
-        </>
-      ) : (
-        <>
-          {/* 词典卡头部（原型 SHEETS.lookup html:1816）：大衬线词 + 音标/听发音 + 词性释义行；
-              词块类别 tag、句式变体行、直译陷阱盒与「详细查词典」不在原型卡内（词条详情页保留） */}
-          <h2 className="serif v2-lookup-title">{entry.word}</h2>
-          <div className="v2-lookup-pronunciation">
-            {entry.phonetic ? <span className="dict-pho" style={{ marginTop: 0 }}>{entry.phonetic}</span> : <span />}
-            <button className="v2-lookup-listen" aria-label="听发音" onClick={() => speak(entry.word, 0.9)}>
-              <Icon name="speaker" size={14} />
-              听发音
-            </button>
-          </div>
+        </> : <>
           {senses.length ? (
             senses.map((s, i) => (
               <div className="sense" key={i}>
@@ -224,8 +231,7 @@ function DictSheet({ entry }: { entry: DictEntry }) {
           )}
           {example && <p className="sheet-note" lang="en">{example}</p>}
           {llmRes && <p className="sheet-note">释义已查到，收藏时会一起保存。</p>}
-        </>
-      )}
+        </>)}
 
       {/* 来源句卡（原型 .trunk html:1816：accent-soft 底 + 「来源 · 第 N 句」eyebrow + 原句 + 中文） */}
       {article && entry.sentIdx !== undefined && article.sentences[entry.sentIdx] && (
@@ -240,13 +246,13 @@ function DictSheet({ entry }: { entry: DictEntry }) {
             {article.title} · 第 {entry.sentIdx + 1} 句
           </div>
           <div className="q">{article.sentences[entry.sentIdx].en}</div>
-          {effectiveSentenceZh(sourceZhOverrides, entry.sentIdx, article.sentences[entry.sentIdx].zh) && <div className="src-cn">{effectiveSentenceZh(sourceZhOverrides, entry.sentIdx, article.sentences[entry.sentIdx].zh)}</div>}
+          {(!contextSentence || showChinese) && effectiveSentenceZh(sourceZhOverrides, entry.sentIdx, article.sentences[entry.sentIdx].zh) && <div className="src-cn">{effectiveSentenceZh(sourceZhOverrides, entry.sentIdx, article.sentences[entry.sentIdx].zh)}</div>}
         </button>
       )}
 
       {/* 主按钮（原型口径）：未收藏=「收藏到生词本」，已收藏=「已收藏 · 查看词条」进词条页；
           「说一句」为次按钮（smoke 链路「收藏并用它说一句」文案保留） */}
-      {missing ? (
+      {!canCollectMeaning ? (
         <div className="dict-actions" style={{ marginTop: 16 }}>
           <button
             className="da pri"
@@ -255,12 +261,12 @@ function DictSheet({ entry }: { entry: DictEntry }) {
               actions.setSheet(null);
             }}
           >
-            仍要收藏 · 暂无释义
+            {contextSentence ? "先收藏这个表达" : "仍要收藏 · 暂无释义"}
           </button>
-          <button className="da" disabled={llm && !llmDone} onClick={runLlm}>
+          {!contextSentence && <button className="da" disabled={llm && !llmDone} onClick={runLlm}>
             <Icon name="bolt" size={15} />
             {lookupError ? "重试查询" : "查询释义"}
-          </button>
+          </button>}
         </div>
       ) : (
         <>
@@ -268,7 +274,7 @@ function DictSheet({ entry }: { entry: DictEntry }) {
             className="btn"
             style={{ marginTop: 16 }}
             onClick={() => {
-              if (!saved || llmRes) {
+              if (!saved || llmRes || englishChanged) {
                 collect();
                 return;
               }
@@ -280,13 +286,13 @@ function DictSheet({ entry }: { entry: DictEntry }) {
             }}
           >
             <Icon name={saved ? "check" : "star"} size={15} />
-            {llmRes && saved ? "保存新释义" : saved ? "已收藏 · 查看词条" : "收藏到生词本"}
+            {saved && (llmRes || englishChanged) ? "保存新释义" : saved ? "已收藏 · 查看词条" : "收藏到生词本"}
           </button>
           <button
             className="btn-ghost"
             style={{ marginTop: 10 }}
             onClick={() => {
-              if (!saved || llmRes) collect();
+              if (!saved || llmRes || englishChanged) collect();
               void openPractice(nav, { mode: "word", title: entry.word, word: entry.word, reference: "用 " + entry.word + " 说一句自己的话。", ...(entry.articleId ? { source: { articleId: entry.articleId, sentenceIdx: entry.sentIdx ?? 0 } } : {}) });
             }}
           >
@@ -473,32 +479,6 @@ function SearchSheet() {
             </button>
           ))}
         {query && !hits.length && <div className="meta" style={{ padding: "10px 0" }}>本篇没有出现这个词</div>}
-      </div>
-    </>
-  );
-}
-
-/* ---------- 退出复习确认 ---------- */
-function ConfirmSheet() {
-  const nav = useNav();
-  return (
-    <>
-      <div className="sheet-title">退出复习？</div>
-      <div className="meta">这一轮的判分已经逐张保存，下次进来接着清。</div>
-      <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-        <button className="btn-ghost" style={{ border: "1px solid var(--hairline-strong)", flex: 1 }} onClick={() => actions.setSheet(null)}>
-          继续复习
-        </button>
-        <button
-          className="btn"
-          style={{ flex: 1 }}
-          onClick={() => {
-            actions.setSheet(null);
-            nav.popAll();
-          }}
-        >
-          退出
-        </button>
       </div>
     </>
   );

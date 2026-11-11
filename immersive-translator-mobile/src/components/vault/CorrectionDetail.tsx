@@ -38,7 +38,7 @@ export function CorrectionDetail({ task, attempt, onBack }: { task: PracticeTask
   return (
     <>
       <header className="learning-head nhead">
-        <button className="tlink" aria-label="返回" onClick={onBack}>
+        <button className="tlink" data-nav-back aria-label="返回" onClick={onBack}>
           <Icon name="left" size={18} />
         </button>
         <div className="nt">

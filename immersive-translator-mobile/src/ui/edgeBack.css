@@ -1,0 +1,9 @@
+/* Direct manipulation uses inline transforms; the existing back action owns dismissal. */
+.edge-back-dragging,.edge-back-settling,.edge-back-pending {
+  will-change:transform;
+  box-shadow:-8px 0 24px rgba(0,0,0,.12);
+}
+.edge-back-dragging { user-select:none;-webkit-user-select:none; }
+@media(prefers-reduced-motion:reduce) {
+  .edge-back-dragging,.edge-back-settling,.edge-back-pending { will-change:auto; }
+}
