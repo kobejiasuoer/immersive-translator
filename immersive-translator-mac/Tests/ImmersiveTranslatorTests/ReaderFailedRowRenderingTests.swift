@@ -17,7 +17,7 @@ import ReaderCore
 /// 依赖 SwiftUI 私有结构描述格式，OS 升级可能需要跟随调整（测试层取舍）。
 final class ReaderFailedRowRenderingTests: XCTestCase {
     private static let zhError429 = "翻译请求太频繁，已重试仍被限流，稍后点重试"
-    private static let titleError401 = "登录状态已失效，请到 设置 → 账号 重新登录"
+    private static let titleError401 = "翻译接口返回 401：请到 设置 → 模型服务 检查 API Key 与接口地址，或切换服务商再试"
 
     // MARK: - 夹具（同 ReaderShellChromeTests：替身通道 + 临时目录，不碰 Keychain/网络）
 

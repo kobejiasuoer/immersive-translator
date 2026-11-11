@@ -10,7 +10,9 @@ public struct XfyunProbeOutcome: Equatable, Sendable {
         case network
         /// 服务器可达但拒绝：401 鉴权被拒 / 403 IP 白名单或系统时间偏差超 5 分钟。
         case rejected
-        /// 已连上服务器且签名通过（非 401/403 的任何 HTTP 状态）。
+        /// 服务器侧问题：404 服务地址 / 429 限频 / 5xx 不可用（连接层正常）。
+        case serverIssue
+        /// 服务器响应且签名通过（仅 2xx/400/426；仍需实际业务调用验证）。
         case reachable
     }
 
@@ -28,28 +30,55 @@ public struct XfyunProbeOutcome: Equatable, Sendable {
 /// 讯飞三服务（ISE/TTS/ASR）状态灯探测。
 /// 用与真实调用同一套 HMAC 签名（XfyunAuth.buildAuthURL）构 wss 地址，
 /// 降级为 https GET：不带 Upgrade 头的 GET 不会升级成 WebSocket、不触发
-/// 业务调用、不耗额度；服务端按签名结果回 401/403，其余状态即视为可达。
+/// 业务调用、不耗额度。注意（300247a 同口径）：普通 GET 只能检查连接，
+/// 不能证明 APPID 匹配或语音业务可用——错误 HTTP 状态一律不算通过。
 public enum XfyunServiceProbe {
     /// 纯分类（单测覆盖点）：statusCode 无网络语义，只按 HTTP 状态归因。
+    /// 对齐 Windows voice_probe_status：仅 2xx/400/426 通过（文案明示「仍需实际
+    /// 朗读、识别或评分验证」），401/403/404/429/5xx 一律失败并给对应成因文案。
     public static func classify(statusCode: Int) -> XfyunProbeOutcome {
         switch statusCode {
+        case 200...299, 400, 426:
+            return XfyunProbeOutcome(
+                ok: true,
+                kind: .reachable,
+                message: "已收到服务器响应；仍需实际朗读、识别或评分验证服务是否可用"
+            )
         case 401:
             return XfyunProbeOutcome(
                 ok: false,
                 kind: .rejected,
-                message: "鉴权被拒（HTTP 401）：凭据可能抄错，或该应用未开通此服务。"
+                message: "签名验证失败，请检查 API Key、API Secret 和系统时间"
             )
         case 403:
             return XfyunProbeOutcome(
                 ok: false,
                 kind: .rejected,
-                message: "请求被拒（HTTP 403）：检查讯飞控制台的 IP 白名单，或系统时间偏差是否超过 5 分钟。"
+                message: "服务器拒绝连接，请检查访问权限、IP 白名单和系统时间"
+            )
+        case 404:
+            return XfyunProbeOutcome(
+                ok: false,
+                kind: .serverIssue,
+                message: "服务地址不存在，请稍后重试"
+            )
+        case 429:
+            return XfyunProbeOutcome(
+                ok: false,
+                kind: .serverIssue,
+                message: "请求过于频繁，请稍后重试"
+            )
+        case 500...599:
+            return XfyunProbeOutcome(
+                ok: false,
+                kind: .serverIssue,
+                message: "语音服务器暂时不可用，请稍后重试"
             )
         default:
             return XfyunProbeOutcome(
-                ok: true,
-                kind: .reachable,
-                message: "已连上服务器且签名通过（HTTP \(statusCode)，非 WebSocket 升级请求被正常回绝）。若语音仍失败，请确认应用已开通对应服务。"
+                ok: false,
+                kind: .serverIssue,
+                message: "连接检查未通过，请稍后重试"
             )
         }
     }

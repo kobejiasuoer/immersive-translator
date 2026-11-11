@@ -17,8 +17,10 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate {
     private var keyUpMonitor: Any?
 
     /// store 可注入（默认共享实例）：单测用临时目录，不碰用户的真实阅读数据。
-    init(settingsStore: SettingsStore, store: ReaderStore = .shared) {
-        let viewModel = ReaderViewModel(settingsStore: settingsStore, store: store)
+    /// accountTokenSource 可注入：沉浸云下阅读室标题/段落/查词请求自动携带账号
+    /// 令牌（auth-1，App 注入 ServerAuthClient.accountAccessToken）。
+    init(settingsStore: SettingsStore, store: ReaderStore = .shared, accountTokenSource: PlatformAccountTokenSource? = nil) {
+        let viewModel = ReaderViewModel(settingsStore: settingsStore, store: store, accountTokenSource: accountTokenSource)
         self.viewModel = viewModel
 
         // 窗口 chrome 一体化（M-01，对齐原型 .spatial-universe 全幅画布与
@@ -58,13 +60,27 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate {
     /// openBookId 非空时直达书级断点章（提醒卡「继续阅读」路径）。
     func show(pendingImportText: String? = nil, openReview: Bool = false, openBookId: String? = nil) {
         guard let window else { return }
+        // port-32（对齐 Windows f49e65f show_reader_window 的 unminimize）：最小化进
+        // Dock 后经热键/菜单/第二实例再开要先还原，makeKeyAndOrderFront 不解除最小化。
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
         if !didBootstrap || pendingImportText != nil || openReview || openBookId != nil {
             if !didBootstrap {
                 didBootstrap = true
-                viewModel.bootstrap(pendingImportText: pendingImportText, openReview: openReview, openBookId: openBookId)
+                // port-12：首次装载先等身份屏障（bootstrap 内部 await；窗口已先
+                // makeKey 显示，数据稍后按正确命名空间进场）。热键导入/托盘生词本/
+                // 提醒卡续读直达参数同样在屏障之后消费（时序保持）。
+                Task { [weak self] in
+                    await self?.viewModel.bootstrap(
+                        pendingImportText: pendingImportText,
+                        openReview: openReview,
+                        openBookId: openBookId
+                    )
+                }
             } else if let text = pendingImportText {
                 viewModel.importPaste(text)
             } else if openReview {

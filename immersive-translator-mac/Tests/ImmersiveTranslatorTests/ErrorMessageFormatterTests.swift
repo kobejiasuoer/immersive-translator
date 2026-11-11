@@ -12,11 +12,11 @@ final class ErrorMessageFormatterTests: XCTestCase {
         )
     }
 
-    /// 401 → 登录失效文案（上游真 401 落同一桶）。
-    func test401MapsToAuthExpiredText() {
+    /// 401 → API Key 指引（Mac 阅读通道无登录态，登录修不了 401；Windows 登录话术的分叉点）。
+    func test401MapsToAPIKeyGuidanceText() {
         XCTAssertEqual(
             ErrorMessageFormatter.readerParagraphErrorText(status: 401),
-            "登录状态已失效，请到 设置 → 账号 重新登录"
+            "翻译接口返回 401：请到 设置 → 模型服务 检查 API Key 与接口地址，或切换服务商再试"
         )
     }
 

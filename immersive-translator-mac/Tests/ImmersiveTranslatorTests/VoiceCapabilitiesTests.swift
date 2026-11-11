@@ -50,6 +50,34 @@ final class VoiceCapabilitiesTests: XCTestCase {
         XCTAssertEqual(caps.quota?[.tts]?.resetsAt, "2026-12-01T00:00:00.000Z")
     }
 
+    // MARK: 分语种 ASR 能力（300247a asrBatchLanguages/asrStreamingLanguages）
+
+    func testAsrLanguagesSplitFieldsParseAndFallback() {
+        // 新服务端：两字段都下发，按调用方式取。
+        let split = parseVoiceCapabilities(capsJSON(
+            voices: "[]",
+            languages: "[\"en_us\"]",
+            iseEnabled: true
+        ))
+        // 旧服务端（未下发）→ nil，asrLanguagesFor 回退 asrLanguages。
+        XCTAssertNil(split.asrBatchLanguages)
+        XCTAssertNil(split.asrStreamingLanguages)
+        XCTAssertEqual(asrLanguagesFor(split, mode: .batch), ["en_us"])
+        XCTAssertEqual(asrLanguagesFor(split, mode: .stream), ["en_us"])
+
+        var voice = capsJSON()
+        voice["voice"] = jsonString(
+            "{\"ttsVoices\":[],\"asrLanguages\":[\"en_us\"],"
+                + "\"asrBatchLanguages\":[\"en_us\",\"zh_cn\"],\"asrStreamingLanguages\":[],\"iseEnabled\":true}"
+        )
+        let parsed = parseVoiceCapabilities(voice)
+        XCTAssertEqual(parsed.asrBatchLanguages, ["en_us", "zh_cn"])
+        // 明确的空数组不回退（流式确实无可用语种）。
+        XCTAssertEqual(parsed.asrStreamingLanguages, [])
+        XCTAssertEqual(asrLanguagesFor(parsed, mode: .batch), ["en_us", "zh_cn"])
+        XCTAssertTrue(asrLanguagesFor(parsed, mode: .stream).isEmpty)
+    }
+
     // MARK: 缺 voice 段 → available=false 全空
 
     func testMissingSegmentGivesEmptyUnavailable() {

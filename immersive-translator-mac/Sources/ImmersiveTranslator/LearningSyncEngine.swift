@@ -7,9 +7,9 @@ import ReaderCore
 //
 // syncLearningRecords：单飞（running 去重）→ 登录前置 → 读协商配置（GET
 // /v1/me/config，同时落盘 server_config.json）→ protocolVersion≠2 拒绝 →
-// namespace 捕获后两次复核（变了即取消）→ learning_migrate → 按序同步 7 个
-// 集合（每个集合只在其 schemaVersions 含 2 时执行，options 携带 namespace +
-// sync 顶层参数 + 集合参数）→ 完成后发 learning-sync-complete 通知。
+// namespace 捕获后两次复核（变了即取消）→ learning_migrate（后台串行队列）→
+// 按序同步 7 个集合（每个集合只在其 schemaVersions 含 2 时执行，options 携带
+// namespace + sync 顶层参数 + 集合参数）→ 完成后发 learning-sync-complete 通知。
 // syncLearningRecordsSilently：吞错打日志（对应 console.error）。
 // ---------------------------------------------------------------------------
 
@@ -35,23 +35,17 @@ final class LearningRelaySync {
 
     /// 测试实例（生产走 shared）。
     init(testing _: Void) {}
-    /// Mac 旧 JSON 同步目录推导（learning_migrate 的 legacy sync 导入段用；
-    /// Windows 旧布局是 sync/<collection>.json，Mac JSON 回退布局是
-    /// sync/<namespace>/<collection>.json——namespace 与 SQLite 生产同公式：
-    /// account-<user.id hex>（syncNamespace(forUserId:)），不是邮箱）。
-    private var legacySyncDirectory: URL?
 
     private init() {}
 
-    /// 启动接线（AppDelegate：serverAuth.bootstrap() 之后调用一次）。
+    /// 启动接线（AppDelegate.applicationDidFinishLaunching：先于
+    /// serverAuth.bootstrap() 调用一次）。不在此捕获任何登录态派生目录——此刻
+    /// 必然未登录（bootstrap 的 Keychain 预填在异步 Task 里），旧 JSON 目录由
+    /// runRelay 每轮按当轮命名空间现算（learning.legacySyncDirectory(namespace:)）。
     func configure(serverAuth: ServerAuthClient, learning: LearningStore, engine: SyncEngine) {
         self.serverAuth = serverAuth
         self.learning = learning
         self.engine = engine
-        let legacyNamespace = syncNamespace(forUserId: serverAuth.status.user?.id)
-        self.legacySyncDirectory = learning.rootDirectory
-            .appendingPathComponent("sync", isDirectory: true)
-            .appendingPathComponent(legacyNamespace, isDirectory: true)
     }
 
     /// 静默入口：失败只打日志（Windows syncLearningRecordsSilently 同语义）。
@@ -100,7 +94,16 @@ final class LearningRelaySync {
         guard learning.currentNamespace() == namespace else {
             throw SyncStoreError("账号已切换，同步已取消")
         }
-        try learning.migrate(expectedNamespace: namespace, legacySyncDirectory: legacySyncDirectory)
+        // Mac 旧 JSON 同步目录按当轮命名空间现算（sync/<namespace>，与 SyncStore
+        // JSON 回退写入端同公式；guest 即 sync/guest，账号即 sync/account-<hex>）。
+        // 不能在 configure 一次性捕获：configure 早于 bootstrap() 的 Keychain 预填，
+        // 捕获瞬间恒未登录，账号命名空间的旧数据将永远读不到。migrate 全量推导
+        // 成本随库体积增长，走后台串行队列（Windows 同逻辑在 Tauri 命令线程），
+        // 不占 MainActor。
+        try await learning.migrateOffMain(
+            expectedNamespace: namespace,
+            legacySyncDirectory: learning.legacySyncDirectory(namespace: namespace)
+        )
         let collectionsConfig = LearningJSON.object(syncConfig?["collections"]) ?? [:]
         var results: [SyncSummary] = []
         for collection in learningRelayCollections {

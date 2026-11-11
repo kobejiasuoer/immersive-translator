@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import ImmersiveTranslator
 
@@ -183,6 +184,13 @@ private func fixtureStored(accessExpiresAt: Int64) -> StoredAuth {
 private func okLoginBody(access: String, refresh: String) -> String {
     """
     {"accessToken":"\(access)","refreshToken":"\(refresh)","expiresIn":900,"user":{"id":"u1","email":"u@test.local","nickname":"u","plan":"free","createdAt":"2026-09-26T00:00:00.000Z"}}
+    """
+}
+
+/// 指定 user.id 的登录响应体（port-3 切号场景：u1/u2 两个账号）。
+private func okLoginBody(access: String, refresh: String, userID: String) -> String {
+    """
+    {"accessToken":"\(access)","refreshToken":"\(refresh)","expiresIn":900,"user":{"id":"\(userID)","email":"\(userID)@test.local","nickname":"u","plan":"free","createdAt":"2026-09-26T00:00:00.000Z"}}
     """
 }
 
@@ -480,7 +488,8 @@ final class ServerAuthTests: XCTestCase {
     }
 
     /// §7-2：verify 成功 = 先落盘 → 内存态 → 返回 user；device 由原生层填
-    /// （platform=macos，name 非空且 ≤64）。
+    /// （platform=mac，name 非空且 ≤64；platform 必须在服务端枚举内，
+    /// 见 devicePayloadJSON 注释——"macos" 会被服务端 validation_error 拒绝）。
     func testLoginSuccessPersistsBeforeReturn() async throws {
         let seq = SequenceCounter()
         let transport = FakeTransport(seq: seq) { request in
@@ -493,13 +502,13 @@ final class ServerAuthTests: XCTestCase {
         let user = try await manager.verifyOTP(email: "someone@test.local", code: "123456")
         XCTAssertEqual(user.id, "u1")
 
-        // device 由原生层填：platform=macos，name 非空且 ≤64
+        // device 由原生层填：platform=mac，name 非空且 ≤64
         let verifyRequests = transport.requests("/v1/auth/otp/verify")
         let bodyText = verifyRequests[0].body
         XCTAssertNotNil(bodyText)
         let body = try JSONSerialization.jsonObject(with: bodyText!.data(using: .utf8)!) as? [String: Any]
         let device = body?["device"] as? [String: Any]
-        XCTAssertEqual(device?["platform"] as? String, "macos")
+        XCTAssertEqual(device?["platform"] as? String, "mac")
         let name = device?["name"] as? String
         XCTAssertNotNil(name)
         XCTAssertFalse(name!.isEmpty)
@@ -1064,6 +1073,133 @@ final class ServerAuthClientTests: XCTestCase {
         XCTAssertEqual(client.loginSuccessSerial, 1)
         _ = try await client.logout()
         XCTAssertEqual(client.loginSuccessSerial, 1, "登出不递增")
+    }
+
+    // MARK: port-3（Windows auth_state_publication_selects_space_before_notifying
+    // 与 auth_bootstrap set_account 语义的对应物，98ef071）
+
+    /// 广播漏斗先切学习空间再发布：订阅者在收到 status 变更的瞬间，命名空间
+    /// 必须已切到该状态对应的账号空间（user→account-<hex>，nil→guest）。
+    /// 场景与 Windows 同序：登录→切号→失效→登录→被踢→登录→显式登出——
+    /// 被踢/登出后回 guest，不能继续读取原账号数据（port-2 行为锁定）。
+    func testAuthStatePublicationSelectsSpaceBeforeNotifying() async throws {
+        var pullCount = 0
+        let (client, _, _, dir) = makeClient { request in
+            switch request.path {
+            case "/v1/auth/otp/verify":
+                let userID = (request.body?.contains("u2@") ?? false) ? "u2" : "u1"
+                return resp(200, okLoginBody(access: "a-\(userID)", refresh: "r-\(userID)", userID: userID))
+            case "/v1/me/config":
+                return resp(200, "{}")
+            case let path where path.hasPrefix("/v1/sync/speak-sessions/pull"):
+                // pull 带 ?since=&limit= 查询串，按前缀匹配（与既有用例同口径）
+                pullCount += 1
+                return resp(401, errBody(pullCount == 1 ? "token_invalid" : "token_reused"))
+            case "/v1/auth/logout":
+                return resp(204, "")
+            default:
+                throw AuthError.local("unknown", "unexpected \(request.path)")
+            }
+        }
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let learning = LearningStore(rootDirectory: dir.appendingPathComponent("learning"))
+        client.attachLearningStore(learning)
+        XCTAssertEqual(learning.currentNamespace(), "guest")
+
+        // 顺序断言：publish 内 setAccount 先于 status 发布，订阅者（窗口收
+        // auth-state-changed 的对应物）看到的命名空间必须已就位。
+        var orderingViolations: [String] = []
+        var subscriber: AnyCancellable?
+        subscriber = client.$status.dropFirst().sink { status in
+            let expected = status.user.map { LearningStore.accountNamespace($0.id) } ?? "guest"
+            let actual = learning.currentNamespace()
+            if actual != expected {
+                orderingViolations.append("broadcast(user=\(status.user?.id ?? "nil")) ns=\(actual) expected=\(expected)")
+            }
+        }
+        defer { subscriber?.cancel() }
+
+        // ① 登录 u1 → 账号域
+        _ = try await client.verifyOTP(email: "u1@test.local", code: "123456")
+        XCTAssertEqual(learning.currentNamespace(), LearningStore.accountNamespace("u1"))
+
+        // ② 切号 u2 → 立即换到 u2 命名空间
+        _ = try await client.verifyOTP(email: "u2@test.local", code: "123456")
+        XCTAssertEqual(learning.currentNamespace(), LearningStore.accountNamespace("u2"))
+
+        // ③ 失效（sync fatal token_invalid）→ 回 guest
+        do {
+            _ = try await client.syncPull(collection: "speak-sessions", since: 0, limit: 100)
+            XCTFail("token_invalid 应 throw")
+        } catch { /* 期待致命鉴权 */ }
+        try await waitUntil(timeout: 3) { client.status.notice != nil }
+        XCTAssertEqual(client.status.notice, .sessionExpired)
+        XCTAssertEqual(learning.currentNamespace(), "guest", "失效广播回 guest")
+
+        // ④ 重新登录 u1
+        _ = try await client.verifyOTP(email: "u1@test.local", code: "123456")
+        XCTAssertEqual(learning.currentNamespace(), LearningStore.accountNamespace("u1"))
+
+        // ⑤ 被踢（sync fatal token_reused）→ 回 guest
+        do {
+            _ = try await client.syncPull(collection: "speak-sessions", since: 0, limit: 100)
+            XCTFail("token_reused 应 throw")
+        } catch { /* 期待致命鉴权 */ }
+        try await waitUntil(timeout: 3) { client.status.notice == .sessionKicked }
+        XCTAssertEqual(learning.currentNamespace(), "guest", "被踢广播回 guest")
+
+        // ⑥ 再登录 u1
+        _ = try await client.verifyOTP(email: "u1@test.local", code: "123456")
+        XCTAssertEqual(learning.currentNamespace(), LearningStore.accountNamespace("u1"))
+
+        // ⑦ 显式登出 → 回 guest（不能继续读取原账号数据）
+        _ = try await client.logout()
+        XCTAssertEqual(client.status.notice, nil)
+        XCTAssertEqual(learning.currentNamespace(), "guest")
+
+        XCTAssertEqual(pullCount, 2, "两次失效广播各对应一次 pull")
+        XCTAssertTrue(orderingViolations.isEmpty, "发布顺序违规: \(orderingViolations)")
+    }
+
+    /// port-3 ①：bootstrap 预填广播后命名空间即账号域（离线也切换——预填即
+    /// 切空间是 Windows auth_get_status set_account 语义）。
+    func testBootstrapPrefillSelectsAccountNamespace() async throws {
+        let (client, _, store, dir) = makeClient { _ in
+            throw AuthError.local("network_error", "注入的离线")
+        }
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let learning = LearningStore(rootDirectory: dir.appendingPathComponent("learning"))
+        client.attachLearningStore(learning)
+        store.preload(fixtureStored(accessExpiresAt: nowUnix() + 1000))
+
+        client.bootstrap()
+        try await waitUntil(timeout: 3) { client.status.loggedIn }
+        XCTAssertEqual(
+            learning.currentNamespace(),
+            LearningStore.accountNamespace("u1"),
+            "预填广播后即读得到账号空间"
+        )
+        XCTAssertEqual(client.status.notice, nil)
+    }
+
+    /// port-3 ③：bootstrap fatal（被踢）广播后回 guest——启动续登录失败的
+    /// 账号同样不能继续读取原账号数据。
+    func testBootstrapFatalResetsToGuestNamespace() async throws {
+        let (client, _, store, dir) = makeClient { request in
+            XCTAssertEqual(request.path, "/v1/auth/refresh")
+            return resp(401, errBody("token_reused"))
+        }
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let learning = LearningStore(rootDirectory: dir.appendingPathComponent("learning"))
+        client.attachLearningStore(learning)
+        store.preload(fixtureStored(accessExpiresAt: nowUnix() + 1000))
+
+        client.bootstrap()
+        try await waitUntil(timeout: 3) { client.status.notice != nil }
+        XCTAssertFalse(client.status.loggedIn)
+        XCTAssertEqual(client.status.notice, .sessionKicked)
+        XCTAssertEqual(learning.currentNamespace(), "guest", "bootstrap fatal 回 guest")
     }
 
     private func waitUntil(

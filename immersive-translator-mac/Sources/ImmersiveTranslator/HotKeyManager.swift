@@ -506,6 +506,15 @@ final class HotKeyManager {
         }
     }
 
+    /// 录制态挂起（settings-ui-1）：临时注销全部全局热键，把组合键还给普通
+    /// keyDown 链——RegisterEventHotKey 的组合会被系统在 NSResponder keyDown
+    /// 之前消费并回调 handler，录制中的 HotKeyRecorderView 永远收不到这些键，
+    /// 对应功能反而被真实触发。事件监听器保留（重注册无需重装）；恢复统一走
+    /// register() 按当前设置整组重注册。
+    func suspendForRecording() {
+        unregisterHotKeys()
+    }
+
     func register(
         selectionShortcut: HotKeyShortcut = .optionSpace,
         ocrShortcut: HotKeyShortcut = .controlOptionSpace,
@@ -560,59 +569,68 @@ final class HotKeyManager {
             }
         }
 
-        let selectionID = EventHotKeyID(signature: signature, id: 1)
-        let selectionStatus = RegisterEventHotKey(
-            selectionShortcut.keyCode,
-            selectionShortcut.modifiers,
-            selectionID,
-            GetApplicationEventTarget(),
-            0,
-            &translateSelectionRef
-        )
-        if selectionStatus != noErr {
-            warnings.append(
-                registrationFailureMessage(
-                    actionTitle: "选中文本翻译",
-                    shortcut: selectionShortcut,
-                    status: selectionStatus,
-                    otherShortcut: ocrShortcut
-                )
-            )
-        }
-
-        let conflicts: [(HotKeyShortcut, String)] = [
+        // 三键查重前移到任何 RegisterEventHotKey 之前（settings-ui-2）：原实现先
+        // 注册翻译键、查重不过即整体早退，OCR↔阅读室重复时该组合一个都注册不上
+        //（与设置页「只会有一个功能能注册」文案相反），无冲突键也被一并跳过。
+        // 现按真实冲突范围处置：重复组合整组跳过、其余键照常注册并如实回报。
+        let candidates: [(shortcut: HotKeyShortcut, title: String)] = [
             (selectionShortcut, "选中文本翻译"),
             (ocrShortcut, "截图 OCR 翻译"),
             (readerShortcut ?? .controlOptionR, "沉浸阅读室")
         ]
-        if Set(conflicts.map(\.0)).count != conflicts.count {
-            let duplicate = conflicts.map(\.0)
-                .first { shortcut in conflicts.filter { $0.0 == shortcut }.count > 1 } ?? selectionShortcut
-            warnings.append("多个功能使用了同一个快捷键 \(duplicate.title)。请为其中一个功能录制不同组合，建议试试 \(HotKeyShortcut.suggestionText(excluding: conflicts.map(\.0)))。")
-            return HotKeyRegistrationReport(warnings: warnings)
+        let duplicatedShortcuts = Set(candidates.map { $0.shortcut }.filter { shortcut in
+            candidates.filter { $0.shortcut == shortcut }.count > 1
+        })
+        if !duplicatedShortcuts.isEmpty {
+            let skipped = candidates.filter { duplicatedShortcuts.contains($0.shortcut) }
+            warnings.append(Self.duplicateRegistrationMessage(skipped: skipped))
         }
 
-        let screenshotID = EventHotKeyID(signature: signature, id: 2)
-        let screenshotStatus = RegisterEventHotKey(
-            ocrShortcut.keyCode,
-            ocrShortcut.modifiers,
-            screenshotID,
-            GetApplicationEventTarget(),
-            0,
-            &translateScreenshotRef
-        )
-        if screenshotStatus != noErr {
-            warnings.append(
-                registrationFailureMessage(
-                    actionTitle: "截图 OCR 翻译",
-                    shortcut: ocrShortcut,
-                    status: screenshotStatus,
-                    otherShortcut: selectionShortcut
-                )
+        if !duplicatedShortcuts.contains(selectionShortcut) {
+            let selectionID = EventHotKeyID(signature: signature, id: 1)
+            let selectionStatus = RegisterEventHotKey(
+                selectionShortcut.keyCode,
+                selectionShortcut.modifiers,
+                selectionID,
+                GetApplicationEventTarget(),
+                0,
+                &translateSelectionRef
             )
+            if selectionStatus != noErr {
+                warnings.append(
+                    registrationFailureMessage(
+                        actionTitle: "选中文本翻译",
+                        shortcut: selectionShortcut,
+                        status: selectionStatus,
+                        otherShortcut: ocrShortcut
+                    )
+                )
+            }
         }
 
-        if let readerShortcut {
+        if !duplicatedShortcuts.contains(ocrShortcut) {
+            let screenshotID = EventHotKeyID(signature: signature, id: 2)
+            let screenshotStatus = RegisterEventHotKey(
+                ocrShortcut.keyCode,
+                ocrShortcut.modifiers,
+                screenshotID,
+                GetApplicationEventTarget(),
+                0,
+                &translateScreenshotRef
+            )
+            if screenshotStatus != noErr {
+                warnings.append(
+                    registrationFailureMessage(
+                        actionTitle: "截图 OCR 翻译",
+                        shortcut: ocrShortcut,
+                        status: screenshotStatus,
+                        otherShortcut: selectionShortcut
+                    )
+                )
+            }
+        }
+
+        if let readerShortcut, !duplicatedShortcuts.contains(readerShortcut) {
             let readerID = EventHotKeyID(signature: signature, id: 3)
             let readerStatus = RegisterEventHotKey(
                 readerShortcut.keyCode,
@@ -635,6 +653,23 @@ final class HotKeyManager {
         }
 
         return HotKeyRegistrationReport(warnings: warnings)
+    }
+
+    /// 重复组合的如实提示（settings-ui-2）：重复的键本次都不注册，不再声称
+    /// 「只会有一个功能能注册成全局热键」。
+    private static func duplicateRegistrationMessage(skipped: [(shortcut: HotKeyShortcut, title: String)]) -> String {
+        let titles = skipped.map { $0.title }
+        let names: String
+        switch titles.count {
+        case 2:
+            names = "\(titles[0])和\(titles[1])"
+        case 3:
+            names = "\(titles[0])、\(titles[1])和\(titles[2])"
+        default:
+            names = titles.joined(separator: "、")
+        }
+        let suggestion = HotKeyShortcut.suggestionText(excluding: skipped.map(\.shortcut))
+        return "\(names)使用了同一个快捷键 \(skipped[0].shortcut.title)，本次都未注册为全局热键。请为其中一个功能录制不同组合，建议试试 \(suggestion)。"
     }
 
     private func registrationFailureMessage(

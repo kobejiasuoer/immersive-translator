@@ -294,7 +294,7 @@ struct ReaderTopStageView: View {
             IslandTabButton(
                 surface: .vault, icon: ReaderIcons.navVault, badge: vm.vaultBadge,
                 active: vm.islandSurface == .vault, palette: palette, namespace: islandNamespace,
-                help: "生词复习与笔记都在这一档"
+                help: "\(max(0, vm.stats.dueNow)) 条待复习 · \(vm.unnotedWordCount) 条未整理进笔记"
             ) { vm.navigate(to: .vault) }
         }
         .padding(4)
@@ -1005,7 +1005,9 @@ struct ShelfHomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 pageHead
-                if tab == .books { booksSection } else { articlesSection }
+                if vm.shelfLoadError {
+                    shelfErrorCard
+                } else if tab == .books { booksSection } else { articlesSection }
             }
             .padding(.horizontal, 40)
             .padding(.top, 20)
@@ -1016,6 +1018,34 @@ struct ShelfHomeView: View {
         }
         .onAppear { lazyComputeCoverage() }
         .onChange(of: vm.articleList) { _ in lazyComputeCoverage() }
+    }
+
+    /// 读取失败卡（对齐 Windows ad2ad68 shelf-load-state 的 error 卡；加载态在 mac
+    /// 结构性不存在不做）：读失败不再冒充「没有内容」，提供「重新读取」。
+    private var shelfErrorCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("阅读数据读取失败")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(palette.text)
+            Text("当前无法确认书架与复习数据，请重新读取。")
+                .font(.system(size: 12))
+                .foregroundColor(palette.textTertiary)
+            Button("重新读取") {
+                vm.retryShelfLoad()
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(.vertical, 36)
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(palette.glassSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(palette.err.opacity(0.45), lineWidth: 1)
+        )
     }
 
     /// 覆盖懒算：只有进书架页才拉全文 sourceCache 跑 coverageForText
@@ -2029,6 +2059,14 @@ struct ReadingStageView: View {
     @State private var resumeHidden = false
     /// 当前句末行 rect（正文内容坐标系；译文浮层锚定）。
     @State private var popAnchors: [Int: PopAnchor] = [:]
+    /// 最新一次回报的句 minY（readerScroll 视口坐标系；跳句跟随的带内判断用）。
+    @State private var sentenceFrames: [Int: CGFloat] = [:]
+    /// 上一份帧所属的排版。排版切换会整列重建正文（prose↔parallel 不同视图分支），
+    /// ScrollView 滚动位置复位到顶；随后的帧回报是「重排」而非用户滚动，不得回写光标
+    ///（BUG-009：74→31→1 / 21→12→1，当前阅读位置被重排帧重置）。
+    /// Windows 对照：浏览器排版切换保留 scrollTop，光标不动（ReadingView.tsx 的
+    /// onViewportIdx 只挂在真实 scroll 事件上）。首次帧回报前为 nil。
+    @State private var lastViewportLayout: SpreadLayout?
 
     private var settings: ReaderSettings { vm.effectiveSettings }
     /// 阅读设置浮层开关（ReadingView.tsx settingsOpen）：挂在 vm 上以接入统一 Esc 链。
@@ -2040,7 +2078,8 @@ struct ReadingStageView: View {
                 ReadingToolbarView(
                     vm: vm,
                     settingsOpen: $vm.readingSettingsPopShown,
-                    sentCards: $sentCards
+                    sentCards: $sentCards,
+                    editingIdx: $editingIdx
                 )
                 readingPane(article: article)
                 if let finish = vm.finishCard, article.id == finish.articleId {
@@ -2104,14 +2143,28 @@ struct ReadingStageView: View {
                 }
                 .coordinateSpace(name: "readerScroll")
                 .onPreferenceChange(RowFramesKey.self) { frames in
-                    adoptViewportFrames(frames, containerHeight: outer.size.height)
+                    sentenceFrames = frames
+                    if layout != lastViewportLayout {
+                        // 排版切换后的第一份新排版帧：正文整列重建、滚动位置复位到顶，
+                        // 此刻视口 1/3 线处的句子不代表阅读位置。不回写光标，改为把
+                        // 当前句带回视口 1/3 线（与 followActiveSentence 同一落点），
+                        // 保留阅读位置——对齐 Windows 排版切换不动 scrollTop、不挪光标。
+                        // 之后的帧与排版一致，恢复「滚到哪读到哪」的常规回写。
+                        lastViewportLayout = layout
+                        proxy.scrollTo(
+                            scrollAnchor(for: vm.activeSentenceIdx, article: article),
+                            anchor: UnitPoint(x: 0.5, y: 1.0 / 3.0)
+                        )
+                    } else {
+                        adoptViewportFrames(frames, containerHeight: outer.size.height)
+                    }
                 }
                 .onPreferenceChange(PopAnchorKey.self) { anchors in
                     // 浮层锚点随排版（末行 rect）更新；取当前句即可。
                     popAnchors = anchors
                 }
                 .onChange(of: vm.activeSentenceIdx) { idx in
-                    proxy.scrollTo(scrollAnchor(for: idx, article: article), anchor: .center)
+                    followActiveSentence(idx, proxy: proxy, article: article, viewportHeight: outer.size.height)
                 }
                 .onChange(of: vm.searchMatchIdx) { idx in
                     guard let idx else { return }
@@ -2223,6 +2276,16 @@ struct ReadingStageView: View {
         }
     }
 
+    /// 跳句跟随（对齐 Windows ReadingView.tsx:230-243）：目标句已入视口带（上缘 40 /
+    /// 下缘 80 余量）不滚——否则与「滚到哪读到哪」的 1/3 线回写互相拽动成滚动-高亮回环；
+    /// 带外才滚，落点取视口 1/3 线（与 adoptViewportFrames 的拾取线重合，回写拾回同句）。
+    /// prose 段块锚点只有块级 id，落点按块的 1/3 对齐，回写可能停在块内目标句上方
+    /// 数句（有带内守卫兜底，不再逐跳上移）；句 minY 只报上缘，多行句按上缘判带。
+    private func followActiveSentence(_ idx: Int, proxy: ScrollViewProxy, article: Article, viewportHeight: CGFloat) {
+        if let top = sentenceFrames[idx], top >= 40, top <= viewportHeight - 80 { return }
+        proxy.scrollTo(scrollAnchor(for: idx, article: article), anchor: UnitPoint(x: 0.5, y: 1.0 / 3.0))
+    }
+
     /// 滚动锚点：对照行 = 句行 id；prose = 所在段块（句卡模式 = 该句卡）。
     private func scrollAnchor(for idx: Int, article: Article) -> AnyHashable {
         if layout == .parallel { return AnyHashable(idx) }
@@ -2327,6 +2390,8 @@ struct ReadingToolbarView: View {
     @ObservedObject var vm: ReaderViewModel
     @Binding var settingsOpen: Bool
     @Binding var sentCards: Bool
+    /// 当前句编辑中（本句译文按钮的禁用条件之一，Windows editingIdx 同源）。
+    @Binding var editingIdx: Int?
     @Environment(\.readerPalette) private var palette
 
     var body: some View {
@@ -2366,6 +2431,27 @@ struct ReadingToolbarView: View {
             if vm.translating == nil, let chunking = vm.chunking {
                 statusChip("词块标注中 \(chunking.done)/\(chunking.total) 批")
             }
+            // 失败段一键重试（Mac 分叉）：限流风暴整篇判死后的恢复入口——
+            // 沉浸云令牌桶 10 次/分钟，长文首次翻译常整篇 failed，逐段点不可用。
+            if vm.translating == nil, vm.chunking == nil, vm.failedParagraphCount > 0 {
+                Button {
+                    vm.retryAllFailed()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text("重试 \(vm.failedParagraphCount) 个失败段")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundColor(palette.err)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(palette.err.opacity(0.12))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("把所有翻译失败的段落重置后重新翻译")
+            }
             Spacer(minLength: 8)
             // 遮罩控件组（ReadingView.tsx:853-876）
             HStack(spacing: 8) {
@@ -2384,6 +2470,32 @@ struct ReadingToolbarView: View {
                     .font(.system(size: 11))
                     .monospacedDigit()
                     .foregroundColor(palette.textTertiary)
+                // 本句译文切换（port-7，ReadingView.tsx:856-876）：当前句单句开/关，
+                // 代替浮层 veil 占位卡的揭示入口。仅对照模式（veil 语义只在 dual 有意义）
+                // 且该句译文 done 可用；编辑中禁用（Windows editingIdx 同口径）。
+                if maskOn, vm.effectiveSettings.contrastMode == .dual,
+                   let current = vm.article?.sentences[safe: vm.activeSentenceIdx] {
+                    Button {
+                        if current.revealed == true {
+                            vm.mask(current.idx)
+                        } else {
+                            vm.reveal(current.idx)
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: ReaderIcons.eye)
+                                .font(.system(size: 11, weight: .semibold))
+                            Text("本句译文")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                    }
+                    .controlSize(.small)
+                    .buttonStyle(.bordered)
+                    .disabled(current.zh == nil || current.zhState != .done || editingIdx == current.idx)
+                    .help(current.revealed == true ? "遮住本句译文；按住 H 临时查看" : "显示本句译文；按住 H 临时查看")
+                    .accessibilityLabel(current.revealed == true ? "遮住本句译文" : "显示本句译文")
+                    .accessibilityAddTraits(current.revealed == true ? .isSelected : [])
+                }
                 if maskOn, revealed < maskable {
                     Button("全部揭开") { vm.revealAll() }
                         .controlSize(.small)
@@ -3383,8 +3495,22 @@ struct TranslationPopView: View {
         let settings = vm.effectiveSettings
         let maskOn = settings.maskTranslation
         let isActive = pair.idx == vm.activeSentenceIdx
-        let masked = maskOn && pair.zh != nil && pair.zhState != .failed && !editing
+        // 遮住时浮层整体收起（port-7，对齐 Windows 1d31239）：veil 占位卡删除，
+        // 揭示入口改工具栏「本句译文」按钮 / 按住 H 临时全显；揭开后点按回遮保留
+        //（zhBody）。failed 行与编辑态不受遮罩收起（Windows masked 判定同口径，
+        // 未译出（zh nil）的句子在遮罩下同样不渲染浮层）。
+        let masked = maskOn && pair.zhState != .failed && !editing
             && !(pair.revealed == true || vm.peekAll)
+        Group {
+            if masked {
+                EmptyView()
+            } else {
+                popContent(maskOn: maskOn, isActive: isActive, settings: settings)
+            }
+        }
+    }
+
+    private func popContent(maskOn: Bool, isActive: Bool, settings: ReaderSettings) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if editing {
                 TranslationEditorView(
@@ -3395,22 +3521,6 @@ struct TranslationPopView: View {
                 )
             } else if pair.zhState == .failed {
                 ReaderFailedRow(vm: vm, pair: pair)
-            } else if masked {
-                Button {
-                    vm.reveal(pair.idx)
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: ReaderIcons.eyeOff).font(.system(size: 12))
-                        Text("点击显示译文")
-                            .font(.system(size: 12.5, weight: .medium))
-                    }
-                    .foregroundColor(palette.textSecondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("点按显示这一句的译文")
             } else {
                 zhBody(maskOn: maskOn)
                 actionsRow(maskOn: maskOn, isActive: isActive)
@@ -5019,6 +5129,15 @@ struct ZenControlsView: View {
             } label: {
                 Image(systemName: ReaderIcons.next).font(.system(size: 12))
             }
+            // QA BUG-002：禅模式下播放条连同其「视图」菜单（zenMode 唯一开关）整体隐藏，
+            // 浮动控制补退出入口，否则进入后无任何 GUI 路径可回（设置跨启动持久）。
+            Divider().frame(height: 18)
+            Button {
+                vm.exitZenMode()
+            } label: {
+                Text("退出禅模式").font(.system(size: 11.5))
+            }
+            .help("退出禅模式，恢复侧栏与播放条")
         }
         .buttonStyle(.plain)
         .foregroundColor(palette.text)

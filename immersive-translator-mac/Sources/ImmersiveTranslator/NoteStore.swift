@@ -43,12 +43,24 @@ final class NoteStore {
         return dir
     }
 
-    /// 读笔记文本（Rust read_path：files 表优先、磁盘兜底；读不到 = nil）。
-    private func readText(_ path: URL) -> String? {
+    /// 读笔记文本（Rust read_path：files 表优先、磁盘兜底）。
+    /// NotFound（文件不存在）→ nil；其余读错误抛出（BUG-029：吞成 nil 会让
+    /// 调用方当空文件、下一次保存静默覆盖，对齐 LearningStore.readFileDB 只
+    /// 豁免 NotFound 的既定策略）。
+    private func readText(_ path: URL) throws -> String? {
         if let learning {
-            return try? learning.readPath(path)
+            do {
+                return try learning.readPath(path)
+            } catch is LearningFileNotFoundError {
+                return nil
+            }
         }
-        return try? String(contentsOf: path, encoding: .utf8)
+        do {
+            return try String(contentsOf: path, encoding: .utf8)
+        } catch let error as NSError {
+            if error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError { return nil }
+            throw error
+        }
     }
 
     /// 写笔记文本（Rust write_path：接线后 commit 派生 notes 实体）。
@@ -95,7 +107,7 @@ final class NoteStore {
             throw NoteStoreError(message: "无效的笔记文件名")
         }
         var finalMeta = meta
-        finalMeta.file = dedupedFileName(base: base)
+        finalMeta.file = try dedupedFileName(base: base)
         if finalMeta.updatedAt > 0 {
             finalMeta.updatedAt = meta.updatedAt
         } else {
@@ -113,10 +125,11 @@ final class NoteStore {
 
     /// 同名不覆盖：base.md 存在则依次尝试 base-2.md、base-3.md……（Rust
     /// dedup_note_path 以 read_path 成功判「已存在」：files 表里同步来的笔记也算）。
-    private func dedupedFileName(base: String) -> String {
+    /// 探测中的真实读错误向上抛（BUG-029）：吞掉会把已占用名判成空闲、直接覆盖它。
+    private func dedupedFileName(base: String) throws -> String {
         let candidate = { (n: Int) in n == 1 ? "\(base).md" : "\(base)-\(n).md" }
         var n = 1
-        while readText(notesDirectory.appendingPathComponent(candidate(n))) != nil {
+        while (try readText(notesDirectory.appendingPathComponent(candidate(n)))) != nil {
             n += 1
         }
         return candidate(n)
@@ -136,7 +149,9 @@ final class NoteStore {
         }
         var metas: [NoteMeta] = []
         for path in entries where path.pathExtension.lowercased() == "md" {
-            guard let text = readText(path) else { continue }
+            // 单篇读不动（无权限等）只跳过该篇（与损坏 frontmatter 跳过同口径），
+            // 不炸整个清单；写路径（save 去重/writeReplay/delete）则照常抛出保护数据。
+            guard let text = try? readText(path) else { continue }
             let (meta, _) = splitNoteFrontmatter(text)
             if var meta {
                 meta.file = path.lastPathComponent
@@ -150,7 +165,7 @@ final class NoteStore {
     /// 读取一篇笔记；文件不存在返回 nil。
     func read(file: String) throws -> (meta: NoteMeta, content: String)? {
         let path = try pathForFile(file)
-        guard let text = readText(path) else { return nil }
+        guard let text = try readText(path) else { return nil }
         let (meta, body) = splitNoteFrontmatter(text)
         guard var meta else { return nil }
         meta.file = file
@@ -161,7 +176,7 @@ final class NoteStore {
     @discardableResult
     func writeReplay(file: String, replay: NoteReplay, rounds: Int, nowMs: Int64) throws -> NoteMeta {
         let path = try pathForFile(file)
-        guard let text = readText(path) else {
+        guard let text = try readText(path) else {
             throw NoteStoreError(message: "读取笔记失败")
         }
         let (metaOpt, body) = splitNoteFrontmatter(text)
@@ -182,15 +197,18 @@ final class NoteStore {
         return meta
     }
 
-    /// 删除一篇笔记（reader_store.rs note_delete：磁盘上不存在返回 false；存在则
+    /// 删除一篇笔记（reader_store.rs note_delete：不存在返回 false；存在则
     /// 接线后走 commit(nil)——files 置 NULL + notes 实体 tombstone + 删导出文件）。
+    /// 存在性与 read/list 同口径（files 表优先、磁盘兜底）：同步拉下来只进 files 表、
+    /// 尚未导出到磁盘的笔记同样要能删（QA BUG-004：旧判法只看磁盘 → 纯云端笔记返回
+    /// false、无 tombstone 无推送，重启后复活）。磁盘有副本的维持原判照删。
     @discardableResult
     func delete(file: String) throws -> Bool {
         let path = try pathForFile(file)
         guard let learning else {
             return (try? FileManager.default.removeItem(at: path)) != nil
         }
-        guard FileManager.default.fileExists(atPath: path.path) else { return false }
+        guard try FileManager.default.fileExists(atPath: path.path) || readText(path) != nil else { return false }
         try learning.commit(path, nil)
         return true
     }

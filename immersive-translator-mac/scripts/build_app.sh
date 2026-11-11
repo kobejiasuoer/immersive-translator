@@ -2,13 +2,42 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_DIR="$(cd "$ROOT_DIR/.." && pwd)"
 APP_NAME="ImmersiveTranslator"
-APP_VERSION="${APP_VERSION:-0.12.1}"
+
+# 默认版本跟随最近一次发布 tag（发版版本号由 tag 决定），避免本地默认值过期。
+default_app_version() {
+    local tag
+    tag="$(git -C "$REPO_DIR" describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || true)"
+    if [[ -n "$tag" ]]; then
+        printf '%s\n' "${tag#v}"
+    else
+        printf '0.15.2\n'
+    fi
+}
+
+# 默认更新源指向本仓库 GitHub Release 的 latest manifest；非 GitHub 远程则留空（禁用更新检查）。
+default_update_manifest_url() {
+    local remote
+    remote="$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)"
+    remote="${remote%.git}"
+    remote="${remote#git@github.com:}"
+    remote="${remote#https://github.com/}"
+    if [[ "$remote" == */* && "$remote" != *[:@]* && "$(printf '%s' "$remote" | tr -dc '/')" == "/" ]]; then
+        printf 'https://github.com/%s/releases/latest/download/update-manifest.json\n' "$remote"
+    fi
+}
+
+APP_VERSION="${APP_VERSION:-$(default_app_version)}"
 APP_BUILD="${APP_BUILD:-1}"
 APP_BUNDLE_ID="${APP_BUNDLE_ID:-local.immersive-translator.mvp}"
-APP_UPDATE_MANIFEST_URL="${APP_UPDATE_MANIFEST_URL:-}"
+APP_UPDATE_MANIFEST_URL="${APP_UPDATE_MANIFEST_URL:-$(default_update_manifest_url)}"
 APP_MINIMUM_SYSTEM_VERSION="${APP_MINIMUM_SYSTEM_VERSION:-13.0}"
-APP_DIR="$ROOT_DIR/dist/$APP_NAME.app"
+# bundle 目录名用产品中文名：macOS 对第三方 App 的 Finder/启动台/macOS 26「App」页
+# 显示名直接取 bundle 文件名（lproj/InfoPlist.strings 与 CFBundleName 都覆盖不了这些
+# 视图），要显示「沉浸口语」就得叫 沉浸口语.app。可执行名/资源 bundle 名仍由 APP_NAME 决定。
+APP_BUNDLE_DIRNAME="${APP_BUNDLE_DIRNAME:-沉浸口语}"
+APP_DIR="$ROOT_DIR/dist/$APP_BUNDLE_DIRNAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
@@ -28,7 +57,30 @@ resolve_codesign_identity() {
         return
     fi
 
+    # 优先选带 Team ID 的证书（Apple Development / Developer ID Application）。
+    # 钥匙串对无 Team ID 签名（自签名/ad-hoc）只能按 cdhash 记分区授权，
+    # 每次重编译哈希都变，读 keychain 条目就会弹「想要使用密钥串」要密码；
+    # 带 Team ID 的签名按 teamid:XXX 记授权，重编译不再弹。
+    local team_id_identity
+    team_id_identity="$(
+        security find-identity -v -p codesigning 2>/dev/null |
+            sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -n 1
+    )"
+    if [[ -z "$team_id_identity" ]]; then
+        team_id_identity="$(
+            security find-identity -v -p codesigning 2>/dev/null |
+                sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -n 1
+        )"
+    fi
+    if [[ -n "$team_id_identity" ]]; then
+        echo "codesign identity: $team_id_identity" >&2
+        printf '%s\n' "$team_id_identity"
+        return
+    fi
+
     if command -v security >/dev/null 2>&1 && security find-identity -v -p codesigning 2>/dev/null | grep -Fq "\"$DEFAULT_LOCAL_CODESIGN_IDENTITY\""; then
+        echo "warning: no Team-ID signing identity found; falling back to '$DEFAULT_LOCAL_CODESIGN_IDENTITY'." >&2
+        echo "warning: without a Team ID, Keychain re-prompts for access on every rebuild." >&2
         printf '%s\n' "$DEFAULT_LOCAL_CODESIGN_IDENTITY"
         return
     fi
@@ -50,7 +102,9 @@ permissions after rebuilds.
 Create a self-signed Code Signing certificate named:
   $DEFAULT_LOCAL_CODESIGN_IDENTITY
 
-Or use an existing stable identity explicitly:
+Or use an existing stable identity explicitly (an Apple Development /
+Developer ID identity is preferred — it carries a Team ID, which keeps
+Keychain authorizations stable across rebuilds):
   security find-identity -v -p codesigning
   CODESIGN_IDENTITY="Your Code Signing Identity" ./scripts/build_app.sh
 
@@ -107,6 +161,18 @@ if [[ ! -d "$RESOURCE_BUNDLE" ]]; then
     exit 1
 fi
 cp -R "$RESOURCE_BUNDLE" "$RESOURCES_DIR/"
+# Finder/启动台/macOS 26「App」页/Spotlight 对 App 显示名的解析优先级：
+# 本地化 InfoPlist.strings > bundle 文件名，裸 CFBundleName/DisplayName key
+# 不参与。要显示中文「沉浸口语」必须写入 lproj 本地化资源（签名前完成，会被 seal 进签名）。
+APP_DISPLAY_NAME_ESCAPED="$(xml_escape "沉浸口语")"
+for lang in zh_CN en; do
+    mkdir -p "$RESOURCES_DIR/$lang.lproj"
+    cat > "$RESOURCES_DIR/$lang.lproj/InfoPlist.strings" <<PSTR
+/* 本地化 App 显示名：对齐 Windows productName「沉浸口语」（tauri.conf.json:3） */
+"CFBundleName" = "$APP_DISPLAY_NAME_ESCAPED";
+"CFBundleDisplayName" = "$APP_DISPLAY_NAME_ESCAPED";
+PSTR
+done
 cat > "$RESOURCES_DIR/${APP_NAME}_${APP_NAME}.bundle/Info.plist" <<BPLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -142,9 +208,11 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>zh_CN</string>
-    <!-- 显示名（访达/启动台/强制退出）：对齐 Windows productName「沉浸口语」
-         （tauri.conf.json:3）。CFBundleName/CFBundleExecutable 保持
-         ImmersiveTranslator：联动 dist 路径、SPM 资源 bundle 命名与 codesign 目标。 -->
+    <!-- 显示名（访达/启动台/App 页/强制退出）：对齐 Windows productName「沉浸口语」
+         （tauri.conf.json:3）。CFBundleName 与 CFBundleDisplayName 都设为中文——
+         macOS 26「App」启动器、Spotlight 元数据(kMDItemDisplayName)取 CFBundleName；
+         CFBundleExecutable 保持 ImmersiveTranslator：联动 dist 路径、SPM 资源
+         bundle 命名与 codesign 目标，不可改。 -->
     <key>CFBundleDisplayName</key>
     <string>沉浸口语</string>
     <key>CFBundleExecutable</key>
@@ -156,7 +224,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>ImmersiveTranslator</string>
+    <string>沉浸口语</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

@@ -44,13 +44,49 @@ struct VoiceCapabilities: Equatable {
     let ttsVoices: [VoiceTtsVoice]
     /// ASR 可用语种（消费点 lang 只能取其中）。
     let asrLanguages: [String]
+    /// 新服务端按调用方式分别下发；nil = 旧服务端未下发，兼容回退 asrLanguages。
+    let asrStreamingLanguages: [String]?
+    let asrBatchLanguages: [String]?
     let iseEnabled: Bool
     /// 配额余量（服务端字段上线前为 nil）。
     let quota: VoiceQuotaMap?
 
+    init(
+        available: Bool,
+        ttsVoices: [VoiceTtsVoice],
+        asrLanguages: [String],
+        asrStreamingLanguages: [String]? = nil,
+        asrBatchLanguages: [String]? = nil,
+        iseEnabled: Bool,
+        quota: VoiceQuotaMap?
+    ) {
+        self.available = available
+        self.ttsVoices = ttsVoices
+        self.asrLanguages = asrLanguages
+        self.asrStreamingLanguages = asrStreamingLanguages
+        self.asrBatchLanguages = asrBatchLanguages
+        self.iseEnabled = iseEnabled
+        self.quota = quota
+    }
+
     static let empty = VoiceCapabilities(
         available: false, ttsVoices: [], asrLanguages: [], iseEnabled: false, quota: nil
     )
+}
+
+/// ASR 消费点的调用方式（批量转写 / 流式识别；能力按方式分语种下发）。
+enum VoiceAsrMode: Equatable {
+    case batch
+    case stream
+}
+
+/// 按调用方式取 ASR 可用语种：分语种字段缺省时兼容回退 asrLanguages；
+/// **明确的空数组不回退**（该方式确实无可用语种，对齐 Windows asrLanguagesFor）。
+func asrLanguagesFor(_ caps: VoiceCapabilities, mode: VoiceAsrMode = .batch) -> [String] {
+    switch mode {
+    case .batch: return caps.asrBatchLanguages ?? caps.asrLanguages
+    case .stream: return caps.asrStreamingLanguages ?? caps.asrLanguages
+    }
 }
 
 /// 402/WSS 事件的 resource 裸值（tts_chars 等）归一成配额键；未知资源返回 nil。
@@ -126,6 +162,11 @@ func parseVoiceCapabilities(_ raw: Any?) -> VoiceCapabilities {
         available: true,
         ttsVoices: parseVoices(voice["ttsVoices"]),
         asrLanguages: parseLanguages(voice["asrLanguages"]),
+        // 分语种字段：新服务端按调用方式分别下发；数组才收，缺失/异形保持 nil 回退。
+        asrStreamingLanguages: voice["asrStreamingLanguages"] is [Any]
+            ? parseLanguages(voice["asrStreamingLanguages"]) : nil,
+        asrBatchLanguages: voice["asrBatchLanguages"] is [Any]
+            ? parseLanguages(voice["asrBatchLanguages"]) : nil,
         // 对齐 JS `voice.iseEnabled === true`：只认真布尔（数值 1 / "yes" 都不算）。
         iseEnabled: voiceJsonIsTrue(voice["iseEnabled"]),
         quota: parseQuota(voice["quota"])

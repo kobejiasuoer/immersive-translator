@@ -63,14 +63,16 @@ struct VoiceRouteSignals {
     var loggedIn: Bool
     /// nil = 未拉到能力（网络失败/未登录拉取被拒等）。
     var caps: VoiceCapabilities?
-    /// 能力拉取失败的错误码（AuthError.code，banned 单列；其余归网络失败）。
+    /// 能力拉取失败的错误码（AuthError.code，banned/登录失效类/未开通单列；其余归网络失败）。
     /// nil = 拉取成功。与 caps 不同时成立：失败侧 caps 恒 nil。
     var capsError: String?
     /// 402/WSS quota_exceeded 事件的 resource 裸值（tts_chars 等；事件式兜底来源）。
     var quotaEvents: [String]
     var ability: VoiceRouteAbility
-    /// asr 要求的具体语种；不给则只看 asrLanguages 是否为空。
+    /// asr 要求的具体语种；不给则只看 asrLanguagesFor(caps, asrMode) 是否为空。
     var asrLang: VoiceAsrLang?
+    /// asr 消费点的调用方式（批量/流式；分语种能力按方式取，缺省批量）。
+    var asrMode: VoiceAsrMode?
     /// 本地跟读打分开关（voiceGatewayIseEnabled）已关闭；仅 ability=ise 时消费。
     var iseLocalOff: Bool
 
@@ -81,6 +83,7 @@ struct VoiceRouteSignals {
         quotaEvents: [String] = [],
         ability: VoiceRouteAbility,
         asrLang: VoiceAsrLang? = nil,
+        asrMode: VoiceAsrMode? = nil,
         iseLocalOff: Bool = false
     ) {
         self.loggedIn = loggedIn
@@ -89,6 +92,7 @@ struct VoiceRouteSignals {
         self.quotaEvents = quotaEvents
         self.ability = ability
         self.asrLang = asrLang
+        self.asrMode = asrMode
         self.iseLocalOff = iseLocalOff
     }
 }
@@ -113,10 +117,30 @@ private func quotaExhausted(caps: VoiceCapabilities, quotaEvents: [String], abil
 func reduceVoiceRoute(_ signals: VoiceRouteSignals) -> VoiceRouteDecision {
     let s = signals
     if !s.loggedIn {
-        return VoiceRouteDecision(engine: .off, reason: .notLoggedIn, hint: "登录沉浸云即用")
+        return VoiceRouteDecision(
+            engine: .off,
+            reason: .notLoggedIn,
+            hint: "请先登录，再检查云语音是否开放；也可在「设置 → 语音」使用讯飞"
+        )
     }
     if s.capsError == "banned" {
         return VoiceRouteDecision(engine: .off, reason: .banned, hint: "账号已被封禁")
+    }
+    // 登录失效类错误码单列（Windows 300247a）：不再并入「查网络」的误导文案，
+    // hint 走 voiceErrorMessage 既有映射（token_expired 静默文案为空 → 兜底句）。
+    if ["token_invalid", "unauthorized", "token_reused", "token_expired"].contains(s.capsError ?? "") {
+        let info = voiceErrorMessage(VoiceError(code: s.capsError ?? "token_invalid"))
+        return VoiceRouteDecision(
+            engine: .off,
+            reason: .notLoggedIn,
+            hint: info.text.isEmpty ? "登录已失效，请重新登录" : info.text
+        )
+    }
+    if s.capsError == "voice_not_configured" {
+        return VoiceRouteDecision(engine: .off, reason: .voiceNotConfigured, hint: "语音功能暂未开通")
+    }
+    if s.capsError == "voice_account_changed" {
+        return VoiceRouteDecision(engine: .off, reason: .capsUnavailable, hint: "账号已切换，请重新操作")
     }
     if s.caps == nil {
         return VoiceRouteDecision(
@@ -146,11 +170,13 @@ func reduceVoiceRoute(_ signals: VoiceRouteSignals) -> VoiceRouteDecision {
             hint: "跟读打分已在设置里关闭，可在「设置 → 语音」重新开启"
         )
     }
+    // 分语种能力按调用方式取（明确的空数组不回退 asrLanguages，Windows 同口径）。
+    let asrLanguages = asrLanguagesFor(caps, mode: s.asrMode ?? .batch)
     let missing =
         (s.ability == .tts && caps.ttsVoices.isEmpty)
         || (s.ability == .asr
-            && (caps.asrLanguages.isEmpty
-                || (s.asrLang != nil && !caps.asrLanguages.contains(s.asrLang!.rawValue))))
+            && (asrLanguages.isEmpty
+                || (s.asrLang != nil && !asrLanguages.contains(s.asrLang!.rawValue))))
         || (s.ability == .ise && !caps.iseEnabled)
     if missing {
         return VoiceRouteDecision(
@@ -167,9 +193,11 @@ func reduceVoiceRoute(_ signals: VoiceRouteSignals) -> VoiceRouteDecision {
 // ---------------------------------------------------------------------------
 
 /// 登录态现查通道（生产由 AppDelegate 接线 serverAuth.status；未接线按未登录
-/// 保守处理，对齐 Windows authGetStatus 每次现查）。
+/// 保守处理，对齐 Windows authGetStatus 每次现查）。accountId 供能力缓存按账号
+/// 隔离与取数后身份核对（A 账号的缓存不得喂给 B 账号）。
 enum VoiceLoginProbe {
     static var provider: () async -> Bool = { false }
+    static var accountId: () async -> String? = { nil }
 }
 
 struct VoiceRouteDeps {
@@ -178,18 +206,20 @@ struct VoiceRouteDeps {
         resolveInitialVoiceProvider(stored: VoicePrefsStore.loadProvider())
     }
     var isLoggedIn: () async -> Bool = { await VoiceLoginProbe.provider() }
+    /// 当前账号 id（未登录 nil）；能力缓存按它隔离、取数后核对身份。
+    var accountId: () async -> String? = { await VoiceLoginProbe.accountId() }
     var fetchCaps: () async throws -> VoiceCapabilities = { try await getVoiceCapabilities() }
     var iseEnabled: () -> Bool = { VoicePrefsStore.loadIseEnabled() }
 }
 
-/// caps 带 TTL 缓存（30s）；失败不缓存且错误码原样带回（banned 由归约单列成
-/// 封禁文案，不再与网络失败并成一句「查网络」）。
+/// caps 带 TTL 缓存（30s）且按账号隔离；失败不缓存且错误码原样带回（banned 由
+/// 归约单列成封禁文案，登录失效类单列成重登录引导，不再与网络失败并成一句「查网络」）。
 enum VoiceRoute {
     static let capsTTLSeconds: TimeInterval = 30
 
     /// 缓存与时钟跨消费点（阅读室 / 录音直译 / 语音页）并发读写：锁保护。
     private static let lock = NSLock()
-    private static var capsCache: (at: Date, caps: VoiceCapabilities)?
+    private static var capsCache: (at: Date, accountId: String?, caps: VoiceCapabilities)?
     private static var clock: () -> Date = { Date() }
 
     static func setClockForTests(_ clock: @escaping () -> Date) {
@@ -206,26 +236,44 @@ enum VoiceRoute {
         clock = { Date() }
     }
 
-    private static func cachedCaps() -> VoiceCapabilities? {
+    /// 取缓存：账号不匹配视同未命中（切号后旧账号的能力不下发新账号）。
+    private static func cachedCaps(accountId: String?) -> VoiceCapabilities? {
         lock.lock()
         defer { lock.unlock() }
-        guard let cache = capsCache, clock().timeIntervalSince(cache.at) < capsTTLSeconds else { return nil }
+        guard let cache = capsCache,
+              cache.accountId == accountId,
+              clock().timeIntervalSince(cache.at) < capsTTLSeconds else { return nil }
         return cache.caps
     }
 
-    private static func storeCaps(_ caps: VoiceCapabilities) {
+    private static func storeCaps(_ caps: VoiceCapabilities, accountId: String?) {
         lock.lock()
         defer { lock.unlock() }
-        capsCache = (clock(), caps)
+        capsCache = (clock(), accountId, caps)
+    }
+
+    /// 清空缓存（登出/切号广播时调用，强制下一轮现拉）。
+    static func clearCapsCache() {
+        lock.lock()
+        defer { lock.unlock() }
+        capsCache = nil
     }
 
     static func fetchCaps(deps: VoiceRouteDeps = VoiceRouteDeps()) async -> (caps: VoiceCapabilities?, errorCode: String?) {
-        if let cached = cachedCaps() {
+        let accountId = await deps.accountId()
+        if let cached = cachedCaps(accountId: accountId) {
             return (cached, nil)
         }
         do {
             let caps = try await deps.fetchCaps()
-            storeCaps(caps)
+            // 取数后核对身份（往返期间可能已切号/登出）：不一致不缓存，
+            // 折算成 voice_account_changed，由归约给「账号已切换」引导。
+            let currentAccountId = await deps.accountId()
+            guard currentAccountId == accountId else {
+                clearCapsCache()
+                return (nil, "voice_account_changed")
+            }
+            storeCaps(caps, accountId: accountId)
             return (caps, nil)
         } catch let error as VoiceError {
             return (nil, error.code.isEmpty ? "network_error" : error.code)
@@ -242,6 +290,7 @@ enum VoiceRoute {
     static func resolve(
         _ ability: VoiceRouteAbility,
         asrLang: VoiceAsrLang? = nil,
+        asrMode: VoiceAsrMode? = nil,
         deps: VoiceRouteDeps = VoiceRouteDeps()
     ) async -> VoiceRouteDecision {
         // 偏好读取/推断整体兜底：拿不到生效服务商时按存量讯飞路径处理（零回归
@@ -256,7 +305,11 @@ enum VoiceRoute {
             return .xfyun
         }
         let loggedIn = await deps.isLoggedIn()
-        // 未登录时归约必然落到 notLoggedIn，不必再拉能力（省一次 me/config 往返）。
+        // 未登录时归约必然落到 notLoggedIn，不必再拉能力（省一次 me/config 往返）；
+        // 未登录也清缓存（登出后旧账号能力不残留）。
+        if !loggedIn {
+            clearCapsCache()
+        }
         let fetched = loggedIn ? await fetchCaps(deps: deps) : (caps: nil as VoiceCapabilities?, errorCode: nil as String?)
         return reduceVoiceRoute(
             VoiceRouteSignals(
@@ -267,6 +320,7 @@ enum VoiceRoute {
                 quotaEvents: [],
                 ability: ability,
                 asrLang: asrLang,
+                asrMode: asrMode,
                 iseLocalOff: ability == .ise && !deps.iseEnabled()
             )
         )

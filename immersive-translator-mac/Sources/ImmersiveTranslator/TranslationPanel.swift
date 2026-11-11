@@ -82,10 +82,13 @@ final class TranslationPanelController {
     private let onLookupCard: (String) async throws -> DictCardData?
     private let onAddVocab: (String, DictCardData?, String) async throws -> CollectVocabOutcome
     private let onSendToReader: (String) -> Void
+    /// 沉浸云账号令牌来源（App 注入；auth-1 查词链同源）：词典预取与快捷动作
+    /// 在沉浸云下自动携带账号令牌。nil = 未接线，按未登录 401 归一。
+    private let accountTokenSource: PlatformAccountTokenSource?
     /// 浮窗自用的 LLM 管线（词典预取 raw 响应解析 + 快捷动作流式），
     /// 与 App 侧共享同一 SettingsStore。既有 onLookupCard / onRunQuickAction
     /// 回调保留不删（波 2 SHELL-CHROME 决定清理或继续接线）。
-    private lazy var chat = ReaderChatClient(settingsStore: settingsStore)
+    private lazy var chat = ReaderChatClient(settingsStore: settingsStore, accountTokenSource: accountTokenSource)
     /// 四位置朗读器（原文/译文/动作结果/词典词条）。
     let speaker = PanelTtsSpeaker()
     private var panel: NSPanel?
@@ -105,6 +108,7 @@ final class TranslationPanelController {
     init(
         settingsStore: SettingsStore,
         historyStore: TranslationHistoryStore,
+        accountTokenSource: PlatformAccountTokenSource? = nil,
         onRetry: @escaping (String) -> Void,
         onShowHistory: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
@@ -118,6 +122,7 @@ final class TranslationPanelController {
     ) {
         self.settingsStore = settingsStore
         self.historyStore = historyStore
+        self.accountTokenSource = accountTokenSource
         self.onRetry = onRetry
         self.onShowHistory = onShowHistory
         self.onOpenSettings = onOpenSettings
@@ -747,6 +752,10 @@ final class TranslationPanelController {
         }
     }
 
+    /// 自动隐藏倒计时（BUG-008 后可注入：生产固定 16s，单测注入短延时以覆盖
+    /// 「取消不得提前隐藏 / 计时结束才隐藏」语义）。
+    var autoHideDelayNanoseconds: UInt64 = 16_000_000_000
+
     private func scheduleAutoHideIfNeeded() {
         autoHideTask?.cancel()
         guard model.autoHideEnabled,
@@ -758,9 +767,15 @@ final class TranslationPanelController {
         }
 
         autoHideTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 16_000_000_000)
+            try? await Task.sleep(nanoseconds: self?.autoHideDelayNanoseconds ?? 16_000_000_000)
+            // 取消即整段作废：try? 会吞掉取消时抛出的 CancellationError，让执行
+            // 落进下面的隐藏块——终态 show 连发两次（流式 isFinal 一发 + App 成功段
+            // 再一发）时，第二次 show 的 cancel 会让第一次的倒计时立即隐藏浮窗，
+            // 即 BUG-008 的「完成即隐」。隐藏前必须确认本任务未被取消。
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self,
+                      !Task.isCancelled,
                       self.model.autoHideEnabled,
                       !self.model.isPinned,
                       !self.model.isLoading,

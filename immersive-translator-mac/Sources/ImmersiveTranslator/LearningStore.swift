@@ -261,6 +261,16 @@ final class LearningStore {
         return dir
     }
 
+    /// Mac 旧 JSON 同步布局的域目录：`<root>/sync/<namespace>`（与 SyncStore JSON
+    /// 回退写入端同公式：guest 即 sync/guest，账号即 sync/account-<user.id hex>，
+    /// 不是邮箱）。learning_migrate 的 legacy 导入段据此取旧数据；Windows 旧布局
+    /// 是 sync/<collection>.json 平铺，与 Mac 不同，不能照抄 Windows 的目录拼接。
+    func legacySyncDirectory(namespace: String) -> URL {
+        rootDirectory
+            .appendingPathComponent("sync", isDirectory: true)
+            .appendingPathComponent(namespace, isDirectory: true)
+    }
+
     /// 路径越界 / 含 `..` / guest 落 learning/ 前缀 → 拒绝（Rust verify_path）。
     func verifyPath(_ url: URL, namespace: String) throws {
         // Rust `path.components().any(ParentDir)` 不做词法归一：原始路径里出现任何
@@ -380,14 +390,32 @@ final class LearningStore {
         }
         do {
             return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw LearningFileNotFoundError()
+        } catch let error as NSError {
+            // 只豁免文件不存在（NotFound → 调用方豁免为空库）；其余读错误必须报
+            // 出来（对齐 readFileDB 同策略）：非 UTF-8（code=259）/ 无权限
+            //（code=257）若也吞成 NotFound，消费方当空库、下一次保存整体清库。
+            if error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError {
+                throw LearningFileNotFoundError()
+            }
+            throw error
         }
     }
 
     /// 写域文件 = commit（派生 outbox + 导出兼容文件）。
     func writePath(_ url: URL, _ content: String) throws {
         try commit(url, content)
+    }
+
+    /// 在本存储互斥锁内执行调用方的一整段「读 → 改 → 写」（BUG-027）。
+    /// readPath 与 commit 各自取锁、两者之间锁是放开的：同步 pull 的 storePut 事务
+    ///（putTransaction → hydrate 重写域文件快照）可以插进来，随后 commit 拿拉取前读到的
+    /// 旧稿经 mergeUnknown 覆盖刚拉下的 srs/recall（新稿已有标量胜出），derive 再以 now()
+    /// 重新入队（dirty）推回云端。锁是 NSRecursiveLock：body 内再调 readPath / commit /
+    /// list 属同线程重入，不死锁；body 只做本地读写，不得同步等待会反向争用本锁的线程/队列。
+    func withExclusiveAccess<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
     }
 
     /// 列目录内的域文件（Rust list_paths：磁盘目录项 ∪ files 表里本命名空间、
@@ -566,13 +594,27 @@ final class LearningStore {
 
     // MARK: 迁移（Rust learning_migrate :1661-1742）
 
+    /// 迁移完成哨兵行（files 表 path 值）：相对路径永不可能与域文件 url.path
+    ///（绝对路径）冲突；content 恒 NULL——adoptGuest 只搬 content 非空的行、
+    /// listPaths 只认父目录匹配的行，哨兵行不会被当作域文件。随库共存亡：删
+    /// learning.sqlite3 重建后哨兵消失，迁移可重跑。
+    private static let migrateMarkerPath = "__learning_migrated__"
+
     /// 把既有 4 个域 JSON + books/notes 目录逐个 commit 入库；再导入旧 sync/
     /// 目录 JSON 里本地没有的实体。`legacySyncDirectory` 为 Mac 旧 JSON 同步目录
-    /// （`sync/<legacyNamespace>`；nil 则按 guest 惯例取 `sync/guest`）。
+    ///（`sync/<legacyNamespace>`；nil 则按当轮命名空间取 `sync/<ns>`，与
+    /// legacySyncDirectory(namespace:) 同公式）。成功完成即落哨兵行，同命名空间
+    /// 后续调用短路早退（SQLite 权威后域 JSON 只是 commit 的导出物，盘上不会再
+    /// 有新数据源），避免每轮启动/登录全量重推导。
     func migrate(expectedNamespace: String?, legacySyncDirectory: URL? = nil) throws {
         try verifyNamespace(expectedNamespace)
         let initialNamespace = currentNamespace()
         let dir = try dataDirectory()
+        let db = try connection()
+        // 已迁移短路：哨兵行在 = 本命名空间已完整迁移。全量推导（JSON 解析 +
+        // 全集合扫描 + 磁盘重导出）成本随库体积增长，不能每轮启动/登录重付。
+        let marker = try db.query("SELECT 1 FROM files WHERE namespace=? AND path=?", [initialNamespace, Self.migrateMarkerPath])
+        guard marker.isEmpty else { return }
         for name in ["reader_articles.json", "reader_books.json", "reader_vocab.json", "reader_speak_sessions.json"] {
             let url = dir.appendingPathComponent(name)
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
@@ -601,8 +643,7 @@ final class LearningStore {
         defer { lock.unlock() }
         try verifyNamespace(initialNamespace)
         let ns = currentNamespace()
-        let folder = legacySyncDirectory ?? (ns == "guest" ? rootDirectory.appendingPathComponent("sync/guest", isDirectory: true) : dir.appendingPathComponent("sync", isDirectory: true))
-        let db = try connection()
+        let folder = legacySyncDirectory ?? self.legacySyncDirectory(namespace: ns)
         try db.transaction { [self] in
             for collection in Self.collections {
                 let url = folder.appendingPathComponent("\(collection).json")
@@ -624,7 +665,43 @@ final class LearningStore {
                     }
                 }
             }
+            // 与 legacy 导入同一事务落哨兵：中途失败整体回滚，下轮重新迁移。
+            try db.run(
+                "INSERT INTO files(namespace,path,content) VALUES(?,?,NULL) ON CONFLICT(namespace,path) DO NOTHING",
+                [ns, Self.migrateMarkerPath]
+            )
         }
+    }
+
+    // MARK: 后台执行（Windows 的 migrate/adopt_guest 跑在 Tauri 命令线程；Mac
+    // 调用方在 MainActor，大库时全量推导会卡 UI——专用串行队列挪出去执行。串行
+    // 队列同时复刻 Rust 全局 Mutex 的整段互斥语义：并发迁移/并入不交错提交）。
+
+    private static let workQueue = DispatchQueue(
+        label: "local.immersive-translator.learning-store.work", qos: .userInitiated
+    )
+
+    private func runOffMain<T>(_ work: @escaping () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            Self.workQueue.async { [self] in
+                do {
+                    continuation.resume(returning: try work())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// migrate 的后台包装（学习接力每轮触发用；await 返回后再继续同步）。
+    func migrateOffMain(expectedNamespace: String?, legacySyncDirectory: URL? = nil) async throws {
+        try await runOffMain { try self.migrate(expectedNamespace: expectedNamespace, legacySyncDirectory: legacySyncDirectory) }
+    }
+
+    /// adoptGuest 的后台包装（登录成功收尾用；Rust after_login_success 的
+    /// adopt_guest 同样在命令线程执行）。
+    func adoptGuestOffMain(userId: String) async throws {
+        try await runOffMain { try self.adoptGuest(userId: userId) }
     }
 
     /// 本地集合白名单（sync.rs LOCAL_COLLECTIONS 同名）。
@@ -1087,6 +1164,15 @@ final class LearningStore {
         }
     }
 
+    /// 裸文章负载判定（hydrate 重建 reader_articles.json 用；对齐 Windows
+    /// is_bare_article_payload）：无 kind 但确是整篇文章（有 id 与 sentences）。
+    /// content-chunk（articleId 键控、无 id）与 progress 等投影实体一律排除。
+    static func isBareArticlePayload(_ p: JSONObject) -> Bool {
+        LearningJSON.array(p["sentences"]) != nil
+            && !LearningJSON.isUndefined(p["id"])
+            && LearningJSON.isUndefined(p["articleId"])
+    }
+
     /// reading-articles：manifest + chunk + progress 组装；chunk 缺失 / revision
     /// 不符 → 沿用旧域文件版本，不写半成品。
     private func hydrateArticles(
@@ -1113,8 +1199,13 @@ final class LearningStore {
                 continue
             }
             if kind != "article" {
-                if LearningJSON.array(p["sentences"]) != nil {
-                    articles.append(p)  // 旧客户端写的完整文章载荷原样保留
+                // 宽容分支只收「裸整篇文章」（旧客户端/外部写入的完整载荷原样保留）；
+                // content-chunk 同步分块（键为 articleId、无 id）同样带 sentences，
+                // 绝不能进文章数组——否则 reader_articles.json 混入缺 id 的对象，整库
+                // 解码失败，书架空白、导入与打开文章必失败（对齐 Windows
+                // is_bare_article_payload，2026-10-30 同一事故）。
+                if Self.isBareArticlePayload(p) {
+                    articles.append(p)
                 }
                 continue
             }
@@ -1257,7 +1348,7 @@ final class LearningStore {
         lock.lock()
         defer { lock.unlock() }
         guard currentNamespace() == "guest" else { return }
-        try migrate(expectedNamespace: "guest", legacySyncDirectory: rootDirectory.appendingPathComponent("sync/guest", isDirectory: true))
+        try migrate(expectedNamespace: "guest", legacySyncDirectory: legacySyncDirectory(namespace: "guest"))
         guard currentNamespace() == "guest" else { return }
         let db = try connection()
         let target = Self.accountNamespace(userId)

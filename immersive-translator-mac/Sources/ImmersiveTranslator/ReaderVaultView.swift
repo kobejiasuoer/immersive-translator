@@ -205,8 +205,25 @@ struct VaultRailView: View {
         )
     }
 
+    /// 来源分组标签：标题解析得到 →《title》；解析不到（原文已删）→「原文不可用 · N」
+    /// 序号区分多组（对齐 Windows VocabListPanel VaultRail 的 unavailable 计数），
+    /// 不再误标「未命名文章」。
+    private static func sourceGroupLabels(
+        _ groups: [VaultRailCounts.ArticleGroup]
+    ) -> [(id: String, label: String, count: Int)] {
+        var unavailable = 0
+        return groups.map { g in
+            if let title = g.title, !title.isEmpty {
+                return (g.id, "《\(title)》", g.count)
+            }
+            unavailable += 1
+            return (g.id, "\(vaultSourceUnavailableLabel) · \(unavailable)", g.count)
+        }
+    }
+
     var body: some View {
         let counts = counts
+        let groupLabels = Self.sourceGroupLabels(counts.articleGroups)
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
                 if let focusCount = vm.focusReviewIds?.count, focusCount > 0 {
@@ -216,9 +233,9 @@ struct VaultRailView: View {
                 railItem(label: "全部", count: counts.total, active: source == .all) {
                     source = .all
                 }
-                ForEach(counts.articleGroups, id: \.id) { group in
+                ForEach(groupLabels, id: \.id) { group in
                     railItem(
-                        label: "《\(group.title ?? "未命名文章")》",
+                        label: group.label,
                         count: group.count,
                         active: source == .article(group.id)
                     ) {
@@ -907,9 +924,8 @@ private struct FocusStageView: View {
     @ViewBuilder
     private func card(_ word: VocabWord) -> some View {
         let sourceLabel = vaultFocusSourceLabel(
-            articleTitle: word.source.articleId.isEmpty
-                ? nil
-                : vm.articleTitle(articleId: word.source.articleId)
+            articleId: word.source.articleId,
+            articleTitle: vm.articleTitle(articleId: word.source.articleId)
         )
         switch focus.effectiveKind(vm: vm) {
         case .cloze:

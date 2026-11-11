@@ -98,39 +98,8 @@ final class VoicePrefsTests: XCTestCase {
         XCTAssertNil(VoicePrefsStore.loadProvider(defaults: defaults))
     }
 
-    // MARK: 登录成功瞬间自动切云（对齐 Windows Settings.tsx:176-185）
-
-    @MainActor
-    func testLoginAutoSwitchWritesGatewayAndBumpsNoticeOnce() {
-        _ = KeychainStore.deleteAllProviderAPIKeySlots()
-        let saved = UserDefaults.standard.string(forKey: VoicePrefsStore.providerKey)
-        defer {
-            if let saved {
-                UserDefaults.standard.set(saved, forKey: VoicePrefsStore.providerKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: VoicePrefsStore.providerKey)
-            }
-        }
-        let store = SettingsStore()
-        store.voiceProvider = .xfyun
-        let before = store.voiceAutoSwitchNoticeSerial
-        let snapshot = SettingsSaveSnapshot.capture(from: store)
-        // 停在讯飞 → 切 gateway 即时落盘 + 轻提示序号递增（讯飞凭据不动）。
-        XCTAssertTrue(store.applyLoginVoiceAutoSwitch())
-        XCTAssertEqual(store.voiceProvider, .gateway)
-        XCTAssertEqual(VoicePrefsStore.loadProvider(), .gateway)
-        XCTAssertEqual(store.voiceAutoSwitchNoticeSerial, before + 1)
-        XCTAssertEqual(SettingsSaveSnapshot.capture(from: store), snapshot, "自动切云不点亮保存条")
-        // 已是 gateway：无感（不再提示）。
-        XCTAssertFalse(store.applyLoginVoiceAutoSwitch())
-        XCTAssertEqual(store.voiceAutoSwitchNoticeSerial, before + 1)
-        // 从未存过（nil）也按「≠ gateway」切换并提示（Windows settings.voiceProvider !== "gateway"）。
-        UserDefaults.standard.removeObject(forKey: VoicePrefsStore.providerKey)
-        store.voiceProvider = nil
-        XCTAssertTrue(store.applyLoginVoiceAutoSwitch())
-        XCTAssertEqual(VoicePrefsStore.loadProvider(), .gateway)
-        XCTAssertEqual(store.voiceAutoSwitchNoticeSerial, before + 2)
-    }
+    // MARK: 登录成功不再自动切云（对齐 Windows 300247a：语音服务由用户选择，
+    // 引导条「使用沉浸云」按钮是唯一主动切换入口，applyLoginVoiceAutoSwitch 已移除）
 
     // MARK: 不点亮保存条（快照不含三字段，对齐 stripVoicePrefs）
 

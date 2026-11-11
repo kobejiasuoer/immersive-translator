@@ -198,9 +198,15 @@ struct ReaderSentenceText: NSViewRepresentable {
     }
 }
 
-/// 记录「用户主动选区」的 NSTextView：
-/// mouseUp 有选区 → onSelection；无选区单击 → 词定位 onWordClick。
-final class ReaderTextView: NSTextView {
+    /// 记录「用户主动选区」的 NSTextView：
+    /// 鼠标按下→抬起完成后有选区 → onSelection；无选区单击 → 词定位 onWordClick。
+    ///
+    /// 判定必须在 mouseDown 覆写里做：`super.mouseDown` 的跟踪循环会吞掉本进程
+    /// 的抬起事件，mouseUp 覆写一次都不会被调用（QA BUG-041，进程内探针实测：
+    /// 单击/划选两种序列 mouseUp 调用次数均为 0，NSView 对照组正常）；super 返回
+    /// 即跟踪结束（鼠标已抬起），此刻的选区/命中与 mouseUp 时刻完全一致。
+    /// mouseUp 覆写保留：探测到派发路径恢复时（macOS 未来版本修掉吞事件）照常工作。
+    final class ReaderTextView: NSTextView {
     var onSelection: ((String) -> Void)?
     var onWordClick: ((String) -> Void)?
     var onChunkClick: ((SentenceChunk) -> Void)?
@@ -249,7 +255,22 @@ final class ReaderTextView: NSTextView {
         if widthChanged { invalidateIntrinsicContentSize() }
     }
 
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        handleInteractionEnd(with: event)
+    }
+
     override func mouseUp(with event: NSEvent) {
+        handleInteractionEnd(with: event)
+        super.mouseUp(with: event)
+    }
+
+    /// 鼠标交互终点的命中判定（划选 → 查短语；无选区单击 → 词块卡/点词）。
+    /// 由 mouseDown（跟踪循环结束后，主路径）或 mouseUp（派发路径恢复时的兜底）
+    /// 调用；两处都可能跑，回调方按幂等语义消费（查词/词块卡重复触发同值）。
+    private func handleInteractionEnd(with event: NSEvent) {
+        // 程序化 setAttributedString 会清空选区；非用户交互（textWasManuallySet
+        // 置位期间）不得当划选上报。
         let range = selectedRange
         if range.length > 0, let source = self.string as NSString?,
            range.location + range.length <= source.length {
@@ -257,7 +278,6 @@ final class ReaderTextView: NSTextView {
             let picked = source.substring(with: range).replacingOccurrences(of: "\u{FFFC}", with: "")
             if !picked.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 onSelection?(picked)
-                super.mouseUp(with: event)
                 return
             }
         }
@@ -269,7 +289,6 @@ final class ReaderTextView: NSTextView {
                 onWordClick?(word)
             }
         }
-        super.mouseUp(with: event)
     }
 
     /// 点击命中词块标注范围 → 出即时卡（渲染索引先映回句内原文坐标）。
@@ -756,7 +775,21 @@ final class ProseFlowTextView: NSTextView {
 
     // MARK: 交互
 
+    /// 鼠标按下→抬起完成后的命中判定：划选 → 查短语；无选区单击 → 词块卡 /
+    /// 点句定位 / 点词。与 ReaderTextView 同理，判定挂在 mouseDown 覆写里——
+    /// `super.mouseDown` 的跟踪循环吞掉抬起事件，mouseUp 覆写在 macOS 26 上
+    /// 一次都不会被调用（QA BUG-041 探针实测）；mouseUp 保留为派发路径恢复后的兜底。
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        handleInteractionEnd(with: event)
+    }
+
     override func mouseUp(with event: NSEvent) {
+        handleInteractionEnd(with: event)
+        super.mouseUp(with: event)
+    }
+
+    private func handleInteractionEnd(with event: NSEvent) {
         let selection = selectedRange
         let source = string as NSString
         if selection.length > 0, selection.location + selection.length <= source.length {
@@ -766,7 +799,6 @@ final class ProseFlowTextView: NSTextView {
                 if let idx = pieceIdx(at: splice.originalIndex(selection.location)) {
                     onSelection?(idx, picked)
                 }
-                super.mouseUp(with: event)
                 return
             }
         }
@@ -775,7 +807,6 @@ final class ProseFlowTextView: NSTextView {
                 onChunkClick?(hit.pieceIdx, hit.chunk)
             } else {
                 guard let idx = pieceIdxAtMouseLocation(with: event) else {
-                    super.mouseUp(with: event)
                     return
                 }
                 // 点句定位；点在单词上顺带查词（handleProseClick）。
@@ -785,7 +816,6 @@ final class ProseFlowTextView: NSTextView {
                 }
             }
         }
-        super.mouseUp(with: event)
     }
 
     private func chunkAtMouseLocation(with event: NSEvent) -> (range: NSRange, chunk: SentenceChunk, pieceIdx: Int)? {

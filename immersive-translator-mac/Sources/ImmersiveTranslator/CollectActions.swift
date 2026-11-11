@@ -8,6 +8,11 @@ extension Notification.Name {
     /// 阅读室各窗订阅后 refreshVocab + 刷复习角标。
     static let readerVocabAdded = Notification.Name("readerVocabAdded")
 
+    /// 复习评分落库（快速复习窗 grade 成功提交后广播；userInfo["wordId"] = 归一化词 id）。
+    /// 阅读室各窗订阅后 refreshVocab——到期数/复习队列即时反映评分结果
+    ///（BUG-011：快速复习收工后阅读室「笔记与复习」仍显示已评词到期、可被重复复习）。
+    static let readerReviewGraded = Notification.Name("readerReviewGraded")
+
     /// 阅读室有新文章落库（userInfo["articleId"] = 文章 id）。
     /// 阅读室各窗订阅后刷新书架列表。
     static let readerArticleAdded = Notification.Name("readerArticleAdded")

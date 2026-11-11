@@ -273,6 +273,53 @@ final class LearningStoreTests: XCTestCase {
         XCTAssertEqual(LearningJSON.string(LearningJSON.object(articles.first ?? [:])?["title"]), "旧稿")
     }
 
+    // MARK: hydrate 不把同步分块写进文章数组（Rust bare_article_payload_excludes_sync_chunks）
+
+    func testBareArticlePayloadExcludesSyncChunks() {
+        // content-chunk 投影（真实事故形状，2026-10-30）：articleId 键控、无 id。
+        let chunk: JSONObject = [
+            "v": 2, "kind": "content-chunk", "articleId": "a1", "contentRevision": "125pf3a",
+            "sentences": [["en": "Hi.", "id": "a1:s0", "idx": 0, "paragraphIdx": 0]],
+        ]
+        XCTAssertFalse(LearningStore.isBareArticlePayload(chunk))
+        // progress 投影同样排除。
+        XCTAssertFalse(LearningStore.isBareArticlePayload(["v": 2, "kind": "progress", "articleId": "a1", "lastReadAt": 1]))
+        // 裸整篇文章（无 kind，但 id + sentences 齐全）放行。
+        XCTAssertTrue(LearningStore.isBareArticlePayload(["id": "a1", "title": "T", "sentences": [["en": "Hi."]]]))
+        // 有 id 但没有 sentences 的负载不放行。
+        XCTAssertFalse(LearningStore.isBareArticlePayload(["id": "a1", "title": "T"]))
+    }
+
+    func testHydrateNeverWritesSyncChunksIntoArticles() throws {
+        let store = makeStore("hydrate-chunks")
+        let articlesURL = store.rootDirectory.appendingPathComponent("reader_articles.json")
+        let article: JSONObject = [
+            "id": "a", "title": "A", "createdAt": 1, "lastReadAt": 20,
+            "progress": ["sentenceIdx": 0, "percent": 0, "secondsListened": 0],
+            "sentences": [["idx": 0, "paragraphIdx": 0, "en": "Hello", "zh": NSNull(), "zhState": "pending"]],
+        ]
+        try store.commit(articlesURL, LearningJSON.stringify(["schemaVersion": 1, "articles": [article]]))
+        // 他端拉下来的孤儿分块（文章已删 / 旧修订）+ 旧客户端写的裸整篇文章。
+        let orphanChunk: JSONObject = [
+            "v": 2, "kind": "content-chunk", "articleId": "gone", "contentRevision": "rev",
+            "sentences": [["idx": 0, "paragraphIdx": 0, "en": "Bye", "id": "gone:s0"]],
+        ]
+        let legacy: JSONObject = [
+            "id": "legacy", "title": "Legacy", "createdAt": 2, "lastReadAt": 2,
+            "sentences": [["idx": 0, "paragraphIdx": 0, "en": "Old", "zh": NSNull(), "zhState": "pending"]],
+        ]
+        try store.storePut("reading-articles", [
+            StoredSyncEntity(id: "chunk:gone:rev:x", baseVersion: 1, updatedAt: 30, deleted: false, schemaVersion: 2, originDevice: "phone", payload: orphanChunk, dirty: false),
+            StoredSyncEntity(id: "legacy", baseVersion: 1, updatedAt: 30, deleted: false, schemaVersion: 2, originDevice: "phone", payload: legacy, dirty: false),
+        ])
+        let text = try store.readPath(articlesURL)
+        // 重建的域文件必须整库可解码（事故即在此处 keyNotFound "id" at articles[1]）：
+        // 本文分块与孤儿分块都不进数组，manifest 组装的文章与裸文章保留。
+        let file = try ReaderFileCodec.decode(ArticlesFile.self, from: Data(text.utf8))
+        XCTAssertEqual(Set(file.articles.map(\.id)), ["a", "legacy"])
+        XCTAssertFalse(text.contains("content-chunk"), text)
+    }
+
     // MARK: review-events 不可变冲突（put / commitReview 双侧）
 
     func testImmutableReviewEventConflicts() throws {
@@ -550,13 +597,15 @@ extension LearningStoreTests {
     // MARK: migrate：旧 sync JSON 读/解析/实体解码失败一律中止（Rust :1722-1735）
 
     func testMigrateAbortsOnCorruptLegacySyncFileAndImportsValidOnes() throws {
-        let store = makeStore("migrate-corrupt")
-        let legacy = store.rootDirectory.appendingPathComponent("sync/guest", isDirectory: true)
+        // 迁移成功一次即落哨兵行短路同命名空间的后续调用，失败阶段（无哨兵）与
+        // 成功导入阶段分用两个独立库验证。
+        let failing = makeStore("migrate-corrupt")
+        let legacy = failing.rootDirectory.appendingPathComponent("sync/guest", isDirectory: true)
         try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
         let notesFile = legacy.appendingPathComponent("notes.json")
         // ① JSON 解析失败 → 抛错（不再静默跳过）
         try "{not json".write(to: notesFile, atomically: true, encoding: .utf8)
-        XCTAssertThrowsError(try store.migrate(expectedNamespace: "guest", legacySyncDirectory: legacy))
+        XCTAssertThrowsError(try failing.migrate(expectedNamespace: "guest", legacySyncDirectory: legacy))
         // ② 实体行缺必需字段 → 抛错且整个事务回滚（同文件的合法行也不落库）
         let valid: JSONObject = [
             "id": "ok", "baseVersion": 3, "updatedAt": 10, "deleted": false, "schemaVersion": 2,
@@ -564,15 +613,45 @@ extension LearningStoreTests {
         ]
         try LearningJSON.stringify(["schemaVersion": 1, "entities": [valid, ["id": "broken"] as JSONObject]])
             .write(to: notesFile, atomically: true, encoding: .utf8)
-        XCTAssertThrowsError(try store.migrate(expectedNamespace: "guest", legacySyncDirectory: legacy)) { error in
+        XCTAssertThrowsError(try failing.migrate(expectedNamespace: "guest", legacySyncDirectory: legacy)) { error in
             XCTAssertEqual((error as? LearningStoreError)?.message, "旧同步数据 notes.json 含无法解析的实体，迁移已中止")
         }
-        XCTAssertEqual(try store.list("notes").count, 0)
+        XCTAssertEqual(try failing.list("notes").count, 0)
         // ③ 顶层不是对象 / 没有 entities 数组：跳过该集合，不是错误
         try "[]".write(to: notesFile, atomically: true, encoding: .utf8)
-        XCTAssertNoThrow(try store.migrate(expectedNamespace: "guest", legacySyncDirectory: legacy))
-        // ④ 全部合法 → 导入本地没有的实体
-        try LearningJSON.stringify(["schemaVersion": 1, "entities": [valid]]).write(to: notesFile, atomically: true, encoding: .utf8)
+        XCTAssertNoThrow(try failing.migrate(expectedNamespace: "guest", legacySyncDirectory: legacy))
+        XCTAssertEqual(try failing.list("notes").count, 0)
+        // ④ 全部合法 → 导入本地没有的实体（新库：③ 已在原库落哨兵，不再复用）
+        let fresh = makeStore("migrate-import")
+        let freshLegacy = fresh.rootDirectory.appendingPathComponent("sync/guest", isDirectory: true)
+        try FileManager.default.createDirectory(at: freshLegacy, withIntermediateDirectories: true)
+        try LearningJSON.stringify(["schemaVersion": 1, "entities": [valid]])
+            .write(to: freshLegacy.appendingPathComponent("notes.json"), atomically: true, encoding: .utf8)
+        try fresh.migrate(expectedNamespace: "guest", legacySyncDirectory: freshLegacy)
+        XCTAssertEqual(try fresh.list("notes").map(\.id), ["ok"])
+    }
+
+    // MARK: migrate 哨兵：成功一次后同命名空间短路，不随每轮启动/登录重推导
+
+    func testMigrateMarkerShortCircuitsRepeatRuns() throws {
+        let store = makeStore("migrate-marker")
+        let legacy = store.rootDirectory.appendingPathComponent("sync/guest", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        let entity: JSONObject = [
+            "id": "ok", "baseVersion": 3, "updatedAt": 10, "deleted": false, "schemaVersion": 2,
+            "payload": ["v": 2] as JSONObject,
+        ]
+        let notesFile = legacy.appendingPathComponent("notes.json")
+        try LearningJSON.stringify(["schemaVersion": 1, "entities": [entity]]).write(to: notesFile, atomically: true, encoding: .utf8)
+        try store.migrate(expectedNamespace: "guest", legacySyncDirectory: legacy)
+        XCTAssertEqual(try store.list("notes").map(\.id), ["ok"])
+        // 首次成功后 legacy 文件再变化也不再导入（哨兵短路：迁移每命名空间只跑一次；
+        // SQLite 权威后域 JSON 只是 commit 的导出物，盘上不会有新数据源）
+        let second: JSONObject = [
+            "id": "ok-2", "baseVersion": 1, "updatedAt": 11, "deleted": false, "schemaVersion": 2,
+            "payload": ["v": 2] as JSONObject,
+        ]
+        try LearningJSON.stringify(["schemaVersion": 1, "entities": [entity, second]]).write(to: notesFile, atomically: true, encoding: .utf8)
         try store.migrate(expectedNamespace: "guest", legacySyncDirectory: legacy)
         XCTAssertEqual(try store.list("notes").map(\.id), ["ok"])
     }
@@ -787,7 +866,17 @@ extension LearningStoreTests {
         XCTAssertTrue(tomb.dirty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: diskURL.path))
         XCTAssertFalse(try notes.list().contains { $0.file == meta.file })
-        // 磁盘上不存在的（仅 files 表）删除返回 false（note_delete 的 path.exists 口径）
+        // 仅 files 表（同步拉下、未导出到磁盘）的笔记同样可删（QA BUG-004：旧 path.exists
+        // 判法返回 false、无 tombstone 无推送，重启后复活）：commit(nil) → 基于拉下实体
+        // （baseVersion 保留）落 tombstone（dirty，随同步推送）+ files 置删除态 + 列表/读取剔除
+        XCTAssertTrue(try notes.delete(file: "remote.md"))
+        let remoteTomb = try XCTUnwrap(try store.list("notes").first { $0.id == "remote.md" })
+        XCTAssertTrue(remoteTomb.deleted)
+        XCTAssertTrue(remoteTomb.dirty)
+        XCTAssertEqual(remoteTomb.baseVersion, 7)
+        XCTAssertFalse(try notes.list().contains { $0.file == "remote.md" })
+        XCTAssertNil(try notes.read(file: "remote.md"))
+        // files 表与磁盘都已没有的（已删除）再删返回 false（note_delete 不存在口径）
         XCTAssertFalse(try notes.delete(file: "remote.md"))
     }
 }

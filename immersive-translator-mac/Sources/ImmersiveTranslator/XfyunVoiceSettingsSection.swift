@@ -6,8 +6,9 @@ import XfyunCore
 /// - 每卡 APPID + APIKey + APISecret 三输入，部分更新语义（空串不覆盖已存值）。
 /// - 保存后引擎立即生效（凭据实时从 Keychain 读）。
 /// - 状态徽标：已配好 ✓ / 未配置；听写留空自动回落评测凭据的说明。
-/// - 状态灯（idle/testing/ok/bad）：真实签名探测（wss 降级 https GET，不耗额度），
-///   401/403 → 鉴权/IP 白名单归因，其余 HTTP 状态 = 可达。
+/// - 状态灯（idle/testing/ok/bad）：「检查连接」——真实签名探测（wss 降级 https
+///   GET，不耗额度），错误 HTTP 状态一律失败（300247a：连接检查不证明业务可用）；
+///   保存凭据/凭据变化后作废在途探测并复位灯（generation 守卫）。
 
 struct XfyunVoiceSettingsSection: View {
     @ObservedObject private var store = XfyunCredentialsStore.shared
@@ -15,6 +16,9 @@ struct XfyunVoiceSettingsSection: View {
     @State private var saveResults: [XfyunService: String] = [:]
     @State private var lights: [XfyunService: XfyunLight] = [:]
     @State private var isTestingAll = false
+    /// 探测代数（Windows probeGenerationRef）：保存凭据/凭据广播后递增，作废在途
+    /// 探测的迟到结果（旧凭据的结论不能挂在已更换的凭据上）。
+    @State private var probeGeneration = 0
 
     /// 状态灯（对齐 Windows LightState idle|testing|ok|bad）。
     private struct XfyunLight: Equatable {
@@ -33,13 +37,13 @@ struct XfyunVoiceSettingsSection: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack {
-                Button("一键测试三个服务") {
+                Button("检查全部连接") {
                     testAll()
                 }
                 .disabled(isTestingAll)
                 .controlSize(.small)
                 if isTestingAll {
-                    Text("探测中（不发业务请求、不耗额度）…")
+                    Text("检查中（不发业务请求、不耗额度）…")
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                 }
@@ -54,6 +58,11 @@ struct XfyunVoiceSettingsSection: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+        // 他处保存凭据（如另一张卡的「保存」或外部写入）后：作废在途探测、复位灯。
+        .onChange(of: store.credentials) { _ in
+            probeGeneration += 1
+            lights = XfyunService.allCases.reduce(into: [:]) { $0[$1] = .idle }
         }
     }
 
@@ -150,14 +159,19 @@ struct XfyunVoiceSettingsSection: View {
     private func save(_ service: XfyunService) {
         let f = editing[service] ?? ("", "", "")
         let ok = store.update(service, appId: f.appId, apiKey: f.apiKey, apiSecret: f.apiSecret)
-        saveResults[service] = ok ? "✓ 已保存" : "保存失败（Keychain 写入异常）"
-        if ok {
-            editing[service] = nil
-            // 保存后灯复位 idle（对齐 Windows：新凭据待重测，不沿用旧结论）。
-            lights[service] = .idle
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                saveResults[service] = nil
-            }
+        guard ok else {
+            saveResults[service] = "保存失败（Keychain 写入异常）"
+            return
+        }
+        editing[service] = nil
+        // 保存成功文案明示「连接检查 ≠ 业务可用」（对齐 Windows saveMain）。
+        saveResults[service] = "凭据已保存。请检查各项服务连接，并在应用中验证实际朗读、录音或评分。"
+        // 保存后作废在途探测并复位三盏灯（新凭据待重检，不沿用旧结论）；
+        // credentials 广播 onChange 亦会触发，双保险。
+        probeGeneration += 1
+        lights = XfyunService.allCases.reduce(into: [:]) { $0[$1] = .idle }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            saveResults[service] = nil
         }
     }
 
@@ -176,7 +190,7 @@ struct XfyunVoiceSettingsSection: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button(light.state == .idle ? "测试" : "重测") {
+                Button(light.state == .testing ? "检查中…" : light.state == .idle ? "检查连接" : "重新检查") {
                     test(service)
                 }
                 .controlSize(.small)
@@ -208,20 +222,23 @@ struct XfyunVoiceSettingsSection: View {
         }
     }
 
-    /// 单服务探测：missingCredentials / 网络失败 / 401·403 / 可达 四态归因。
+    /// 单服务探测：代数守卫（保存凭据/凭据广播后旧探测的迟到结果丢弃）。
     private func test(_ service: XfyunService) {
+        let generation = probeGeneration
         lights[service] = XfyunLight(state: .testing, message: "")
         let host = endpointHost(service)
         let path = endpointPath(service)
         let creds = store.creds(for: service)
         Task {
             let outcome = await XfyunServiceProbe.probe(host: host, path: path, creds: creds)
+            guard generation == probeGeneration else { return }
             lights[service] = XfyunLight(state: outcome.ok ? .ok : .bad, message: outcome.message)
         }
     }
 
-    /// 一键测试三个服务：并发 TaskGroup 跑完，灯逐个落定（对齐 Windows testAll）。
+    /// 检查全部连接：并发 TaskGroup 跑完，灯逐个落定（对齐 Windows testAll）。
     private func testAll() {
+        let generation = probeGeneration
         isTestingAll = true
         let targets: [(service: XfyunService, host: String, path: String, creds: XfyunCredentials?)] =
             XfyunService.allCases.map { ($0, endpointHost($0), endpointPath($0), store.creds(for: $0)) }
@@ -237,9 +254,11 @@ struct XfyunVoiceSettingsSection: View {
                     }
                 }
                 for await (service, outcome) in group {
+                    guard generation == probeGeneration else { break }
                     lights[service] = XfyunLight(state: outcome.ok ? .ok : .bad, message: outcome.message)
                 }
             }
+            guard generation == probeGeneration else { return }
             isTestingAll = false
         }
     }

@@ -339,7 +339,10 @@ final class LiveCaptionController: ObservableObject {
     func clearSegments() {
         guard !recording else { return }
         segments = []
-        nextSegmentId = 0
+        // settings-ui-3：nextSegmentId 保持单调递增、不归零——停止录音 flush 出的
+        // 尾句 Task 仍在网络等待中，归零会让新会话从 0 重新取号，旧 Task 完成后按
+        // 旧 id 回写/删除会命中新会话同 id 的段（覆盖文字/译文、误删占位）。计数
+        // 单调后旧 id 不再复用，回写自然落空成 no-op。
         startedAt = 0
         endedAt = 0
     }

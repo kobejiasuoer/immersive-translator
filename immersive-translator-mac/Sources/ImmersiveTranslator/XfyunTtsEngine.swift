@@ -98,6 +98,28 @@ final class XfyunTtsEngine {
             _ = try? await self?.audioData(for: trimmed)
         }
     }
+
+    /// 只查 L1 → L2、绝不发网络请求（BUG-025：阅读室播放引擎网络熔断窗口内用——
+    /// 已缓存句照常出云音色，未命中由调用方直接回落本地）。key 与
+    /// audioData(nativeRate: nil) 同一算法（同 vcn 选择 + ttsCacheKey），命中行为也一致。
+    func cachedAudioData(for text: String) async -> Data? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let opts = XfyunTtsOptions(
+            vcn: vcn(forChinese: XfyunTts.looksChinese(trimmed)),
+            rate: nil
+        )
+        let key = ttsCacheKey(text: trimmed, opts: opts)
+        if let hit = l1.get(key) {
+            disk.touch(key)
+            return hit
+        }
+        if let hit = disk.get(key) {
+            l1.set(key, hit)
+            return hit
+        }
+        return nil
+    }
 }
 
 /// L2 磁盘缓存：tts-cache/<sha256(key)>.mp3 + <同名>.meta（访问时间）。

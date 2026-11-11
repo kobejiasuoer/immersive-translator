@@ -499,10 +499,11 @@ public enum ReaderRouteKind: String, Equatable, CaseIterable {
     }
 }
 
-/// 「笔记与复习」档角标 = 待复习词数 + 未整理进笔记的生词数（ReaderTopBar.tsx:85 vaultCount）。
+/// 「笔记与复习」档角标 = 待复习词数（对齐 Windows ReaderTopBar.tsx:269-277：未整理数
+/// 与待复习数可能重叠，只算 dueNow 避免双料词重复计数；未整理数走入口提示独立说明）。
 /// 负值按 0 计，不让坏数据把角标算成负数。
-public func vaultBadgeCount(dueNow: Int, unnotedCount: Int) -> Int {
-    max(0, dueNow) + max(0, unnotedCount)
+public func vaultBadgeCount(dueNow: Int) -> Int {
+    max(0, dueNow)
 }
 
 /// 正文字体配对。

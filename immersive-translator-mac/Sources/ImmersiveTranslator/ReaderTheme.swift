@@ -193,6 +193,7 @@ enum ReaderIcons {
     static let gear = "gearshape"
     static let book = "book"
     static let eyeOff = "eye.slash"
+    static let eye = "eye"
     static let edit = "pencil"
     static let speaker = "speaker.wave.2"
     static let close = "xmark"

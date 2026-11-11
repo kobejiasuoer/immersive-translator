@@ -772,32 +772,38 @@ private struct IntakeBookTab: View {
 
     private func chapterList(_ state: PreviewState) -> some View {
         let book = state.book
-        return VStack(spacing: 2) {
-            ForEach(book.chapters.indices, id: \.self) { i in
-                let on = state.selected.contains(i)
-                Button {
-                    toggleChapter(i)
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: on ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 12))
-                            .foregroundColor(on ? .accentColor : .secondary)
-                        Text(book.chapters[i].title)
-                            .font(.system(size: 12.5, design: .serif))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        Spacer()
-                        Text("\(book.chapters[i].wordCount) 词 · \(minutesLabel(max(1, Int((Double(book.chapters[i].wordCount) / 135.0).rounded()))))")
-                            .font(.system(size: 10.5))
-                            .foregroundColor(.secondary)
+        // BUG-040：220 封顶必须配滚动容器（对齐 Windows .epub-chapter-list
+        // max-height:220px + overflow-y:auto）。frame(maxHeight:) 只限布局高度、不裁剪，
+        // 章多时整列居中溢出、盖住表头/导入按钮且后段章节不可达；章少时 ScrollView
+        // 仍按内容高度收拢，与原布局一致。
+        return ScrollView(.vertical) {
+            VStack(spacing: 2) {
+                ForEach(book.chapters.indices, id: \.self) { i in
+                    let on = state.selected.contains(i)
+                    Button {
+                        toggleChapter(i)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 12))
+                                .foregroundColor(on ? .accentColor : .secondary)
+                            Text(book.chapters[i].title)
+                                .font(.system(size: 12.5, design: .serif))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer()
+                            Text("\(book.chapters[i].wordCount) 词 · \(minutesLabel(max(1, Int((Double(book.chapters[i].wordCount) / 135.0).rounded()))))")
+                                .font(.system(size: 10.5))
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(on ? Color.accentColor.opacity(0.08) : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(on ? Color.accentColor.opacity(0.08) : Color.clear)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
         .frame(maxHeight: 220)

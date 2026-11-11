@@ -264,18 +264,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 服务端账号（令牌 Keychain 单槽、单飞刷新、启动预填；状态 @Published 供
     /// 设置 chip / 账号分区 / 菜单分流订阅）。
     let serverAuth = ServerAuthClient()
+    /// 沉浸云账号令牌来源（浮窗/阅读室共用）：经 ServerAuthClient.accountAccessToken
+    /// 统一取发——临期单飞刷新、致命失效广播（auth-4）都在门面完成；不再
+    /// try? 吞错。refreshAfter401 供平台 401 token_expired 单飞刷新后重放一次
+    ///（auth-2，Windows translation.rs:442-460 对应物）。
+    private lazy var platformTokenSource = PlatformAccountTokenSource(
+        current: { [weak serverAuth] in
+            guard let serverAuth else { return nil }
+            return try await serverAuth.accountAccessToken()
+        },
+        refreshAfter401: { [weak serverAuth] usedToken in
+            guard let serverAuth else {
+                throw AuthError.local("unauthorized", "应用服务已释放")
+            }
+            return try await serverAuth.accountAccessToken(after401: usedToken)
+        }
+    )
     /// 沉浸云选中时翻译请求自动携带账号令牌（AuthTokenManager 取票：临期单飞
     /// 刷新，Windows「到期自动续期」同语义）；其他 provider 不取令牌。
     private lazy var translator = TranslationClient(
         settingsStore: settingsStore,
-        accountTokenProvider: { [weak serverAuth] in
-            guard let serverAuth else { return nil }
-            return try? await serverAuth.manager.getAccessToken()
-        }
+        accountTokenSource: platformTokenSource
     )
     private lazy var panelController = TranslationPanelController(
         settingsStore: settingsStore,
         historyStore: historyStore,
+        accountTokenSource: platformTokenSource,
         onRetry: { [weak self] text in
             self?.startTranslation(text, source: .retry)
         },
@@ -329,6 +343,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 设置内「升级到 vN」下载完成 → 接既有校验＋替换安装确认流（SET-6）。
         onInstallUpdate: { [weak self] download, result in
             self?.showDownloadedUpdateInstallOptions(download, result: result)
+        },
+        // port-39：设置窗打开时读取最近一次自动检查的更新结果，预填关于页更新卡。
+        latestAutomaticUpdateResult: { [weak self] in
+            self?.lastAutomaticUpdateResult
+        },
+        // settings-ui-1：热键录制期间挂起全局热键（否则录制器收不到已注册组合、
+        // 还会真实触发对应功能），结束/取消后按当前设置整组重注册。
+        onHotKeyRecordingChanged: { [weak self] recording in
+            if recording {
+                self?.hotKeyManager?.suspendForRecording()
+            } else {
+                self?.registerHotKeys()
+            }
         }
     )
     /// 登录窗（验证码主流程 + 密码页签）；已登录兜底卡与成功态的「进入账号管理」
@@ -366,9 +393,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.startScreenSelection()
         }
     )
-    private lazy var readerController = ReaderWindowController(settingsStore: settingsStore)
+    private lazy var readerController = ReaderWindowController(
+        settingsStore: settingsStore,
+        accountTokenSource: platformTokenSource
+    )
     private lazy var liveCaptionController = LiveCaptionWindowController()
-    private lazy var readerChat = ReaderChatClient(settingsStore: settingsStore)
+    private lazy var readerChat = ReaderChatClient(
+        settingsStore: settingsStore,
+        accountTokenSource: platformTokenSource
+    )
     private var hotKeyManager: HotKeyManager?
     private var screenSelector: ScreenSelectionController?
     private var ocrSessionCounter = 0
@@ -378,6 +411,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingOCRPreview: PendingOCRPreview?
     private var statusItem: NSStatusItem?
     private var automaticUpdateTask: Task<Void, Never>?
+    /// port-39：自动检查最近一次的发现（有可升级且系统兼容的结果；无可升级为 nil）。
+    /// 设置窗打开时经 latestAutomaticUpdateResult 预填关于页更新卡。
+    private var lastAutomaticUpdateResult: UpdateCheckResult?
     private var activeTranslationTask: Task<Void, Never>?
     private var activeTranslationRequest: ActiveTranslationRequest?
     private var cancellables: Set<AnyCancellable> = []
@@ -398,29 +434,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         VoiceLoginProbe.provider = { [weak serverAuth] in
             await MainActor.run { serverAuth?.status.loggedIn ?? false }
         }
+        // 账号 id 探针：能力缓存按账号隔离、取数后核对身份（voice_account_changed）。
+        VoiceLoginProbe.accountId = { [weak serverAuth] in
+            await MainActor.run { serverAuth?.status.user?.id }
+        }
     }
 
-    /// 登录成功瞬间自动切云（按规格 voice.md §1.1(b) / 验收 #18 与 Windows
-    /// Settings.tsx:170-172 注释写明的意图）：只认交互式登录成功
-    ///（ServerAuthClient.loginSuccessSerial 递增），启动静默续登录不触发——Mac status
-    /// 初值即 loggedOut 且 bootstrap 异步发布 true，纯 loggedIn 边沿会把启动续登录误判
-    /// 成登录瞬间、每次启动把存量讯飞用户切走。
-    /// 与 Windows 实际运行行为并非 1:1（记录待决策）：Windows `loggedIn =
-    /// accountStatus?.loggedIn ?? false`（Settings.tsx:167）把读取中的 null 折成 false，
-    /// useAccountStatus 初值为 null、异步拉到已登录后同样产生 false→true 边沿——已登录
-    /// 用户的设置窗挂载时也会被代切 gateway，与其注释「null→true 不算登录瞬间」不符，
-    /// 属 Windows 侧潜在缺陷，Mac 不复刻。已是 gateway 无感；讯飞凭据原样保留、随时
-    /// 可切回。设置窗口从未打开过也能落盘（规格 §四差异 6），设置窗按
-    /// voiceAutoSwitchNoticeSerial 展示 4s 绿色轻提示。
+    /// 登录态镜像：阅读抽屉「音色来源」行等无法拿到 AppDelegate 的视图订阅。
+    /// （登录成功不再自动切云——Windows 300247a 移除了 Settings 的登录瞬间强写
+    /// voiceProvider=gateway，改为登录仅更新账号状态、语音服务由用户主动选择，
+    /// 语音页引导条提供「使用沉浸云」按钮；mac 同步移除 applyLoginVoiceAutoSwitch。）
+    /// dropFirst 跳过订阅时的 loggedOut 初值快照（port-12）：镜像只透传真实广播，
+    /// 「center.status == nil」才表示身份尚未解析（读取中）——bootstrap 的预填
+    /// 分诊完成（已登录 / 确认未登录）才广播，阅读室身份屏障据此等待。
     private func observeLoginForVoiceSwitch() {
-        serverAuth.$loginSuccessSerial
-            .dropFirst()
-            .sink { [weak self] _ in
-                self?.settingsStore.applyLoginVoiceAutoSwitch()
-            }
-            .store(in: &cancellables)
-        // 登录态镜像：阅读抽屉「音色来源」行等无法拿到 AppDelegate 的视图订阅。
         serverAuth.$status
+            .dropFirst()
             .sink { AppAuthStatusCenter.shared.publish($0) }
             .store(in: &cancellables)
     }
@@ -678,7 +707,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             selectionShortcut: settingsStore.selectionHotKeyShortcut,
             ocrShortcut: settingsStore.ocrHotKeyShortcut,
             readerShortcut: settingsStore.readerHotKeyShortcut
-        ), !report.warnings.isEmpty else {
+        ) else {
+            settingsStore.hotKeyRegistrationMessage = nil
+            return
+        }
+
+        // port-29（对齐 Windows e6ed983 的 [hotkey] 日志）：注册成败均落诊断文件，
+        // 「热键没反应」类工单可凭日志区分「注册失败」与「注册成功但未触发」。
+        DiagnosticLogger.log(
+            "hotkey.register selection=\(settingsStore.selectionHotKeyShortcut.title)"
+            + " ocr=\(settingsStore.ocrHotKeyShortcut.title)"
+            + " reader=\(settingsStore.readerHotKeyShortcut.title)"
+            + " warnings=\(report.warnings.isEmpty ? "none" : report.warnings.joined(separator: " | "))"
+        )
+
+        guard !report.warnings.isEmpty else {
             settingsStore.hotKeyRegistrationMessage = nil
             return
         }
@@ -695,8 +738,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func observeSettings() {
+        // BUG-012：@Published 在 willSet 里发布——同步 sink 执行时属性仍是旧值，
+        // 而 registerHotKeys/refreshMenu 都从 settingsStore 现读三键，读到的是改动前
+        // 的组合（诊断日志每次改键都成对出现「旧值 register → 新值 register」，后者
+        // 来自设置侧 acknowledgeAutoSave；菜单只在前一刻按旧值重建，托盘镜像滞后一拍）。
+        // receive(on: main) 把 sink 推到本次赋值（含 didSet 落盘）完成之后再执行。
         settingsStore.$selectionHotKeyShortcut
             .dropFirst()
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.registerHotKeys()
                 self?.refreshMenu()
@@ -705,6 +754,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         settingsStore.$ocrHotKeyShortcut
             .dropFirst()
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.registerHotKeys()
                 self?.refreshMenu()
@@ -713,6 +763,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         settingsStore.$readerHotKeyShortcut
             .dropFirst()
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.registerHotKeys()
                 self?.refreshMenu()
@@ -785,10 +836,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsController.showAccountRedeemSection()
     }
 
-    /// 第二实例启动时由 SingleInstanceGuard 激活通知触发：前置设置窗
-    /// （Windows 同款：聚焦 settings 窗）。
+    /// 第二实例启动时由 SingleInstanceGuard 激活通知触发：前置阅读室
+    ///（port-31，对齐 Windows f49e65f：single_instance 回调由 show settings 改为
+    /// show_reader_window——阅读室是主工作台，双开误触更可能想继续阅读）。
     func activateForSecondInstance() {
-        settingsController.show()
+        readerController.show()
     }
 
     @objc private func openHistory() {
@@ -960,34 +1012,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         automaticUpdateTask?.cancel()
         guard UpdateChecker.hasConfiguredUpdateSource else { return }
 
-        let defaults = UserDefaults.standard
-        if let lastCheck = defaults.object(forKey: UpdateDefaults.lastAutomaticCheckAt) as? Date,
-           Date().timeIntervalSince(lastCheck) < UpdateDefaults.minimumAutomaticCheckInterval {
-            return
-        }
-
         automaticUpdateTask = Task { [weak self] in
+            // 启动延迟沿用 8s；跨启动 24h 节流照旧只约束启动首查（port-45 保留分层）。
             try? await Task.sleep(nanoseconds: 8_000_000_000)
             guard !Task.isCancelled else { return }
 
-            await MainActor.run {
-                UserDefaults.standard.set(Date(), forKey: UpdateDefaults.lastAutomaticCheckAt)
+            let startupCheckDue: Bool
+            if let lastCheck = UserDefaults.standard.object(forKey: UpdateDefaults.lastAutomaticCheckAt) as? Date {
+                startupCheckDue = Date().timeIntervalSince(lastCheck) >= UpdateDefaults.minimumAutomaticCheckInterval
+            } else {
+                startupCheckDue = true
+            }
+            if startupCheckDue {
+                await self?.runAutomaticUpdateCheck()
             }
 
-            do {
-                let result = try await UpdateChecker.check()
-                await MainActor.run {
-                    guard let self else { return }
-                    guard result.hasUpdate,
-                          result.isSystemCompatible,
-                          self.shouldPromptAutomatically(for: result) else {
-                        return
-                    }
-                    self.showUpdateAvailable(result, isAutomatic: true)
-                }
-            } catch {
-                DiagnosticLogger.log("update.automatic_check.failed error=\(error.localizedDescription)")
+            // port-35/45（对齐 Windows useProactiveUpdate.ts:7 的 2h 周期）：会话内
+            // 每 2h 重查一次——菜单栏 App 常年驻留，原先整场会话只查一次，新版本
+            // 发现远慢于 Windows。首查被 24h 节流跳过时循环仍持续。
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UpdateDefaults.sessionRecheckIntervalNanoseconds)
+                guard !Task.isCancelled else { return }
+                await self?.runAutomaticUpdateCheck()
             }
+        }
+    }
+
+    /// 自动检查一轮（port-35 抽取：启动首查与会话内 2h 周期共用）。检查开始即记
+    /// lastAutomaticCheckAt（原行为）；发现可升级且系统兼容的结果暂存进
+    /// lastAutomaticUpdateResult 供设置窗预填（port-39），无可升级则清空。
+    @MainActor
+    private func runAutomaticUpdateCheck() async {
+        UserDefaults.standard.set(Date(), forKey: UpdateDefaults.lastAutomaticCheckAt)
+
+        do {
+            let result = try await UpdateChecker.check()
+            lastAutomaticUpdateResult = result.hasUpdate && result.isSystemCompatible ? result : nil
+            guard result.hasUpdate,
+                  result.isSystemCompatible,
+                  shouldPromptAutomatically(for: result) else {
+                return
+            }
+            showUpdateAvailable(result, isAutomatic: true)
+        } catch {
+            DiagnosticLogger.log("update.automatic_check.failed error=\(error.localizedDescription)")
         }
     }
 
@@ -2290,6 +2358,13 @@ private struct TranslationErrorRecovery {
                 settingsTitle: "登录沉浸云",
                 allowsRetry: false
             )
+        case .platformAccountAuthFailed:
+            // 凭据已被清除且失效态已广播（auth-4）；重新登录后可重试
+            return TranslationErrorRecovery(
+                statusMessage: "沉浸云登录已失效",
+                settingsTitle: "重新登录沉浸云",
+                allowsRetry: true
+            )
         case .invalidEndpoint:
             return TranslationErrorRecovery(
                 statusMessage: "接口地址无效",
@@ -2573,4 +2648,7 @@ private enum UpdateDefaults {
     static let lastAutomaticCheckAt = "lastAutomaticUpdateCheckAt"
     static let lastPromptedVersion = "lastPromptedUpdateVersion"
     static let minimumAutomaticCheckInterval: TimeInterval = 24 * 60 * 60
+    /// 会话内周期重查间隔（port-35/45，对齐 Windows useProactiveUpdate.ts:7 的 2h；
+    /// 跨启动 24h 节流只约束启动首查，二者分层保留）。
+    static let sessionRecheckIntervalNanoseconds: UInt64 = 2 * 60 * 60 * 1_000_000_000
 }

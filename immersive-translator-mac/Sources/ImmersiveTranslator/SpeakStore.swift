@@ -61,16 +61,27 @@ final class SpeakStore {
         domainDirectory.appendingPathComponent("reader_speak_sessions.json")
     }
 
-    private func readText() -> String? {
+    /// NotFound（文件不存在）→ nil = 空库；其余读错误抛出（BUG-029：吞成 nil
+    /// 会让 load() 当空库、下一次保存整体清库，对齐 LearningStore.readFileDB
+    /// 只豁免 NotFound 的既定策略）。
+    private func readText() throws -> String? {
         if let learning {
-            guard let text = try? learning.readPath(fileURL) else { return nil }
-            return text
+            do {
+                return try learning.readPath(fileURL)
+            } catch is LearningFileNotFoundError {
+                return nil
+            }
         }
-        return try? String(contentsOf: fileURL, encoding: .utf8)
+        do {
+            return try String(contentsOf: fileURL, encoding: .utf8)
+        } catch let error as NSError {
+            if error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError { return nil }
+            throw error
+        }
     }
 
     private func load() throws -> SpeakSessionsFile {
-        guard let text = readText() else {
+        guard let text = try readText() else {
             return SpeakSessionsFile()
         }
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

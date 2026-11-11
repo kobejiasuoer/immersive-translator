@@ -37,9 +37,24 @@ final class GatewayViewStateTests: XCTestCase {
     }
 
     func testOtherErrorCodesCollapseToErrorPhase() {
-        for code in ["network_error", "token_invalid", "rate_limited", "who_knows"] {
+        for code in ["network_error", "rate_limited", "who_knows"] {
             XCTAssertEqual(reduceVoiceGatewayView(input(errorCode: code, caps: nil)).caps, .error, code)
         }
+    }
+
+    /// 登录失效类错误码单列 authRequired（Windows 300247a：不再并入网络失败）。
+    func testAuthErrorCodesCollapseToAuthRequiredPhase() {
+        for code in ["token_invalid", "unauthorized", "token_reused", "token_expired"] {
+            let view = reduceVoiceGatewayView(input(errorCode: code, caps: nil))
+            XCTAssertEqual(view.caps, .authRequired, code)
+            XCTAssertEqual(view.errorCode, code)
+        }
+    }
+
+    func testVoiceNotConfiguredErrorCodeIsNonePhaseWithAllMissing() {
+        let view = reduceVoiceGatewayView(input(errorCode: "voice_not_configured", caps: nil))
+        XCTAssertEqual(view.caps, .noneCase)
+        XCTAssertEqual(view.missing, allVoiceCapabilities)
     }
 
     func testLoadingWhileCapsNil() {
@@ -48,7 +63,16 @@ final class GatewayViewStateTests: XCTestCase {
     }
 
     func testNoneWhenVoiceSegmentMissing() {
-        XCTAssertEqual(reduceVoiceGatewayView(input(caps: caps(available: false))).caps, .noneCase)
+        let view = reduceVoiceGatewayView(input(caps: caps(available: false)))
+        XCTAssertEqual(view.caps, .noneCase)
+        XCTAssertEqual(view.missing, allVoiceCapabilities, "未开通时三项全缺")
+    }
+
+    /// 三项全缺（能力下发齐全但全空）等同未开放，不给 partial 的误导。
+    func testAllMissingCollapsesToNonePhase() {
+        let view = reduceVoiceGatewayView(input(caps: caps(voices: [], languages: [], iseEnabled: false)))
+        XCTAssertEqual(view.caps, .noneCase)
+        XCTAssertEqual(view.missing, allVoiceCapabilities)
     }
 
     func testPartialMissingCombinations() {
@@ -83,9 +107,20 @@ final class GatewayViewStateTests: XCTestCase {
             quotaEvents: ["tts_chars", "asr_seconds", "asr_seconds"]
         ))
         XCTAssertTrue(view.exhausted)
-        // 常驻 tts 用全名「云端朗读」；事件裸值走 quotaFeatureLabel（tts_chars→「朗读」，
-        // asr_seconds→「口语识别」），按插入序去重（对齐 JS Set 语义）。
-        XCTAssertEqual(view.exhaustedLabels, ["云端朗读", "朗读", "口语识别"])
+        // 常驻与事件都归一成能力全名（300247a：tts_chars→「云端朗读」同 asr_seconds→
+        // 「口语识别」），按插入序去重（对齐 JS Set 语义）。
+        XCTAssertEqual(view.exhaustedLabels, ["云端朗读", "口语识别"])
+    }
+
+    /// 已缺失的能力不再叠「额度已用完」（未开放谈不上用完，Windows 同步修复）。
+    func testExhaustedLabelsSkipMissingCapabilities() {
+        let view = reduceVoiceGatewayView(input(
+            caps: caps(voices: [], quota: [.tts: VoiceQuotaRemaining(remaining: 0)]),
+            quotaEvents: ["tts_chars"]
+        ))
+        XCTAssertEqual(view.caps, .partial)
+        XCTAssertFalse(view.exhausted, "tts 已缺失，耗尽标签应跳过")
+        XCTAssertTrue(view.exhaustedLabels.isEmpty)
     }
 
     func testQuotaEventsOnlyFallbackSourceWithTtsCharsAlias() {
@@ -93,9 +128,13 @@ final class GatewayViewStateTests: XCTestCase {
         // 无常驻 quota 时，事件单独即可点亮耗尽态（tts_chars 不得被丢弃）。
         let view = reduceVoiceGatewayView(input(caps: caps(), quotaEvents: ["ise_calls", "tts_chars"]))
         XCTAssertTrue(view.exhausted)
-        XCTAssertTrue(view.exhaustedLabels.contains("跟读打分"))
-        XCTAssertTrue(view.exhaustedLabels.contains("朗读"))
-        XCTAssertEqual(view.exhaustedLabels, ["跟读打分", "朗读"], "事件按到达序")
+        XCTAssertEqual(view.exhaustedLabels, ["跟读打分", "云端朗读"], "事件 resource 归一成能力全名，按到达序")
+    }
+
+    func testUnknownEventResourceFallsBackToFeatureLabel() {
+        let view = reduceVoiceGatewayView(input(caps: caps(), quotaEvents: ["llm_tokens"]))
+        XCTAssertTrue(view.exhausted)
+        XCTAssertEqual(view.exhaustedLabels, ["对话"])
     }
 
     func testRepeatedEventsDeduped() {
@@ -118,7 +157,7 @@ final class GatewayViewStateTests: XCTestCase {
         let view = reduceVoiceGatewayView(input(caps: caps(), quotaEvents: ["ise_calls"]))
         let line = voiceGatewayStatusLine(view, loggedIn: true, email: "u@x.y")
         XCTAssertEqual(line.tone, .off)
-        XCTAssertEqual(line.text, "已登录 u@x.y · 本月额度已用完")
+        XCTAssertEqual(line.text, "本月跟读打分额度已用完")
     }
 
     func testNoQuotaNoEventsNotExhausted() {
@@ -127,32 +166,45 @@ final class GatewayViewStateTests: XCTestCase {
         XCTAssertEqual(view.quota?[.ise]?.remaining, 5)
     }
 
-    // MARK: 状态行文案逐态
+    // MARK: 状态行文案逐态（300247a：不再带「已登录 \(email)」前缀）
 
     func testStatusLineLoggedOut() {
         let line = voiceGatewayStatusLine(reduceVoiceGatewayView(input()), loggedIn: false, email: "a@b.c")
         XCTAssertEqual(line.tone, .off)
-        XCTAssertEqual(line.text, "未登录——选中后到右侧登录即可使用")
+        XCTAssertEqual(line.text, "未登录，登录后检查语音是否开放")
     }
 
     func testStatusLinePhases() {
         XCTAssertEqual(voiceGatewayStatusLine(reduceVoiceGatewayView(input(errorCode: "banned")), loggedIn: true, email: "a@b.c").text, "账号已被封禁")
         XCTAssertEqual(voiceGatewayStatusLine(reduceVoiceGatewayView(input(errorCode: "network_error")), loggedIn: true, email: "a@b.c").text, "连接沉浸云失败，请检查网络")
-        XCTAssertEqual(voiceGatewayStatusLine(reduceVoiceGatewayView(input(caps: caps(available: false))), loggedIn: true, email: "a@b.c").text, "语音功能暂未开通——账号正常，服务端尚未为本账号开通语音")
-        XCTAssertEqual(voiceGatewayStatusLine(reduceVoiceGatewayView(input(loading: true)), loggedIn: true, email: "a@b.c").text, "已登录 a@b.c · 正在获取语音能力…")
-        XCTAssertEqual(voiceGatewayStatusLine(reduceVoiceGatewayView(input(caps: caps())), loggedIn: true, email: "a@b.c").text, "已登录 a@b.c · 朗读、识别、跟读打分全部可用")
+        XCTAssertEqual(voiceGatewayStatusLine(reduceVoiceGatewayView(input(caps: caps(available: false))), loggedIn: true, email: "a@b.c").text, "三项云语音功能暂未开放")
+        XCTAssertEqual(voiceGatewayStatusLine(reduceVoiceGatewayView(input(loading: true)), loggedIn: true, email: "a@b.c").text, "正在检查语音服务…")
+        XCTAssertEqual(voiceGatewayStatusLine(reduceVoiceGatewayView(input(loading: true)), loggedIn: true, email: "a@b.c").tone, .off)
+        XCTAssertEqual(voiceGatewayStatusLine(reduceVoiceGatewayView(input(caps: caps())), loggedIn: true, email: "a@b.c").text, "朗读、识别、跟读打分均已开放")
+    }
+
+    /// authRequired 态按错误码查 voiceErrorMessage 映射；静默文案（token_expired）
+    /// 落兜底句。
+    func testStatusLineAuthRequired() {
+        let invalid = voiceGatewayStatusLine(reduceVoiceGatewayView(input(errorCode: "token_invalid")), loggedIn: true, email: "a@b.c")
+        XCTAssertEqual(invalid.tone, .err)
+        XCTAssertEqual(invalid.text, "登录已失效，请重新登录")
+        let reused = voiceGatewayStatusLine(reduceVoiceGatewayView(input(errorCode: "token_reused")), loggedIn: true, email: "a@b.c")
+        XCTAssertEqual(reused.text, "检测到登录凭据异常复用，该账号已在所有设备安全下线，请重新登录")
+        let expired = voiceGatewayStatusLine(reduceVoiceGatewayView(input(errorCode: "token_expired")), loggedIn: true, email: "a@b.c")
+        XCTAssertEqual(expired.text, "登录已失效，请重新登录")
     }
 
     func testStatusLinePartialInterpolatesShortNames() {
         let view = reduceVoiceGatewayView(input(caps: caps(voices: [], iseEnabled: false)))
         let line = voiceGatewayStatusLine(view, loggedIn: true, email: "u@x.y")
-        XCTAssertEqual(line.text, "已登录 u@x.y · 识别可用，朗读、跟读打分未开放")
+        XCTAssertEqual(line.text, "识别已开放，朗读、跟读打分未开放")
         XCTAssertEqual(line.tone, .off)
     }
 
     func testStatusLineFullExhausted() {
         let view = reduceVoiceGatewayView(input(caps: caps(quota: [.tts: VoiceQuotaRemaining(remaining: 0)])))
-        XCTAssertEqual(voiceGatewayStatusLine(view, loggedIn: true, email: "u@x.y").text, "已登录 u@x.y · 本月额度已用完")
+        XCTAssertEqual(voiceGatewayStatusLine(view, loggedIn: true, email: "u@x.y").text, "本月云端朗读额度已用完")
     }
 
     // MARK: quotaLine 单位与「—」

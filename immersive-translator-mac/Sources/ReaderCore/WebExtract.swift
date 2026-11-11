@@ -123,6 +123,18 @@ public func extractText(html: String) -> String {
             s = re.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "")
         }
     }
+    // div/section 不在固定标签表里，按属性特征点名整块删除：美式政府站横幅
+    // （<section class="usa-banner"> 展开文案在 div.usa-banner__guidance 里）、
+    // 打印头部（p.nist-print-header__url）等 chrome 的容器都是 div/section/p；
+    // 行内 display:none 的隐藏块（不解析样式表，只认行内样式）同样照抄会混进正文。
+    for tag in ["section", "div", "p"] {
+        if let re = regex(#"<\#(tag)\b[^>]*\bclass=["'][^"']*(?:banner|print-header|elastic-exclude)[^"']*["'][^>]*>.*?</\#(tag)>"#) {
+            s = re.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "")
+        }
+        if let re = regex(#"<\#(tag)\b[^>]*\bstyle=["'][^"']*display\s*:\s*none[^"']*["'][^>]*>.*?</\#(tag)>"#) {
+            s = re.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "")
+        }
+    }
     // 块级边界 → 段落分隔
     if let re = regex(#"</(p|div|h[1-6]|li|blockquote|article|section|td|tr|pre)>"#) {
         s = re.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "\n\n")
@@ -150,8 +162,12 @@ public func extractText(html: String) -> String {
         let letters = t.unicodeScalars.filter { ("a"..."z").contains($0) || ("A"..."Z").contains($0) }.count
         let upper = t.unicodeScalars.filter { ("A"..."Z").contains($0) }.count
         if letters > 12, upper * 100 / letters > 70 { continue }
+        // 整段就是一个裸 URL（打印头部/引用残留），照抄进正文是杂物
+        if looksLikeBareURL(t) { continue }
         // 常见站点口号/导航行（只对短行生效，避免误伤提到同词的正文联句）
         if t.count < 120, looksLikeChrome(t) { continue }
+        // 联邦政府站横幅展开文案较长（可超 120），单独放宽门槛的特异词表
+        if t.count < 200, looksLikeGovBanner(t) { continue }
         paras.append(t)
     }
     return paras.joined(separator: "\n\n")
@@ -166,6 +182,26 @@ let chromePhrases = [
 func looksLikeChrome(_ t: String) -> Bool {
     let lower = t.lowercased()
     return chromePhrases.contains { lower.contains($0) }
+}
+
+/// 美式 .gov 站横幅样板句（usa-banner 展开文案 + lock 提示行）。词组足够特异，
+/// 不会误伤正常正文；独立于 chromePhrases 以放宽 120 字符门槛（横幅长句 137 字符）。
+let govBannerPhrases = [
+    "official government organization",
+    "secure .gov websites",
+    "safely connected to the .gov website",
+    "share sensitive information only on official, secure websites",
+]
+
+func looksLikeGovBanner(_ t: String) -> Bool {
+    let lower = t.lowercased()
+    return govBannerPhrases.contains { lower.contains($0) }
+}
+
+/// 整段是裸 URL（http(s):// 开头且中间无空白；t 已经过空白归一）。
+func looksLikeBareURL(_ t: String) -> Bool {
+    guard t.hasPrefix("http://") || t.hasPrefix("https://") else { return false }
+    return !t.contains(" ")
 }
 
 func endsSentence(_ t: String) -> Bool {
