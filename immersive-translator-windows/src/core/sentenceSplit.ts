@@ -3,29 +3,44 @@
  *
  * 阅读室的句对是朗读/高亮/遮罩的最小单元，切分错误会直接破坏对齐，
  * 所以规则保守：先按空行/换行切段，段内按「句子终结符 + 空白 + 大写/数字/引号」
- * 切句，常见缩写（Mr. / e.g. / U.S. 等）不作为切分点。
+ * 切句，保留称谓、姓名首字母和句中的缩写；缩写也可能位于句末，
+ * 所以后续明显开启新句时仍允许切分。
  */
 
-/** 常见不可切分的缩写结尾（大小写敏感匹配）。 */
-const ABBREVIATIONS = new Set([
-  "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc",
-  "e.g", "i.e", "cf", "al", "inc", "ltd", "co", "corp", "approx",
-  "dept", "est", "fig", "gen", "gov", "sen", "rep", "no", "nos", "vol",
+/** 后面通常还有姓名、地点、编号或例子的前缀；匹配时统一转小写。 */
+const ABBREVIATION_PREFIXES = new Set([
+  "mr", "mrs", "ms", "dr", "prof", "st", "vs", "rev", "hon",
+  "e.g", "i.e", "cf", "approx", "dept", "fig", "gen", "gov", "sen",
+  "rep", "no", "nos", "vol", "capt", "lt", "col", "sgt",
 ]);
 
 /** 句子终结符后必须跟的"新句开头"。 */
 const NEXT_SENTENCE_LOOKAHEAD = /[A-Z0-9"'“‘(\[]/;
 
-/** 判断 "word." 形式的句点是否属于缩写。 */
-function endsWithAbbreviation(text: string, dotIndex: number): boolean {
+/** 与 Department / Secretary 等缩写后续名称区分的明确新句起始词。 */
+const SENTENCE_STARTERS = /^(?:I|You|He|She|It|We|They|My|Your|His|Her|Its|Our|Their|This|That|These|Those|The|A|An|There|Here|Then|Next|However|Meanwhile|Afterward|Afterwards|Instead|Finally|Moreover|Nevertheless|Therefore|Thus|But|And|Yet|So|When|Where|Why|How|What|Who|Which|If|Although|Because|Before|After|During|Since|While|Despite|In|On|At|By|From|With|Without|For|As|Today|Yesterday|Tomorrow|Now|Later|Another)\b/;
+
+/** 判断此处是否为句中缩写，而不把所有缩写的最后一点永久屏蔽。 */
+function endsWithAbbreviation(text: string, dotIndex: number, nextIndex: number): boolean {
   let start = dotIndex;
   while (start > 0 && /[A-Za-z.]/.test(text[start - 1])) {
     start--;
   }
-  const token = text.slice(start, dotIndex).toLowerCase();
+  const token = text.slice(start, dotIndex);
   if (!token) return false;
-  // U.S.A. / e.g. 这类多段缩写：末段在缩写表即认为整体是缩写
-  return ABBREVIATIONS.has(token);
+  if (ABBREVIATION_PREFIXES.has(token.toLowerCase())) return true;
+
+  // U.S. / U.K. / J.R.R. 与 J. R. R. 的中间首字母不能拆开。
+  if (/^(?:[A-Z]\.)*[A-Z]$/.test(token)) {
+    const following = text.slice(nextIndex);
+    if (/^[A-Z]\.(?:\s|$)/.test(following)) return true;
+    // "in the U.S. It..." 的句点同时结束缩写与句子。引号、数字
+    // 及明确新句起始词保留正常句界；其余专名采用保守的不拆分规则。
+    return !/^[0-9"'“‘(\[]/.test(following) && !SENTENCE_STARTERS.test(following);
+  }
+  // etc. / Inc. / Jr. / p.m. 等可以自然出现在句末：后接大写时
+  // 允许正常切句，后接小写时由调用方的句首检测继续保留在原句中。
+  return false;
 }
 
 /**
@@ -47,15 +62,18 @@ export function splitSentences(paragraph: string): string[] {
     while (end + 1 < text.length && ".!?…".includes(text[end + 1])) {
       end++;
     }
+    const punctuationEnd = end;
+    // 结束引号/括号跟随它们包住的句子，不能留作下一句的开头。
+    while (end + 1 < text.length && /["'”’)\]}]/.test(text[end + 1])) end++;
     // 末尾终结符必然收句；否则看后随字符
     if (end + 1 < text.length) {
-      // 句点且是缩写（如 "Mr."）→ 不切
-      if (ch === "." && endsWithAbbreviation(text, i)) continue;
       // 后面必须跟空白 + 新句开头才算句界（小数点 3.14、网址不切）
       if (!/\s/.test(text[end + 1])) continue;
       let next = end + 1;
       while (next < text.length && /\s/.test(text[next])) next++;
       if (next >= text.length || !NEXT_SENTENCE_LOOKAHEAD.test(text[next])) continue;
+      // 仅孤立句点适用缩写保护；省略号、问号以及已闭合的引文仍收句。
+      if (ch === "." && punctuationEnd === i && end === i && endsWithAbbreviation(text, i, next)) continue;
     }
     const sentence = text.slice(start, end + 1).trim();
     if (sentence) sentences.push(sentence);
