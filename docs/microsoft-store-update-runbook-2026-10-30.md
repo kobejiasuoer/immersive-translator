@@ -45,7 +45,8 @@
 
 | 坑 | 现象 / 解法 |
 |---|---|
-| **VC++ 运行时缺失 → 认证被拒（2026-10-30 实际被拒）** | 干净机器（无 VC++ Redistributable）上 MSIX 启动即挂：缺 `MSVCP140.dll`/`VCRUNTIME140_1.dll`，条款 10.1.2.10（功能性）+ 10.2.4.1（未披露依赖）。修复：`msvcp140.dll`/`vcruntime140.dll`/`vcruntime140_1.dll` 三个 DLL 放 `src-tauri/`、经 bundle.resources 进包与 exe 同目录（微软官方 app-local deployment，redist 许可允许随应用分发）；pack-msix.ps1 对缺失会直接 throw。**EXE/NSIS 通道同样受益**（裸机用户原先也会挂） |
+| **VC++ 运行时缺失 → 认证被拒（已中两次：0.11.1 缺 vcruntime140_1；0.12.1 缺 msvcp140_1）** | 干净机器上 MSIX 启动即挂，条款 10.1.2.10 + 10.2.4.1。**最终修复是四件套**：`msvcp140.dll`/`msvcp140_1.dll`/`vcruntime140.dll`/`vcruntime140_1.dll` 全部放 `src-tauri/` 经 bundle.resources 进包与 exe 同目录（pack-msix.ps1 对缺失直接 throw）。**教训：改构建工具链后必须用 PE 导入表解析重新核对 exe 依赖**（0.15.x 的 exe 新增了 msvcp140_1 导入，三件套不够）。另外 10.2.4.1 要求：若披露依赖，必须写在**商店描述前两行**（中英描述均已加披露句） |
+| **元数据链接被判定打不开 → 认证被拒（10.1.2.7，2026-11-09 第四次拒审）** | 属性页 Website/Support 填的 GitHub 仓库与 issues 链接被认证员判「did not resolve to a functional website」（Surface Laptop 测试机）。实测链接全球可达（check-host 7 节点全通），但 GitHub status 显示 11/08「Increase in timeouts for some unauthenticated users」、11/09「Increased timeouts due to surge in anonymous users」——匿名访客超时事故正好覆盖认证窗口。**修复：两个链接都换成自有域名 `https://prismspace.online`**（腾讯云 Caddy 自建，美国节点 0.65~0.87s），不再受第三方站点故障牵连。教训：**商店元数据链接永远用自有域名**；被拒时先查 githubstatus.com 事故记录再下结论 |
 | 产品类型选错 | 选成「EXE 或 MSI」→ 触发 10.2.9 签名要求。**只能删除产品重建**（「MSIX 或 PWA」），商店分配的身份会变，需同步改 `msix/Package.appxmanifest` |
 | runFullTrust 说明超字数 | 提交选项页标「未完成」但无显眼红字。硬上限 **500 字**（当前合规版 482 字），超限时提交按钮置灰 |
 | makeappx 报 0x80080203 | 包内清单文件名必须是 **`AppxManifest.xml`**（`Package.appxmanifest` 只是源模板名） |
@@ -62,7 +63,9 @@
 - [x] 属性页「应用网站」原填的 `immersivetranslate.com` 是原版沉浸翻译官网，与本应用无关；0.11.1 被拒后的重提（0.12.1，2026-11-02）已改为 GitHub 仓库地址。
 - [x] 0.11.1 认证被拒（VC++ 运行时缺失，见 §4 首行）→ 0.12.1 已修复并于 2026-11-02 重新提交认证。
 - [x] 0.12.1 二次被拒（2026-11-03，条款 10.1.2.10）：认证员注册新账号时「获取验证码」报网络连接失败（美/日网络）。**根因层面可归因的错误是我们没提供测试凭据**（凭据区空着，认证员只能走注册→邮件验证码链路）；网络层根因未定论——实测海外直连完全正常（check-host 7 国节点 0.7~1.9s 全通、us1 ping 185ms），怀疑微软测试机的企业代理/TLS 拦截或偶发故障。0.15.2 于 2026-11-04 携测试账号重新提交。
-- **带登录功能的提交必须在「认证说明」写英文测试账号指引**（微软文档允许凭据写在认证说明；本应用的凭据区网格控件自动化困难，认证说明等效）。当前账号：deploy-smoke-1793198432@example.com / Password1（密码页签登录，免注册免邮件验证码）。
+- **带登录功能的提交必须在「认证说明」写英文测试账号指引**（微软文档允许凭据写在认证说明；本应用的凭据区网格控件自动化困难且有 7 行掩码历史行，以说明文本为准）。当前账号：deploy-smoke-1793198432@example.com / Password1（密码页签登录，免注册免邮件验证码）。
+- [x] 0.15.3 于 2026-11-06 重新提交（msvcp140_1 四件套 + 描述披露 + 测试账号三保险）。第三次认证 0.12.1 被拒的截图实证：商店安装后启动报缺 MSVCP140_1.dll——与 PE 导入表解析结论一致。**包维度这次通过了**（第四次报告未再提 10.1.2.10/10.2.4.1），但 2026-11-09 以 10.1.2.7 第四次被拒：属性页 GitHub 元数据链接在认证窗口撞上 GitHub 匿名用户超时事故（报告 45088a36，详见 §4 新增行）。
+- [x] 第四次拒审修复（2026-11-10）：属性页 Website/Support 两个链接换成自有域名 `https://prismspace.online`；认证说明改写为 1945 字符英文完整版（URL 变更说明 + GitHub status 事故取证 + AI 披露 + 测试账号 + 四 DLL 全名）。同日第五次提交进入认证，等待结果。
 - [ ] 订阅/登录功能的**测试账号**：认证员若验证付费功能会要凭据，届时在「提交选项 → 认证说明」补充。
 - [ ] 应用内隐私入口（`PrivacyPolicyCard`，e42018f）随下个版本上线；上线后商店版和仓库页三方口径一致。
 - [ ] 下个 release 观察 CI 的 MSIX 产物在 runner 上真实产出（首次提交的包是本地补打的）。

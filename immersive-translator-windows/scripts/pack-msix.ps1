@@ -55,11 +55,12 @@ if (Test-Path $dml) { Copy-Item $dml $dist }
 
 # VC++ 运行时（app-local deployment，微软官方允许的再分发方式）：
 # 2026-10-29 提交的 0.11.1 因干净机器缺 MSVCP140/VCRUNTIME140_1 启动即挂
-# （认证条款 10.1.2.10 + 10.2.4.1 被拒）。exe 与 DirectML/onnxruntime 都依赖它们，
-# 必须与 exe 同目录进包，三个缺一不可。
-foreach ($vcDll in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+# （认证条款 10.1.2.10 + 10.2.4.1 被拒）；2026-11-05 提交的 0.15.2 又因缺
+# MSVCP140_1.dll 再次被拒——exe 的 PE 导入表同时依赖 msvcp140/msvcp140_1/
+# vcruntime140/vcruntime140_1 四件（已用 PE 导入表解析逐一核实），缺一启动即挂。
+foreach ($vcDll in @("msvcp140.dll", "msvcp140_1.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
     $src = Join-Path $ReleaseDir $vcDll
-    if (-not (Test-Path $src)) { throw "缺少 $src——tauri.conf.json bundle.resources 必须包含三个 VC 运行时 DLL（商店 10.1.2.10 认证硬要求）" }
+    if (-not (Test-Path $src)) { throw "缺少 $src——tauri.conf.json bundle.resources 必须包含全部四个 VC 运行时 DLL（商店 10.1.2.10/10.2.4.1 认证硬要求）" }
     Copy-Item $src $dist
 }
 
