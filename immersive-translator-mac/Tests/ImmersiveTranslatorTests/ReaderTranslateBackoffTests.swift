@@ -2,13 +2,15 @@ import XCTest
 import ReaderCore
 @testable import ImmersiveTranslator
 
-/// 翻译 429 自动退避与失败原因透出（vm 级）——对齐 Windows ReaderApp.tsx:894-1029
-/// 的组合语义：仅结构化 429 触发重试、每段 ≤1 次、整篇封顶、等待醒来先验 run、
-/// 失败按状态码三桶写 zhError、parse 对齐失败不写原因、手动重试清 zhError 开新 run。
+/// 翻译 429 自动退避与失败原因透出（vm 级）——Mac 先行版语义（2026-11-05
+/// Happy Prince 批量判死复盘）：仅结构化 429 触发重试、等待优先服务端
+/// Retry-After、连续 429 熔断 + 整篇预算按段数比例，预算耗尽**整篇暂停**（句子
+/// 保持 pending + toast「继续翻译」），不再把剩余段逐个判死；失败按状态码三桶
+/// 写 zhError、parse 对齐失败不写原因、手动重试清 zhError 开新 run。
 /// 复用 ReaderShellChromeTests 的夹具思路（替身通道 + 临时目录落盘，不碰 Keychain/网络）。
 final class ReaderTranslateBackoffTests: XCTestCase {
     private static let text429 = "翻译请求太频繁，已重试仍被限流，稍后点重试"
-    private static let text401 = "登录状态已失效，请到 设置 → 账号 重新登录"
+    private static let text401 = "翻译接口返回 401：请到 设置 → 模型服务 检查 API Key 与接口地址，或切换服务商再试"
     private static let textFallback = "翻译服务暂时不可用，请稍后点重试"
 
     // MARK: - 夹具
@@ -37,10 +39,12 @@ final class ReaderTranslateBackoffTests: XCTestCase {
         var queued: Int { script.count }
     }
 
-    /// LLM 通道替身：标题走 title 盒、段落流式走 stream 盒；配置恒有效。
+    /// LLM 通道替身：标题走 title 盒、段落流式走 stream 盒；配置恒有效，
+    /// isPlatform 可切换（限速用例：沉浸云判定来自 Configuration.isPlatformProvider）。
     private final class ScriptedChat: ReaderChatChannel {
         let titleBox = ScriptBox()
         let streamBox = ScriptBox()
+        var isPlatform = false
         var glossaryText: String { "" }
         var customStyle: String { "" }
 
@@ -48,7 +52,8 @@ final class ReaderTranslateBackoffTests: XCTestCase {
             ReaderChatClient.Configuration(
                 url: URL(string: "https://gateway.example/v1/chat/completions")!,
                 apiKey: "test-key",
-                model: "test-model"
+                model: "test-model",
+                isPlatformProvider: isPlatform
             )
         }
 
@@ -157,12 +162,16 @@ final class ReaderTranslateBackoffTests: XCTestCase {
 
     // MARK: - 段级 429 退避与失败原因
 
-    /// 恒 429：首次 + 1 次自动重试后落 failed，zhError 为 429 定稿文案。
+    /// 持续 429：连续熔断（阈值 10）后**整篇暂停**——句子保持 pending、无 zhError、
+    /// 返回 pausedRateLimited（不再逐段判死）。管线级断言见
+    /// testPipelinePausesOnSustained429WithToastAndResume。
     @MainActor
-    func testPersistent429RetriesOnceThenFailsWithReason() async {
+    func testPersistent429CircuitBreaksAndLeavesPending() async {
         let chat = ScriptedChat()
-        await chat.streamBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 429, message: "rate limited")))
-        await chat.streamBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 429, message: "rate limited")))
+        let limited = ReaderChatClient.ReaderChatError.http(status: 429, message: "rate limited", retryAfterSeconds: nil)
+        for _ in 0..<ReaderCore.translateMaxConsecutive429 {
+            await chat.streamBox.enqueue(.failure(limited))
+        }
         let vm = makeVM(chat: chat)
         vm.translateBackoffWaitMsOverride = 10
         let article = pendingArticle()
@@ -170,44 +179,52 @@ final class ReaderTranslateBackoffTests: XCTestCase {
         let group = article.sentences
 
         let backoffs = ReaderViewModel.TranslateBackoffCounter()
-        await vm.translateGroupWithBackoff(
+        let outcome = await vm.translateGroupWithBackoff(
             group,
             target: "简体中文",
             articleID: article.id,
             runID: 0,
-            backoffs: backoffs
+            backoffs: backoffs,
+            totalGroups: 1
         )
 
         let calls = await chat.streamBox.calls
-        XCTAssertEqual(calls, 2, "每段最多自动重试 1 次（首次 + 1 次重试）")
-        XCTAssertEqual(backoffs.runBackoffs, 1, "重试计入整篇退避计数")
+        XCTAssertEqual(calls, ReaderCore.translateMaxConsecutive429, "连续 429 到熔断阈值即停，不再发请求")
+        XCTAssertEqual(outcome, .pausedRateLimited)
+        XCTAssertEqual(backoffs.consecutive429s, ReaderCore.translateMaxConsecutive429)
+        XCTAssertEqual(backoffs.runBackoffs, ReaderCore.translateMaxConsecutive429 - 1, "熔断那次不计入退避预算")
         for sentence in vm.article?.sentences ?? [] {
-            XCTAssertEqual(sentence.zhState, .failed)
-            XCTAssertEqual(sentence.zhError, Self.text429, "失败原因 = 429 定稿文案")
+            XCTAssertEqual(sentence.zhState, .pending, "暂停不判死：句子保持 pending")
+            XCTAssertNil(sentence.zhError, "暂停不写失败原因")
         }
     }
 
-    /// 首 429 后重试成功：句子 done、zhError 为 nil。
+    /// 首 429 后重试成功：句子 done、zhError 为 nil；连续 429 计数清零。
     @MainActor
     func test429ThenSuccessRetriesAndCompletes() async {
         let chat = ScriptedChat()
-        await chat.streamBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 429, message: "rate limited")))
+        await chat.streamBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 429, message: "rate limited", retryAfterSeconds: nil)))
         await chat.streamBox.enqueue(.success("[1] 第一句译文\n[2] 第二句译文"))
         let vm = makeVM(chat: chat)
         vm.translateBackoffWaitMsOverride = 10
         let article = pendingArticle()
         vm.article = article
 
-        await vm.translateGroupWithBackoff(
+        let backoffs = ReaderViewModel.TranslateBackoffCounter()
+        backoffs.consecutive429s = 3 // 模拟此前段落的限流残留
+        let outcome = await vm.translateGroupWithBackoff(
             article.sentences,
             target: "简体中文",
             articleID: article.id,
             runID: 0,
-            backoffs: ReaderViewModel.TranslateBackoffCounter()
+            backoffs: backoffs,
+            totalGroups: 1
         )
 
         let calls = await chat.streamBox.calls
-        XCTAssertEqual(calls, 2, "429 → 等 10ms → 重试一次成功")
+        XCTAssertEqual(calls, 2, "429 → 等待后重试一次成功")
+        XCTAssertEqual(outcome, .finished)
+        XCTAssertEqual(backoffs.consecutive429s, 0, "网关放行即清零连续计数")
         XCTAssertEqual(vm.article?.sentences[0].zhState, .done)
         XCTAssertEqual(vm.article?.sentences[0].zh, "第一句译文")
         XCTAssertNil(vm.article?.sentences[0].zhError, "重试成功不残留失败原因")
@@ -217,20 +234,22 @@ final class ReaderTranslateBackoffTests: XCTestCase {
     @MainActor
     func testNon429FailsImmediatelyWithoutRetry() async {
         let chat401 = ScriptedChat()
-        await chat401.streamBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 401, message: "unauthorized")))
+        await chat401.streamBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 401, message: "unauthorized", retryAfterSeconds: nil)))
         let vm401 = makeVM(chat: chat401)
         vm401.translateBackoffWaitMsOverride = 10
         let article401 = pendingArticle()
         vm401.article = article401
-        await vm401.translateGroupWithBackoff(
+        let outcome401 = await vm401.translateGroupWithBackoff(
             article401.sentences,
             target: "简体中文",
             articleID: article401.id,
             runID: 0,
-            backoffs: ReaderViewModel.TranslateBackoffCounter()
+            backoffs: ReaderViewModel.TranslateBackoffCounter(),
+            totalGroups: 1
         )
         let calls401 = await chat401.streamBox.calls
         XCTAssertEqual(calls401, 1, "401 不触发退避")
+        XCTAssertEqual(outcome401, .finished, "非 429 判死后按正常收尾继续管线")
         XCTAssertEqual(vm401.article?.sentences[0].zhError, Self.text401)
 
         // 网络错误（URLSession 超时/断网 → 无结构化状态码）→ 兜底桶，同样不退避。
@@ -245,7 +264,8 @@ final class ReaderTranslateBackoffTests: XCTestCase {
             target: "简体中文",
             articleID: articleNet.id,
             runID: 0,
-            backoffs: ReaderViewModel.TranslateBackoffCounter()
+            backoffs: ReaderViewModel.TranslateBackoffCounter(),
+            totalGroups: 1
         )
         let callsNet = await chatNet.streamBox.calls
         XCTAssertEqual(callsNet, 1, "超时/断网（status=nil）不触发退避")
@@ -268,7 +288,8 @@ final class ReaderTranslateBackoffTests: XCTestCase {
             target: "简体中文",
             articleID: article.id,
             runID: 0,
-            backoffs: ReaderViewModel.TranslateBackoffCounter()
+            backoffs: ReaderViewModel.TranslateBackoffCounter(),
+            totalGroups: 1
         )
 
         let calls = await chat.streamBox.calls
@@ -281,8 +302,8 @@ final class ReaderTranslateBackoffTests: XCTestCase {
     @MainActor
     func testRunInvalidatedDuringBackoffSkipsRetry() async {
         let chat = ScriptedChat()
-        await chat.streamBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 429, message: "rate limited")))
-        await chat.streamBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 429, message: "rate limited")))
+        await chat.streamBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 429, message: "rate limited", retryAfterSeconds: nil)))
+        await chat.streamBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 429, message: "rate limited", retryAfterSeconds: nil)))
         let vm = makeVM(chat: chat)
         vm.translateBackoffWaitMsOverride = 300
         let article = pendingArticle()
@@ -295,7 +316,8 @@ final class ReaderTranslateBackoffTests: XCTestCase {
                 target: "简体中文",
                 articleID: article.id,
                 runID: 0,
-                backoffs: backoffs
+                backoffs: backoffs,
+                totalGroups: 1
             )
         }
         // 首次请求已返回、任务进入退避等待后切走文章（run 失效）。
@@ -315,6 +337,89 @@ final class ReaderTranslateBackoffTests: XCTestCase {
             .pending,
             "旧 run 失效后不写任何句子状态（新文章句子保持 pending）"
         )
+    }
+
+    /// 管线级暂停：持续 429 熔断 → 清 chip、toast 带动作、句子保持 pending 且
+    /// 不再发后续段请求；点 toast「继续翻译」重跑管线，pending 段被重新认领翻完。
+    @MainActor
+    func testPipelinePausesOnSustained429WithToastAndResume() async {
+        let chat = ScriptedChat()
+        let limited = ReaderChatClient.ReaderChatError.http(status: 429, message: "rate limited", retryAfterSeconds: nil)
+        // 两段文章（每段 1 句）：首段 429 到熔断阈值，剩余帧留给「继续翻译」后的两段。
+        var article = pendingArticle()
+        article.sentences = [
+            SentencePair(idx: 0, paragraphIdx: 0, en: "One sentence."),
+            SentencePair(idx: 1, paragraphIdx: 1, en: "Two sentence.")
+        ]
+        article.title = "Tide"
+        article.titleCn = "潮"
+        article.titleCnState = .done
+        article.chunkState = .done // 避免词块标注分支干扰
+        let vm = makeVM(chat: chat)
+        vm.translateBackoffWaitMsOverride = 10
+        _ = try? vm.store.saveArticle(article)
+
+        for _ in 0..<ReaderCore.translateMaxConsecutive429 {
+            await chat.streamBox.enqueue(.failure(limited))
+        }
+        vm.openArticle(id: article.id)
+        await waitUntil("熔断暂停 toast 出现") {
+            vm.toast == "翻译请求被限流，已暂停自动翻译"
+        }
+        XCTAssertNil(vm.translating, "暂停时清掉「翻译中 N/M 段」chip")
+        XCTAssertEqual(vm.toastAction?.title, "继续翻译", "toast 携带恢复动作")
+        for sentence in vm.article?.sentences ?? [] {
+            XCTAssertEqual(sentence.zhState, .pending, "限流暂停不判死")
+            XCTAssertNil(sentence.zhError)
+        }
+        let callsAfterPause = await chat.streamBox.calls
+        XCTAssertEqual(callsAfterPause, ReaderCore.translateMaxConsecutive429, "熔断后不再发后续段请求")
+
+        // 「继续翻译」：新 run 预算从 0 起算，剩余帧全部走通。
+        await chat.streamBox.enqueue(.success("[1] 第一段译文"))
+        await chat.streamBox.enqueue(.success("[1] 第二段译文"))
+        vm.toastAction?.handler()
+        await waitUntil("恢复后全篇翻完") {
+            vm.article?.sentences.allSatisfy { $0.zhState == .done } == true
+        }
+        XCTAssertNil(vm.translating)
+        XCTAssertEqual(vm.article?.sentences[0].zh, "第一段译文")
+        XCTAssertEqual(vm.article?.sentences[1].zh, "第二段译文")
+    }
+
+    /// 暂停后单段重试仍可恢复补翻（新 run、预算重置）：限流期用户点「重试本段」，
+    /// 网关放行后该段翻完，不再依赖整篇管线。
+    @MainActor
+    func testRetryParagraphRecoversAfterPipelinePause() async {
+        let chat = ScriptedChat()
+        let limited = ReaderChatClient.ReaderChatError.http(status: 429, message: "rate limited", retryAfterSeconds: nil)
+        for _ in 0..<ReaderCore.translateMaxConsecutive429 {
+            await chat.streamBox.enqueue(.failure(limited))
+        }
+        let vm = makeVM(chat: chat)
+        vm.translateBackoffWaitMsOverride = 10
+        let article = pendingArticle()
+        vm.article = article
+
+        let backoffs = ReaderViewModel.TranslateBackoffCounter()
+        let outcome = await vm.translateGroupWithBackoff(
+            article.sentences,
+            target: "简体中文",
+            articleID: article.id,
+            runID: 0,
+            backoffs: backoffs,
+            totalGroups: 1
+        )
+        XCTAssertEqual(outcome, .pausedRateLimited)
+
+        // 暂停态句子 pending；retryParagraph 直接补翻成功（模拟网关已放行）。
+        await chat.streamBox.enqueue(.success("[1] 补翻译文一\n[2] 补翻译文二"))
+        vm.retryParagraph(0)
+        await waitUntil("单段重试翻完") {
+            vm.article?.sentences.allSatisfy { $0.zhState == .done } == true
+        }
+        XCTAssertEqual(vm.article?.sentences[0].zh, "补翻译文一")
+        XCTAssertEqual(vm.article?.sentences[1].zh, "补翻译文二")
     }
 
     /// 翻译中途清空接口配置再切文章（验收 13 / B1 对等）：新文章管线在
@@ -397,8 +502,8 @@ final class ReaderTranslateBackoffTests: XCTestCase {
     @MainActor
     func testRetryParagraphRewritesErrorOnSecondFailure() async {
         let chat = ScriptedChat()
-        await chat.streamBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 429, message: "rate limited")))
-        await chat.streamBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 500, message: "boom")))
+        await chat.streamBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 429, message: "rate limited", retryAfterSeconds: nil)))
+        await chat.streamBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 500, message: "boom", retryAfterSeconds: nil)))
         let vm = makeVM(chat: chat)
         vm.translateBackoffWaitMsOverride = 10
         var article = pendingArticle()
@@ -418,6 +523,100 @@ final class ReaderTranslateBackoffTests: XCTestCase {
         XCTAssertEqual(vm.article?.sentences[0].zhError, Self.textFallback, "500 → 兜底桶重写")
     }
 
+    // MARK: - 沉浸云主动限速（Mac 先行）
+
+    /// 两段文章夹具（标题已翻完、词块已标完，只跑段落管线）。
+    @MainActor
+    private func twoParagraphArticle() -> Article {
+        Article(
+            id: "backoff-pace",
+            title: "Tide",
+            titleCn: "潮",
+            titleCnState: .done,
+            createdAt: 0,
+            lastReadAt: 0,
+            sentences: [
+                SentencePair(idx: 0, paragraphIdx: 0, en: "First paragraph sentence."),
+                SentencePair(idx: 1, paragraphIdx: 1, en: "Second paragraph sentence.")
+            ],
+            chunkState: .done
+        )
+    }
+
+    /// 沉浸云（isPlatformProvider）下主管线逐请求限速：两段之间至少隔一个
+    /// pacing 间隔（网关令牌桶 10 次/分钟，匀速发请求从源头避开 429）。
+    @MainActor
+    func testPlatformPipelinePacesRequests() async throws {
+        let chat = ScriptedChat()
+        chat.isPlatform = true
+        await chat.streamBox.enqueue(.success("[1] 译文一"))
+        await chat.streamBox.enqueue(.success("[1] 译文二"))
+        let vm = makeVM(chat: chat)
+        vm.translatePacingIntervalMsOverride = 250
+        let article = twoParagraphArticle()
+        _ = try vm.store.saveArticle(article)
+
+        let started = Date()
+        vm.openArticle(id: article.id)
+        await waitUntil("两段限速翻完") {
+            vm.article?.sentences.allSatisfy { $0.zhState == .done } == true
+        }
+        let elapsed = Date().timeIntervalSince(started)
+        XCTAssertGreaterThanOrEqual(elapsed, 0.22, "第二段请求须等满一个限速间隔")
+        XCTAssertEqual(vm.article?.sentences[0].zh, "译文一")
+        XCTAssertEqual(vm.article?.sentences[1].zh, "译文二")
+    }
+
+    /// 第三方 provider 不限速：同样两段立等可翻（间隔 0 直通）。
+    @MainActor
+    func testThirdPartyPipelineSkipsPacing() async throws {
+        let chat = ScriptedChat()
+        chat.isPlatform = false
+        await chat.streamBox.enqueue(.success("[1] 译文一"))
+        await chat.streamBox.enqueue(.success("[1] 译文二"))
+        let vm = makeVM(chat: chat)
+        vm.translatePacingIntervalMsOverride = 250 // 非 immersive：覆盖不生效
+        let article = twoParagraphArticle()
+        _ = try vm.store.saveArticle(article)
+
+        let started = Date()
+        vm.openArticle(id: article.id)
+        await waitUntil("两段直通翻完") {
+            vm.article?.sentences.allSatisfy { $0.zhState == .done } == true
+        }
+        let elapsed = Date().timeIntervalSince(started)
+        XCTAssertLessThan(elapsed, 0.2, "第三方不限速，两段背靠背完成")
+    }
+
+    // MARK: - 一键重试全部失败段
+
+    /// retryAllFailed：整篇 failed（限流风暴残留）→ 全部重置 pending → 主管线
+    /// 重跑翻完（恢复入口，代替逐段点 85 次「重试本段」）。
+    @MainActor
+    func testRetryAllFailedResetsAndReTranslates() async throws {
+        let chat = ScriptedChat()
+        await chat.streamBox.enqueue(.success("[1] 重翻一\n[2] 重翻二"))
+        let vm = makeVM(chat: chat)
+        vm.translateBackoffWaitMsOverride = 10
+        var article = pendingArticle()
+        for i in article.sentences.indices {
+            article.sentences[i].zhState = .failed
+            article.sentences[i].zhError = Self.text429
+        }
+        _ = try vm.store.saveArticle(article)
+
+        vm.openArticle(id: article.id)
+        XCTAssertEqual(vm.failedParagraphCount, 1, "打开不自动重翻：failed 保持")
+        vm.retryAllFailed()
+        XCTAssertEqual(vm.article?.sentences[0].zhState, .pending, "一键重置回 pending")
+        XCTAssertNil(vm.article?.sentences[0].zhError)
+        await waitUntil("重跑翻完") {
+            vm.article?.sentences.allSatisfy { $0.zhState == .done } == true
+        }
+        XCTAssertEqual(vm.article?.sentences[0].zh, "重翻一")
+        XCTAssertNil(vm.translating)
+    }
+
     // MARK: - 标题失败原因（瞬态）
 
     /// 标题失败：titleCnError 落 401 文案且 titleCnState=failed；retryTitle 先清
@@ -425,7 +624,7 @@ final class ReaderTranslateBackoffTests: XCTestCase {
     @MainActor
     func testTitleFailureSetsTransientErrorAndRetryClears() async {
         let chat = ScriptedChat()
-        await chat.titleBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 401, message: "unauthorized")))
+        await chat.titleBox.enqueue(.failure(ReaderChatClient.ReaderChatError.http(status: 401, message: "unauthorized", retryAfterSeconds: nil)))
         await chat.titleBox.enqueue(.success("潮汐"))
         let vm = makeVM(chat: chat)
         vm.translateBackoffWaitMsOverride = 10

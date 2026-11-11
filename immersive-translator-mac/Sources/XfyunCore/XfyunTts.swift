@@ -193,21 +193,30 @@ public func synthesizeXfyunTts(
     let frame = buildTtsRequestFrame(appId: creds.appId, text: trimmed, opts: opts)
 
     var chunks: [Data] = []
-    return try await XfyunWebSocketSession.run(
+    // BUG-033：任一帧 base64 非法 = 拼出的是截断 mp3。旧实现静默丢帧照常返回，上层
+    // XfyunTtsEngine 成功即写 L1+L2 双层缓存，命中后永不自愈。onFrame 不可抛错，
+    // 先记标记；整段作废改抛 decodeFailure，上层不落缓存、下次重新合成。
+    var decodeFailed = false
+    let mp3 = try await XfyunWebSocketSession.run(
         url: url,
         firstFrame: frame,
         timeout: 20
     ) { obj in
         if let data = obj["data"] as? [String: Any], let audio = data["audio"] as? String {
+            // 每帧独立带 padding 的 base64，逐帧解码
             guard let piece = Data(base64Encoded: audio) else {
-                // 每帧独立带 padding 的 base64，逐帧解码
+                decodeFailed = true
                 return
             }
             chunks.append(piece)
         }
     } finish: { _ in
         let total = chunks.reduce(0) { $0 + $1.count }
-        guard total > 0 else { throw XfyunTtsError.emptyAudio }
+        // 有帧解码失败时不在 finish 里抛：正常返回让 run 先 close 会话（run 只在 finish
+        // 成功后 close），再由下方统一抛 decodeFailure，不新增不关 WebSocket 的错误路径。
+        guard total > 0 || decodeFailed else { throw XfyunTtsError.emptyAudio }
         return chunks.reduce(Data()) { $0 + $1 }
     }
+    guard !decodeFailed else { throw XfyunTtsError.decodeFailure }
+    return mp3
 }

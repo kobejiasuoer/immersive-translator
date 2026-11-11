@@ -32,6 +32,7 @@ final class VoiceRouteTests: XCTestCase {
         quotaEvents: [String] = [],
         ability: VoiceRouteAbility,
         asrLang: VoiceAsrLang? = nil,
+        asrMode: VoiceAsrMode? = nil,
         iseLocalOff: Bool = false
     ) -> VoiceRouteSignals {
         VoiceRouteSignals(
@@ -41,6 +42,7 @@ final class VoiceRouteTests: XCTestCase {
             quotaEvents: quotaEvents,
             ability: ability,
             asrLang: asrLang,
+            asrMode: asrMode,
             iseLocalOff: iseLocalOff
         )
     }
@@ -59,7 +61,37 @@ final class VoiceRouteTests: XCTestCase {
         ))
         XCTAssertEqual(decision.engine, .off)
         XCTAssertEqual(decision.reason, .notLoggedIn)
-        XCTAssertEqual(decision.hint, "登录沉浸云即用")
+        XCTAssertEqual(
+            decision.hint,
+            "请先登录，再检查云语音是否开放；也可在「设置 → 语音」使用讯飞"
+        )
+    }
+
+    /// 登录失效类错误码单列（Windows 300247a）：不再落「查网络」，hint 走
+    /// voiceErrorMessage 映射（token_expired 静默文案为空 → 兜底句）。
+    func testAuthExpiredErrorCodesGiveReloginHints() {
+        for code in ["token_invalid", "unauthorized", "token_reused", "token_expired"] {
+            let decision = reduceVoiceRoute(signals(caps: nil, capsError: code, ability: .tts))
+            XCTAssertEqual(decision.engine, .off, code)
+            XCTAssertEqual(decision.reason, .notLoggedIn, code)
+            XCTAssertFalse(decision.hint?.isEmpty ?? true, code)
+            XCTAssertNotEqual(decision.hint, "暂无法连接沉浸云语音，请检查网络后重试", code)
+        }
+        XCTAssertEqual(
+            reduceVoiceRoute(signals(caps: nil, capsError: "token_invalid", ability: .tts)).hint,
+            "登录已失效，请重新登录"
+        )
+    }
+
+    func testVoiceNotConfiguredAndAccountChangedErrorCodes() {
+        let notConfigured = reduceVoiceRoute(signals(caps: nil, capsError: "voice_not_configured", ability: .tts))
+        XCTAssertEqual(notConfigured.engine, .off)
+        XCTAssertEqual(notConfigured.reason, .voiceNotConfigured)
+        XCTAssertEqual(notConfigured.hint, "语音功能暂未开通")
+        let changed = reduceVoiceRoute(signals(caps: nil, capsError: "voice_account_changed", ability: .tts))
+        XCTAssertEqual(changed.engine, .off)
+        XCTAssertEqual(changed.reason, .capsUnavailable)
+        XCTAssertEqual(changed.hint, "账号已切换，请重新操作")
     }
 
     func testBannedSeparateFromNetworkFailure() {
@@ -121,6 +153,28 @@ final class VoiceRouteTests: XCTestCase {
             reduceVoiceRoute(signals(caps: caps(iseEnabled: false), ability: .ise)).hint,
             "沉浸云跟读打分暂未开放"
         )
+    }
+
+    /// 分语种能力（300247a）：batch/stream 字段按方式取；**明确的空数组不回退**
+    /// asrLanguages；缺省（旧服务端未下发）兼容回退。
+    func testAsrLanguagesSplitByMode() {
+        let split = VoiceCapabilities(
+            available: true,
+            ttsVoices: [VoiceTtsVoice(id: "v1", label: "一")],
+            asrLanguages: ["en_us"],
+            asrStreamingLanguages: [],
+            asrBatchLanguages: ["en_us", "zh_cn"],
+            iseEnabled: true,
+            quota: nil
+        )
+        // batch 有英语：放行。
+        XCTAssertEqual(reduceVoiceRoute(signals(caps: split, ability: .asr, asrLang: .en_us, asrMode: .batch)).engine, .gateway)
+        // stream 明确空数组：不回退 asrLanguages，拦截。
+        XCTAssertEqual(reduceVoiceRoute(signals(caps: split, ability: .asr, asrLang: .en_us, asrMode: .stream)).reason, .capabilityMissing)
+        // asrMode 缺省 = batch。
+        XCTAssertEqual(reduceVoiceRoute(signals(caps: split, ability: .asr, asrLang: .en_us)).engine, .gateway)
+        // 未下发分语种字段（旧服务端）：回退 asrLanguages。
+        XCTAssertEqual(reduceVoiceRoute(signals(caps: caps(), ability: .asr, asrLang: .en_us, asrMode: .stream)).engine, .gateway)
     }
 
     func testGatewayPassForAllThreeAbilities() {
@@ -338,5 +392,78 @@ final class VoiceRouteTests: XCTestCase {
         let second = await VoiceRoute.fetchCaps(deps: deps)
         XCTAssertEqual(fetches, 2, "失败不缓存：下一次调用立即重试")
         XCTAssertEqual(second.errorCode, "network_error")
+    }
+
+    // MARK: 能力缓存按账号隔离（300247a voice_account_changed）
+
+    func testCapsCacheIsolatedPerAccount() async {
+        var fetches = 0
+        var currentAccount: String? = "a"
+        let deps = VoiceRouteDeps(
+            resolveProvider: { .gateway },
+            isLoggedIn: { true },
+            accountId: { currentAccount },
+            fetchCaps: {
+                fetches += 1
+                return self.caps()
+            }
+        )
+        _ = await VoiceRoute.fetchCaps(deps: deps)
+        _ = await VoiceRoute.fetchCaps(deps: deps)
+        XCTAssertEqual(fetches, 1, "同账号 TTL 内命中缓存")
+        // 切号：旧账号缓存不得喂给新账号。
+        currentAccount = "b"
+        _ = await VoiceRoute.fetchCaps(deps: deps)
+        XCTAssertEqual(fetches, 2, "账号不同即重拉")
+        // 切回 A：缓存已被 B 覆盖，同样重拉。
+        currentAccount = "a"
+        _ = await VoiceRoute.fetchCaps(deps: deps)
+        XCTAssertEqual(fetches, 3)
+    }
+
+    func testFetchCapsIdentityChangedMidFlightReturnsAccountChanged() async {
+        var fetchCount = 0
+        var currentAccount: String? = "a"
+        let deps = VoiceRouteDeps(
+            resolveProvider: { .gateway },
+            isLoggedIn: { true },
+            accountId: { currentAccount },
+            fetchCaps: {
+                fetchCount += 1
+                // 取数往返期间切号/登出：取数后身份核对失败。
+                currentAccount = nil
+                return self.caps()
+            }
+        )
+        let result = await VoiceRoute.fetchCaps(deps: deps)
+        XCTAssertNil(result.caps)
+        XCTAssertEqual(result.errorCode, "voice_account_changed")
+        // 失败不缓存：恢复身份后下一次立即重拉。
+        currentAccount = "a"
+        _ = await VoiceRoute.fetchCaps(deps: deps)
+        XCTAssertEqual(fetchCount, 2)
+    }
+
+    func testLoggedOutResolveClearsCapsCache() async {
+        var fetches = 0
+        var loggedIn = true
+        let deps = VoiceRouteDeps(
+            resolveProvider: { .gateway },
+            isLoggedIn: { loggedIn },
+            fetchCaps: {
+                fetches += 1
+                return self.caps()
+            }
+        )
+        let ok = await VoiceRoute.resolve(.tts, deps: deps)
+        XCTAssertEqual(ok.engine, .gateway)
+        // 登出：归约给未登录，且缓存被清。
+        loggedIn = false
+        let off = await VoiceRoute.resolve(.tts, deps: deps)
+        XCTAssertEqual(off.reason, .notLoggedIn)
+        // 重新登录：重拉（旧账号能力不残留）。
+        loggedIn = true
+        _ = await VoiceRoute.resolve(.tts, deps: deps)
+        XCTAssertEqual(fetches, 2, "登出清空缓存：重新登录后重拉")
     }
 }

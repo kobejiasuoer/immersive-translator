@@ -8,6 +8,10 @@ enum TranslationClientError: LocalizedError {
     /// 沉浸云已选中但本机没有可用账号令牌（未登录）——不同于 missingAPIKey，
     /// 沉浸云不需要 API Key，需要的是登录（设置中心模型服务页「登录沉浸云」）。
     case platformNotLoggedIn
+    /// 沉浸云取账号令牌遇「非未登录」的鉴权错误（token_expired/token_invalid/
+    /// token_reused：凭据已被 AuthTokenManager 清除，且 ServerAuthClient 已广播
+    /// 失效态）。不再折叠成「未登录」或落「API Key」桶（auth-4）。
+    case platformAccountAuthFailed(code: String)
     case badResponse(statusCode: Int, message: String?)
     case emptyTranslation
     case invalidResponse(preview: String?)
@@ -20,6 +24,8 @@ enum TranslationClientError: LocalizedError {
             return "还没有配置 API Key。"
         case .platformNotLoggedIn:
             return "尚未登录沉浸云——请在设置中心「模型服务」页登录后再翻译。"
+        case .platformAccountAuthFailed:
+            return "沉浸云登录已失效——请到 设置 → 账号 重新登录。"
         case .badResponse(let statusCode, _):
             return "翻译接口返回 HTTP \(statusCode)。"
         case .emptyTranslation:
@@ -67,13 +73,14 @@ struct TranslationProgress {
 final class TranslationClient {
     private let logger = Logger(subsystem: "local.immersive-translator.mvp", category: "TranslationClient")
     private let settingsStore: SettingsStore
-    /// 沉浸云账号令牌来源（App 注入 ServerAuthClient.getAccessToken：无凭据抛错、
-    /// 临期单飞刷新）。nil 或抛错时按未登录处理。非沉浸云 provider 不取令牌。
-    private let accountTokenProvider: (@MainActor () async -> String?)?
+    /// 沉浸云账号令牌来源（App 注入 ServerAuthClient.accountAccessToken：无凭据
+    /// 抛错、临期单飞刷新；refreshAfter401 供平台 401 token_expired 重放）。
+    /// 非沉浸云 provider 不取令牌。nil = 未接线，按未登录处理。
+    private let accountTokenSource: PlatformAccountTokenSource?
 
-    init(settingsStore: SettingsStore, accountTokenProvider: (@MainActor () async -> String?)? = nil) {
+    init(settingsStore: SettingsStore, accountTokenSource: PlatformAccountTokenSource? = nil) {
         self.settingsStore = settingsStore
-        self.accountTokenProvider = accountTokenProvider
+        self.accountTokenSource = accountTokenSource
     }
 
     @MainActor
@@ -139,12 +146,7 @@ final class TranslationClient {
         // 令牌由 ServerAuthClient 统一取发（临期单飞刷新），本地 API Key 槽不参与。
         var accountToken: String?
         if isPlatformProvider {
-            // try? + Optional 返回值会被 Swift 展平成单层 Optional：抛错或返回 nil
-            // 都按「未登录/无令牌」处理。
-            guard let bearer = try? await accountTokenProvider?(), !bearer.isEmpty else {
-                throw TranslationClientError.platformNotLoggedIn
-            }
-            accountToken = bearer
+            accountToken = try await Self.resolvePlatformAccountToken(accountTokenSource)
         }
         let startedAt = Date()
         let requestOptions = Self.requestOptions(endpoint: url, model: resolvedModel)
@@ -154,7 +156,10 @@ final class TranslationClient {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 18
+        // 120s 对齐 Windows translation.rs 同接口超时（BUG-031：旧值 18s 对非流式
+        // 长文本/慢模型必然超时）。同一 request 复用于流式与非流式两条路径；流式
+        // 的 timeoutInterval 只约束等待数据的间隔，抬高不改变流式行为。
+        request.timeoutInterval = 120
         if let accountToken {
             request.setValue("Bearer \(accountToken)", forHTTPHeaderField: "Authorization")
         } else if !apiKey.isEmpty {
@@ -189,6 +194,8 @@ final class TranslationClient {
                 resolvedModel: resolvedModel,
                 targetLanguage: targetLanguage,
                 apiKey: apiKey,
+                isPlatformProvider: isPlatformProvider,
+                accountToken: accountToken,
                 onProgress: onProgress
             )
         }
@@ -199,8 +206,57 @@ final class TranslationClient {
             resolvedModel: resolvedModel,
             targetLanguage: targetLanguage,
             apiKey: apiKey,
+            isPlatformProvider: isPlatformProvider,
+            accountToken: accountToken,
             onProgress: onProgress
         )
+    }
+
+    /// 沉浸云取票（auth-4）：不再 try? 吞错。未登录（unauthorized / nil / 空串）
+    /// 维持 platformNotLoggedIn 口径；其余鉴权码（致命三码，凭据已被 manager
+    /// 清除且 ServerAuthClient 已广播失效态）透传为 platformAccountAuthFailed，
+    /// 由 ErrorMessageFormatter 按 auth 口径出文案，不再落「API Key」桶。
+    @MainActor
+    private static func resolvePlatformAccountToken(
+        _ source: PlatformAccountTokenSource?
+    ) async throws -> String {
+        guard let source else { throw TranslationClientError.platformNotLoggedIn }
+        let bearer: String?
+        do {
+            bearer = try await source.current()
+        } catch let error as AuthError {
+            guard error.code == "unauthorized" else {
+                throw TranslationClientError.platformAccountAuthFailed(code: error.code)
+            }
+            throw TranslationClientError.platformNotLoggedIn
+        }
+        guard let bearer, !bearer.isEmpty else {
+            throw TranslationClientError.platformNotLoggedIn
+        }
+        return bearer
+    }
+
+    /// 平台 401 重放取票（auth-2，红线 4；Windows translation.rs:442-460 对应物）：
+    /// 仅 401 且 body `error.code == "token_expired"` 时经单飞刷新取新票（带所用
+    /// 旧票进单飞，迟到 401 逢并发刷新完成则搭车新凭据）；其余 401 code
+    ///（invalid/reused/unauthorized）凭据已死，不重试，返回 nil 沿用既有
+    /// badResponse 路径。刷新失败同样返回 nil（不吞掉原始 401 上下文）。
+    @MainActor
+    private func platformReplayTokenAfter401(errorData: Data, usedToken: String?) async -> String? {
+        guard let source = accountTokenSource else { return nil }
+        guard let code = TranslationResponseErrorParser.errorCode(from: errorData),
+              code == "token_expired" else {
+            return nil
+        }
+        do {
+            return try await source.refreshAfter401(usedToken ?? "")
+        } catch let error as AuthError {
+            DiagnosticLogger.log("translation.platform.401.refresh.failed code=\(error.code)")
+            return nil
+        } catch {
+            DiagnosticLogger.log("translation.platform.401.refresh.failed code=unknown")
+            return nil
+        }
     }
 
     @MainActor
@@ -210,6 +266,9 @@ final class TranslationClient {
         resolvedModel: String,
         targetLanguage: String,
         apiKey: String,
+        isPlatformProvider: Bool,
+        accountToken: String? = nil,
+        allowPlatform401Replay: Bool = true,
         onProgress: (@MainActor (TranslationProgress) -> Void)?
     ) async throws -> TranslationResult {
         let bytes: URLSession.AsyncBytes
@@ -237,6 +296,25 @@ final class TranslationClient {
                 logger.error("translation.request.error_body_error elapsed=\(elapsed, privacy: .public) error=\(safeError, privacy: .public)")
                 DiagnosticLogger.log("translation.request.error_body_error elapsed=\(String(format: "%.2f", elapsed)) error=\(safeError)")
                 throw error
+            }
+
+            // 沉浸云 401 分支（auth-2）：仅 token_expired 单飞刷新后换票重放一次。
+            if httpResponse.statusCode == 401, isPlatformProvider, allowPlatform401Replay,
+               let replayToken = await platformReplayTokenAfter401(errorData: errorData, usedToken: accountToken) {
+                DiagnosticLogger.log("translation.platform.401.refreshed replay=true")
+                var replayRequest = request
+                replayRequest.setValue("Bearer \(replayToken)", forHTTPHeaderField: "Authorization")
+                return try await performBufferedRequest(
+                    replayRequest,
+                    startedAt: startedAt,
+                    resolvedModel: resolvedModel,
+                    targetLanguage: targetLanguage,
+                    apiKey: apiKey,
+                    isPlatformProvider: isPlatformProvider,
+                    accountToken: replayToken,
+                    allowPlatform401Replay: false,
+                    onProgress: onProgress
+                )
             }
 
             let elapsed = Date().timeIntervalSince(startedAt)
@@ -316,6 +394,9 @@ final class TranslationClient {
         resolvedModel: String,
         targetLanguage: String,
         apiKey: String,
+        isPlatformProvider: Bool,
+        accountToken: String? = nil,
+        allowPlatform401Replay: Bool = true,
         onProgress: @escaping @MainActor (TranslationProgress) -> Void
     ) async throws -> TranslationResult {
         let bytes: URLSession.AsyncBytes
@@ -336,6 +417,26 @@ final class TranslationClient {
             for try await byte in bytes {
                 errorData.append(byte)
             }
+
+            // 沉浸云 401 分支（auth-2）：仅 token_expired 单飞刷新后换票重放一次。
+            if httpResponse.statusCode == 401, isPlatformProvider, allowPlatform401Replay,
+               let replayToken = await platformReplayTokenAfter401(errorData: errorData, usedToken: accountToken) {
+                DiagnosticLogger.log("translation.platform.401.refreshed replay=true stream=true")
+                var replayRequest = request
+                replayRequest.setValue("Bearer \(replayToken)", forHTTPHeaderField: "Authorization")
+                return try await performStreamingRequest(
+                    replayRequest,
+                    startedAt: startedAt,
+                    resolvedModel: resolvedModel,
+                    targetLanguage: targetLanguage,
+                    apiKey: apiKey,
+                    isPlatformProvider: isPlatformProvider,
+                    accountToken: replayToken,
+                    allowPlatform401Replay: false,
+                    onProgress: onProgress
+                )
+            }
+
             let message = parseErrorMessage(from: errorData, apiKey: apiKey) ?? "翻译接口返回 HTTP \(httpResponse.statusCode)。"
             let elapsed = Date().timeIntervalSince(startedAt)
             logger.error("translation.stream.http_error status=\(httpResponse.statusCode, privacy: .public) elapsed=\(elapsed, privacy: .public) message=\(message, privacy: .public)")
@@ -1014,6 +1115,19 @@ enum TranslationResponseErrorParser {
             return nil
         }
         return message(from: object)
+    }
+
+    /// 服务端错误信封里的结构化 code（`{"error":{"code":…}}`；无则 nil）。
+    /// 平台 401 分支（auth-2）据此识别 token_expired——协议数据按字段分支，
+    /// 绝不匹配 message 文本（§3 纪律与 Windows translation.rs:446-450 一致）。
+    static func errorCode(from data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let error = object["error"] as? [String: Any],
+              let code = (error["code"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !code.isEmpty else {
+            return nil
+        }
+        return code
     }
 
     static func message(from object: Any) -> String? {

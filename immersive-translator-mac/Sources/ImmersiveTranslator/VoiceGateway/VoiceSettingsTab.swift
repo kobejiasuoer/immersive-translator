@@ -392,16 +392,21 @@ struct VoiceSettingsTab: View {
 
     // MARK: - 提示条
 
-    /// 切云引导条（Windows msg-bar ok：绿色成功调）。
+    /// 切云引导条（Windows msg-bar ok：绿色成功调）。登录不再自动切云（300247a），
+    /// 这里是主动切换入口：「使用沉浸云」一键落盘 voiceProvider=gateway。
     private var guideBar: some View {
         HStack(spacing: 8) {
             Image(systemName: "info.circle.fill")
                 .font(.system(size: 12))
                 .foregroundStyle(.green)
-            Text("沉浸云已为本账号开通语音能力——点击左侧「沉浸云语音」卡片即可切换，讯飞凭据保留、随时切回。")
+            Text("沉浸云的三项语音能力已开放，可以切换使用。")
                 .font(.footnote)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
+            Button("使用沉浸云") {
+                selectProvider(.gateway)
+            }
+            .controlSize(.small)
             Button {
                 guideDismissed = true
             } label: {

@@ -59,13 +59,24 @@ final class ReaderStore {
         return baseDirectory
     }
 
-    /// 读域文件文本（接线后 files 表优先、磁盘兼容兜底；NotFound → nil = 空库）。
-    private func readText(_ url: URL) -> String? {
+    /// 读域文件文本（接线后 files 表优先、磁盘兼容兜底）。
+    /// NotFound（文件不存在）→ nil = 空库；其余读错误（无权限 / 非 UTF-8 等）
+    /// 必须抛出（BUG-029：吞成 nil 会让消费方当空库、下一次保存整体清库，
+    /// 对齐 LearningStore.readFileDB 只豁免 NotFound 的既定策略）。
+    private func readText(_ url: URL) throws -> String? {
         if let learning {
-            guard let text = try? learning.readPath(url) else { return nil }
-            return text
+            do {
+                return try learning.readPath(url)
+            } catch is LearningFileNotFoundError {
+                return nil
+            }
         }
-        return try? String(contentsOf: url, encoding: .utf8)
+        do {
+            return try String(contentsOf: url, encoding: .utf8)
+        } catch let error as NSError {
+            if error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError { return nil }
+            throw error
+        }
     }
 
     /// 删除域文件（接线后走 commit(nil)：outbox 记 tombstone + files 置 NULL +
@@ -76,6 +87,19 @@ final class ReaderStore {
             return
         }
         try? fileManager.removeItem(at: url)
+    }
+
+    /// 域文件「读 → 改 → 写」临界区（BUG-027）：串行队列内再持 LearningStore 锁跨越整段。
+    /// queue 只串行化 ReaderStore 自己，管不住 SyncEngine 的 storePut（事务内 hydrate 重写
+    /// 域文件快照）；读与写之间一旦插进一轮 pull，commit 就以拉取前的旧稿覆盖刚拉下的进度
+    ///（mergeUnknown 旧标量胜出）并由 derive 以 now() 重新入队外推。加锁顺序恒为
+    /// queue → learning 锁（LearningStore 从不回调 ReaderStore）。未接线（纯文件 IO）时
+    /// 只有队列串行，行为不变。只读入口不需要：单次 readPath 本身在锁内完成。
+    private func readModifyWrite<T>(_ body: () throws -> T) throws -> T {
+        try queue.sync {
+            guard let learning else { return try body() }
+            return try learning.withExclusiveAccess(body)
+        }
     }
 
     var articlesURL: URL { directory.appendingPathComponent("reader_articles.json") }
@@ -124,18 +148,48 @@ final class ReaderStore {
     // MARK: - 文章
 
     private func loadArticlesFile() throws -> ArticlesFile {
-        guard let raw = readText(articlesURL) else { return .empty }
+        guard let raw = try readText(articlesURL) else { return .empty }
+        if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .empty }
         let data = Data(raw.utf8)
-        if data.isEmpty { return .empty }
         guard let topLevel = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return .empty
+            // JSON 顶层解析失败：报错保护数据，绝不静默清空（对齐 Windows
+            // load_articles_from_path「JSON 本身损坏仍报错」契约；旧实现 return .empty
+            // 会让损坏文件在下一次 saveArticle 时被空库覆盖，与生词库同策略）。
+            throw ReaderStoreError.schemaIncompatible("文章数据损坏：reader_articles.json 不是合法 JSON")
         }
         do {
             try ReaderFileCodec.checkSchemaVersion(topLevel: topLevel, file: "reader_articles.json")
         } catch {
             throw ReaderStoreError.schemaIncompatible((error as? LocalizedError)?.errorDescription ?? "数据版本不兼容")
         }
-        return try ReaderFileCodec.decode(ArticlesFile.self, from: data)
+        do {
+            return try ReaderFileCodec.decode(ArticlesFile.self, from: data)
+        } catch {
+            // JSON 合法但有条目解码失败（事故：v2 同步 hydrate 把缺 id 的 content-chunk
+            // 分块写进了文章数组 → 整库读不出 → 书架空、导入与打开文章必失败）：
+            // 抢救全部合法条目并回写自愈，只有坏条目被剔除（对齐 Windows
+            // salvage_articles_file，2026-10-30 同类事故同策略；接线 LearningStore
+            // 时 writeAtomically 走 commit，回写派生 outbox）。
+            let salvaged = salvageArticlesFile(topLevel: topLevel)
+            if let clean = try? ReaderFileCodec.encode(salvaged) {
+                try? writeAtomically(clean, to: articlesURL)
+            }
+            return salvaged
+        }
+    }
+
+    /// 从「JSON 合法但部分条目损坏」的文章文件里抢救（对齐 Windows salvage_articles_file）：
+    /// 只保留能完整解码为 Article 的条目。schemaVersion 已由调用方校验，恒等于
+    /// readerSchemaVersion；JSON 本身损坏由调用方报错，不走这里。
+    private func salvageArticlesFile(topLevel: [String: Any]) -> ArticlesFile {
+        let rows = (topLevel["articles"] as? [Any]) ?? []
+        let kept: [Article] = rows.compactMap { row in
+            guard let dict = row as? [String: Any],
+                  JSONSerialization.isValidJSONObject(dict),
+                  let data = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
+            return try? ReaderFileCodec.decode(Article.self, from: data)
+        }
+        return ArticlesFile(schemaVersion: readerSchemaVersion, articles: kept)
     }
 
     /// 书架：文章去掉句对正文，按最近阅读排序。
@@ -166,7 +220,7 @@ final class ReaderStore {
     /// 新建或整体更新一篇文章（进度/译文/设置覆盖都通过它落盘）。
     /// 书章（bookId 非空）路由到 books/<bookId>.json，短文照旧走 reader_articles.json。
     func saveArticle(_ article: Article) throws -> ArticleSummary {
-        try queue.sync {
+        try readModifyWrite {
             if let bookId = article.bookId, !bookId.isEmpty {
                 return try saveArticleIntoBookFile(article, bookId: bookId)
             }
@@ -184,7 +238,7 @@ final class ReaderStore {
 
     @discardableResult
     func deleteArticle(id: String) throws -> Bool {
-        try queue.sync {
+        try readModifyWrite {
             var file = try loadArticlesFile()
             let before = file.articles.count
             file.articles.removeAll { $0.id == id }
@@ -197,11 +251,15 @@ final class ReaderStore {
     // MARK: - 书（书级载体）
 
     private func loadJSONFile<T: Decodable>(_ type: T.Type, url: URL, file: String, empty: T) throws -> T {
-        guard let raw = readText(url) else { return empty }
+        guard let raw = try readText(url) else { return empty }
         let data = Data(raw.utf8)
         if data.isEmpty { return empty }
         guard let topLevel = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return empty
+            // JSON 顶层解析失败：报错保护数据，绝不静默清空（对齐 loadArticlesFile /
+            // loadVocabFile 同策略）。旧实现 return empty 会让损坏的 reader_books.json
+            // / books/<id>.json 在下一次 saveBook/saveBookMeta/saveArticleIntoBookFile
+            // 时被空库整体覆盖——书索引整本丢失、单章重写抹掉整本书其余章节。
+            throw ReaderStoreError.schemaIncompatible("数据损坏：\(file) 不是合法 JSON")
         }
         do {
             try ReaderFileCodec.checkSchemaVersion(topLevel: topLevel, file: file)
@@ -234,7 +292,7 @@ final class ReaderStore {
     /// 整本入库（导入向导确认时一次性调用）：写书文件 + upsert 索引，返回最新书列表。
     @discardableResult
     func saveBook(meta: BookMeta, articles: [Article]) throws -> [BookMeta] {
-        try queue.sync {
+        try readModifyWrite {
             guard !meta.chapters.isEmpty else {
                 throw FileImportError("书至少要有一章")
             }
@@ -260,7 +318,7 @@ final class ReaderStore {
 
     /// 只更新书元信息（进度/时长/最近阅读写回；不碰章正文）。
     func saveBookMeta(_ meta: BookMeta) throws {
-        try queue.sync {
+        try readModifyWrite {
             var index = try loadBooksIndexFile()
             guard index.books.contains(where: { $0.id == meta.id }) else {
                 throw FileImportError("书不存在: \(meta.id)")
@@ -273,7 +331,7 @@ final class ReaderStore {
     /// 删除一本书：删书卡与全部章文章（进度不可恢复），生词一律保留。
     @discardableResult
     func deleteBook(bookId: String) throws -> Bool {
-        try queue.sync {
+        try readModifyWrite {
             var index = try loadBooksIndexFile()
             let before = index.books.count
             index.books.removeAll { $0.id == bookId }
@@ -312,18 +370,86 @@ final class ReaderStore {
     // MARK: - 生词 + 复习日志
 
     private func loadVocabFile() throws -> VocabFile {
-        guard let raw = readText(vocabURL) else { return .empty }
+        guard let raw = try readText(vocabURL) else { return .empty }
         let data = Data(raw.utf8)
         if data.isEmpty { return .empty }
         guard let topLevel = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return .empty
+            // JSON 顶层解析失败：报错保护数据，绝不静默清空（对齐 Windows 564b6c1
+            // 「JSON 本身损坏仍报错」契约；旧实现 return .empty 会让损坏文件在下一
+            // 次 saveVocabWord 时被空库覆盖）。
+            throw ReaderStoreError.schemaIncompatible("生词数据损坏：reader_vocab.json 不是合法 JSON")
         }
         do {
             try ReaderFileCodec.checkSchemaVersion(topLevel: topLevel, file: "reader_vocab.json")
         } catch {
             throw ReaderStoreError.schemaIncompatible((error as? LocalizedError)?.errorDescription ?? "数据版本不兼容")
         }
-        return try ReaderFileCodec.decode(VocabFile.self, from: data)
+        do {
+            return try ReaderFileCodec.decode(VocabFile.self, from: data)
+        } catch {
+            // JSON 合法但有条目反序列化失败（事故：v2 同步曾把前端词块标签的中文
+            // 展示名「搭配/短语动词/习语/句式」当 chunkType 传上云端，回灌后整库
+            // 读不出 → 加词必失败、生词列表空白且到期数不显示）：修复标签后逐词
+            // 抢救并回写自愈（与文章库 2026-10-30 同类事故同策略；接线 LearningStore
+            // 时 writeAtomically 走 commit，回写派生 outbox，下次推送顺带修正云端）。
+            let salvaged = try salvageVocabFile(topLevel: topLevel)
+            if let clean = try? ReaderFileCodec.encode(salvaged) {
+                try? writeAtomically(clean, to: vocabURL)
+            }
+            return salvaged
+        }
+    }
+
+    /// 中文词块标签 → 枚举值（前端 CHUNK_TYPE_LABELS 的展示名；对齐 Windows
+    /// 564b6c1 repair_chunk_type_label）。
+    static func repairChunkTypeLabel(_ label: String) -> String? {
+        switch label {
+        case "搭配": return "collocation"
+        case "短语动词": return "phrasal"
+        case "习语": return "idiom"
+        case "句式": return "pattern"
+        default: return nil
+        }
+    }
+
+    /// 从「JSON 合法但部分条目损坏」的生词文件里抢救（对齐 Windows salvage_vocab_file）：
+    /// 先把中文词块标签修回枚举值（词不丢），再剔除仍无法解码的词（只有坏条目出局）；
+    /// reviewLog / readingLog 整体解码，失败即抛（结构性损坏不静默，让调用方报错
+    /// 保护数据）。schemaVersion 已由调用方校验，恒等于 readerSchemaVersion。
+    private func salvageVocabFile(topLevel: [String: Any]) throws -> VocabFile {
+        var words = (topLevel["words"] as? [[String: Any]]) ?? []
+        for index in words.indices {
+            if let label = words[index]["chunkType"] as? String,
+               let fixed = Self.repairChunkTypeLabel(label) {
+                words[index]["chunkType"] = fixed
+            }
+        }
+        let kept: [VocabWord] = words.compactMap { dict in
+            guard JSONSerialization.isValidJSONObject(dict),
+                  let data = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
+            return try? ReaderFileCodec.decode(VocabWord.self, from: data)
+        }
+        guard let rawReviewLog = topLevel["reviewLog"],
+              JSONSerialization.isValidJSONObject(rawReviewLog),
+              let reviewLogData = try? JSONSerialization.data(withJSONObject: rawReviewLog),
+              let reviewLog = try? ReaderFileCodec.decode(ReviewLogFile.self, from: reviewLogData) else {
+            throw ReaderStoreError.schemaIncompatible("生词数据损坏：reader_vocab.json 复习日志不可解码")
+        }
+        var readingLog: [ReadingLogDay]?
+        if let raw = topLevel["readingLog"] {
+            guard JSONSerialization.isValidJSONObject(raw),
+                  let data = try? JSONSerialization.data(withJSONObject: raw),
+                  let decoded = try? ReaderFileCodec.decode([ReadingLogDay].self, from: data) else {
+                throw ReaderStoreError.schemaIncompatible("生词数据损坏：reader_vocab.json 阅读日志不可解码")
+            }
+            readingLog = decoded
+        }
+        return VocabFile(
+            schemaVersion: readerSchemaVersion,
+            words: kept,
+            reviewLog: reviewLog,
+            readingLog: readingLog
+        )
     }
 
     func getVocabFile() throws -> VocabFile {
@@ -332,7 +458,7 @@ final class ReaderStore {
 
     /// 新增或更新一个生词（SRS 评分走它整体覆盖）。
     func saveVocabWord(_ word: VocabWord) throws {
-        try queue.sync {
+        try readModifyWrite {
             var file = try loadVocabFile()
             file.schemaVersion = readerSchemaVersion
             if let idx = file.words.firstIndex(where: { $0.id == word.id }) {
@@ -350,7 +476,7 @@ final class ReaderStore {
     /// 返回是否新增（false = 合并进已有词，复习进度保持不变）。
     @discardableResult
     func mergeVocabWord(_ word: VocabWord) throws -> Bool {
-        try queue.sync {
+        try readModifyWrite {
             var file = try loadVocabFile()
             file.schemaVersion = readerSchemaVersion
             let key = normalizeWordKey(word.word)
@@ -371,7 +497,7 @@ final class ReaderStore {
 
     @discardableResult
     func deleteVocabWord(id: String) throws -> Bool {
-        try queue.sync {
+        try readModifyWrite {
             var file = try loadVocabFile()
             let before = file.words.count
             file.words.removeAll { $0.id == id }
@@ -383,7 +509,7 @@ final class ReaderStore {
 
     /// 记一次复习打卡（day = 本地时区 YYYY-MM-DD），返回打卡后的日志。
     func recordReview(day: String) throws -> ReviewLogFile {
-        try queue.sync {
+        try readModifyWrite {
             var file = try loadVocabFile()
             file.schemaVersion = readerSchemaVersion
             if let idx = file.reviewLog.days.firstIndex(where: { $0.day == day }) {
@@ -403,7 +529,7 @@ final class ReaderStore {
     /// 对齐 Windows reader_record_reading）。
     @discardableResult
     func recordReading(day: String, seconds: Double) throws -> Double {
-        try queue.sync {
+        try readModifyWrite {
             var file = try loadVocabFile()
             file.schemaVersion = readerSchemaVersion
             let log = readingLogRecorded(file.readingLog ?? [], day: day, seconds: seconds)

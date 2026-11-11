@@ -441,6 +441,24 @@ final class ReaderCoreTests: XCTestCase {
         XCTAssertEqual(judgeDictation("", "sentence"), .wrong)
     }
 
+    /// QA BUG-001 防回归：听写卡空输入提交后判分面板调用 wordDiff("", 句子)，
+    /// 旧实现 `for i in 1...m`（m=0）构造 1...0 Range 直接崩溃整个应用。
+    func testWordDiffEmptySidesDoNotCrash() {
+        // 空输入 → 全部 miss（答案侧原文），命中 0
+        let emptyInput = wordDiff("", "She took on momentum")
+        XCTAssertEqual(emptyInput.map(\.status), [.miss, .miss, .miss, .miss])
+        XCTAssertEqual(emptyInput.map(\.text), ["she", "took", "on", "momentum"])
+        // 仅标点/空白的输入归一化后同样为空
+        XCTAssertEqual(wordDiff("  ,.!  ", "go").map(\.status), [.miss])
+        // 空答案 → 全部 extra（输入侧原文）
+        let emptyAnswer = wordDiff("hello world", "")
+        XCTAssertEqual(emptyAnswer.map(\.status), [.extra, .extra])
+        XCTAssertEqual(emptyAnswer.map(\.text), ["hello", "world"])
+        // 两侧皆空
+        XCTAssertEqual(wordDiff("", ""), [])
+        XCTAssertEqual(wordHitRate("", "She took on momentum"), 0)
+    }
+
     func testRouteRecallMode() {
         func word(_ kind: VocabKind?, interval: Double) -> VocabWord {
             VocabWord(

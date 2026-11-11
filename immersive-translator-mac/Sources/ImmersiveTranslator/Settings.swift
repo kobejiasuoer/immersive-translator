@@ -105,22 +105,9 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// 登录自动切云轻提示的触发序号（瞬态，不落盘、不进保存条快照）：登录成功瞬间
-    /// 真正发生了切换才递增，设置窗据此展示 4s 绿色提示条。
-    @Published private(set) var voiceAutoSwitchNoticeSerial = 0
-
-    /// 登录成功瞬间自动切云（对齐 Windows Settings.tsx:176-185）：已存值已是 gateway
-    /// 无感（返回 false）；否则即时落盘 gateway（didSet 写 UserDefaults，语音页卡片
-    /// 选中态随之切换）并递增提示序号。讯飞凭据原样保留、随时可切回。
-    /// 唯一调用点：AppDelegate 订阅 ServerAuthClient.loginSuccessSerial（交互式登录
-    /// 成功；启动静默续登录不触发）。
-    @discardableResult
-    func applyLoginVoiceAutoSwitch() -> Bool {
-        if voiceProvider == .gateway { return false }
-        voiceProvider = .gateway
-        voiceAutoSwitchNoticeSerial &+= 1
-        return true
-    }
+    // 登录成功不再自动切云（对齐 Windows 300247a：登录仅更新账号状态，语音服务由
+    // 用户选择；云能力未开放时也不能覆盖已可用的讯飞配置。引导条上的「使用沉浸云」
+    // 按钮是唯一主动切换入口，见 VoiceSettingsTab.guideBar）。
 
     init() {
         // 用局部变量完成所有计算,避免在存储属性初始化前访问 self(didSet 会触发 self 访问)。
@@ -576,6 +563,14 @@ enum OCRLanguagePreset: String, CaseIterable, Identifiable {
         default:
             return [.autoMixed, .japanese]
         }
+    }
+
+    /// 「混合」交给 Vision 自动检测语言（VNRecognizeTextRequest.automaticallyDetectsLanguage，macOS 13+）。
+    /// 只按 recognitionLanguages 顺序识别时，en-US 在首位会把中文/日文/韩文硬解成拉丁乱码或 0 字符
+    /// （QA BUG-005）；改成 zh-Hans 优先又会丢日文假名、韩文为空、英文置信度下降。开自动检测后英文结果
+    /// 与原顺序一致、中日韩恢复正常。其余预设语言已明确，仍按列表顺序识别。
+    var automaticallyDetectsLanguage: Bool {
+        self == .autoMixed
     }
 }
 
@@ -1135,10 +1130,25 @@ final class SettingsSectionRequest: ObservableObject {
     }
 }
 
+/// 应用更新卡的「已知结果预填」信号（port-39，对齐 Windows cd2d3f2 的
+/// readKnownUpdate + subscribeUpdateInfo 语义）：AppDelegate 自动检查发现新版本后
+/// 暂存结果，设置窗打开时经 SettingsWindowController.show 注入关于页更新卡——
+/// 用户被自动提醒后打开设置无需再手动查一次。mac 单进程，不需要 Windows 那套
+/// 跨窗口 storage 订阅，一个可观察容器即可。
+@MainActor
+final class SettingsUpdatePrefill: ObservableObject {
+    @Published var availableResult: UpdateCheckResult?
+}
+
 final class SettingsWindowController: NSWindowController {
     private let settingsStore: SettingsStore
     /// 「账号」分区导航信号（菜单「账号登录」已登录时选中账号页签）。
     private let accountNavigation = SettingsAccountNavigation()
+    /// 关于页更新卡预填（port-39）：show() 时从 AppDelegate 取最近一次自动检查结果。
+    private let updatePrefill = SettingsUpdatePrefill()
+    private let latestAutomaticUpdateResult: () -> UpdateCheckResult?
+    /// 热键录制态变化（settings-ui-1）：进入录制挂起全局热键，结束/取消整组重注册。
+    private let onHotKeyRecordingChanged: (Bool) -> Void
 
     init(
         settingsStore: SettingsStore,
@@ -1146,9 +1156,13 @@ final class SettingsWindowController: NSWindowController {
         onShowOnboarding: @escaping () -> Void,
         onOpenLogin: @escaping () -> Void,
         onReregisterHotKeys: @escaping () -> Void,
-        onInstallUpdate: @escaping (UpdateDownloadResult, UpdateCheckResult) -> Void
+        onInstallUpdate: @escaping (UpdateDownloadResult, UpdateCheckResult) -> Void,
+        latestAutomaticUpdateResult: @escaping () -> UpdateCheckResult?,
+        onHotKeyRecordingChanged: @escaping (Bool) -> Void
     ) {
         self.settingsStore = settingsStore
+        self.latestAutomaticUpdateResult = latestAutomaticUpdateResult
+        self.onHotKeyRecordingChanged = onHotKeyRecordingChanged
         let view = SettingsView(
             settingsStore: settingsStore,
             onShowOnboarding: onShowOnboarding,
@@ -1156,7 +1170,9 @@ final class SettingsWindowController: NSWindowController {
             accountNavigation: accountNavigation,
             onOpenLogin: onOpenLogin,
             onReregisterHotKeys: onReregisterHotKeys,
-            onInstallUpdate: onInstallUpdate
+            onInstallUpdate: onInstallUpdate,
+            updatePrefill: updatePrefill,
+            onHotKeyRecordingChanged: onHotKeyRecordingChanged
         )
         // 品牌统一（对齐 Windows v0.12 墨绿）：根视图注入 .tint 让系统控件
         //（Toggle 开关/segmented Picker/borderedProminent 按钮/录制高亮）同步墨绿；
@@ -1193,6 +1209,9 @@ final class SettingsWindowController: NSWindowController {
     }
 
     func show() {
+        // port-39：开窗即把 AppDelegate 最近一次自动检查发现的新版本预填进更新卡
+        //（无可升级项为 nil，视图侧对 busy 状态与空结果各有守卫）。
+        updatePrefill.availableResult = latestAutomaticUpdateResult()
         window?.center()
         window?.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
@@ -1237,6 +1256,10 @@ struct SettingsView: View {
     let onReregisterHotKeys: () -> Void
     /// 设置内「升级到 vN」下载完成 → 接既有校验＋替换安装确认流（AppDelegate）。
     let onInstallUpdate: (UpdateDownloadResult, UpdateCheckResult) -> Void
+    /// 关于页更新卡预填（port-39）：AppDelegate 自动检查结果经 show() 注入。
+    @ObservedObject var updatePrefill: SettingsUpdatePrefill
+    /// 热键录制态变化（settings-ui-1）：进入录制挂起全局热键，结束/取消整组重注册。
+    let onHotKeyRecordingChanged: (Bool) -> Void
     @State private var recordingHotKey: HotKeyRecorderTarget?
     @State private var hotKeyRecorderMessage = ""
     @State private var providerDiagnostic = ProviderConnectionDiagnostic.idle
@@ -1261,16 +1284,6 @@ struct SettingsView: View {
     @State private var savedSnapshot: SettingsSaveSnapshot?
     @State private var autoSavedAck = false
     @State private var autoSavedAckTask: Task<Void, Never>?
-
-    // ---- 登录自动切云（语音云决策 1，对齐 Windows Settings.tsx:169-191）----
-    // 登录成功的瞬间自动把 voiceProvider 写为 gateway：即时落盘 + 语音页卡片选中态
-    // 随之切换 + 一条 4s 绿色轻提示；讯飞凭据原样保留、随时可切回。已是 gateway 无感；
-    // 启动静默续登录不算登录瞬间，不代切。切换动作在 AppDelegate（订阅交互式登录
-    // 成功序号 loginSuccessSerial，设置窗口从未打开过也能落盘，规格 §四差异 6；
-    // 触发口径与 Windows 实际运行行为的差异见 AppDelegate.observeLoginForVoiceSwitch），
-    // 这里只按 settingsStore.voiceAutoSwitchNoticeSerial 展示轻提示。
-    @State private var switchedCloudNotice = false
-    @State private var switchedCloudNoticeTask: Task<Void, Never>?
 
     // SET-9 危险区：恢复默认确认弹窗
     @State private var confirmResetDefaults = false
@@ -1309,21 +1322,6 @@ struct SettingsView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
-                            // 登录自动切云轻提示（4s，Settings.tsx:567-572 同文案）。
-                            if switchedCloudNotice {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(.green)
-                                    Text("已切换为沉浸云语音——讯飞凭据已保留，可在「语音」页随时切回")
-                                        .font(.footnote)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                    Spacer()
-                                }
-                                .padding(10)
-                                .background(Color.green.opacity(0.09), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                .transition(.opacity)
-                            }
                             sectionContent
                         }
                         .padding(EdgeInsets(top: 25, leading: 26, bottom: 28, trailing: 30))
@@ -1456,16 +1454,6 @@ struct SettingsView: View {
         .onChange(of: settingsStore.providerDiagnosticRequestID) { _ in
             runRequestedProviderDiagnostic()
         }
-        .onChange(of: settingsStore.voiceAutoSwitchNoticeSerial) { _ in
-            // 登录成功瞬间已自动切云（AppDelegate 落盘）：顶部绿色轻提示 4s。
-            switchedCloudNotice = true
-            switchedCloudNoticeTask?.cancel()
-            switchedCloudNoticeTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                guard !Task.isCancelled else { return }
-                switchedCloudNotice = false
-            }
-        }
         .onAppear {
             runRequestedProviderDiagnostic()
             savedSnapshot = SettingsSaveSnapshot.capture(from: settingsStore)
@@ -1474,7 +1462,6 @@ struct SettingsView: View {
             cancelProviderDiagnosticTasks()
             updateTask?.cancel()
             autoSavedAckTask?.cancel()
-            switchedCloudNoticeTask?.cancel()
         }
         .onReceive(accountNavigation.$scrollRequestID.dropFirst()) { _ in
             // 菜单「账号登录」已登录：新 IA 下选中账号页签（原滚动锚点改释，SET-5）。
@@ -1490,6 +1477,21 @@ struct SettingsView: View {
             DispatchQueue.main.async {
                 SettingsSectionRequest.shared.clear()
             }
+        }
+        // settings-ui-1：录制态变化是挂起/恢复全局热键的唯一信号源（行间直接切换
+        // 不经过 nil 也覆盖）。挂起后已注册组合不再被系统消费，录制器的 keyDown
+        // 才收得到键；结束（成功/Esc/失焦）后按当前设置整组重注册。
+        .onChange(of: recordingHotKey) { target in
+            onHotKeyRecordingChanged(target != nil)
+        }
+        // port-39：自动检查发现的新版本开卡即预填；手动检查进行中（checking/
+        // downloading）不覆盖，空结果（无可升级项）不动卡片既有内容。
+        .onReceive(updatePrefill.$availableResult) { result in
+            guard let result else { return }
+            guard updatePhase != .checking, updatePhase != .downloading else { return }
+            updateAvailableResult = result
+            updateMessage = "发现新版本 v\(result.latestDisplayVersion)（当前 v\(result.currentDisplayVersion)）"
+            updatePhase = .idle
         }
     }
 
@@ -1575,7 +1577,10 @@ struct SettingsView: View {
         // REVIEW-03 侧栏材质：平面 3.5% 灰在深色下几乎不可见，且与底部保存条的
         // .regularMaterial 讲两套材质故事。换成系统 sidebar vibrancy（材质承载层级，
         // 结构性区域更厚）；「减弱透明度」开启时系统自动退化为实底，无需分支。
-        .background(SidebarVibrancyBackground())
+        // 材质必须 ignoresSafeArea 铺到窗口顶缘：fullSizeContentView 下标题条
+        // 是安全区，macOS 26（Tahoe）安全区更高，不忽略会让左上角（交通灯区）
+        // 露出透明窗口底——窗口本体 backgroundColor=.clear，缺口直接见桌面。
+        .background(SidebarVibrancyBackground().ignoresSafeArea())
     }
 
     /// 侧栏导航行（set-nav-item：16pt 图标 + 13pt 文案；选中 accent-soft 底 + 左缘 3pt 主色条）。
@@ -4481,7 +4486,7 @@ struct SettingsView: View {
         switch translationError {
         case .badResponse(let statusCode, _):
             return statusCode
-        case .invalidEndpoint, .missingAPIKey, .platformNotLoggedIn, .emptyTranslation, .invalidResponse:
+        case .invalidEndpoint, .missingAPIKey, .platformNotLoggedIn, .platformAccountAuthFailed, .emptyTranslation, .invalidResponse:
             return nil
         }
     }
@@ -4898,7 +4903,8 @@ struct SettingsView: View {
             shortcuts.filter { $0.0 == current.0 }.count > 1
         }
         guard let (shortcut, title) = duplicate else { return nil }
-        return "\(title)和其它功能都使用 \(shortcut.title)。请录制不同快捷键，避免只触发其中一个。建议试试：\(hotKeySuggestionText(excluding: shortcut))。"
+        // settings-ui-2：重复组合本次一个都注册不上，文案按真实结果表述。
+        return "\(title)和其它功能都使用 \(shortcut.title)，重复的组合本次都未注册为全局热键。请录制不同快捷键。建议试试：\(hotKeySuggestionText(excluding: shortcut))。"
     }
 
     private func hotKeyRecorderRow(
@@ -5012,6 +5018,14 @@ struct SettingsView: View {
             )
             .frame(width: 0, height: 0)
         )
+        // port-23（对齐 Windows d5d1387 录制态窗口失焦自动取消）：失焦后回来按钮
+        // 仍停在「按下组合键...」，须再点一次才退出录制态。这里失焦即取消本行
+        // 录制，文案与 HotKeyRecorderBridge.onCancel 一致；仅录制中的行响应。
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            guard recordingHotKey == target else { return }
+            recordingHotKey = nil
+            hotKeyRecorderMessage = "已取消录制 \(title)。"
+        }
     }
 
     private func defaultHotKeyShortcut(for target: HotKeyRecorderTarget) -> HotKeyShortcut {
@@ -5049,7 +5063,8 @@ struct SettingsView: View {
         if others.contains(shortcut) {
             let titles = otherHotKeyTitles(for: target)
             let duplicateTitle = others.firstIndex(of: shortcut).map { titles[$0] } ?? "其它功能"
-            return "已录制 \(title)：\(shortcut.title)，但它和\(duplicateTitle)重复；重复组合只会有一个功能能注册成全局热键。建议试试：\(hotKeySuggestionText(excluding: shortcut, target: target))。"
+            // settings-ui-2：重复组合本次一个都注册不上，不再声称「只会有一个能注册」。
+            return "已录制 \(title)：\(shortcut.title)，但它和\(duplicateTitle)重复；重复的组合本次都未注册为全局热键。建议试试：\(hotKeySuggestionText(excluding: shortcut, target: target))。"
         }
         if shortcut == defaultHotKeyShortcut(for: target) {
             return "已录制 \(title)：\(shortcut.title)，这是默认快捷键；如果没有橙色注册提示，说明已注册为全局热键。"

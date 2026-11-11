@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import Foundation
 import ReaderCore
 import XfyunCore
@@ -36,7 +37,7 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
         case gatewayFailure(ReaderSpeechFailureToast)
     }
 
-    struct Settings {
+    struct Settings: Equatable {
         var rate: Double = 1
         var voice: String = ""
         var sentencePauseMs: Double = 0
@@ -74,13 +75,32 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
     var currentCloudPlayer: AVAudioPlayer? { cloudPlayer }
 
     // ---- 沉浸云网关朗读（cloud 档）状态 ----
-    /// 运行时配额耗尽：本句与后续句直接走 Edge（守卫 caps 缓存可能尚未感知；
-    /// 对齐 Windows gatewayQuotaErrorRef）。
-    private var gatewayQuotaError: VoiceError?
+    /// 运行时配额耗尽：短暂（30s）回落 Edge 后重新查能力——兑换额度后无需重启
+    /// 阅读室（对齐 Windows gatewayQuotaErrorRef {error, expiresAt}，300247a）。
+    /// 设置存储变更与切号广播时清空（updateContext / observeGatewayQuotaReset）。
+    private var gatewayQuotaError: (error: VoiceError, expiresAt: Date)?
+    /// 配额回落缓存有效期（Windows 同款 30s）。
+    private let gatewayQuotaErrorTTL: TimeInterval = 30
+    /// 切号广播订阅（身份变化清空配额回落缓存）。
+    private var authObserverCancellable: AnyCancellable?
     /// 回落提示去重 key（message|action；连读不重复弹，对齐 fallbackNoticeKeyRef）。
     private var gatewayFallbackNoticeKey = ""
     /// 网关流式播放器（当前句；stop/换句即打断作废）。
     private var gatewayPlayer: GatewayStreamPlayer?
+
+    // ---- 云合成网络熔断（BUG-025，讯飞 / Edge 逐句合成）----
+    /// 某引擎逐句合成遇网络类失败（超时/拒连/断开，classifyTtsError → .network）后，
+    /// 窗口内同引擎后续句不再发网络请求：只查本地缓存（命中照常出云音色），未命中直接
+    /// 本地合成——挂起型网络下不再每句先等满云端超时（EdgeTts.requestTimeout 20s）才回落。
+    /// 过期后下一句重新走网络（半开探测）；用户按播放键开播即复位（toggle），「检查网络
+    /// 后重试」语义不打折。按引擎分键：Edge 不通不牵连讯飞。
+    private var cloudNetworkBreakerUntil: [CloudEngine: Date] = [:]
+    /// 熔断窗口时长（与配额回落缓存 gatewayQuotaErrorTTL 同为 30s）。
+    let cloudNetworkBreakerTTL: TimeInterval = 30
+    /// 熔断计时时钟（单测注入；生产为系统时间）。
+    var breakerClock: () -> Date = Date.init
+    /// 云合成取音（生产恒为共享讯飞/Edge 引擎；单测注入替身，不碰真实网络与用户缓存目录）。
+    var cloudAudioSource = CloudAudioSource.shared
 
     /// 双音轨各自独立 synthesizer。
     private let sentenceSynth = AVSpeechSynthesizer()
@@ -90,18 +110,41 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
         super.init()
         sentenceSynth.delegate = self
         wordSynth.delegate = self
+        observeGatewayQuotaReset()
     }
 
     // MARK: - 上下文注入
 
     func updateContext(texts: [String], settings: Settings) {
         let textsChanged = self.texts != texts
+        // 设置变更清空配额回落缓存（对齐 Windows storage 事件监听：兑换额度/
+        // 换音色后下一次合成重新查能力）。
+        if self.settings != settings {
+            gatewayQuotaError = nil
+        }
         self.texts = texts
         self.settings = settings
         if textsChanged, cursor >= texts.count {
             cursor = max(0, texts.count - 1)
         }
     }
+
+    /// 切号广播观察：账号身份变化即清空配额回落缓存（Windows auth-state-changed
+    /// 的 `gatewayQuotaErrorRef.current=null`；A 账号耗尽的额度不牵连 B 账号）。
+    private func observeGatewayQuotaReset() {
+        authObserverCancellable = AppAuthStatusCenter.shared.$status.sink { [weak self] status in
+            guard let status else { return }
+            guard let self else { return }
+            let identity = status.loggedIn ? status.user?.id : nil
+            if identity != self.observedAuthIdentity {
+                self.observedAuthIdentity = identity
+                self.gatewayQuotaError = nil
+            }
+        }
+    }
+
+    /// 上次广播观察到的账号身份（nil = 未登录/未广播）。
+    private var observedAuthIdentity: String?
 
     // MARK: - 状态查询
 
@@ -122,6 +165,8 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
             continueAfterShadowing()
             return
         }
+        // BUG-025：按播放键开播 = 用户显式（重）试，云合成网络熔断复位（窗口只拦自动逐句推进）。
+        cloudNetworkBreakerUntil.removeAll()
         playing = true
         speak(cursor)
     }
@@ -240,12 +285,18 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
         stopCloudPlayback()
         let myEpoch = epoch
         cloudTask = Task { [weak self] in
-            // 运行时配额耗尽：守卫 caps 缓存可能尚未感知，缓存命中直接 Edge。
-            if let self, let quotaError = self.gatewayQuotaError {
-                self.showEdgeFallback(readerEdgeFallbackNoticeForQuota(quotaError))
-                guard self.epoch == myEpoch, self.playing else { return }
-                self.speakCloud(idx, text: text, engine: .edge)
-                return
+            // 运行时配额耗尽：守卫 caps 缓存可能尚未感知。30s 内直接 Edge；
+            // 过期清空重新查能力（兑换额度后无需重启阅读室）。
+            if let self {
+                if let cached = self.gatewayQuotaError {
+                    if Date().timeIntervalSince(cached.expiresAt) < 0 {
+                        self.showEdgeFallback(readerEdgeFallbackNoticeForQuota(cached.error))
+                        guard self.epoch == myEpoch, self.playing else { return }
+                        self.speakCloud(idx, text: text, engine: .edge)
+                        return
+                    }
+                    self.gatewayQuotaError = nil
+                }
             }
             let routed = await resolveReaderSpeechRoute(
                 provider: .cloud,
@@ -334,8 +385,8 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
         gatewayPlayer?.stop()
         gatewayPlayer = nil
         if let voiceError = error as? VoiceError, voiceError.code == "quota_exceeded" {
-            // 守卫缓存可能尚未感知：记下后续句直接走 Edge。
-            gatewayQuotaError = voiceError
+            // 守卫缓存可能尚未感知：记下 30s 内后续句直接走 Edge，过期重查能力。
+            gatewayQuotaError = (error: voiceError, expiresAt: Date().addingTimeInterval(gatewayQuotaErrorTTL))
             if !started {
                 // 启动失败：本句同句转 Edge（不中断阅读）+ 回落提示。
                 showEdgeFallback(readerEdgeFallbackNoticeForQuota(voiceError))
@@ -372,28 +423,76 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
     }
 
     /// speakCloud 的云引擎选择（.edge 免凭据恒尝试；.xfyun 需 isReady 才路由进来）。
-    private enum CloudEngine {
+    enum CloudEngine {
         case xfyun
         case edge
+    }
+
+    /// 云合成取音两条路径（BUG-025）：fetch = 引擎完整路径（L1 → L2 → 网络，失败抛错）；
+    /// cached = 只查 L1/L2、绝不发网络请求（熔断窗口内用，未命中返回 nil）。
+    struct CloudAudioSource {
+        var fetch: (CloudEngine, String) async throws -> Data
+        var cached: (CloudEngine, String) async -> Data?
+
+        static let shared = CloudAudioSource(
+            fetch: { engine, text in
+                switch engine {
+                case .xfyun: return try await XfyunTtsEngine.shared.audioData(for: text)
+                case .edge: return try await EdgeTtsEngine.shared.audioData(for: text)
+                }
+            },
+            cached: { engine, text in
+                switch engine {
+                case .xfyun: return await XfyunTtsEngine.shared.cachedAudioData(for: text)
+                case .edge: return await EdgeTtsEngine.shared.cachedAudioData(for: text)
+                }
+            }
+        )
+    }
+
+    /// 熔断只认网络类失败（超时/拒连/断开/URLError）：凭据、空文本、空音频、解码等
+    /// 与网络无关的失败下一句未必重现，不拦后续句的网络尝试。
+    static func shouldTripCloudNetworkBreaker(_ error: Error) -> Bool {
+        classifyTtsError(error).kind == .network
+    }
+
+    /// 打开某引擎的网络熔断窗口（catch 路径真发过网络请求且网络类失败时调用）。
+    func tripCloudNetworkBreaker(for engine: CloudEngine) {
+        cloudNetworkBreakerUntil[engine] = breakerClock().addingTimeInterval(cloudNetworkBreakerTTL)
+    }
+
+    /// 熔断窗口是否打开；过期即清掉视为关闭（本句重新走网络 = 半开探测）。
+    private func isCloudNetworkBreakerOpen(for engine: CloudEngine) -> Bool {
+        guard let until = cloudNetworkBreakerUntil[engine] else { return false }
+        if breakerClock() < until { return true }
+        cloudNetworkBreakerUntil[engine] = nil
+        return false
     }
 
     /// 云播放（云合成 → AVAudioPlayer 变速播放；讯飞 / Edge 同一回落语义）。
     private func speakCloud(_ idx: Int, text: String, engine: CloudEngine) {
         stopCloudPlayback()
         let myEpoch = epoch
+        // BUG-025：熔断窗口内只查缓存、不发网络请求（未命中直接本地合成，不重复弹归因）。
+        let breakerOpen = isCloudNetworkBreakerOpen(for: engine)
+        let source = cloudAudioSource
         cloudTask = Task { [weak self] in
             do {
                 let data: Data
-                switch engine {
-                case .xfyun:
-                    data = try await XfyunTtsEngine.shared.audioData(for: text)
-                case .edge:
-                    data = try await EdgeTtsEngine.shared.audioData(for: text)
+                if breakerOpen {
+                    guard let cached = await source.cached(engine, text) else {
+                        guard !Task.isCancelled, let self, self.epoch == myEpoch, self.playing else { return }
+                        self.speakLocally(text)
+                        return
+                    }
+                    data = cached
+                } else {
+                    data = try await source.fetch(engine, text)
                 }
                 guard !Task.isCancelled, let self, self.epoch == myEpoch, self.playing else { return }
                 try self.playCloud(data: data)
-                // 预取下一句（命中缓存则无网络请求）
-                if idx + 1 < self.texts.count {
+                // 预取下一句（命中缓存则无网络请求）；熔断窗口内不预取（窗口内不发网络请求）。
+                if !breakerOpen, idx + 1 < self.texts.count {
                     let next = self.texts[idx + 1]
                     switch engine {
                     case .xfyun: XfyunTtsEngine.shared.prefetch(next)
@@ -407,18 +506,31 @@ final class ReaderPlaybackEngine: NSObject, ObservableObject {
                 // 云失败回落本地合成，保证朗读不断流；归因上浮（凭据/网络/系统），
                 // 让用户知道云音色为什么没响（对齐 Windows P1 归因）。
                 let info = classifyTtsError(error)
-                DiagnosticLogger.log("reader.tts.cloud-fallback kind=\(info.kind) error=\(error)")
-                let utterance = self.makeUtterance(
-                    text,
-                    chinese: looksMostlyChinese(text),
-                    rate: self.settings.rate,
-                    pauseMs: self.settings.sentencePauseMs
+                // BUG-025：本句真发过网络请求且属网络类失败 → 打开熔断窗口（日志行尾标注）。
+                let tripBreaker = !breakerOpen && !Task.isCancelled && Self.shouldTripCloudNetworkBreaker(error)
+                DiagnosticLogger.log(
+                    "reader.tts.cloud-fallback kind=\(info.kind) error=\(error)"
+                    + (tripBreaker ? " breaker=\(Int(self.cloudNetworkBreakerTTL))s" : "")
                 )
-                self.currentUtterance = utterance
-                self.sentenceSynth.speak(utterance)
+                if tripBreaker {
+                    self.tripCloudNetworkBreaker(for: engine)
+                }
+                self.speakLocally(text)
                 self.publish(.cloudFallback(info))
             }
         }
+    }
+
+    /// 本句改由本地合成朗读（云失败回落 / 熔断窗口缓存未命中共用；didFinish 照常推进）。
+    private func speakLocally(_ text: String) {
+        let utterance = makeUtterance(
+            text,
+            chinese: looksMostlyChinese(text),
+            rate: settings.rate,
+            pauseMs: settings.sentencePauseMs
+        )
+        currentUtterance = utterance
+        sentenceSynth.speak(utterance)
     }
 
     private func playCloud(data: Data) throws {
@@ -580,6 +692,9 @@ extension ReaderPlaybackEngine: AVAudioPlayerDelegate {
                 self.handleCloudFinished()
             } else {
                 self.stopCloudPlayback()
+                // 失败即停止：先复位 playing 再发布（与 handleGatewayFailure 收口一致），
+                // 否则播放条停在「播放中」、第一按播放被 toggle 当作停止。
+                self.playing = false
                 self.publish(.failed(.cloudPlaybackInterrupted()))
             }
         }

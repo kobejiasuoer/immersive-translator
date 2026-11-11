@@ -164,13 +164,12 @@ final class ShellChromeTests: XCTestCase {
         XCTAssertEqual(IslandSurface.vault.label, "笔记与复习")
     }
 
-    func testVaultBadgeCountSumsDueAndUnnoted() {
-        // 角标 = 到期数 + 未整理数（ReaderTopBar.tsx:85）。
-        XCTAssertEqual(vaultBadgeCount(dueNow: 3, unnotedCount: 4), 7)
-        XCTAssertEqual(vaultBadgeCount(dueNow: 0, unnotedCount: 0), 0)
+    func testVaultBadgeCountOnlyDueNow() {
+        // 角标 = 到期数（对齐 ReaderTopBar.tsx:269-277：未整理数可能重叠，只算 dueNow）。
+        XCTAssertEqual(vaultBadgeCount(dueNow: 3), 3)
+        XCTAssertEqual(vaultBadgeCount(dueNow: 0), 0)
         // 坏数据不产生负角标。
-        XCTAssertEqual(vaultBadgeCount(dueNow: -2, unnotedCount: 5), 5)
-        XCTAssertEqual(vaultBadgeCount(dueNow: 2, unnotedCount: -9), 2)
+        XCTAssertEqual(vaultBadgeCount(dueNow: -2), 0)
     }
 
     func testFolioTriggerLabelCompositions() {

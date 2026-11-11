@@ -325,17 +325,33 @@ final class SpeakRecordsSyncer {
     let engine: SyncEngine
     /// 登录态读取（nil = 读取失败——宁可不同步也不出网）。
     private let loginStatus: () -> AuthStatus?
+    /// 命名空间读取（BUG-030）：入队/删除每次操作前采集一次，list → put 全程
+    /// 作为 expectedNamespace 携带——账号切换窗口内存储层 verifyNamespace 直接
+    /// 取消本次写入，实体绝不落错命名空间（对照 SyncEngine.syncNow 采集
+    /// deps.namespace()、ReaderStore.gradeVocabWord 采集 currentNamespace 同策略；
+    /// 登出后误写的 guest 行会在下次登录被 adoptGuest 并入账号，跨账号串扰）。
+    /// 默认走 store 门面（JSON 回退布局的命名空间由 setAccount 驱动、读取准确）；
+    /// learningBacked 布局下 SyncStore 门面不跟随登录态，由 SpeakSyncCenter
+    /// 注入 LearningStore.currentNamespace。
+    private let currentNamespace: () -> String
 
-    init(store: SyncStore, engine: SyncEngine, loginStatus: @escaping () -> AuthStatus?) {
+    init(
+        store: SyncStore,
+        engine: SyncEngine,
+        loginStatus: @escaping () -> AuthStatus?,
+        currentNamespace: (() -> String)? = nil
+    ) {
         self.store = store
         self.engine = engine
         self.loginStatus = loginStatus
+        self.currentNamespace = currentNamespace ?? { store.currentNamespace() }
     }
 
     // MARK: 入队 / 裁剪
 
     private func enqueueRecord(collection: String, id: String, updatedAt: Int64, payload: [String: Any]) throws {
-        let stored = try store.list(collection)
+        let namespace = currentNamespace()
+        let stored = try store.list(collection, expectedNamespace: namespace)
         let existing = stored.first { $0.id == id }
         let entity = StoredSyncEntity(
             id: id,
@@ -352,7 +368,11 @@ final class SpeakRecordsSyncer {
             live: stored.filter { !$0.deleted && $0.id != id },
             now: updatedAt
         )
-        try store.put(collection, tombstones.isEmpty ? [entity] : [entity] + tombstones)
+        try store.put(
+            collection,
+            tombstones.isEmpty ? [entity] : [entity] + tombstones,
+            expectedNamespace: namespace
+        )
     }
 
     /// 会话记录入队（每轮保存漏斗调用；LWW 时钟 = 会话 updatedAt）。
@@ -409,7 +429,8 @@ final class SpeakRecordsSyncer {
 
     private func tombstoneRecord(collection: String, id: String, now: Int64?) throws -> Bool {
         let stamp = now ?? Int64(Date().timeIntervalSince1970 * 1000)
-        let stored = try store.list(collection)
+        let namespace = currentNamespace()
+        let stored = try store.list(collection, expectedNamespace: namespace)
         guard let existing = stored.first(where: { $0.id == id }), !existing.deleted else {
             return false
         }
@@ -424,7 +445,7 @@ final class SpeakRecordsSyncer {
                 payload: nil,
                 dirty: true
             ),
-        ])
+        ], expectedNamespace: namespace)
         return true
     }
 
@@ -507,10 +528,12 @@ final class SpeakSyncCenter: ObservableObject {
 
     private init() {}
 
-    /// 启动接线（AppDelegate.applicationDidFinishLaunching，serverAuth.bootstrap()
-    /// 之后调用一次）。存储为 SQLite 权威 LearningStore（Windows 7fc6abd 起
-    /// sync_store_* 全部委托 learning_store 的对应物）；命名空间跟随登录态
-    /// （guest / account-<user.id hex>，由 ServerAuthClient 驱动 setAccount）。
+    /// 启动接线（AppDelegate.applicationDidFinishLaunching，先于
+    /// serverAuth.bootstrap() 调用一次）。存储为 SQLite 权威 LearningStore
+    ///（Windows 7fc6abd 起 sync_store_* 全部委托 learning_store 的对应物）；
+    /// 命名空间跟随登录态（guest / account-<user.id hex>，由 ServerAuthClient
+    /// 驱动 setAccount）。学习接力的旧 JSON 同步目录不在此捕获（此刻必然未
+    /// 登录），由 runRelay 每轮按当轮命名空间现算。
     func configure(serverAuth: ServerAuthClient) {
         self.serverAuth = serverAuth
         let learning = LearningStore.shared
@@ -520,7 +543,10 @@ final class SpeakSyncCenter: ObservableObject {
         records = SpeakRecordsSyncer(
             store: store,
             engine: engine,
-            loginStatus: { [weak serverAuth] in serverAuth?.status }
+            loginStatus: { [weak serverAuth] in serverAuth?.status },
+            // BUG-030：learningBacked 布局下 SyncStore 门面命名空间不跟随登录态，
+            // 入队/删除的 expectedNamespace 采集源接 LearningStore.currentNamespace。
+            currentNamespace: { learning.currentNamespace() }
         )
         LearningRelaySync.shared.configure(serverAuth: serverAuth, learning: learning, engine: engine)
     }

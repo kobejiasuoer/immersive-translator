@@ -117,11 +117,19 @@ public func buildVaultListEntries(
             post = vaultListSubstring16(src.en, range.end, Array(src.en.utf16).count)
         }
         let title = w.source.articleId.isEmpty ? nil : articleTitle(w.source.articleId)
+        // 来源三态（VaultPage.tsx:313，ad2ad68）：articleId 非空但标题解析不到
+        // （原文已删）→「原文不可用」，不再误标「划词收藏」。
+        let sourceLabel: String
+        switch vaultSourceOrigin(articleId: w.source.articleId, articleTitle: title) {
+        case .popup: sourceLabel = "划词收藏"
+        case .article(let t): sourceLabel = "《\(t)》"
+        case .unavailable: sourceLabel = vaultSourceUnavailableLabel
+        }
         wordEntries.append(VaultListEntry(
             kind: .word,
             id: "w:\(w.id)",
             word: w,
-            sourceLabel: title.map { "《\($0)》" } ?? "划词收藏",
+            sourceLabel: sourceLabel,
             articleId: w.source.articleId,
             pre: pre,
             blank: blank,

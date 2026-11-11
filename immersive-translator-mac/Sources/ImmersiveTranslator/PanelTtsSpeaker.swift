@@ -35,6 +35,8 @@ final class PanelTtsSpeaker: NSObject, ObservableObject, AVAudioPlayerDelegate, 
     var onNotice: ((String) -> Void)?
     /// 引擎解析：默认读全局阅读设置；可注入以便测试。
     private let resolveProvider: () -> TtsProvider
+    /// 云音色档路由裁决：默认现查（首次 / TTL 过期时是一次网络探测）；可注入以便测试。
+    private let routeCloud: () async -> CloudTtsRouter.Engine
 
     private let synth = AVSpeechSynthesizer()
     private var player: AVAudioPlayer?
@@ -47,9 +49,13 @@ final class PanelTtsSpeaker: NSObject, ObservableObject, AVAudioPlayerDelegate, 
     init(
         resolveProvider: @escaping () -> TtsProvider = {
             ReaderStore.shared.loadGlobalReaderSettings().ttsProvider
+        },
+        routeCloud: @escaping () async -> CloudTtsRouter.Engine = {
+            await CloudTtsRouter.route(xfyunReady: XfyunTtsEngine.shared.isReady)
         }
     ) {
         self.resolveProvider = resolveProvider
+        self.routeCloud = routeCloud
         super.init()
         synth.delegate = self
     }
@@ -95,7 +101,14 @@ final class PanelTtsSpeaker: NSObject, ObservableObject, AVAudioPlayerDelegate, 
     private func speakCloudRouted(clean: String, chinese: Bool, gen: Int) {
         cloudTask = Task { [weak self] in
             guard let self else { return }
-            switch await CloudTtsRouter.route(xfyunReady: XfyunTtsEngine.shared.isReady) {
+            let engine = await self.routeCloud()
+            // BUG-026：路由裁决是一次可能挂起的网络探测，期间 stop()/换朗读位会推进代数；
+            // unstructured Task 在该挂起点不抛取消。返回后先核代数再分发（对齐
+            // LeadSpeaker.speak、ReaderPlaybackEngine.speakCloudRouted），被停/被换的旧朗读
+            // 不再进入任何出声腿——原先 .local 腿无条件 synth.speak（幽灵语音、乱序），
+            // 其 playingGeneration 还会覆盖当前代数，令新朗读播完后 speaking 不复位。
+            guard gen == self.generation, !Task.isCancelled else { return }
+            switch engine {
             case .gateway:
                 do {
                     let data = try await CloudTtsRouter.gatewayAudioData(text: clean)

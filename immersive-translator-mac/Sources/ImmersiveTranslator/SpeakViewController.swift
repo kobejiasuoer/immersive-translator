@@ -705,6 +705,12 @@ final class SpeakViewController: ObservableObject {
         speakAssistant(text: text)
     }
 
+    /// 重听任意一句 assistant 英文（对话流每轮 speaker 行的「重听」，Windows
+    /// SpeakView.tsx:1745 speakRound(t.text) 同语义：走主环播报态，播完回 idle）。
+    func replayTurn(_ text: String) {
+        speakAssistant(text: text)
+    }
+
     /// 发音详情「慢速示范 0.75×」（SPEAK-8）：跟随当前 TTS 引擎——Edge 走 SSML prosody -25%、
     /// 讯飞走 speed 38、播放 1×；本地引擎或云失败回落系统语音 0.75×（LeadSpeaker.speakSlowNative）。
     /// 单词朗读不进主环状态机（对齐 Windows speakWordSlowly 走 word 轨独立通道）。

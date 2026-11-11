@@ -609,10 +609,15 @@ struct ReviewView: View {
     }
 
     private func metaSource(_ word: VocabWord) -> String {
-        if let title = vm.articleTitle(articleId: word.source.articleId) {
+        switch vaultSourceOrigin(articleId: word.source.articleId, articleTitle: vm.articleTitle(articleId: word.source.articleId)) {
+        case .article(let title):
             return "来自「\(title)」· 第 \(word.source.sentenceIdx + 1) 句"
+        case .unavailable:
+            // 原文已删：不再误标「来自划词收藏」（对齐 Windows ad2ad68）。
+            return vaultSourceUnavailableLabel
+        case .popup:
+            return "来自划词收藏"
         }
-        return "来自划词收藏"
     }
 
     private var donePanel: some View {

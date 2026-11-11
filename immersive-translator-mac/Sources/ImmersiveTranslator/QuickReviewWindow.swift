@@ -142,6 +142,9 @@ final class QuickReviewViewModel: ObservableObject {
                 sentence = pair.en
                 sentenceZh = pair.zh
                 sourceLabel = "\(article.title) · 第 \(word.source.sentenceIdx + 1) 句"
+            } else {
+                // 原文已删（文章/句子取不到）：不再沿用「划词收藏」误标（对齐 ad2ad68）。
+                sourceLabel = vaultSourceUnavailableLabel
             }
         } else if let example = word.example {
             sentence = example.en
@@ -251,6 +254,13 @@ final class QuickReviewViewModel: ObservableObject {
                 }
                 cards[pos] = card
                 ReviewTouchpointManager.shared.refreshBadge()
+                // 评分落库广播（BUG-011）：阅读室各窗据此 refreshVocab，到期数与
+                // 复习队列即时反映评分结果，已评词不再显示到期、不可重复复习。
+                NotificationCenter.default.post(
+                    name: .readerReviewGraded,
+                    object: nil,
+                    userInfo: ["wordId": card.word.id]
+                )
                 if first {
                     if pos + 1 < cards.count {
                         pos += 1
@@ -284,6 +294,12 @@ final class QuickReviewViewModel: ObservableObject {
         }
         cards[pos] = card
         ReviewTouchpointManager.shared.refreshBadge()
+        // 同学习接线路径：评分落库后广播（BUG-011），阅读室刷新词表与复习队列。
+        NotificationCenter.default.post(
+            name: .readerReviewGraded,
+            object: nil,
+            userInfo: ["wordId": card.word.id]
+        )
         // 首评才前进（尾卡评完即收工）；回看改评留在原地
         if first {
             if pos + 1 < cards.count {

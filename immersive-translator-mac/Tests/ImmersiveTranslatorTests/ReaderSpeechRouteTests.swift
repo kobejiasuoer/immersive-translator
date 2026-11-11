@@ -133,10 +133,15 @@ final class ReaderSpeechRouteTests: XCTestCase {
     func testCloudGuardOffFallsBackToEdgeSilently() async throws {
         VoicePrefsStore.saveProvider(.gateway)
         VoiceLoginProbe.provider = { false } // 未登录 → off(notLoggedIn)
+        VoiceRoute.clearCapsCache()
         let routed = await resolveReaderSpeechRoute(provider: .cloud, xfyunReady: true)
         XCTAssertEqual(routed.engine, .edge)
         let notice = try XCTUnwrap(routed.fallback)
-        XCTAssertEqual(notice.message, "已临时使用 Edge 朗读：登录沉浸云即用")
+        // 300247a：未登录 hint 改为「先登录再检查 + 可用讯飞」引导（Windows 同文案）。
+        XCTAssertEqual(
+            notice.message,
+            "已临时使用 Edge 朗读：请先登录，再检查云语音是否开放；也可在「设置 → 语音」使用讯飞"
+        )
         XCTAssertFalse(notice.redeemAction, "非配额回落无动作位")
     }
 

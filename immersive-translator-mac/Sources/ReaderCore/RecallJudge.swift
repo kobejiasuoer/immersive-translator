@@ -152,11 +152,16 @@ public func wordDiff(_ input: String, _ sentence: String) -> [DiffToken] {
     let m = a.count
     let n = b.count
     var dp = Array(repeating: Array(repeating: 0, count: n + 1), count: m + 1)
-    for i in 1...m {
-        for j in 1...n {
-            dp[i][j] = a[i - 1] == b[j - 1]
-                ? dp[i - 1][j - 1] + 1
-                : max(dp[i - 1][j], dp[i][j - 1])
+    // 空输入（m=0）或空答案（n=0）时 1...0 会越界崩溃（QA BUG-001，2/2 复现）；
+    // 此时 DP 填表本就是空操作，回溯尾部循环会正确输出全 miss/全 extra。
+    // 守卫写法对齐 computeCoachDiff（SpeakLogic.swift）。
+    if m >= 1 && n >= 1 {
+        for i in 1...m {
+            for j in 1...n {
+                dp[i][j] = a[i - 1] == b[j - 1]
+                    ? dp[i - 1][j - 1] + 1
+                    : max(dp[i - 1][j], dp[i][j - 1])
+            }
         }
     }
     var out: [DiffToken] = []

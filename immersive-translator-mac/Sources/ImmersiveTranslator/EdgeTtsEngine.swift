@@ -37,15 +37,20 @@ final class EdgeTtsEngine: @unchecked Sendable {
     /// 校准后的时钟偏差（秒），跨调用复用（替代 TS 的模块级 calibratedSkewSeconds）。
     private var calibratedSkewSeconds: Int?
     private let lock = NSLock()
-    private let transport: EdgeTtsTransport
+    /// 传输实例工厂：每次网络合成新建一个 transport。URLSessionEdgeTtsTransport
+    /// 内部只有单 task 槽位（connect 覆写 / close 置 nil，无锁），共享实例在两次
+    /// 并发合成时会互踩同一条 WebSocket（speech.config/ssml 发错 socket、音频帧
+    /// 被两个 receive 争抢、收尾 close 拆对方连接）——协议注释的设计意图本就是
+    /// 「每次合成一个实例」，引擎层按工厂兑现。单测注入桩也走同一缝。
+    private let makeTransport: () -> EdgeTtsTransport
     private let calibrate: (Int) async -> Int?
 
-    /// 默认参数用于生产（真传输 + 真校准）；单测注入桩 transport / calibrate。
+    /// 默认参数用于生产（真传输工厂 + 真校准）；单测注入桩 transport / calibrate。
     init(
-        transport: EdgeTtsTransport = URLSessionEdgeTtsTransport(),
+        makeTransport: @escaping () -> EdgeTtsTransport = { URLSessionEdgeTtsTransport() },
         calibrate: @escaping (Int) async -> Int? = { _ in await calibrateEdgeClockSkew() }
     ) {
-        self.transport = transport
+        self.makeTransport = makeTransport
         self.calibrate = calibrate
     }
 
@@ -99,11 +104,12 @@ final class EdgeTtsEngine: @unchecked Sendable {
             return hit
         }
         let skew = currentSkew()
+        // 每次网络合成新建 transport（并发合成各持独立 WebSocket，互不串线）。
         let result = try await synthesizeEdgeTts(
             text: trimmed,
             opts: opts,
             skewSeconds: skew,
-            transport: transport,
+            transport: makeTransport(),
             calibrate: calibrate
         )
         storeSkew(result.skewSeconds)
@@ -119,5 +125,27 @@ final class EdgeTtsEngine: @unchecked Sendable {
         Task.detached(priority: .utility) { [weak self] in
             _ = try? await self?.audioData(for: trimmed)
         }
+    }
+
+    /// 只查 L1 → L2、绝不发网络请求（BUG-025：阅读室播放引擎网络熔断窗口内用——
+    /// 已缓存句照常出云音色，未命中由调用方直接回落本地）。key 与
+    /// audioData(nativeRate: nil) 同一算法（同音色选择 + edgeCacheKey），命中行为也一致。
+    func cachedAudioData(for text: String) async -> Data? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let opts = EdgeTtsOptions(
+            voice: voice(forChinese: XfyunTts.looksChinese(trimmed)),
+            ratePercent: nil
+        )
+        let key = edgeCacheKey(text: trimmed, opts: opts)
+        if let hit = l1.get(key) {
+            disk.touch(key)
+            return hit
+        }
+        if let hit = disk.get(key) {
+            l1.set(key, hit)
+            return hit
+        }
+        return nil
     }
 }

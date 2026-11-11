@@ -122,6 +122,9 @@ private func performRecognition(in image: CGImage, attempt: OCRRecognitionAttemp
     let request = VNRecognizeTextRequest()
     request.recognitionLevel = recognitionLevel(for: attempt.mode)
     request.usesLanguageCorrection = attempt.mode == .accurate
+    // 「混合」预设由 Vision 自动检测语言（只在准确模式开启，快速模式行为不变），见 OCRLanguagePreset。
+    request.automaticallyDetectsLanguage = attempt.mode == .accurate
+        && attempt.languagePreset.automaticallyDetectsLanguage
 
     let languages = supportedRecognitionLanguages(
         from: attempt.languagePreset.recognitionLanguages,

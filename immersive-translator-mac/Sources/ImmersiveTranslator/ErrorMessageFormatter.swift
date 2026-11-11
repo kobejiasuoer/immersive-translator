@@ -417,13 +417,16 @@ enum TranslationErrorIssue {
 
 enum ErrorMessageFormatter {
     /// 阅读室段落失败行文案：按 HTTP 状态码定稿（绝不透传/匹配上游消息文本）。
-    /// 401 统一按登录失效给文案（Mac 阅读翻译只有 API Key 直连第三方端点，
-    /// 上游真 401 落同一桶）；nil/其余兜底桶同时覆盖未配置与 180s 超时——
-    /// 已接受的取舍：未配置场景 vm 发起翻译前已有专属 toast，失败行文案
-    /// 略宽泛无害。对齐 src/core/errorMessageFormatter.ts readerParagraphErrorText。
+    /// 401 给 API Key 指引而非 Windows 的登录话术：Mac 阅读翻译通道只有 API Key
+    /// 直连第三方端点（ReaderChatClient，凭据 = Key + activeProvider.endpoint，
+    /// 登录态不参与；沉浸云 provider 连 Authorization 头都不带），重新登录修不了
+    /// 401——同时提示切服务商，覆盖沉浸云免 Key 场景。nil/其余兜底桶同时覆盖
+    /// 未配置与 180s 超时——已接受的取舍：未配置场景 vm 发起翻译前已有专属
+    /// toast，失败行文案略宽泛无害。429/兜底两桶对齐
+    /// src/core/errorMessageFormatter.ts readerParagraphErrorText（401 为 Mac 分叉）。
     static func readerParagraphErrorText(status: Int?) -> String {
         if status == 429 { return "翻译请求太频繁，已重试仍被限流，稍后点重试" }
-        if status == 401 { return "登录状态已失效，请到 设置 → 账号 重新登录" }
+        if status == 401 { return "翻译接口返回 401：请到 设置 → 模型服务 检查 API Key 与接口地址，或切换服务商再试" }
         return "翻译服务暂时不可用，请稍后点重试"
     }
 
@@ -471,6 +474,12 @@ enum ErrorMessageFormatter {
             return "还没有配置 API Key。请先打开设置并填入 OpenAI 或兼容服务的 API Key。"
         case .platformNotLoggedIn:
             return "尚未登录沉浸云。请打开设置中心「模型服务」页点「登录沉浸云」，登录后即可翻译。"
+        case .platformAccountAuthFailed(let code):
+            // 沉浸云取票鉴权错误（auth-4）：凭据已被 AuthTokenManager 清除且失效
+            // 态已广播，文案对齐 auth 口径（D8：reused→被踢下线、invalid/expired
+            // →登录失效）；未知码兜底同阅读室 401 口径，绝不落「API Key」桶。
+            return authNoticeText(noticeForAuthCode(code))
+                ?? "登录状态已失效，请到 设置 → 账号 重新登录"
         case .badResponse(let statusCode, let message):
             var lines: [String]
             switch statusCode {

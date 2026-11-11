@@ -12,6 +12,10 @@ final class LeadSpeaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     private var player: AVAudioPlayer?
     private var completion: (() -> Void)?
     private var cloudTask: Task<Void, Never>?
+    /// 播报代数：每次 speak/stop 自增，迟到的合成/分发/播放回调按代数丢弃
+    /// （PanelTtsSpeaker 同款机制）。playEdge/playXfyun 等腿新建的 unstructured
+    /// Task 不继承外层 cloudTask 的取消，Task.isCancelled 拦不住「换句」，需代数兜底。
+    private var generation = 0
 
     override init() {
         super.init()
@@ -41,32 +45,43 @@ final class LeadSpeaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         self.completion = completion
         let chinese = looksMostlyChinese(clean)
         let fallbackRate = localRate ?? rate
+        generation += 1
+        let gen = generation
 
         if provider == .edge {
             // Edge 免凭据恒尝试（isReady 恒 true）；失败静默回落本地（领读不弹归因 toast）。
-            playEdge(clean, nativeRate: nativeRate, rate: rate, fallbackRate: fallbackRate, chinese: chinese)
+            playEdge(clean, nativeRate: nativeRate, rate: rate, fallbackRate: fallbackRate, chinese: chinese, gen: gen)
         } else if provider == .xfyun, XfyunTtsEngine.shared.isReady {
-            playXfyun(clean, nativeRate: nativeRate, rate: rate, fallbackRate: fallbackRate, chinese: chinese)
+            playXfyun(clean, nativeRate: nativeRate, rate: rate, fallbackRate: fallbackRate, chinese: chinese, gen: gen)
         } else if provider == .cloud {
             // 云音色档：跟随语音页 voiceProvider（裁决与阅读室主链路同源；
             // 外围消费点网关化属后续批次——守卫不过按裁决落 edge/本地，不弹回落提示）。
             cloudTask = Task { [weak self] in
-                switch await CloudTtsRouter.route(xfyunReady: XfyunTtsEngine.shared.isReady) {
+                let engine = await CloudTtsRouter.route(xfyunReady: XfyunTtsEngine.shared.isReady)
+                // 路由裁决首次调用/30s TTL 过期时是一次网络探测（HTTPS 往返），期间
+                // stop()/新 speak 会推进代数：返回后先核代数再分发，被停/被换的句子
+                // 不再进入任何出声腿（unstructured Task 不继承取消，代数是唯一门禁）。
+                guard let self, gen == self.generation, !Task.isCancelled else { return }
+                switch engine {
                 case .gateway:
                     do {
                         let data = try await CloudTtsRouter.gatewayAudioData(text: clean)
-                        guard !Task.isCancelled, let self else { return }
-                        try self.play(data: data, rate: rate)
+                        guard gen == self.generation, !Task.isCancelled else { return }
+                        // 网关上行帧契约只有 text/voice/volume（VoiceTts.ttsSynthesisFrame），
+                        // 没有语速字段：慢速示范（nativeRate 非空）在网关腿拿不到原生 -25%，
+                        // 回落播放端变速（fallbackRate，与 catch 回落腿同源）；nativeRate
+                        // 仍由 edge/xfyun 腿原生兑现。
+                        try self.play(data: data, rate: nativeRate == nil ? rate : fallbackRate)
                     } catch {
-                        guard !Task.isCancelled, let self else { return }
+                        guard gen == self.generation, !Task.isCancelled else { return }
                         self.speakLocal(clean, chinese: chinese, rate: fallbackRate)
                     }
                 case .edge:
-                    self?.playEdge(clean, nativeRate: nativeRate, rate: rate, fallbackRate: fallbackRate, chinese: chinese)
+                    self.playEdge(clean, nativeRate: nativeRate, rate: rate, fallbackRate: fallbackRate, chinese: chinese, gen: gen)
                 case .xfyun:
-                    self?.playXfyun(clean, nativeRate: nativeRate, rate: rate, fallbackRate: fallbackRate, chinese: chinese)
+                    self.playXfyun(clean, nativeRate: nativeRate, rate: rate, fallbackRate: fallbackRate, chinese: chinese, gen: gen)
                 case .local:
-                    self?.speakLocal(clean, chinese: chinese, rate: fallbackRate)
+                    self.speakLocal(clean, chinese: chinese, rate: fallbackRate)
                 }
             }
         } else {
@@ -75,32 +90,33 @@ final class LeadSpeaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     }
 
     /// Edge 云合成 + 失败静默回落本地（领读不弹归因 toast）。
-    private func playEdge(_ clean: String, nativeRate: String?, rate: Double, fallbackRate: Double, chinese: Bool) {
+    private func playEdge(_ clean: String, nativeRate: String?, rate: Double, fallbackRate: Double, chinese: Bool, gen: Int) {
         cloudTask = Task { [weak self] in
             do {
                 let data = try await EdgeTtsEngine.shared.audioData(for: clean, nativeRate: nativeRate)
-                guard !Task.isCancelled else { return }
-                guard let self else { return }
+                guard let self, gen == self.generation, !Task.isCancelled else { return }
                 try self.play(data: data, rate: rate)
             } catch {
-                // stop() 取消（cloudTask.cancel）也会以错误落到 catch：取消后不得再回落
-                // 本地出声，否则旧句会混进随后开始的评测录音（与上方成功路径同一取消守卫）。
-                guard !Task.isCancelled, let self else { return }
+                // stop() 取消（cloudTask.cancel）也会以错误落到 catch：取消或代数已推进
+                // （被新 speak 替换）都不得再回落本地出声，否则旧句会混进随后开始的评测录音。
+                guard let self, gen == self.generation, !Task.isCancelled else { return }
                 self.speakLocal(clean, chinese: chinese, rate: fallbackRate)
             }
         }
     }
 
     /// 讯飞云合成 + 失败静默回落本地（调用方已确认 isReady）。
-    private func playXfyun(_ clean: String, nativeRate: String?, rate: Double, fallbackRate: Double, chinese: Bool) {
+    private func playXfyun(_ clean: String, nativeRate: String?, rate: Double, fallbackRate: Double, chinese: Bool, gen: Int) {
         cloudTask = Task { [weak self] in
             do {
                 let data = try await XfyunTtsEngine.shared.audioData(for: clean, nativeRate: nativeRate)
-                guard !Task.isCancelled else { return }
-                guard let self else { return }
+                guard let self, gen == self.generation, !Task.isCancelled else { return }
                 try self.play(data: data, rate: rate)
             } catch {
-                guard let self else { return }
+                // stop() 取消也会以错误落到 catch（讯飞 wss receive 抛取消类错误）：
+                // 取消或代数已推进都不得再回落本地出声，否则旧句会混进随后开始的评测
+                // 录音（与 playEdge 同一守卫，此前此处漏检查）。
+                guard let self, gen == self.generation, !Task.isCancelled else { return }
                 self.speakLocal(clean, chinese: chinese, rate: fallbackRate)
             }
         }
@@ -125,6 +141,7 @@ final class LeadSpeaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     static let slowLocalFallbackRate: Double = 0.75
 
     func stop() {
+        generation += 1
         cloudTask?.cancel()
         cloudTask = nil
         synth.stopSpeaking(at: .immediate)

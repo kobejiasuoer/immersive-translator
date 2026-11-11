@@ -3,13 +3,32 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="ImmersiveTranslator"
-VERSION="${1:-${APP_VERSION:-0.12.1}}"
+# 版本默认跟随最近一次发布 tag（与 build_app.sh 一致），避免本地默认值过期。
+APP_VERSION_DEFAULT="$(git -C "$ROOT_DIR/.." describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null | sed 's/^v//')"
+VERSION="${1:-${APP_VERSION:-${APP_VERSION_DEFAULT:-0.15.2}}}"
 BUILD="${APP_BUILD:-1}"
 RELEASE_DIR="${RELEASE_DIR:-$ROOT_DIR/release}"
 if [[ "$RELEASE_DIR" != /* ]]; then
     RELEASE_DIR="$ROOT_DIR/$RELEASE_DIR"
 fi
-APP_DIR="$ROOT_DIR/dist/$APP_NAME.app"
+# bundle 目录名用产品中文名，与 build_app.sh 保持一致（原因见该脚本内注释）。
+APP_BUNDLE_DIRNAME="${APP_BUNDLE_DIRNAME:-沉浸口语}"
+APP_DIR="$ROOT_DIR/dist/$APP_BUNDLE_DIRNAME.app"
+
+# 更新源默认值与 build_app.sh 保持一致：本仓库 GitHub Release 的 latest manifest；
+# 非 GitHub 远程则留空（禁用更新检查）。不物化这个默认值的话，build_app.sh 写进
+# Info.plist 的 URL 会和下面的预检期望值（空）不一致，直接校验失败。
+default_update_manifest_url() {
+    local remote
+    remote="$(git -C "$ROOT_DIR/.." remote get-url origin 2>/dev/null || true)"
+    remote="${remote%.git}"
+    remote="${remote#git@github.com:}"
+    remote="${remote#https://github.com/}"
+    if [[ "$remote" == */* && "$remote" != *[:@]* && "$(printf '%s' "$remote" | tr -dc '/')" == "/" ]]; then
+        printf 'https://github.com/%s/releases/latest/download/update-manifest.json\n' "$remote"
+    fi
+}
+APP_UPDATE_MANIFEST_URL="${APP_UPDATE_MANIFEST_URL:-$(default_update_manifest_url)}"
 ZIP_PATH="$RELEASE_DIR/$APP_NAME-$VERSION-macOS.zip"
 CHECKSUM_PATH="$ZIP_PATH.sha256"
 MANIFEST_PATH="$RELEASE_DIR/update-manifest.json"
@@ -516,7 +535,7 @@ validate_release_zip_contents() {
 
         local extracted_app="${app_bundles[1]}"
         local relative_app_path="${extracted_app#$extraction_dir/}"
-        local expected_relative_app_path="$APP_NAME.app"
+        local expected_relative_app_path="$APP_BUNDLE_DIRNAME.app"
         if [[ "$relative_app_path" != "$expected_relative_app_path" ]]; then
             echo "error: release zip app path mismatch. expected '$expected_relative_app_path', got '$relative_app_path'." >&2
             exit 1

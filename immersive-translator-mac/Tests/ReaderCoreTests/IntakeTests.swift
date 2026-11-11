@@ -106,6 +106,45 @@ final class IntakeTests: XCTestCase {
         XCTAssertTrue(article.text.contains("Reading is the process"))
     }
 
+    func testExtractArticleStripsGovBannerAndBareURL() {
+        // nist.gov 实测结构：横幅展开文案在 div.usa-banner__guidance（外层
+        // section.usa-banner）、裸 URL 在 style="display:none" 的打印头部 p 里。
+        let html = """
+        <html><head><title>NIST</title></head><body>
+        <section data-elastic-exclude class="usa-banner">
+        <div class="usa-banner__guidance"><p>A .gov website belongs to an official government organization in the United States.</p></div>
+        <div class="usa-banner__guidance"><p>Secure .gov websites use HTTPS. A lock or https:// means you've safely connected to the .gov website. Share sensitive information only on official, secure websites.</p></div>
+        </section>
+        <div class="nist-print-header" style="display:none;"><p class="nist-print-header__url">https://www.nist.gov/national-institute-standards-and-technology</p></div>
+        <p>\(long1)</p>
+        <p>\(long2)</p>
+        </body></html>
+        """
+        guard case .success(let article) = extractArticle(finalURL: "https://www.nist.gov/", html: html, minWords: 20) else {
+            return XCTFail("应成功")
+        }
+        XCTAssertFalse(article.text.contains("official government organization"))
+        XCTAssertFalse(article.text.contains("Secure .gov websites"))
+        XCTAssertFalse(article.text.contains("nist.gov/national-institute"))
+        XCTAssertTrue(article.text.contains("Reading is the process"))
+    }
+
+    func testExtractArticleDropsBareURLParagraphWithoutClassHook() {
+        // 段落级兜底：无 class 特征可依时，整段裸 URL 行也应被过滤。
+        let html = """
+        <html><body>
+        <p>https://www.example.com/some-long-page-path</p>
+        <p>\(long1)</p>
+        <p>\(long2)</p>
+        </body></html>
+        """
+        guard case .success(let article) = extractArticle(finalURL: "https://example.com/", html: html, minWords: 20) else {
+            return XCTFail("应成功")
+        }
+        XCTAssertFalse(article.text.contains("some-long-page-path"))
+        XCTAssertTrue(article.text.contains("Reading is the process"))
+    }
+
     func testTinyBodyRejectedAsPaywallLike() {
         let html = "<html><body><p>Subscribe to continue reading.</p></body></html>"
         guard case .failure(let err) = extractArticle(finalURL: "https://example.com/p", html: html) else {

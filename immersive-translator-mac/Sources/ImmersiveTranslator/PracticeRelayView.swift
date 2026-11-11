@@ -3,6 +3,7 @@ import Combine
 import Foundation
 import ReaderCore
 import SwiftUI
+import XfyunCore
 
 // ---------------------------------------------------------------------------
 // 练习接力（Windows src/reader/PracticeRelayView.tsx 的 SwiftUI 等价实现）。
@@ -153,6 +154,12 @@ final class PracticeRelayMic: PracticeRelayMicHandle {
     }
 }
 
+/// 练习接力语音动作的引擎去向（Windows voiceAction 的 "gateway"|"xfyun"）。
+enum PracticeRelayVoiceEngine {
+    case gateway
+    case xfyun
+}
+
 struct PracticeRelayEnvironment {
     var listEntities: (_ collection: String, _ namespace: String?) throws -> [StoredSyncEntity]
     var putEntities: (_ collection: String, _ entities: [StoredSyncEntity], _ namespace: String?) throws -> Void
@@ -174,6 +181,15 @@ struct PracticeRelayEnvironment {
     /// 生产接 ServerAuthClient.$status（去掉订阅即发的当前值）；nil = 不订阅
     ///（测试经模型 init 参数注入 PassthroughSubject）。
     var authStatusPublisher: AnyPublisher<AuthStatus, Never>? = nil
+    /// 统一语音守卫（Windows voiceAction 的 resolveVoiceRoute）：转写/评测前过
+    /// 能力裁决；默认放行 gateway（测试不关心守卫时保持旧行为）。
+    var resolveVoiceRoute: (VoiceRouteAbility) async -> VoiceRouteDecision = { _ in .gateway }
+    /// 讯飞回落：本机直连转写（16k/16bit PCM）；凭据缺失由生产闭包抛错。
+    var xfyunTranscribe: (_ pcm: Data) async throws -> String = { _ in "" }
+    /// 讯飞回落：本机直连评测（16k/16bit PCM）。
+    var xfyunAssess: (_ refText: String, _ pcm: Data) async throws -> PracticeRelayAssessment = { _, _ in
+        PracticeRelayAssessment(total: 0, accuracy: 0, fluency: 0, isRejected: false, exceptInfo: nil)
+    }
 
     static func empty(onToast: @escaping (String) -> Void = { _ in }) -> PracticeRelayEnvironment {
         PracticeRelayEnvironment(
@@ -258,7 +274,32 @@ extension PracticeRelayEnvironment {
             // 登录/登出/切号广播（auth-state-changed）：列表刷新、面板切号守卫与
             // 挂起云动作恢复都靠它；@Published 订阅即发当前值，dropFirst 对齐
             // listenAuthStateChanged 只收后续事件。
-            authStatusPublisher: serverAuth.$status.dropFirst().eraseToAnyPublisher()
+            authStatusPublisher: serverAuth.$status.dropFirst().eraseToAnyPublisher(),
+            // 统一语音守卫（Windows 300247a voiceAction）：asr 固定要英语
+            //（样本与跟读链路一致），ise 无语种参数。
+            resolveVoiceRoute: { ability in
+                await VoiceRoute.resolve(ability, asrLang: ability == .asr ? .en_us : nil)
+            },
+            xfyunTranscribe: { pcm in
+                // 讯飞回落：听写留空回落评测凭据（creds(for:) 既有语义）。
+                guard let creds = XfyunCredentialsStore.shared.creds(for: .asr) else {
+                    throw SyncStoreError("未配置讯飞听写凭据，请到「设置 → 语音」保存凭据；原录音已保留")
+                }
+                return try await transcribeSpeech(pcm: pcm, language: .en_us, creds: creds)
+            },
+            xfyunAssess: { refText, pcm in
+                guard let creds = XfyunCredentialsStore.shared.creds(for: .ise) else {
+                    throw SyncStoreError("未配置讯飞评测凭据，请到「设置 → 语音」保存凭据；原录音已保留")
+                }
+                let result = try await assessPronunciation(text: refText, pcm: pcm, creds: creds)
+                return PracticeRelayAssessment(
+                    total: result.total,
+                    accuracy: result.accuracy,
+                    fluency: result.fluency,
+                    isRejected: result.isRejected,
+                    exceptInfo: result.exceptInfo
+                )
+            }
         )
     }
 }
@@ -522,12 +563,21 @@ final class PracticeRelayViewModel: ObservableObject {
         draftText = LearningJSON.string(selected["draft"]) ?? ""
     }
 
-    /// 账号切换（auth-state-changed）：epoch++、取消录音、停回听、清任务；登录且
-    /// before 是 guest 或同命名空间 → 恢复同 ID 任务并重放挂起动作。
+    /// 账号切换（auth-state-changed）：同命名空间内登录 → 直接续做挂起动作
+    ///（Windows 300247a：语音动作挂起后在本空间登录即恢复，不走切号清场）；
+    /// 命名空间变化 → epoch++、取消录音、停回听、清任务，登录且 before 是
+    /// guest 或同命名空间 → 恢复同 ID 任务并重放挂起动作。
     func handleAuthChange(_ status: AuthStatus) async {
         let before = namespaceNow
         let ns = environment.namespace()
-        guard mounted, before != ns else { return }
+        guard mounted else { return }
+        if before == ns {
+            if status.loggedIn, let action = pendingAction {
+                pendingAction = nil
+                await action()
+            }
+            return
+        }
         epoch += 1
         await recorder?.stop()
         recorder?.cancel()
@@ -873,56 +923,111 @@ final class PracticeRelayViewModel: ObservableObject {
         }
     }
 
-    /// 转文字：read 本机 PCM → 转写 → 写回草稿与 attempt 文本。
+    /// 统一语音守卫（Windows voiceAction）：转写/评测先过 VoiceRoute.resolve——
+    /// 登录/封禁/未开通/额度/能力缺失都在守卫层给出准确文案；未登录挂起动作 +
+    /// 开登录窗（登录后 handleAuthChange 自动续做）；守卫判 xfyun 时走本机直连。
+    private func voiceAction(
+        _ ability: VoiceRouteAbility,
+        action: (_ engine: PracticeRelayVoiceEngine, _ token: Int, _ ns: String) async throws -> Void,
+        resume: @escaping () async -> Void
+    ) async throws {
+        let token = epoch
+        let ns = namespaceNow
+        let route = await environment.resolveVoiceRoute(ability)
+        guard mounted, epoch == token, ns == environment.namespace() else { return }
+        if route.engine == .off {
+            if route.reason == .notLoggedIn {
+                // 能力接口的鉴权结果优先于本地缓存的登录态，不据后者递归重试。
+                pendingAction = resume
+                notice = "\(route.hint ?? "请登录沉浸云")；登录后将继续刚才的操作，原录音已保存在本机。"
+                environment.openLogin()
+                return
+            }
+            throw SyncStoreError("\(route.hint ?? "语音功能暂不可用")；原录音已保留")
+        }
+        try await action(route.engine == .gateway ? .gateway : .xfyun, token, ns)
+    }
+
+    /// 转文字：read 本机 PCM → 转写（网关 / 讯飞直连回落）→ 写回草稿与 attempt 文本。
     func recognize(_ t: JSONObject, _ attempt: JSONObject) async {
+        let startedEpoch = epoch
         busy = true
         defer { busy = false }
         do {
-            try await cloud { [self] in
-                let token = epoch
-                let ns = namespaceNow
+            try await voiceAction(.asr, action: { [self] engine, token, ns in
                 guard let clipId = LearningJSON.string(attempt["clipId"]) else { return }
                 let local = try await audio("read", clipId, extra: ["expectedNamespace": ns])
-                let result = try await environment.transcribe(LearningJSON.string(LearningJSON.object(local)?["pcmB64"]) ?? "")
                 guard mounted, epoch == token, ns == environment.namespace() else { return }
-                guard !practiceRelayTrim(result).isEmpty else {
+                let pcmB64 = LearningJSON.string(LearningJSON.object(local)?["pcmB64"]) ?? ""
+                guard !pcmB64.isEmpty else {
+                    throw SyncStoreError("录音数据不完整，请重新录制")
+                }
+                let text: String
+                switch engine {
+                case .gateway:
+                    text = try await environment.transcribe(pcmB64)
+                case .xfyun:
+                    // 讯飞口吃 16k/16bit PCM Data，base64 直接解（无 Float32 转换）。
+                    guard let pcm = Data(base64Encoded: pcmB64), !pcm.isEmpty else {
+                        throw SyncStoreError("录音数据不完整，请重新录制")
+                    }
+                    text = try await environment.xfyunTranscribe(pcm)
+                }
+                guard mounted, epoch == token, ns == environment.namespace() else { return }
+                guard !practiceRelayTrim(text).isEmpty else {
                     throw SyncStoreError("没有识别出文字，录音已保留")
                 }
                 let latest = LearningJSON.string(current?["id"]) == LearningJSON.string(t["id"]) ? current ?? t : t
                 var next = latest
-                next["draft"] = result
+                next["draft"] = text
                 next["attempts"] = (LearningJSON.array(latest["attempts"]) ?? []).map { item -> Any in
                     guard var row = LearningJSON.object(item),
                           LearningJSON.string(row["id"]) == LearningJSON.string(attempt["id"]) else { return item }
-                    row["text"] = result
+                    row["text"] = text
                     row["status"] = "draft"
                     return row
                 }
                 next["updatedAt"] = environment.now()
                 try await update(next, namespace: ns)
                 notice = "转写已保存，确认文字后再提交表达建议。"
-            }
+            }, resume: { [weak self] in
+                await self?.recognize(t, attempt)
+            })
         } catch {
-            notice = environmentErrorMessage(error)
+            guard mounted, epoch == startedEpoch else { return }
+            notice = voiceActionErrorText(error)
         }
     }
 
-    /// 真实发音评测：必须有冻结 reference；结果写回 attempt.pronunciation。
+    /// 真实发音评测：必须有冻结 reference；网关 / 讯飞直连回落；结果写回 attempt.pronunciation。
     func assess(_ t: JSONObject, _ attempt: JSONObject) async {
+        let startedEpoch = epoch
         busy = true
         defer { busy = false }
         do {
-            try await cloud { [self] in
-                let token = epoch
-                let ns = namespaceNow
-                // tsx:66 `if(!a.reference?.trim())throw`；评测仍用原始 reference（未裁剪）。
-                guard let reference = LearningJSON.string(attempt["reference"]),
-                      !practiceRelayTrim(reference).isEmpty else {
-                    throw SyncStoreError("这次录音缺少冻结原句，不能评测发音")
-                }
+            // tsx `if(!a.reference?.trim())throw`；评测仍用原始 reference（未裁剪）。
+            guard let reference = LearningJSON.string(attempt["reference"]),
+                  !practiceRelayTrim(reference).isEmpty else {
+                throw SyncStoreError("这次录音缺少冻结原句，不能评测发音")
+            }
+            try await voiceAction(.ise, action: { [self] engine, token, ns in
                 guard let clipId = LearningJSON.string(attempt["clipId"]) else { return }
                 let local = try await audio("read", clipId, extra: ["expectedNamespace": ns])
-                let result = try await environment.assess(reference, LearningJSON.string(LearningJSON.object(local)?["pcmB64"]) ?? "")
+                guard mounted, epoch == token, ns == environment.namespace() else { return }
+                let pcmB64 = LearningJSON.string(LearningJSON.object(local)?["pcmB64"]) ?? ""
+                guard !pcmB64.isEmpty else {
+                    throw SyncStoreError("录音数据不完整，请重新录制")
+                }
+                let result: PracticeRelayAssessment
+                switch engine {
+                case .gateway:
+                    result = try await environment.assess(reference, pcmB64)
+                case .xfyun:
+                    guard let pcm = Data(base64Encoded: pcmB64), !pcm.isEmpty else {
+                        throw SyncStoreError("录音数据不完整，请重新录制")
+                    }
+                    result = try await environment.xfyunAssess(reference, pcm)
+                }
                 guard mounted, epoch == token, ns == environment.namespace() else { return }
                 let latest = LearningJSON.string(current?["id"]) == LearningJSON.string(t["id"]) ? current ?? t : t
                 var next = latest
@@ -945,9 +1050,12 @@ final class PracticeRelayViewModel: ObservableObject {
                     : "真实发音评测结果已保存"
                 // tsx:66 `void syncLearningRecordsSilently()`：fire-and-forget。
                 Task { [environment] in await environment.syncSilently() }
-            }
+            }, resume: { [weak self] in
+                await self?.assess(t, attempt)
+            })
         } catch {
-            notice = environmentErrorMessage(error)
+            guard mounted, epoch == startedEpoch else { return }
+            notice = voiceActionErrorText(error)
         }
     }
 
@@ -1107,6 +1215,16 @@ private func environmentErrorMessage(_ error: Error) -> String {
     if let storeError = error as? LearningStoreError { return storeError.message }
     if let syncError = error as? SyncStoreError { return syncError.message }
     return (error as? LocalizedError)?.errorDescription ?? "\(error)"
+}
+
+/// 语音动作错误 → 文案（Windows voiceActionErrorText）：VoiceError 走 §二映射表
+/// （配额/登录失效/封禁给准确成因），其余落环境错误通解。
+private func voiceActionErrorText(_ error: Error) -> String {
+    if let voiceError = error as? VoiceError {
+        let info = voiceErrorMessage(voiceError)
+        if !info.text.isEmpty { return info.text }
+    }
+    return environmentErrorMessage(error)
 }
 
 // MARK: - 面板视图

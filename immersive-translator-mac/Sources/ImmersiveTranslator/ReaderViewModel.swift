@@ -184,6 +184,10 @@ final class ReaderViewModel: ObservableObject {
     @Published var articleList: [ArticleSummary] = []
     /// 书架的书（索引与元信息，不含章正文；按最近阅读倒序）。
     @Published var bookList: [BookMeta] = []
+    /// 书架读取失败态（port-11，对齐 Windows ad2ad68 三态的 error 半边；加载态在
+    /// mac 结构性不存在——读盘同步，不做）：任一列表/生词读失败置位、读取成功清除，
+    /// 书架页据此显示失败卡 +「重新读取」，不再把读失败冒充「没有内容」。
+    @Published var shelfLoadError = false
     /// 带入口语的语境意图（SPEAK-14）。book 形态切文章即作废；vocab 形态
     /// 离开口语页即清；消费在 openSpeak（同一 intent 只开会一次）。
     @Published private(set) var pendingSpeak: PendingSpeakIntent?
@@ -291,10 +295,15 @@ final class ReaderViewModel: ObservableObject {
     private var saveTask: Task<Void, Never>?
     private var bookSaveTask: Task<Void, Never>?
     private var translationTask: Task<Void, Never>?
+    /// 单段重试任务（与主管线并发，各自持有引用便于分别取消）。
+    private var retryTranslationTask: Task<Void, Never>?
     private var translationRunID = 0
     /// 429 退避等待注入点（单测用短值驱动真实等待路径）：nil = 生产常量
     /// ReaderCore.translateBackoffWaitMs（固定 20s）。
     var translateBackoffWaitMsOverride: Int?
+    /// 主动限速间隔注入点（单测用短值）：nil = 生产常量
+    /// ReaderCore.translatePacingIntervalMs（沉浸云 6.5s；0 = 关闭限速）。
+    var translatePacingIntervalMsOverride: Int?
     private var toastTask: Task<Void, Never>?
     /// 阅读计时：本次打开这篇文章以来的累计秒数（章末小结「本章用时」用，
     /// 切章清零）与未落盘缓冲。
@@ -307,6 +316,9 @@ final class ReaderViewModel: ObservableObject {
     weak var attachedWindow: NSWindow?
     /// 打开的文章 id 集合里的源文缓存（复习卡回跳展示用）。
     var sourceCache: [String: Article] = [:]
+    /// 学习空间基线（port-4 竞态防护）：VM 装载数据时所在的命名空间（bootstrap
+    /// 落定）。auth 广播换算的命名空间与基线不同即整轮切换收口；nil = 尚未装载。
+    private var authBaselineNamespace: String?
     /// 每篇文章的查词次数（读完统计用）。
     private var dictLookupCounts: [String: Int] = [:]
     /// 复习卡在到期队列中的位置（左栏词表可跳卡）。
@@ -341,9 +353,17 @@ final class ReaderViewModel: ObservableObject {
     let speak = SpeakViewController()
 
 
-    /// 生产入口（ReaderWindowController）：LLM 通道由 SettingsStore 驱动的 ReaderChatClient。
-    convenience init(settingsStore: SettingsStore, store: ReaderStore = .shared) {
-        self.init(chat: ReaderChatClient(settingsStore: settingsStore), store: store)
+    /// 生产入口（ReaderWindowController）：LLM 通道由 SettingsStore 驱动的 ReaderChatClient；
+    /// accountTokenSource 注入后沉浸云下阅读室请求自动携带账号令牌（auth-1）。
+    convenience init(
+        settingsStore: SettingsStore,
+        store: ReaderStore = .shared,
+        accountTokenSource: PlatformAccountTokenSource? = nil
+    ) {
+        self.init(
+            chat: ReaderChatClient(settingsStore: settingsStore, accountTokenSource: accountTokenSource),
+            store: store
+        )
     }
 
     /// 指定初始化器：注入 LLM 通道。单测用替身通道——`SettingsStore()` 初始化会读
@@ -390,19 +410,38 @@ final class ReaderViewModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.refreshVocab() }
             .store(in: &cancellables)
+        // 快速复习窗评分落库后同样刷新词表（BUG-011）：评分改的是到期态，
+        // 不在 .readerVocabAdded（新增/合并）语义内，单独广播、同一刷新动作。
+        NotificationCenter.default.publisher(for: .readerReviewGraded)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshVocab() }
+            .store(in: &cancellables)
         NotificationCenter.default.publisher(for: .readerArticleAdded)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.refreshArticleList() }
             .store(in: &cancellables)
-        // 学习接力：一轮同步完成（learning-sync-complete）后刷新词表与书架
-        //（对齐 Windows ReaderApp 在 auth-state-changed 后 refresh 的观感——
-        // 拉到的生词/文章/复习日志即时进场）。
+        // 学习接力：一轮同步完成（learning-sync-complete）后刷新词表/书架/书架书籍
+        //（对齐 Windows ReaderApp 在 auth-state-changed 后 refresh 的观感——拉到的
+        // 生词/文章/复习日志即时进场；书架书籍补进刷新，Windows relay 同样含书架）。
+        // 命名空间交错无需专门代际：mac 读盘同步（发起与回写同在主线程），账号切换
+        // 若先于此处到达，refresh 读到的已是新空间。
         NotificationCenter.default.publisher(for: .learningSyncComplete)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.refreshVocab()
                 self.refreshArticleList()
+                self.refreshBooks()
+            }
+            .store(in: &cancellables)
+        // 学习空间/账号切换防护（port-4，对齐 Windows 1d31239）：userId 变化（含
+        // 登出→guest、换号）即停播、清当前文章与内存数据、回书架，再按新命名空间
+        // 重读列表；同一空间的重复广播（续登录/notice 变化）早退。基线在 bootstrap
+        // 装载数据时落定（port-12：先等身份再装载）。
+        AppAuthStatusCenter.shared.$status
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] status in
+                self?.observeAuthIdentity(status)
             }
             .store(in: &cancellables)
         // 练习接力「回到原文这句」（Windows ReaderApp.tsx:1902 接 reader-relay-source）：
@@ -878,13 +917,17 @@ final class ReaderViewModel: ObservableObject {
     /// 首次打开窗口：加载数据后默认落在整页书架（书架是首页，对齐 Windows
     /// ReaderApp.tsx:206 / 1148）；只有外部推入——热键导入 / 托盘「生词本」/
     /// 提醒卡「继续阅读」——才直接进对应视图。
-    func bootstrap(pendingImportText: String? = nil, openReview: Bool = false, openBookId: String? = nil) {
+    /// port-12（对齐 Windows ad2ad68 的 auth_get_status 身份屏障）：装载前先等
+    /// 一次身份解析（已解析立即返回）——已登录用户启动不再先读 guest 目录；
+    /// 装载完成即落学习空间基线（port-4 切换收口的比对基准）。
+    func bootstrap(pendingImportText: String? = nil, openReview: Bool = false, openBookId: String? = nil) async {
+        await waitForAuthIdentity()
         globalSettings = store.loadGlobalReaderSettings()
         refreshVocab()
         refreshBooks()
         refreshNotes()  // 「笔记与复习」角标（到期 + 未整理）启动即准
-        let list = (try? store.listArticles()) ?? []
-        articleList = list
+        refreshArticleList()
+        authBaselineNamespace = store.learning?.currentNamespace()
         if let text = pendingImportText, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             importPaste(text)
             return
@@ -899,6 +942,16 @@ final class ReaderViewModel: ObservableObject {
             return
         }
         openShelf()
+    }
+
+    /// 身份屏障（port-12；auth_get_status 语义的 Mac 等价物——README 口径：mac
+    /// 无该命令，用 ServerAuth 广播快照）：ServerAuthClient.bootstrap 的预填分诊
+    /// 完成（已登录广播 / 确认未登录也广播）即有值，等待立即解除；已有值立即返回。
+    /// 广播前 setAccount 已生效（ServerAuthClient.publish 顺序），随后读列表读到
+    /// 的就是正确命名空间。
+    private func waitForAuthIdentity() async {
+        if AppAuthStatusCenter.shared.status != nil { return }
+        _ = await AppAuthStatusCenter.shared.$status.values.first { $0 != nil }
     }
 
     /// 上次打开过的内容（书架为空时 nil）：短文按最近阅读倒序取首篇，否则最近读的书。
@@ -916,7 +969,8 @@ final class ReaderViewModel: ObservableObject {
     }
 
     func refreshVocab() {
-        if let file = try? store.getVocabFile() {
+        do {
+            let file = try store.getVocabFile()
             vocabWords = file.words
             reviewLog = file.reviewLog
             readSecondsToday = readingSeconds(
@@ -925,21 +979,91 @@ final class ReaderViewModel: ObservableObject {
             )
             loadSourceArticles(ids: file.words.map(\.source.articleId))
             ReviewTouchpointManager.shared.refreshBadge()
+            shelfLoadError = false
+        } catch {
+            // 读失败不再冒充「没有内容」：置错误态供书架页显示失败卡（port-11 对齐
+            // Windows ad2ad68 三态的 error 半边；已加载的生词保留不清空）。
+            shelfLoadError = true
         }
     }
 
     // MARK: - 文章打开 / 列表
 
     func refreshArticleList() {
-        articleList = (try? store.listArticles()) ?? []
+        do {
+            articleList = try store.listArticles()
+            shelfLoadError = false
+        } catch {
+            // 读失败不冒充空书架：置错误态（port-11，对齐 Windows ad2ad68）。
+            articleList = []
+            shelfLoadError = true
+        }
     }
 
     func refreshBooks() {
-        bookList = (try? store.listBooks()) ?? []
+        do {
+            bookList = try store.listBooks()
+            shelfLoadError = false
+        } catch {
+            bookList = []
+            shelfLoadError = true
+        }
     }
 
-    func openArticle(id: String) {
-        guard let full = (try? store.getArticle(id: id)) ?? nil else { return }
+    /// 书架失败卡的「重新读取」：重跑三路刷新（对齐 Windows ad2ad68 重新读取按钮）。
+    func retryShelfLoad() {
+        refreshArticleList()
+        refreshBooks()
+        refreshVocab()
+    }
+
+    // MARK: - 学习空间切换（port-4，对齐 Windows 1d31239 auth 变化防护）
+
+    /// auth 广播 → 学习空间判定：命名空间与基线不同（登出→guest、换号、登录）即
+    /// 整轮切换收口；同一空间的重复广播（续登录/notice 变化）与首次广播早退——
+    /// 基线由 bootstrap 装载数据时落定，首次广播的命名空间若与基线一致就只是确认。
+    private func observeAuthIdentity(_ status: AuthStatus?) {
+        guard let status else { return }  // 尚无广播：基线等 bootstrap 落定
+        let namespace = (status.user?.id).map(LearningStore.accountNamespace) ?? "guest"
+        guard namespace != authBaselineNamespace else { return }
+        let firstBaseline = authBaselineNamespace == nil
+        authBaselineNamespace = namespace
+        guard !firstBaseline else { return }
+        adoptLearningSpace()
+    }
+
+    /// 学习空间切换收口：停播、掐掉在途翻译与防抖落盘、清当前文章与内存数据、
+    /// 回书架，再按新命名空间重读三路列表。否则登出/换号后阅读室仍显示上一账号
+    /// 的文章/书/生词直到重启（Windows 1d31239 修复的 Mac 对应缺陷）。
+    private func adoptLearningSpace() {
+        clearOpenArticle()      // 含 invalidateTranslationRun + 停播复位
+        saveTask?.cancel()
+        bookSaveTask?.cancel()
+        articleList = []
+        bookList = []
+        vocabWords = []
+        reviewLog = .empty
+        notes = []
+        activeNoteFile = nil
+        activeNote = nil
+        openShelf()
+        refreshVocab()
+        refreshArticleList()
+        refreshBooks()
+        refreshNotes()
+    }
+
+    /// 打开文章。取不到（换号后学习空间变化 / 已被删除）不再静默返回：给可操作
+    /// toast 并刷新双列表，返回 false 供跳句方判定失败不跳（对齐 Windows
+    /// 1d31239 openArticle 的「当前学习空间找不到这篇内容…」+ refresh 双列表）。
+    @discardableResult
+    func openArticle(id: String) -> Bool {
+        guard let full = (try? store.getArticle(id: id)) ?? nil else {
+            showToast("当前学习空间找不到这篇内容，请确认账号或重新导入。")
+            refreshArticleList()
+            refreshBooks()
+            return false
+        }
         settleReadingSeconds()  // 上一章的未落盘秒数先写库；本章用时重新累计
         invalidateTranslationRun()
         route = .reading
@@ -974,7 +1098,29 @@ final class ReaderViewModel: ObservableObject {
                 sentenceIdx: full.progress.sentenceIdx
             ))
         }
+        // 登录恢复自愈（2026-11-05 实测）：登出期间导入/翻译的文章会把整段 401
+        // 失败态连同 zhError 一起持久化，而管线只认领 pending——登录成功后这些
+        // 段永远停在错误下划线里，整页看起来像样式坏掉。打开文章时若账号已登录，
+        // 把登录态类失败（新旧两版 401 文案）复活回 pending 交给管线补翻；第三方
+        // Key 的 401 属配置错误、限流/服务不可用属临时态，均保持 Windows 的
+        // 手动重试语义，不在此复活。
+        if AppAuthStatusCenter.shared.status?.loggedIn == true {
+            scheduleSave { a in
+                a.sentences = a.sentences.map { st in
+                    guard st.zhState == .failed,
+                          let error = st.zhError,
+                          error.hasPrefix("翻译接口返回 401") || error.hasPrefix("登录状态已失效")
+                    else { return st }
+                    var next = st
+                    next.zh = nil
+                    next.zhState = .pending
+                    next.zhError = nil
+                    return next
+                }
+            }
+        }
         runTranslationPipeline(for: full.id)
+        return true
     }
 
     /// 删短文：删的是当前打开的那篇 → 清空阅读态并回整页书架（对齐 Windows
@@ -1010,9 +1156,17 @@ final class ReaderViewModel: ObservableObject {
 
     // MARK: - 整本书（书卡 / 断点直达 / 删书）
 
-    /// 书卡/导入后进书：直达书级断点章（断点章缺失时回落第一章）。
+    /// 书卡/导入后进书：直达书级断点章（断点章缺失时回落第一章）。书缺失/无章节
+    /// 不再静默返回，分别给可操作文案（对齐 Windows 1d31239 openBookAtBreakpoint）。
     func openBookAt(bookId: String) {
-        guard let book = bookList.first(where: { $0.id == bookId }), !book.chapters.isEmpty else { return }
+        guard let book = bookList.first(where: { $0.id == bookId }) else {
+            showToast("书架内容已更新，请重新选择书籍。")
+            return
+        }
+        guard !book.chapters.isEmpty else {
+            showToast("这本书没有可阅读的章节，请重新导入。")
+            return
+        }
         let target = book.chapters.contains { $0.id == book.progress.chapterId }
             ? book.progress.chapterId
             : book.chapters[0].id
@@ -1161,9 +1315,14 @@ final class ReaderViewModel: ObservableObject {
         sourceCache[current.id] = current
         saveTask?.cancel()
         let id = current.id
+        // 学习空间代数守卫（port-4）：防抖落盘可能晚于账号切换，发起时的命名空间
+        // 与写入时不一致即丢弃——旧空间的正文不得回写进新空间（对齐 Windows
+        // 1d31239 的 seq 代际语义；列表读同步无需逐点 seq，防抖落盘是唯一跨命名窗口）。
+        let namespace = store.learning?.currentNamespace()
         saveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 700_000_000)
             guard !Task.isCancelled, let self else { return }
+            if self.store.learning?.currentNamespace() != namespace { return }
             if let latest = self.article, latest.id == id, let summary = try? self.store.saveArticle(latest) {
                 self.articleList = self.articleList
                     .filter { $0.id != summary.id }
@@ -1199,6 +1358,21 @@ final class ReaderViewModel: ObservableObject {
         }
     }
 
+    /// 退出禅模式（QA BUG-002）：禅模式隐藏播放条，zenMode 唯一开关「视图」菜单随之不可达，
+    /// 禅模式浮动控制的退出入口走这里。不能只靠 patchSettings { $0.zenMode = false }——
+    /// 文章覆盖补丁按「全局旧值→新值」求差：全局已是 false、本篇覆盖仍记着 zenMode=true 时
+    /// 差分为空、覆盖不动，有效设置仍是禅模式。故全局落 false 后再把本篇覆盖显式落 false。
+    func exitZenMode() {
+        patchSettings { $0.zenMode = false }
+        if article?.settings?.zenMode == true {
+            scheduleSave { article in
+                var override = article.settings ?? ReaderSettingsOverride()
+                override.zenMode = false
+                article.settings = override
+            }
+        }
+    }
+
     func resetSettings() {
         globalSettings = .default
         store.saveGlobalReaderSettings(.default)
@@ -1230,6 +1404,8 @@ final class ReaderViewModel: ObservableObject {
     /// 并发架构，旧 run 无从得知新 run 是否已置 chip，由它来清会误清新 chip）。
     private func invalidateTranslationRun() {
         translationTask?.cancel()
+        retryTranslationTask?.cancel()
+        retryTranslationTask = nil
         translationRunID += 1
         translating = nil
     }
@@ -1275,7 +1451,13 @@ final class ReaderViewModel: ObservableObject {
             self.scheduleSave(mutate: mutate)
         }
 
+        // 沉浸云主动限速：平台请求按 6.5s 间隔匀速发（makeTranslatePacer 判别），
+        // 从源头避开 10 次/分钟令牌桶；第三方直通。
+        let pacer = makeTranslatePacer()
+
         if titlePending {
+            // 限速时隙（title 也占一个令牌；取消 = run 失效，chip 已由失效点清）。
+            guard await pacer.awaitSlot() else { return }
             // 标题只发一次、不参与 429 退避（对齐 ReaderApp.tsx:876-890）。
             do {
                 let cn = try await chat.complete(
@@ -1296,7 +1478,7 @@ final class ReaderViewModel: ObservableObject {
                     }
                 }
             } catch {
-                let status = Self.channelHTTPStatus(of: error)
+                let status = Self.channelHTTPOutcome(of: error).status
                 if isCurrentRun(articleID, runID) {
                     titleCnError = ErrorMessageFormatter.readerParagraphErrorText(status: status)
                 }
@@ -1309,19 +1491,40 @@ final class ReaderViewModel: ObservableObject {
             }
         }
 
-        // 整篇自动退避计数（429 等待次数，跨段共享；手动重试发起的新 run 从 0 重新起算）。
+        // 整篇自动退避计数（429 等待次数 + 连续限流，跨段共享；手动重试发起的
+        // 新 run 从 0 重新起算）。预算按待翻段数比例给（translateRunBackoffBudget）。
         let backoffs = TranslateBackoffCounter()
+        let totalGroups = pendingGroups.count
         for (_, sentences) in pendingGroups {
             // 中途切文 / 新 run 接管：裸 return 不会卡死 chip——失效点
             //（invalidateTranslationRun）已同步清掉本 run 的 chip（B1 对等）。
             guard isCurrentRun(articleID, runID) else { return }
-            await translateGroupWithBackoff(
+            // 限速时隙：沉浸云下匀速发请求（间隔内等待；取消 = run 失效静默退出）。
+            guard await pacer.awaitSlot(), isCurrentRun(articleID, runID) else { return }
+            let groupOutcome = await translateGroupWithBackoff(
                 sentences,
                 target: target,
                 articleID: articleID,
                 runID: runID,
-                backoffs: backoffs
+                backoffs: backoffs,
+                totalGroups: totalGroups
             )
+            if groupOutcome == .pausedRateLimited {
+                // 限流预算耗尽：清 chip、toast 带「继续翻译」按钮重跑管线
+                //（剩余 pending 段会被重新认领）。不写任何失败态——限流是
+                // 暂态，判死只会把整篇打成假失败（2026-11-05 Happy Prince 复盘）。
+                await MainActor.run {
+                    guard self.isCurrentRun(articleID, runID) else { return }
+                    self.translating = nil
+                    self.showToast(
+                        "翻译请求被限流，已暂停自动翻译",
+                        action: ToastAction(title: Self.resumeTranslateToastTitle) { [weak self] in
+                            self?.runTranslationPipeline(for: articleID)
+                        }
+                    )
+                }
+                return
+            }
             await MainActor.run {
                 if isCurrentRun(articleID, runID) {
                     self.translating?.done += 1
@@ -1340,11 +1543,65 @@ final class ReaderViewModel: ObservableObject {
 
     // MARK: - 段级 429 自动退避（对齐 ReaderApp.tsx:894-997 + paragraphTranslate.ts）
 
-    /// 整篇翻译 run 共享的退避计数盒：一个 run 内跨段共享 429 等待次数，
-    /// 手动重试发起的新 run 换新盒子从 0 起算。引用语义（class）让
+    /// 沉浸云网关主动限速器：平台请求按固定间隔匀速发送（网关令牌桶 10 次/分钟
+    /// → 每 6.5s 一个请求），从源头避免 429——串行逐段翻译每段 2~4s 翻完就发
+    /// 下一段 ≈ 20 次/分钟，不主动慢下来必然打穿令牌桶。第三方 provider
+    /// intervalMs = 0 直通（各家配额远高于此）。与 429 反应式退避互补：
+    /// 限速漏网（如同账号多设备并发）仍由 planTranslateRetry 兜底。
+    /// Mac 先行（Windows paragraphTranslate.ts 无此层，待跟进对齐）。
+    @MainActor
+    final class TranslateRequestPacer {
+        let intervalMs: Int
+        private var nextSlot = Date.distantPast
+
+        init(intervalMs: Int) {
+            self.intervalMs = max(0, intervalMs)
+        }
+
+        /// 等到下一个可用时隙再返回并占用该时隙；run 被取消（sleep 抛
+        /// CancellationError）返回 false，调用方静默退出（chip 已由失效点清掉）。
+        func awaitSlot() async -> Bool {
+            guard intervalMs > 0 else { return true }
+            let now = Date()
+            if now < nextSlot {
+                let waitMs = Int(ceil(nextSlot.timeIntervalSince(now) * 1000))
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(max(1, waitMs)) * 1_000_000)
+                } catch {
+                    return false
+                }
+            }
+            nextSlot = Date().addingTimeInterval(Double(intervalMs) / 1000)
+            return true
+        }
+    }
+
+    /// 按当前通道配置建限速器：沉浸云 → 固定间隔（单测可用 override 注入短值）；
+    /// 第三方 → 0 直通（override 不生效，第三方永远不限速）。
+    private func makeTranslatePacer() -> TranslateRequestPacer {
+        let isPlatform = (try? chat.configuration())?.isPlatformProvider ?? false
+        let intervalMs = isPlatform
+            ? (translatePacingIntervalMsOverride ?? ReaderCore.translatePacingIntervalMs)
+            : 0
+        return TranslateRequestPacer(intervalMs: intervalMs)
+    }
+
+    /// 整篇翻译 run 共享的退避计数盒：一个 run 内跨段共享退避预算与连续 429
+    /// 计数，手动重试发起的新 run 换新盒子从 0 起算。引用语义（class）让
     /// ensureTranslated 持有、各段循环里递增。
     final class TranslateBackoffCounter {
         var runBackoffs = 0
+        /// 连续 429 计数：中间任何一次请求走通（done/unaligned，即网关真的
+        /// 放行了）就清零；熔断阈值见 ReaderCore.translateMaxConsecutive429。
+        var consecutive429s = 0
+    }
+
+    /// 一段（含退避循环）的收尾：finished = 已落到终态（成功/判死），管线可
+    /// 认领下一段；pausedRateLimited = 429 预算耗尽，整篇暂停——剩余段全部
+    /// 保持 pending，由 toast 的「继续翻译」或重开文章恢复。
+    enum TranslateGroupOutcome: Equatable {
+        case finished
+        case pausedRateLimited
     }
 
     /// 单段一次尝试的三种收尾（对齐 ReaderApp.tsx:949-980 的分桶语义）。
@@ -1353,33 +1610,39 @@ final class ReaderViewModel: ObservableObject {
         case done
         /// HTTP 200 但编号行对不齐 → failed 不带原因。
         case unaligned
-        /// 请求错误（结构化 HTTP 状态码；nil = 超时/断网/未配置等）。
-        case failed(httpStatus: Int?)
+        /// 请求错误（结构化 HTTP 状态码与 Retry-After 秒数；均为 nil = 超时/断网/未配置等）。
+        case failed(httpStatus: Int?, retryAfterSeconds: Int?)
         /// run 已失效（切文章/新 run 接管）：静默退出，不写任何句子状态。
         case stale
     }
 
-    /// 从通道错误里提结构化 HTTP 状态码（超时/断网/未配置等非 HTTP 失败 → nil）。
-    /// 只认 ReaderChatError.http，绝不匹配错误 message 文本。
-    private static func channelHTTPStatus(of error: Error) -> Int? {
-        if case ReaderChatClient.ReaderChatError.http(let status, _) = error { return status }
-        return nil
+    /// 从通道错误里提结构化 HTTP 状态码与 Retry-After 秒数（超时/断网/未配置
+    /// 等非 HTTP 失败 → 均为 nil）。只认 ReaderChatError.http，绝不匹配错误
+    /// message 文本。
+    private static func channelHTTPOutcome(of error: Error) -> (status: Int?, retryAfterSeconds: Int?) {
+        if case ReaderChatClient.ReaderChatError.http(let status, _, let retryAfter) = error {
+            return (status, retryAfter)
+        }
+        return (nil, nil)
     }
 
-    /// 一段的翻译（含 429 自动退避）：仅结构化 429 触发重试，每段最多 1 次、
-    /// 整篇（backoffs 计数盒）封顶 6 次；等待固定 20s（单测可经
-    /// translateBackoffWaitMsOverride 注入短值），等待醒来先确认 run 仍有效
-    /// 再重试，失效则退出且不重发请求（对齐 ReaderApp.tsx:924-948）。
-    /// 失败分桶在循环外收尾一次：退避等待期间句子保持 pending（与 Windows
-    /// 观察面一致，不提前落 failed）。
+    /// 一段的翻译（含 429 自动退避）：按 ReaderCore.planTranslateRetry 决策——
+    /// 等待时长优先服务端 Retry-After（clamp 5~60s，无头回退 20s）、连续 429
+    /// 熔断、整篇预算按段数比例；预算耗尽返回 pausedRateLimited（当前段与剩余
+    /// 段保持 pending，不判死——旧实现固定 6 次预算烧完会把每段逐个标 failed）。
+    /// 等待醒来先确认 run 仍有效再重试，失效则退出且不重发请求（对齐
+    /// ReaderApp.tsx:924-948）。失败分桶在循环外收尾一次：退避等待期间句子保持
+    /// pending（与 Windows 观察面一致，不提前落 failed）。
+    /// Windows 侧 planTranslateRetry（每段 ≤1 次 + 固定 20s + 封顶 6 次）语义
+    /// 分叉待跟进对齐。
     func translateGroupWithBackoff(
         _ sentences: [SentencePair],
         target: String,
         articleID: String,
         runID: Int,
-        backoffs: TranslateBackoffCounter
-    ) async {
-        let waitMs = translateBackoffWaitMsOverride ?? translateBackoffWaitMs
+        backoffs: TranslateBackoffCounter,
+        totalGroups: Int
+    ) async -> TranslateGroupOutcome {
         // 重试请求复用：系统提示词只构造一次，重试与首次完全相同
         //（对齐 ReaderApp.tsx:945-947 循环外捕获 systemPrompt/onDelta）。
         let systemPrompt = buildParagraphTranslateSystemPrompt(
@@ -1387,43 +1650,56 @@ final class ReaderViewModel: ObservableObject {
             customStyle: chat.customStyle,
             glossaryText: chat.glossaryText
         )
-        var groupRetries = 0
         var outcome = await attemptParagraph(
             sentences,
             systemPrompt: systemPrompt,
             articleID: articleID,
             runID: runID
         )
-        while case let .failed(status) = outcome,
-              ReaderCore.planTranslateRetry(
+        while case let .failed(status, retryAfterSeconds) = outcome {
+            if status == 429 { backoffs.consecutive429s += 1 }
+            let plan = ReaderCore.planTranslateRetry(
                 httpStatus: status,
-                groupRetries: groupRetries,
-                runBackoffs: backoffs.runBackoffs
-              ) != nil {
-            groupRetries += 1
+                retryAfterSeconds: retryAfterSeconds,
+                runBackoffs: backoffs.runBackoffs,
+                consecutive429s: backoffs.consecutive429s,
+                totalGroups: totalGroups
+            )
+            guard case .wait(let plannerWaitMs) = plan else {
+                if plan == .pauseRun {
+                    // 预算耗尽：整篇暂停，本段保持 pending（不写失败态）。
+                    return .pausedRateLimited
+                }
+                break // .failNow：非 429，落循环外失败分桶
+            }
             backoffs.runBackoffs += 1
+            // 单测注入短等待（translateBackoffWaitMsOverride）；生产用 planner 值。
+            let waitMs = translateBackoffWaitMsOverride ?? plannerWaitMs
             do {
                 try await Task.sleep(nanoseconds: UInt64(waitMs) * 1_000_000)
             } catch {
                 // 切文章/手动重试接管：Task 被 cancel，sleep 抛 CancellationError。
                 // 静默退出，不把句子标 failed（对齐 Windows 退避期间切文先清 chip 再退出）。
-                return
+                return .finished
             }
             // 等待醒来先查 run 有效性：失效则不再发重试请求。
-            guard isCurrentRun(articleID, runID) else { return }
+            guard isCurrentRun(articleID, runID) else { return .finished }
             outcome = await attemptParagraph(
                 sentences,
                 systemPrompt: systemPrompt,
                 articleID: articleID,
                 runID: runID
             )
+            if case .failed = outcome {} else {
+                backoffs.consecutive429s = 0 // 网关放行（成功或 200 对不齐）即清零
+            }
         }
         switch outcome {
         case .done:
             break
         case .unaligned:
             markParagraphFailed(sentences, articleID: articleID, runID: runID, errorText: nil)
-        case let .failed(status):
+        case let .failed(status, _):
             markParagraphFailed(
                 sentences,
                 articleID: articleID,
@@ -1433,6 +1709,7 @@ final class ReaderViewModel: ObservableObject {
         case .stale:
             break
         }
+        return .finished
     }
 
     /// 一段的单次请求尝试：流式部分解析 + 完整解析；只写成功态，失败分桶由
@@ -1494,7 +1771,11 @@ final class ReaderViewModel: ObservableObject {
             return .done
         } catch {
             guard isCurrentRun(articleID, runID) else { return .stale }
-            return .failed(httpStatus: Self.channelHTTPStatus(of: error))
+            let httpOutcome = Self.channelHTTPOutcome(of: error)
+            return .failed(
+                httpStatus: httpOutcome.status,
+                retryAfterSeconds: httpOutcome.retryAfterSeconds
+            )
         }
     }
 
@@ -1552,11 +1833,14 @@ final class ReaderViewModel: ObservableObject {
         annotatingArticleID = articleID
         defer { annotatingArticleID = nil }
         chunking = ChunkProgress(done: 0, total: batches.count)
+        // 词块标注同样走沉浸云网关（令牌桶同一只），与翻译管线同口径限速。
+        let pacer = makeTranslatePacer()
         var marked = 0
         var anyError = false
         var done = 0
         for batch in batches {
             guard article?.id == articleID else { return } // 切走文章，整批终止
+            guard await pacer.awaitSlot() else { return }
             do {
                 let raw = try await chat.complete(systemPrompt: system, userText: buildChunkBatchInput(batch))
                 let byIdx = parseChunkResponse(raw, batch: batch)
@@ -1601,8 +1885,36 @@ final class ReaderViewModel: ObservableObject {
         ensureAnnotated()
     }
 
-    /// 单段重试：把该段失败句重置回 pending（清掉 zhError）后单独重跑；
-    /// 新 run，退避配额从 0 重新起算（对齐 ReaderApp.tsx:1002-1022）。
+    /// 失败段数量（阅读室状态行的「重试 N 个失败段」入口用）。
+    var failedParagraphCount: Int {
+        Set((article?.sentences ?? []).filter { $0.zhState == .failed }.map(\.paragraphIdx)).count
+    }
+
+    /// 一键重试全部失败段：把所有 failed 句重置回 pending（清 zh/zhError）后
+    /// 重跑主管线——限流风暴期整篇判死的恢复入口（逐段点「重试本段」对 85 段
+    /// 不可用，2026-11-05 复盘补）。runTranslationPipeline 自带旧 run 失效，
+    /// 在跑管线会被新 run 接管。
+    func retryAllFailed() {
+        guard let current = article, failedParagraphCount > 0 else { return }
+        scheduleSave { a in
+            a.sentences = a.sentences.map { st in
+                guard st.zhState == .failed else { return st }
+                var next = st
+                next.zh = nil
+                next.zhState = .pending
+                next.zhError = nil
+                return next
+            }
+        }
+        runTranslationPipeline(for: current.id)
+    }
+
+    /// 单段重试：把该段失败句重置回 pending（清掉 zhError）后单独补翻。
+    /// 不 invalidate 在跑的主管线、不 bump 代数（对齐 Windows ReaderApp.tsx:1027-1047
+    /// 的并发补翻语义）：重试与管线共用当前 runID、各写各的段，剩余 pending 段仍由
+    /// 主管线认领；旧实现先 invalidate 会掐死在跑管线，剩余段无人认领直到重新打开文章。
+    /// 退避配额从 0 重新起算（新计数盒）；chip 只在无在跑管线时展示本段进度，
+    /// 不覆盖主管线的 N/M 计数（Windows 重试同样不接管 chip）。
     func retryParagraph(_ paragraphIdx: Int) {
         scheduleSave { a in
             a.sentences = a.sentences.map { st in
@@ -1615,22 +1927,34 @@ final class ReaderViewModel: ObservableObject {
             }
         }
         guard let current = article else { return }
-        invalidateTranslationRun()
         let runID = translationRunID
         let target = chat.resolveTarget(for: current.sentences.first?.en ?? current.title)
         let group = current.sentences.filter { $0.paragraphIdx == paragraphIdx && $0.zhState == .pending }
         guard !group.isEmpty else { return }
-        translating = StepProgress(done: 0, total: 1)
-        translationTask = Task { [weak self] in
-            await self?.translateGroupWithBackoff(
+        // 退避预算按全篇待翻段数比例给（单段重试也看整篇规模，而非只有自己）。
+        let pendingGroupCount = Set(
+            current.sentences.filter { $0.zhState == .pending }.map(\.paragraphIdx)
+        ).count
+        let ownsChip = translating == nil
+        if ownsChip {
+            translating = StepProgress(done: 0, total: 1)
+        }
+        retryTranslationTask = Task { [weak self] in
+            let outcome = await self?.translateGroupWithBackoff(
                 group,
                 target: target,
                 articleID: current.id,
                 runID: runID,
-                backoffs: TranslateBackoffCounter()
+                backoffs: TranslateBackoffCounter(),
+                totalGroups: max(1, pendingGroupCount)
             )
             await MainActor.run {
-                if self?.isCurrentRun(current.id, runID) == true { self?.translating = nil }
+                // 只清自己置的 chip；主管线的计数归主管线收口。单段重试撞上
+                // 限流暂停同理清 chip（句子保持 pending，主面板「重试本段」仍在）。
+                if ownsChip, self?.isCurrentRun(current.id, runID) == true { self?.translating = nil }
+                if outcome == .pausedRateLimited {
+                    self?.showToast("翻译请求被限流，已暂停自动翻译")
+                }
             }
         }
     }
@@ -1758,9 +2082,12 @@ final class ReaderViewModel: ObservableObject {
         bookList[idx] = next
         bookSaveTask?.cancel()
         let id = next.id
+        // 学习空间代数守卫（port-4，同 scheduleSave）。
+        let namespace = store.learning?.currentNamespace()
         bookSaveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             guard !Task.isCancelled, let self else { return }
+            if self.store.learning?.currentNamespace() != namespace { return }
             if let meta = self.bookList.first(where: { $0.id == id }) {
                 try? self.store.saveBookMeta(meta)
             }
@@ -2051,13 +2378,14 @@ final class ReaderViewModel: ObservableObject {
         }
     }
 
-    /// 复习卡「回到原文」：切到阅读视图并定位该句。
+    /// 复习卡「回到原文」：切到阅读视图并定位该句。打开失败（文章已不在当前
+    /// 学习空间）不跳——openArticle 已给 toast 并刷新列表（对齐 Windows bool 契约）。
     func jumpToSource(articleId: String, sentenceIdx: Int) {
         guard !articleId.isEmpty else { return }
         if article?.id == articleId {
             route = .reading
         } else {
-            openArticle(id: articleId)
+            guard openArticle(id: articleId) else { return }
         }
         jumpTo(idx: sentenceIdx)
     }
@@ -2228,9 +2556,11 @@ final class ReaderViewModel: ObservableObject {
         route == .vault && vaultPlayMode == .focus
     }
 
-    /// 「笔记与复习」档角标 = 到期数 + 未整理数；收藏 / 评分 / 生成笔记后随 @Published 数据实时变。
+    /// 「笔记与复习」档角标 = 到期数（未整理数与到期数可能重叠，只算 dueNow；
+    /// 未整理数在笔记页「N 词未整理」胶囊独立说明）；收藏 / 评分 / 生成笔记后随
+    /// @Published 数据实时变。
     var vaultBadge: Int {
-        vaultBadgeCount(dueNow: stats.dueNow, unnotedCount: unnotedWordCount)
+        vaultBadgeCount(dueNow: stats.dueNow)
     }
 
     /// 顶栏左上触发器文案「书架 · X」的 X：书架页 / 口语陪练 / 笔记与复习 / 当前文章名。
@@ -2349,14 +2679,37 @@ final class ReaderViewModel: ObservableObject {
         activeNote = (loaded.meta, parseNoteMarkdown(loaded.content))
     }
 
+    /// 删除笔记：先弹确认，确认才删（对齐 Windows 7fc7501 后的 ConfirmDialog 契约
+    /// 「删除这篇笔记？删除后不可恢复。」，取消不删）；NSAlert 样式与书架/短文
+    /// 删除确认一致（ReaderViews confirmDelete）。
     func deleteNote(file: String) {
-        _ = try? noteStore.delete(file: file)
+        let alert = NSAlert()
+        alert.messageText = "删除这篇笔记"
+        alert.informativeText = "删除这篇笔记？删除后不可恢复。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        performDeleteNote(file: file)
+    }
+
+    private func performDeleteNote(file: String) {
+        // QA BUG-004：旧写法 `_ = try?` 吞掉异常与 false，删除失败也报「笔记已删除」。
+        // 对齐 Windows confirmDeleteNote（removed 为真才报已删除）；失败如实提示、不清当前笔记。
+        let removed: Bool
+        do {
+            removed = try noteStore.delete(file: file)
+        } catch {
+            showToast("删除笔记失败：\((error as? LocalizedError)?.errorDescription ?? String(describing: error))")
+            return
+        }
         if activeNoteFile == file {
             activeNoteFile = nil
             activeNote = nil
         }
         refreshNotes()
-        showToast("笔记已删除")
+        // false = files 表与磁盘都已没有这篇（如已被同步删除）：刷新列表即可，不谎报。
+        showToast(removed ? "笔记已删除" : "这篇笔记已不存在")
     }
 
     /// 生成弹窗「在笔记库打开」：保存完成后直达。
@@ -2780,6 +3133,7 @@ final class ReaderViewModel: ObservableObject {
         // 带「兑换更多额度」动作的 toast 停留 8s（对齐 ReaderApp.tsx showToast
         // `action ? 8000 : 3200`，08595f3）；其余维持 3.2s。
         let lingering = resolvedAction?.title == Self.redeemQuotaToastAction.title
+            || resolvedAction?.title == Self.resumeTranslateToastTitle
         let durationNs: UInt64 = lingering ? 8_000_000_000 : 3_200_000_000
         toastTask?.cancel()
         toastTask = Task { [weak self] in
@@ -2789,6 +3143,10 @@ final class ReaderViewModel: ObservableObject {
             self?.toastAction = nil
         }
     }
+
+    /// 限流暂停 toast 的「继续翻译」按钮：重跑主管线认领剩余 pending 段
+    ///（带动作的 toast 与「兑换更多额度」同样停留 8s）。
+    private static let resumeTranslateToastTitle = "继续翻译"
 
     /// 配额耗尽 toast 的「兑换更多额度」按钮：跳设置账号分区兑换码卡（与口语页
     /// 错误位同一落点，AppDelegate.openAccountRedeem）。

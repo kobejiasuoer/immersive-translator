@@ -83,17 +83,27 @@ private struct LoginTheme {
 // MARK: - 窗口控制器
 
 @MainActor
-final class LoginWindowController: NSWindowController {
+final class LoginWindowController: NSWindowController, NSWindowDelegate {
     private let auth: ServerAuthClient
     private let onOpenAccountSettings: () -> Void
     /// SwiftUI 视图关窗回调的延迟绑定盒（init 时 window 尚未存在）。
     private let closeBox = CloseBox()
+    /// 登录视图重挂载令牌（QA BUG-003）：窗口 isReleasedWhenClosed=false 只是 orderOut，
+    /// LoginView 的 @State（view=.success / existing 快照…）跨开闭存活，bootstrapState 也不复位
+    /// view、900ms 自动关窗挂在 onChange(of: view) 上不再触发——登出后重开残留「登录成功」态且
+    /// 无表单可再登。关窗后的下一次 show() 令牌 +1，根视图以它作 .id 让 LoginView 整体重建
+    ///（对齐 Windows：登录窗 close 即销毁、show_window 重建后重新挂载）。D10 重发冷却按邮箱
+    /// 持久化在 UserDefaults，不受重建影响。
+    private let mountToken = LoginMountToken()
+    /// 关过窗（windowWillClose）→ 下次 show() 重挂载；最小化不算关窗，进行中的流程保留。
+    private var remountOnNextShow = false
 
     init(auth: ServerAuthClient, onOpenAccountSettings: @escaping () -> Void) {
         self.auth = auth
         self.onOpenAccountSettings = onOpenAccountSettings
         let box = closeBox
-        let view = LoginView(
+        let view = LoginRootView(
+            mountToken: mountToken,
             auth: auth,
             onOpenAccountSettings: onOpenAccountSettings,
             onClose: { box.close() }
@@ -112,6 +122,7 @@ final class LoginWindowController: NSWindowController {
                 : NSColor(red: 0xF6 / 255, green: 0xF3 / 255, blue: 0xEC / 255, alpha: 1)
         }
         super.init(window: window)
+        window.delegate = self
         closeBox.close = { [weak self] in
             self?.window?.performClose(nil)
         }
@@ -122,9 +133,39 @@ final class LoginWindowController: NSWindowController {
     }
 
     func show() {
+        if remountOnNextShow {
+            remountOnNextShow = false
+            mountToken.generation += 1
+        }
         window?.center()
         window?.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: - NSWindowDelegate
+
+    /// ✕ / Esc / 成功后自动关窗都经 performClose → 这里；只记标记，重建推迟到下次 show()，
+    /// 让 bootstrapState 在重开那一刻查登录态（关窗期间可能登出/会话失效）。
+    func windowWillClose(_ notification: Notification) {
+        remountOnNextShow = true
+    }
+}
+
+/// 登录视图重挂载令牌（见 LoginWindowController.mountToken）。
+private final class LoginMountToken: ObservableObject {
+    @Published var generation = 0
+}
+
+/// 宿主根视图：LoginView 以令牌作身份，令牌变化即整体重建（全部 @State 回初值）。
+private struct LoginRootView: View {
+    @ObservedObject var mountToken: LoginMountToken
+    let auth: ServerAuthClient
+    let onOpenAccountSettings: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        LoginView(auth: auth, onOpenAccountSettings: onOpenAccountSettings, onClose: onClose)
+            .id(mountToken.generation)
     }
 }
 

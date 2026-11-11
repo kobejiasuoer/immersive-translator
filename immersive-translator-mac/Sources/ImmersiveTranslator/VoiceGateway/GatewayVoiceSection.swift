@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 // ---------------------------------------------------------------------------
@@ -17,8 +18,8 @@ import SwiftUI
 
 /// 一键测试样本的固定英文句（assets/voice/README.md：样本内容的唯一真源）。
 let gatewaySampleRefText = "The quick brown fox jumps over the lazy dog."
-/// 朗读通道探测用的极短句（正常计字符额度，量级可忽略）。
-let gatewayTtsProbeText = "Hello."
+/// 朗读通道试听句（300247a 起换长句并真实播放：短句播完太快，用户来不及确认声音输出）。
+let gatewayTtsProbeText = "Hello. Welcome to Immersive Speaking."
 
 /// 申诉入口：两个仓库均未定义申诉页/客服渠道（Windows 同款 null 占位），
 /// 上线前由运维回填；为 nil 时按钮置灰占位（契约 §三.6 封禁态要求该按钮存在）。
@@ -59,6 +60,57 @@ enum GatewayIseSample {
 private func testErrorText(_ error: Error) -> String {
     let info = voiceErrorMessage(error as? VoiceErrorLike ?? VoiceError(code: "unknown"))
     return info.text.isEmpty ? "服务暂时不可用，请稍后再试" : info.text
+}
+
+/// 真实试听播放器（Windows playAudio/HTMLAudioElement 的 Mac 对应物）：收齐的
+/// mp3 分片整段播放，播完/出错/15s 看门狗结算一次；stop() 供配置变更/视图卸载
+/// 时中断（结算为未完成）。
+private final class GatewayAuditionPlayer: NSObject, AVAudioPlayerDelegate {
+    private let player: AVAudioPlayer
+    private let onResult: (Bool) -> Void
+    private var settled = false
+    private let lock = NSLock()
+    private var watchdog: Task<Void, Never>?
+
+    init?(data: Data, onResult: @escaping (Bool) -> Void) {
+        guard let player = try? AVAudioPlayer(data: data, fileTypeHint: AVFileType.mp3.rawValue) else {
+            return nil
+        }
+        self.player = player
+        self.onResult = onResult
+        super.init()
+        player.delegate = self
+    }
+
+    func start() {
+        watchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.finish(false)
+        }
+        player.play()
+    }
+
+    func stop() {
+        finish(false)
+    }
+
+    private func finish(_ ok: Bool) {
+        lock.lock()
+        guard !settled else {
+            lock.unlock()
+            return
+        }
+        settled = true
+        lock.unlock()
+        watchdog?.cancel()
+        player.stop()
+        onResult(ok)
+    }
+
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        finish(flag)
+    }
 }
 
 /// JS `Number.prototype.toFixed(1)` 同口径（一键测试「总分 4.3」「约 1.7 秒」文案）：
@@ -127,10 +179,16 @@ struct GatewayVoiceSection: View {
         .ise: .idle, .tts: .idle, .asr: .idle,
     ]
     @State private var running = false
+    /// 探测代数：换账号/刷新能力/换音色/视图卸载即递增，在途探测结果按代数丢弃、
+    /// 试听停止、三盏灯复位（对齐 Windows generationRef：旧结果不能当作当前配置的
+    /// 成功证据）。
+    @State private var probeGeneration = 0
+    /// 在途真实试听播放器（配置变更/卸载时停止）。
+    @State private var audition: GatewayAuditionPlayer?
 
     private let testRows: [(key: VoiceQuotaKey, label: String, name: String)] = [
         (.ise, "跟读打分", "真实英文样本评测 · 消耗 1 次评分额度"),
-        (.tts, "云端朗读", "短句合成探测 · 不播放声音"),
+        (.tts, "云端朗读", "真实试听 · 消耗少量字符额度"),
         (.asr, "口语识别", "样本转写探测 · 消耗少量识别秒数"),
     ]
 
@@ -159,6 +217,15 @@ struct GatewayVoiceSection: View {
             if loggedIn, view.caps != .error, view.caps != .banned {
                 capabilityCard
             }
+        }
+        // 换账号/刷新能力/换音色后旧探测结果作废（在途结果丢弃并复位灯、停试听）；
+        // 视图卸载停止播放。
+        .onChange(of: caps) { _ in invalidateProbes() }
+        .onChange(of: email) { _ in invalidateProbes() }
+        .onChange(of: loggedIn) { _ in invalidateProbes() }
+        .onChange(of: selectedVoice) { _ in invalidateProbes() }
+        .onDisappear {
+            invalidateProbes()
         }
     }
 
@@ -473,6 +540,8 @@ struct GatewayVoiceSection: View {
     private func testRow(_ row: (key: VoiceQuotaKey, label: String, name: String)) -> some View {
         let light = lights[row.key] ?? .idle
         let rowDisabled = missing(row.key)
+        // tts 行是真实试听：按钮文案随行（Windows FEATURE_COPY 的 copy.test）。
+        let idleLabel = row.key == .tts ? "试听" : "测试"
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
                 Circle()
@@ -484,7 +553,7 @@ struct GatewayVoiceSection: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button(light.state == .testing ? "测试中…" : light.state == .idle ? "测试" : "重测") {
+                Button(light.state == .testing ? "测试中…" : light.state == .idle ? idleLabel : "重测") {
                     runOne(row.key)
                 }
                 .controlSize(.small)
@@ -511,11 +580,53 @@ struct GatewayVoiceSection: View {
 
     // MARK: - 探测执行
 
+    /// 试听音色：当前选中值在能力表里才用，否则取第一个（Windows voiceId 同逻辑）。
+    private var probeVoiceId: String? {
+        if let selectedVoice, voices.contains(where: { $0.id == selectedVoice }) {
+            return selectedVoice
+        }
+        return voices.first?.id
+    }
+
+    /// 配置已变更后的统一丢弃结果（在途探测的迟到返回不落灯）。
+    private var staleProbeResult: GatewayTestLight {
+        GatewayTestLight(state: .bad, message: "配置已变更，请重新测试。")
+    }
+
+    /// 真实试听：整段 mp3 交给播放器，播完/出错/15s 看门狗结算。
+    private func playAudition(_ audio: Data) async -> GatewayTestLight {
+        await withCheckedContinuation { (continuation: CheckedContinuation<GatewayTestLight, Never>) in
+            guard let player = GatewayAuditionPlayer(data: audio, onResult: { ok in
+                continuation.resume(returning: ok
+                    ? GatewayTestLight(state: .ok, message: "已合成并播放试听，请确认能听到声音。")
+                    : GatewayTestLight(state: .bad, message: "试听未完成，请检查声音输出后重试。"))
+            }) else {
+                continuation.resume(returning: GatewayTestLight(state: .bad, message: "试听未完成，请检查声音输出后重试。"))
+                return
+            }
+            audition = player
+            player.start()
+        }
+    }
+
+    /// 换账号/刷新能力/换音色/视图卸载后：在途探测按代数丢弃、停止试听、复位三盏灯。
+    private func invalidateProbes() {
+        probeGeneration += 1
+        audition?.stop()
+        audition = nil
+        lights = [.ise: .idle, .tts: .idle, .asr: .idle]
+        running = false
+    }
+
     /// 统一收口：跑一项探测；quota_exceeded 顺带上抛 resource（402 事件式兜底）。
+    /// 代数守卫：探测在途期间配置变化（caps/email/loggedIn/voice）即丢弃结果。
     private func runProbe(_ key: VoiceQuotaKey) async -> GatewayTestLight {
+        let generation = probeGeneration
+        let active = { generation == self.probeGeneration }
         do {
             if key == .ise {
                 let result = try await evaluatePronunciation(refText: gatewaySampleRefText, lang: .en, pcmBase64: GatewayIseSample.loadBase64())
+                if !active() { return staleProbeResult }
                 if result.isRejected {
                     return GatewayTestLight(state: .bad, message: "样本被判定为无效语音，请重测")
                 }
@@ -523,6 +634,7 @@ struct GatewayVoiceSection: View {
             }
             if key == .asr {
                 let result = try await transcribeBatch(lang: .en_us, pcmBase64: GatewayIseSample.loadBase64())
+                if !active() { return staleProbeResult }
                 if result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     return GatewayTestLight(state: .bad, message: "识别结果为空，请重测")
                 }
@@ -531,24 +643,29 @@ struct GatewayVoiceSection: View {
                 }
                 return GatewayTestLight(state: .ok, message: "识别通道正常")
             }
-            // tts：短句合成探测，分片不播放（onChunk 空实现）。
-            return await withCheckedContinuation { continuation in
+            // tts：真实试听（300247a）——合成分片收齐后整段播放，播完才算通过；
+            // 音色取当前选中 voiceId（能力里没有时取第一个）。
+            var audio = Data()
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 GatewayTts.synthesize(
                     text: gatewayTtsProbeText,
-                    voice: nil,
+                    voice: probeVoiceId,
                     volume: nil,
-                    onChunk: { _ in },
-                    onEnd: {
-                        continuation.resume(returning: GatewayTestLight(state: .ok, message: "合成通道正常"))
-                    },
+                    onChunk: { audio.append($0) },
+                    onEnd: { continuation.resume() },
                     onError: { error in
-                        continuation.resume(returning: GatewayTestLight(state: .bad, message: testErrorText(error)))
+                        continuation.resume(throwing: error)
                     }
                 )
             }
+            guard active() else { return staleProbeResult }
+            if audio.isEmpty {
+                return GatewayTestLight(state: .bad, message: "服务未返回音频，请重试")
+            }
+            return await playAudition(audio)
         } catch let error as VoiceError where error.code == "quota_exceeded" {
             let details = quotaDetailsOf(error)
-            if let resource = details.resource {
+            if let resource = details.resource, active() {
                 onQuotaEvent(resource)
             }
             let reset = quotaResetText(details.resetsAt)

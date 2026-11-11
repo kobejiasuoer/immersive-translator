@@ -50,10 +50,32 @@ public enum VaultFocusOutcomeText {
     public static let skipped = "跳过（未评分）"
 }
 
-/// focus 卡 q-meta 的来源：`来自《{title}》` / `来自划词收藏`（VaultPage.tsx:856-860）。
-public func vaultFocusSourceLabel(articleTitle: String?) -> String {
-    if let articleTitle, !articleTitle.isEmpty { return "来自《\(articleTitle)》" }
-    return "来自划词收藏"
+/// 生词来源统一判别（Windows ad2ad68 VaultPage/VocabListPanel 的三态判据）：
+/// articleId 为空 → 划词收藏；articleId 非空且标题解析得到 → 文章来源；
+/// articleId 非空但文章已删（标题解析不到）→ 原文不可用。
+public enum VaultSourceOrigin: Equatable {
+    case popup
+    case article(title: String)
+    case unavailable
+}
+
+public func vaultSourceOrigin(articleId: String, articleTitle: String?) -> VaultSourceOrigin {
+    guard !articleId.isEmpty else { return .popup }
+    if let articleTitle, !articleTitle.isEmpty { return .article(title: articleTitle) }
+    return .unavailable
+}
+
+/// 原文不可用标签（来源为已删文章的生词统一文案，供 focus 卡/复习卡/列表/rail 复用）。
+public let vaultSourceUnavailableLabel = "原文不可用"
+
+/// focus 卡 q-meta 的来源（VaultPage.tsx:853-860，ad2ad68 后三态）：`来自《{title}》` /
+/// `原文不可用`（articleId 非空但文章已删）/ `来自划词收藏`。
+public func vaultFocusSourceLabel(articleId: String, articleTitle: String?) -> String {
+    switch vaultSourceOrigin(articleId: articleId, articleTitle: articleTitle) {
+    case .popup: return "来自划词收藏"
+    case .article(let title): return "来自《\(title)》"
+    case .unavailable: return vaultSourceUnavailableLabel
+    }
 }
 
 /// 专注会话（不含队列本体——队列由 vm.reviewQueue / focusIds 驱动，评分落盘后自然出队）。

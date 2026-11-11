@@ -33,6 +33,8 @@ struct SpeakView: View {
     @State private var selectedDifficulty: SpeakDifficulty = .medium
     /// 发音详情：选中的词/音素下标（换 pron 时自动跳到最差词）。
     @State private var pronSel: PronSelection?
+    /// 右栏「逐词得分曲线」展开态（Windows details 默认收起）。
+    @State private var curveExpanded = false
     /// 当前透镜卡正在展示的 pron 时间戳（变化时重选最差词）。
     @State private var lensPronAt: Int64?
     /// 口语页是否借用了全局抽屉的接线（收起时还给阅读室）。
@@ -754,348 +756,365 @@ struct SpeakView: View {
     }
 
     private var conversationPage: some View {
-        HStack(spacing: 0) {
-            dialogueColumn
-            Divider().opacity(0.6)
-            pronunciationLens
-                .frame(width: 292)
-                .background(palette.surfaceAlt.opacity(0.5))
+        // Windows .sonic-studio-grid：左「对话舞台」卡 + 右「发音反馈」卡，间距 24；
+        // 面板宽三档随窗口收缩（reader.css ≥1440→460 / 基表 410 / ≤1199→340）。
+        GeometryReader { geo in
+            HStack(spacing: 24) {
+                speakStage
+                pronunciationPanel
+                    .frame(width: panelWidth(for: geo.size.width))
+            }
         }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 14)
         .background(palette.background)
     }
 
-    private var dialogueColumn: some View {
-        VStack(spacing: 0) {
-            // M-03：声波舞台卡（.harmonic-stage-card，原型 html:837-860）——
-            // 口语页唯一的「生命感」元素：谐波画布铺底，切换场景 / 标题 / 目标词
-            // chips 收进卡内，与 Windows SpeakView.tsx:1175-1223 对齐。
-            harmonicStage
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-                .padding(.bottom, 16)
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    // 原型 .sonic-turns-scroll gap: 20
-                    VStack(spacing: 20) {
-                        if let session = controller.session {
-                            ForEach(Array(session.turns.enumerated()), id: \.element.id) { idx, turn in
-                                turnBubble(turn, index: idx)
-                                    .id(turn.id)
-                            }
-                        }
-                        if controller.phase == .thinking {
-                            thinkingBubble
-                        }
-                        if controller.phase == .transcribing {
-                            HStack {
-                                Text("…识别你刚才说的…")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(palette.textTertiary)
-                                Spacer()
-                            }
-                            .padding(.horizontal, 4)
-                        }
-                        // 跟读报告卡（SPEAK-7）：评分后从落盘 attempts 派生，跟读录音/
-                        // 评测中不显示（正被新一轮覆盖，SpeakView.tsx:650-653 同语义）。
-                        if let report = lastShadowReport, let target = shadowTarget {
-                            HStack {
-                                ShadowReportCardBody(
-                                    result: report.result,
-                                    marks: report.marks,
-                                    attemptTotals: report.totals,
-                                    passScore: shadowPassScore,
-                                    target: target,
-                                    actions: ShadowReportActions(
-                                        again: { controller.retryShadow() },
-                                        drill: { entries in
-                                            controller.openShadowDrill(entries: entries)
-                                        },
-                                        hearModel: { controller.hearShadowModel() },
-                                        hearMine: controller.lastShadowPcm == nil
-                                            ? nil
-                                            : { controller.hearShadowMine() },
-                                        speakWord: { controller.speakWord($0) },
-                                        drillWord: { word in
-                                            let entries = shadowDrillEntries(target: target, marks: report.marks)
-                                            controller.openShadowDrill(entries: entries, preferring: word)
-                                        },
-                                        dismiss: nil
-                                    )
-                                )
-                                .id("shadow-report")
-                                .transition(ShadowCardTokens.enterTransition(reduceMotion: reduceMotion))
-                                Spacer(minLength: 0)
-                            }
-                        }
-                        // 跟读异常可行动卡（SPEAK-13）：四类文案与按钮，替代一行 errorBanner。
-                        if let failure = controller.shadowFailure {
-                            HStack {
-                                ShadowFailureCardView(
-                                    card: failure,
-                                    perform: { controller.performShadowFailureAction($0) },
-                                    onDismiss: nil
-                                )
-                                .transition(ShadowCardTokens.enterTransition(reduceMotion: reduceMotion))
-                                Spacer(minLength: 0)
-                            }
-                            .id("shadow-failure")
-                        }
-                    }
-                    .padding(16)
-                    // 报告卡/异常卡入场：rc-in 曲线（reader.css @keyframes rc-in：0.38s
-                    // cubic-bezier(.2,.9,.3,1.15)，自底 8pt + 0.985 缩放 + 淡入）；
-                    // 「减弱动态效果」时只留淡入（apple-design §14：减弱 ≠ 没有反馈）。
-                    .animation(ShadowCardTokens.enterAnimation(reduceMotion: reduceMotion), value: lastShadowReport?.attemptAt)
-                    .animation(ShadowCardTokens.enterAnimation(reduceMotion: reduceMotion), value: controller.shadowFailure)
-                }
-                .onChange(of: controller.session?.turns.count) { _ in
-                    if let last = controller.session?.turns.last {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    }
-                }
-                .onChange(of: lastShadowReport?.attemptAt) { _ in
-                    withAnimation { proxy.scrollTo("shadow-report", anchor: .bottom) }
-                }
-                .onChange(of: controller.shadowFailure) { _ in
-                    if controller.shadowFailure != nil {
-                        withAnimation { proxy.scrollTo("shadow-failure", anchor: .bottom) }
-                    }
-                }
-            }
-
-            if case .error(let message) = controller.phase {
-                errorBanner(message)
-            }
-
-            Divider().opacity(0.5)
-            controlBar
-        }
+    /// 右栏宽度三档（mac 以对话页内容宽近似 Windows 视口宽，含 24 间距等差）。
+    private func panelWidth(for contentWidth: CGFloat) -> CGFloat {
+        if contentWidth >= 1408 { return 460 }
+        if contentWidth >= 1168 { return 410 }
+        return 340
     }
 
-    /// 声波舞台卡：122pt 高 / 20 圆角玻璃，画布 opacity .72 铺底不拦事件；
-    /// 左侧「切换场景 + 场景标题 + 目标词 chips」，右侧「重听 AI 这句」。
-    private var harmonicStage: some View {
-        ZStack {
-            HarmonicCanvas(phase: controller.phase, level: controller.level)
-                .opacity(0.72)
-                .allowsHitTesting(false)
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 10) {
-                        Button {
-                            controller.backToEntry()
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "chevron.left").font(.system(size: 10, weight: .semibold))
-                                Text("切换场景").font(.system(size: 12))
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(palette.accent)
-                        if let s = controller.session {
-                            Text("\(speakSceneTitle(s)) · \(difficultyOf(s.difficulty).label)难度")
-                                .font(.system(size: 13, weight: .semibold))
-                                .lineLimit(1)
-                                .help(speakSceneTitle(s))
-                        }
-                        // 目标词进度（语境词 + 场景短语合并计数；无目标词不画，SpeakParts.tsx:45-58）
-                        if let progress = stageProgress {
-                            stageProgressView(progress)
-                        }
-                        listenModeToggle
-                    }
-                    if !targetItems.isEmpty {
-                        stageTargetChips
-                    }
-                }
-                Spacer(minLength: 12)
-                replayButton
+    /// 左列对话舞台（Windows .speak-stage）：场景条 / 目标词条 / 对话流 / 失败提示 /
+    /// 控制条自上而下装进同一张玻璃卡，分区用发丝线分界。
+    private var speakStage: some View {
+        VStack(spacing: 0) {
+            sceneBar
+            if !targetItems.isEmpty {
+                targetsStrip
             }
-            .padding(.horizontal, 22)
+            dialogueScroll
+            if case .error(let message) = controller.phase {
+                noticeBar(message)
+            }
+            composer
         }
-        .frame(height: 122, alignment: .center)
         .glassCard(palette: palette, radius: 20)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("声波舞台：\(controller.session.map(speakSceneTitle) ?? "")")
+        .accessibilityLabel("口语对话：\(controller.session.map(speakSceneTitle) ?? "")")
     }
 
-    /// 场景条目标词进度：细条 + 「已用上 {hit} / {total} 个词」。
+    /// 场景条（.speak-scene）：在练什么、难度、目标词进度与听力开关，一行讲清。
+    private var sceneBar: some View {
+        HStack(spacing: 12) {
+            SpeakTextButton(title: "← 切换场景", palette: palette) {
+                controller.backToEntry()
+            }
+            .help("回到场景中心")
+            if let s = controller.session {
+                Text(speakSceneTitle(s))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(palette.text)
+                    .lineLimit(1)
+                    .help(speakSceneTitle(s))
+                Text("\(difficultyOf(s.difficulty).label)难度")
+                    .font(.system(size: 11.5))
+                    .foregroundColor(palette.textTertiary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 1)
+                    .background(Capsule().strokeBorder(palette.glassBorderStrong))
+            }
+            if let progress = stageProgress {
+                stageProgressView(progress)
+            }
+            Spacer(minLength: 12)
+            listenModeToggle
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(palette.glassBorder).frame(height: 1)
+        }
+    }
+
+    /// 目标词进度（.speak-bar）：110×6 细条 + 「已用上 {hit} / {total} 个词」。
     private func stageProgressView(_ progress: SpeakTargetProgress) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(palette.surfaceAlt)
+                    Capsule().fill(palette.background)
                     Capsule()
                         .fill(palette.sonicTeal)
                         .frame(width: geo.size.width * CGFloat(progress.pct) / 100)
                 }
             }
-            .frame(width: 56, height: 5)
+            .frame(width: 110, height: 6)
             Text(progress.label)
-                .font(.system(size: 10.5).monospacedDigit())
-                .foregroundColor(palette.textTertiary)
+                .font(.system(size: 12.5).monospacedDigit())
+                .foregroundColor(palette.textSecondary)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(progress.label)
         .accessibilityValue("\(progress.hit) / \(progress.total)")
     }
 
-    /// 听力模式开关（SpeakParts.tsx:69-77）：按钮文案「听力模式」，on 态强调色。
+    /// 听力模式开关（.speak-listen-toggle / .speak-switch）：28×16 迷你开关，on 态 teal。
     private var listenModeToggle: some View {
         Button {
             controller.toggleListenMode()
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: controller.listenMode ? "ear.fill" : "ear")
-                    .font(.system(size: 10.5, weight: .semibold))
-                Text("听力模式").font(.system(size: 11.5, weight: controller.listenMode ? .semibold : .regular))
+            HStack(spacing: 7) {
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(controller.listenMode ? palette.sonicTeal : palette.ink4)
+                        .frame(width: 28, height: 16)
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 12, height: 12)
+                        .offset(x: controller.listenMode ? 14 : 2)
+                }
+                Text("听力模式")
+                    .font(.system(size: 12.5, weight: controller.listenMode ? .semibold : .regular))
+                    .foregroundColor(controller.listenMode ? palette.text : palette.textSecondary)
             }
-            .foregroundColor(controller.listenMode ? palette.accent : palette.textSecondary)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 3)
-            .background(
-                Capsule().fill(controller.listenMode ? palette.accentSoft : palette.glassElevated)
-                    .overlay(Capsule().strokeBorder(controller.listenMode ? palette.accent : palette.glassBorderStrong))
-            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help("听力模式：AI 的话先只听不看——答完一句自动显示原文，也可点「看原文」随时查看")
+        .accessibilityLabel("听力模式")
         .accessibilityAddTraits(controller.listenMode ? [.isSelected] : [])
         .accessibilityValue(controller.listenMode ? "开" : "关")
     }
 
-    private var replayButton: some View {
-        Button {
-            controller.replayLast()
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "speaker.wave.2").font(.system(size: 11))
-                Text("重听 AI 这句").font(.system(size: 11.5))
+    /// 目标词条（.speak-targets）：画布底横条；done=teal-soft 打勾、next=accent 描边。
+    private var targetsStrip: some View {
+        let nextKey = nextChipKey
+        return HStack(spacing: 8) {
+            Text("本轮目标词")
+                .font(.system(size: 12))
+                .foregroundColor(palette.textTertiary)
+            ForEach(targetItems) { item in
+                targetChip(item, next: item.key == nextKey)
             }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(palette.background)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(palette.glassBorder).frame(height: 1)
+        }
+    }
+
+    /// 目标词 chip（.speak-chip）：状态用颜色 + 勾号双编码，中文释义随行展示。
+    private func targetChip(_ item: TargetChipItem, next: Bool) -> some View {
+        let done = item.done
+        return Button {
+            vm.showToast(item.toast)
+        } label: {
+            HStack(spacing: 6) {
+                ZStack {
+                    Circle()
+                        .fill(done ? palette.sonicTeal : Color.clear)
+                        .overlay(Circle().strokeBorder(done ? palette.sonicTeal : palette.ink4, lineWidth: 1.5))
+                    if done {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundColor(.white)
+                    }
+                }
+                .frame(width: 16, height: 16)
+                Text(item.word)
+                    .font(.system(size: 14, weight: done ? .semibold : .regular, design: .serif))
+                    .foregroundColor(done ? palette.sonicTeal : palette.text)
+                if !item.zh.isEmpty {
+                    Text(item.zh)
+                        .font(.system(size: 12))
+                        .foregroundColor(palette.textTertiary)
+                }
+            }
+            .padding(.leading, 6)
+            .padding(.trailing, 12)
+            .padding(.vertical, 3)
+            .background(
+                Capsule()
+                    .fill(done ? palette.sonicTealSoft : palette.glassElevated)
+                    .overlay(Capsule().strokeBorder(done ? Color.clear : (next ? palette.accent : palette.glassBorderStrong)))
+            )
+            .shadow(color: next ? palette.accentSoft : Color.clear, radius: 3)
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .foregroundColor(palette.textSecondary)
-        .disabled(controller.phase == .recording || controller.phase == .transcribing || controller.phase == .thinking)
-        .help("重听 AI 最新一句")
+        .help("\(item.word) — 在对话中自然说出即可完成")
+        .accessibilityLabel("\(done ? "已用上" : "待练习")：\(item.word)\(item.zh.isEmpty ? "" : " · \(item.zh)")")
     }
 
-    /// 舞台卡内的目标词 chips（.lex-target-chip，html:873-891；语境词 ≤6 个 + 用户场景短语）：
-    /// ○ 待练习 = glass-elevated 底 + 发丝边；✓ 已用上 = teal-soft 底 + teal 边 600 字重；
-    /// 「下一个该用的词」（第一个未用上）加强调边。中文释义收进悬浮说明，chips 保持
-    /// 一行能放下的密度；点击 toast 说明（文案按通道各自逐字）。
-    private var stageTargetChips: some View {
-        let nextKey = nextChipKey
-        return FlowLayout(spacing: 8, lineSpacing: 6) {
-            ForEach(targetItems) { item in
-                let done = item.done
-                let next = item.key == nextKey
-                Button {
-                    vm.showToast(item.toast)
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: done ? "checkmark" : "circle")
-                            .font(.system(size: 8, weight: .bold))
-                        Text(item.word)
-                            .font(.system(size: 12, weight: done ? .semibold : .regular, design: .serif))
-                    }
-                    .foregroundColor(done ? palette.sonicTeal : palette.textSecondary)
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 4)
-                    .background(
-                        Capsule().fill(done ? palette.sonicTealSoft : palette.glassElevated)
-                            .overlay(Capsule().strokeBorder(
-                                done ? palette.sonicTeal : (next ? palette.accent : palette.glassBorderStrong)
-                            ))
-                    )
-                }
-                .buttonStyle(.plain)
-                .help("\(item.word) — 在对话中自然说出即可完成")
-                .accessibilityLabel("\(done ? "已用上" : "待练习")：\(item.word)\(item.zh.isEmpty ? "" : " · \(item.zh)")")
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityLabel("本轮目标词")
-    }
-
-    /// 对话轮（原型 html:901-930）：AI 轮直接落在画布上（无底卡），用户轮是
-    /// .dialogue-turn.mine——18 圆角 glass-elevated + shadow-pill，最大宽 58ch；
-    /// 排版三级：英文 19pt 衬线 / 行距 1.58、中文提示 13.5、speaker 行 11.5。
-    private func turnBubble(_ turn: SpeakTurn, index: Int) -> some View {
-        let isUser = turn.role == .user
-        return HStack {
-            if isUser { Spacer(minLength: 24) }
-            if isUser {
-                turnContent(turn, index: index)
-                    .padding(.vertical, 16)
-                    .padding(.horizontal, 20)
-                    .frame(maxWidth: 560, alignment: .trailing)
-                    .glassCard(palette: palette, radius: 18, elevated: true)
-            } else {
-                turnContent(turn, index: index)
-                    .frame(maxWidth: 580, alignment: .leading)
-                    .padding(.horizontal, 2)
-            }
-            if !isUser { Spacer(minLength: 24) }
-        }
-    }
-
-    @ViewBuilder
-    private func turnContent(_ turn: SpeakTurn, index: Int) -> some View {
-        let isUser = turn.role == .user
-        // 听力模式：未揭开的 AI 轮遮原文（答完自动揭/点「看原文」手动揭；重开的历史会话
-        // 全部已揭）。遮罩保高度，不引起滚动跳动（SpeakView.tsx:1724-1773）。
-        let veiled = !isUser && controller.isTurnVeiled(index)
-        let analysis = isUser ? analyzeTargets(turn.text) : (spans: [], count: 0)
-        VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
-            if isUser {
-                HStack(spacing: 8) {
-                    Text("我的回答 · 点击右侧单词查看发音细节")
-                        .font(.system(size: 11.5))
-                        .foregroundColor(palette.textTertiary)
-                    if let pron = turn.pron {
-                        Text(String(format: "发音得分 %.1f / 5.0", pron.total))
-                            .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
-                            .foregroundColor(palette.accent)
-                    }
-                    // 用户轮 meta pill：「✓ 用上 {count} 个目标词」（speakUi 句内高亮口径）
-                    if analysis.count > 0 {
-                        Text("✓ 用上 \(analysis.count) 个目标词")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(palette.sonicTeal)
-                    }
-                }
-            } else {
-                HStack(spacing: 12) {
-                    Text("AI 陪练 · \(scenarioOf(controller.session?.scenario ?? "smalltalk").title)")
-                        .font(.system(size: 11.5))
-                        .foregroundColor(palette.textTertiary)
-                    if veiled {
-                        Button {
-                            controller.revealTurn(index)
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "eye").font(.system(size: 10.5))
-                                Text("看原文").font(.system(size: 11.5))
-                            }
-                            .foregroundColor(palette.accent)
+    /// 对话流（.sonic-turns-scroll）：AI 在左（无气泡），你在右（气泡），gap 20。
+    private var dialogueScroll: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    if let session = controller.session {
+                        ForEach(Array(session.turns.enumerated()), id: \.element.id) { idx, turn in
+                            turnBubble(turn, index: idx)
+                                .id(turn.id)
                         }
-                        .buttonStyle(.plain)
-                        .help("显示这句原文")
+                    }
+                    if controller.phase == .thinking {
+                        thinkingBubble
+                    }
+                    if controller.phase == .transcribing {
+                        Text("…识别你刚才说的…")
+                            .font(.system(size: 11.5))
+                            .foregroundColor(palette.textTertiary)
+                    }
+                    if controller.phase == .recording {
+                        listeningRow
+                    }
+                    // 跟读报告卡（SPEAK-7）：评分后从落盘 attempts 派生，跟读录音/
+                    // 评测中不显示（正被新一轮覆盖，SpeakView.tsx:650-653 同语义）。
+                    if let report = lastShadowReport, let target = shadowTarget {
+                        HStack(alignment: .bottom) {
+                            ShadowReportCardBody(
+                                result: report.result,
+                                marks: report.marks,
+                                attemptTotals: report.totals,
+                                passScore: shadowPassScore,
+                                target: target,
+                                actions: ShadowReportActions(
+                                    again: { controller.retryShadow() },
+                                    drill: { entries in
+                                        controller.openShadowDrill(entries: entries)
+                                    },
+                                    hearModel: { controller.hearShadowModel() },
+                                    hearMine: controller.lastShadowPcm == nil
+                                        ? nil
+                                        : { controller.hearShadowMine() },
+                                    speakWord: { controller.speakWord($0) },
+                                    drillWord: { word in
+                                        let entries = shadowDrillEntries(target: target, marks: report.marks)
+                                        controller.openShadowDrill(entries: entries, preferring: word)
+                                    },
+                                    dismiss: nil
+                                )
+                            )
+                            .id("shadow-report")
+                            .transition(ShadowCardTokens.enterTransition(reduceMotion: reduceMotion))
+                            Spacer(minLength: 0)
+                        }
+                    }
+                    // 跟读异常可行动卡（SPEAK-13）：四类文案与按钮，替代一行 errorBanner。
+                    if let failure = controller.shadowFailure {
+                        HStack(alignment: .bottom) {
+                            ShadowFailureCardView(
+                                card: failure,
+                                perform: { controller.performShadowFailureAction($0) },
+                                onDismiss: nil
+                            )
+                            .transition(ShadowCardTokens.enterTransition(reduceMotion: reduceMotion))
+                            Spacer(minLength: 0)
+                        }
+                        .id("shadow-failure")
                     }
                 }
+                .padding(.top, 6)
+                .padding(.horizontal, 22)
+                .padding(.bottom, 20)
+                // 报告卡/异常卡入场：rc-in 曲线（reader.css @keyframes rc-in：0.38s
+                // cubic-bezier(.2,.9,.3,1.15)，自底 8pt + 0.985 缩放 + 淡入）；
+                // 「减弱动态效果」时只留淡入（apple-design §14：减弱 ≠ 没有反馈）。
+                .animation(ShadowCardTokens.enterAnimation(reduceMotion: reduceMotion), value: lastShadowReport?.attemptAt)
+                .animation(ShadowCardTokens.enterAnimation(reduceMotion: reduceMotion), value: controller.shadowFailure)
             }
-            if isUser {
-                highlightedUserText(turn.text, spans: analysis.spans)
-            } else {
-                Text(turn.text)
-                    .font(.system(size: 19, design: .serif))
-                    .lineSpacing(7)
-                    .foregroundColor(palette.text)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .multilineTextAlignment(.leading)
-                    .modifier(ListenVeil(on: veiled))
+            .onChange(of: controller.session?.turns.count) { _ in
+                if let last = controller.session?.turns.last {
+                    proxy.scrollTo(last.id, anchor: .bottom)
+                }
             }
+            .onChange(of: lastShadowReport?.attemptAt) { _ in
+                withAnimation { proxy.scrollTo("shadow-report", anchor: .bottom) }
+            }
+            .onChange(of: controller.shadowFailure) { _ in
+                if controller.shadowFailure != nil {
+                    withAnimation { proxy.scrollTo("shadow-failure", anchor: .bottom) }
+                }
+            }
+        }
+    }
+
+    /// 录音中行（.speak-live）：右对齐「正在听你说…」+ 电平波形 + 自动发送说明。
+    private var listeningRow: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 10) {
+                Text("正在听你说…")
+                    .font(.system(size: 12.5))
+                    .foregroundColor(palette.textTertiary)
+                HStack(spacing: 3) {
+                    ForEach(0..<5, id: \.self) { i in
+                        Capsule()
+                            .fill(palette.err)
+                            .frame(width: 3, height: waveHeight(index: i))
+                            .animation(.linear(duration: 0.09), value: controller.level)
+                    }
+                }
+                .frame(height: 18, alignment: .center)
+            }
+            Text("停顿约 1.5 秒自动发送 · 也可以点麦克风立即发送")
+                .font(.system(size: 12))
+                .foregroundColor(palette.textTertiary)
+        }
+        .frame(maxWidth: 560, alignment: .trailing)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("正在听你说")
+    }
+
+    /// 五根电平柱的高度（对齐 .speak-wave i 的 2n/3 规则；level ×3 增益同源）。
+    private func waveHeight(index: Int) -> CGFloat {
+        let lv = Double(min(1, max(0, controller.level * 3)))
+        switch index {
+        case 1, 3: return 4 + 10 * lv
+        case 2: return 5 + 16 * lv
+        default: return 4 + 14 * lv
+        }
+    }
+
+    /// 对话轮：AI 轮直接落在卡面上（无底卡，左对齐），用户轮是 .dialogue-turn.mine——
+    /// 18/18/4/18 圆角 glass-elevated 气泡 + shadow-pill 右对齐，最大宽 58ch。
+    @ViewBuilder
+    private func turnBubble(_ turn: SpeakTurn, index: Int) -> some View {
+        if turn.role == .user {
+            HStack(alignment: .bottom) {
+                Spacer(minLength: 24)
+                userTurnCard(turn)
+            }
+        } else {
+            assistantTurn(turn, index: index)
+        }
+    }
+
+    /// AI 轮（.dialogue-turn）：speaker 行 + 19pt 衬线英文 + 中文提示 + 历史跟读摘要
+    /// + 表达改进建议块；最新一轮的跟读摘要由流末报告卡承担（SpeakView.tsx:1260 不重复）。
+    /// 听力模式：未揭开的 AI 轮遮原文（答完自动揭/点「看原文」手动揭；重开的历史会话
+    /// 全部已揭），遮罩保高度不引起滚动跳动（SpeakView.tsx:1724-1773）。
+    private func assistantTurn(_ turn: SpeakTurn, index: Int) -> some View {
+        let veiled = controller.isTurnVeiled(index)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                Text("AI 陪练 · \(scenarioOf(controller.session?.scenario ?? "smalltalk").title)")
+                    .font(.system(size: 11.5))
+                    .foregroundColor(palette.textTertiary)
+                Spacer(minLength: 12)
+                SpeakTextAction(title: "重听", icon: "speaker.wave.2", palette: palette) {
+                    controller.replayTurn(turn.text)
+                }
+                .disabled(controller.phase == .recording || controller.phase == .transcribing)
+                .help("重听这句")
+                if veiled {
+                    SpeakTextAction(title: "看原文", icon: "eye", palette: palette) {
+                        controller.revealTurn(index)
+                    }
+                    .help("显示这句原文")
+                }
+            }
+            Text(turn.text)
+                .font(.system(size: 19, design: .serif))
+                .lineSpacing(7)
+                .foregroundColor(palette.text)
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+                .modifier(ListenVeil(on: veiled))
             if let hint = turn.hintZh {
                 Text(hint)
                     .font(.system(size: 13.5))
@@ -1103,45 +1122,157 @@ struct SpeakView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .modifier(ListenVeil(on: veiled))
             }
-            // 历史 assistant 轮的跟读摘要行；最新一轮由对话流末尾的报告卡承担，不重复
-            //（SpeakView.tsx:1260 `!isLastAssistant && …`）。
-            if turn.role == .assistant, turn.id != lastAssistantTurnId {
+            // 历史 assistant 轮的跟读摘要（.speak-shadow-score：ok 色粗体小字）。
+            if turn.id != lastAssistantTurnId {
                 if let attempts = turn.shadowAttempts, !attempts.isEmpty {
                     Text("跟读过 \(attempts.count) 次 · 最好 \(String(format: "%.1f", attempts.map(\.total).max() ?? 0))")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(palette.textSecondary)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundColor(palette.ok)
+                        .padding(.top, 2)
                 } else if let score = turn.shadowScore {
-                    Text("跟读 \(String(format: "%.1f", score)) 分\(score < 4.2 ? " · 可以再试一次" : "")")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(score < 4.2 ? palette.warn : palette.ok)
+                    Text(String(format: "跟读 %.1f / 5", score))
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundColor(palette.ok)
+                        .padding(.top, 2)
                 }
             }
             if let diff = turn.coachDiff, !diff.segs.isEmpty {
                 coachDiffBlock(diff, turnText: turn.text)
             }
         }
+        .frame(maxWidth: 580, alignment: .leading)
     }
 
-    /// 用户轮英文：按目标词命中区间切段高亮（annotateSegments 两层区间切段的
-    /// 目标层；发音标记在右栏透镜卡承担，此处 marks 为空）。
-    private func highlightedUserText(_ text: String, spans: [TargetSpan]) -> some View {
-        let segments = annotateSegments(text, marks: [], targets: spans)
-        let ns = text as NSString
-        var out = Text("")
-        for seg in segments {
-            let piece = ns.substring(with: NSRange(location: seg.start, length: seg.end - seg.start))
-            if seg.target {
-                out = out + Text(verbatim: piece).fontWeight(.semibold).foregroundColor(palette.sonicTeal)
-            } else {
-                out = out + Text(verbatim: piece)
+    /// 用户轮气泡（.dialogue-turn.mine）：18pt 衬线英文（目标词高亮 + 发音弱词着色）
+    /// + meta 药丸行；最新 pron 轮的弱词可点选同步右栏。
+    private func userTurnCard(_ turn: SpeakTurn) -> some View {
+        let analysis = analyzeTargets(turn.text)
+        let isPronTurn = turn.id == lastPronTurn?.id
+        let marks = isPronTurn ? lastPronMarks : []
+        return VStack(alignment: .trailing, spacing: 8) {
+            userSentence(turn.text, spans: analysis.spans, marks: marks, pickable: isPronTurn)
+            HStack(spacing: 6) {
+                if analysis.count > 0 {
+                    speakMetaPill("用上 \(analysis.count) 个目标词", icon: "checkmark", fg: palette.sonicTeal, bg: palette.sonicTealSoft)
+                }
+                if let pron = turn.pron {
+                    let tone = scoreToneOf(pron.total)
+                    speakMetaPill(String(format: "发音 %.1f / 5.0", pron.total), icon: nil, fg: toneColor(tone), bg: toneSoftColor(tone))
+                }
             }
         }
-        return out
-            .font(.system(size: 19, design: .serif))
-            .lineSpacing(7)
+        .padding(.vertical, 12)
+        .padding(.horizontal, 18)
+        .frame(maxWidth: 560, alignment: .trailing)
+        .background(
+            UserBubbleShape()
+                .fill(palette.glassElevated)
+                .background(.regularMaterial, in: UserBubbleShape())
+        )
+        .overlay(UserBubbleShape().stroke(palette.glassBorderStrong, lineWidth: 1))
+        .shadow(color: palette.shadowPill, radius: 12, y: 5)
+    }
+
+    /// 用户句（.speak-user-text + UserSentence）：目标词区间 teal 加粗；发音弱词按档位
+    /// 加线（ok=warn / bad=err / missed=err-soft 底），最新 pron 轮的弱词可点选同步右栏。
+    private func userSentence(_ text: String, spans: [TargetSpan], marks: [XfyunCore.WordMark], pickable: Bool) -> some View {
+        let ns = text as NSString
+        let markSpans = marks.map { TargetSpan(start: $0.start, end: $0.end) }
+        let segments = annotateSegments(text, marks: markSpans, targets: spans)
+        return FlowLayout(spacing: 0, lineSpacing: 5) {
+            ForEach(Array(segments.enumerated()), id: \.offset) { _, seg in
+                let piece = ns.substring(with: NSRange(location: seg.start, length: seg.end - seg.start))
+                let mark = seg.markIdx >= 0 ? marks[seg.markIdx] : nil
+                Group {
+                    if let mark, mark.quality != .good {
+                        weakWord(mark, text: piece, pickable: pickable)
+                    } else if seg.target {
+                        Text(verbatim: piece)
+                            .fontWeight(.semibold)
+                            .foregroundColor(palette.sonicTeal)
+                    } else {
+                        Text(verbatim: piece)
+                            .foregroundColor(palette.text)
+                    }
+                }
+                .font(.system(size: 18, design: .serif))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 发音弱词（.speak-seg.wd-*）：文字不换色只加线；missed 补 err-soft 底；
+    /// 右栏当前选中的词叠 warn-soft 圆角底（.speak-seg.sel）。
+    private func weakWord(_ mark: XfyunCore.WordMark, text: String, pickable: Bool) -> some View {
+        let idx = pickable ? pronWordIdx(of: mark) : nil
+        let selected = idx != nil && pronSel?.wordIdx == idx
+        let lineColor: Color = mark.quality == .ok ? palette.warn : palette.err
+        return Group {
+            if let idx {
+                Button {
+                    pronSel = PronSelection(wordIdx: idx, phoneIdx: 0)
+                } label: {
+                    weakWordLabel(mark, text: text, lineColor: lineColor, selected: selected)
+                }
+                .buttonStyle(.plain)
+                .help(mark.quality == .missed ? "漏读了 · 点击看细节" : String(format: "%.1f 分 · 点击看细节", mark.score))
+            } else {
+                weakWordLabel(mark, text: text, lineColor: lineColor, selected: selected)
+            }
+        }
+    }
+
+    private func weakWordLabel(_ mark: XfyunCore.WordMark, text: String, lineColor: Color, selected: Bool) -> some View {
+        Text(verbatim: text)
             .foregroundColor(palette.text)
-            .fixedSize(horizontal: false, vertical: true)
-            .multilineTextAlignment(.leading)
+            .padding(.horizontal, 1)
+            .background(
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(selected ? palette.warnSoft : (mark.quality == .missed ? palette.errSoft : Color.clear))
+            )
+            .overlay(alignment: .bottom) {
+                // Windows 用波浪下划线（wavy 1.5px / offset 4）；SwiftUI 无原生波浪，
+                // 以 1.5pt 实线近似（同阅读室 xray 词标线语言）。
+                Rectangle()
+                    .fill(lineColor.opacity(0.85))
+                    .frame(height: 1.5)
+                    .offset(y: -3)
+            }
+            .contentShape(Rectangle())
+    }
+
+    /// 用户轮 meta 药丸（.speak-pill）：hit=teal / 发音分按档位着色。
+    private func speakMetaPill(_ text: String, icon: String?, fg: Color, bg: Color) -> some View {
+        HStack(spacing: 5) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 9, weight: .bold))
+            }
+            Text(text)
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+        }
+        .foregroundColor(fg)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(bg))
+    }
+
+    /// 最新 pron 轮的词标记（句内着色与右栏选词共用同源 mapWordsToText）。
+    private var lastPronMarks: [XfyunCore.WordMark] {
+        guard let pron = lastPron else { return [] }
+        return mapWordsToText(text: lastPronText, words: pron.words.map(\.xfyunWordScore))
+    }
+
+    /// 右栏「需要注意的词」数（非 good 档；0 时提示「没有明显问题」）。
+    private var weakCount: Int {
+        lastPronMarks.filter { $0.quality != .good }.count
+    }
+
+    /// WordMark 回找 pron.words 下标（mapWordsToText 的 word 字段等值匹配；
+    /// 增读词被过滤、对不上原文的词被丢弃，找不到返回 nil）。
+    private func pronWordIdx(of mark: XfyunCore.WordMark) -> Int? {
+        guard let w = mark.word else { return nil }
+        return lastPron?.words.firstIndex { $0.xfyunWordScore == w }
     }
 
     /// 用户气泡下的「表达改进建议」块（原型 .editorial-diff-block，html:932-935）：
@@ -1238,43 +1369,80 @@ struct SpeakView: View {
         }
     }
 
-    private func errorBanner(_ message: String) -> some View {
-        // 通知分类（Windows friendlyNotice redeem 档）：文案含「额度已用完」→
-        // 主按钮「兑换更多额度」跳设置账号分区兑换码卡（SpeakView.tsx:1700-1710）。
-        let redeemable = speakFriendlyNotice(message).kind == .redeem
-        return HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11))
-                .foregroundColor(palette.err)
+    /// 失败提示条（.speak-notice）：warn-soft 底 + 可行动按钮，只在真的失败后出现；
+    /// redeem 类给「兑换更多额度」，其余给「再试一次」（Windows retryFromNotice 同义：
+    /// 清错后直接重开麦克风），✕ 关闭 = dismiss。
+    private func noticeBar(_ message: String) -> some View {
+        let kind = speakFriendlyNotice(message).kind
+        return HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 14))
+                .foregroundColor(palette.warn)
             Text(message)
-                .font(.system(size: 11))
-                .foregroundColor(palette.err)
-                .lineLimit(2)
+                .font(.system(size: 12.5))
+                .foregroundColor(palette.warn)
+                .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
-            Spacer()
-            if redeemable {
-                Button("兑换更多额度") {
-                    (NSApp.delegate as? AppDelegate)?.openAccountRedeem()
+            Spacer(minLength: 8)
+            HStack(spacing: 6) {
+                if kind == .redeem {
+                    noticeActionButton("兑换更多额度", primary: true) {
+                        (NSApp.delegate as? AppDelegate)?.openAccountRedeem()
+                    }
+                } else {
+                    noticeActionButton("再试一次", primary: true) {
+                        controller.clearError()
+                        if controller.hasASR {
+                            controller.toggleMic()
+                        }
+                    }
+                    .help("重开麦克风再说一次")
                 }
-                .controlSize(.small)
-                .buttonStyle(.borderedProminent)
+                Button {
+                    controller.clearError()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(palette.warn)
+                        .padding(3)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("关闭提示")
             }
-            Button("知道了") { controller.clearError() }
-                .controlSize(.small)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(palette.err.opacity(0.08))
+        .padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(palette.warnSoft))
+        .padding(.horizontal, 20)
+        .padding(.bottom, 8)
+    }
+
+    /// 提示条动作按钮（.speak-notice-actions button）：primary = accent 实底白字。
+    private func noticeActionButton(_ title: String, primary: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12))
+                .foregroundColor(primary ? Color.white : palette.text)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(primary ? palette.accent : palette.glassElevated)
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(primary ? Color.clear : palette.glassBorderStrong))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - 底部控制条
 
     private var micTitle: String {
-        switch controller.phase {
-        case .recording: return "正在听你说——停顿约 1.5 秒自动发送，再点一下立即说完"
-        case .speaking: return "点击插话（会打断播报）"
-        default: return "点击开始说话，停顿自动发送"
-        }
+        controller.phase == .recording
+            ? "说完后再点一下立即发送"
+            : "点击开始说话，停顿自动发送"
     }
 
     private var canToggleMic: Bool {
@@ -1287,94 +1455,100 @@ struct SpeakView: View {
         }
     }
 
-    private var phaseHint: String {
+    /// 麦克风下方一句话提示（Windows speakUi.micTip）。
+    private var micTipText: String {
+        if controller.phase == .shadowRecording || controller.phase == .shadowAssessing {
+            return "正在跟读评分，完成后再回答"
+        }
         switch controller.phase {
-        case .recording: return "正在听你说…停顿约 1.5 秒自动发送"
+        case .recording: return "说完后再点一下发送"
         case .transcribing: return "识别中…"
         case .thinking: return "对方回复中…"
         case .speaking: return "对方说话中 · 点击麦克风可插话"
-        default: return "点击麦克风说话（英语）→ AI 回复带中文提示与表达改进"
+        case .error: return "点一下麦克风再说一次"
+        default:
+            let hasSpoken = controller.session?.turns.contains { $0.role == .user } ?? false
+            return hasSpoken ? "点击麦克风继续回答" : "点击麦克风用英语回答"
         }
     }
 
-    private var controlBar: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 12) {
-                micButton
-                if controller.phase == .recording {
-                    levelBar(controller.level)
-                    Text(String(format: "%.1fs", Double(controller.elapsedMs) / 1000))
-                        .font(.system(size: 10.5).monospacedDigit())
+    /// 控制条（.speak-composer）：左「跟读/重听」、中麦克风主按钮 + 提示、右收尾动作。
+    private var composer: some View {
+        Grid(alignment: .center, horizontalSpacing: 16, verticalSpacing: 0) {
+            GridRow {
+                HStack(spacing: 8) {
+                    shadowButton
+                    SpeakGhostButton(title: "重听", icon: "speaker.wave.2", palette: palette) {
+                        controller.replayLast()
+                    }
+                    .disabled(controller.phase == .recording || controller.phase == .transcribing || controller.phase == .thinking)
+                    .help("重听 AI 最新一句")
+                }
+                .gridColumnAlignment(.leading)
+                VStack(spacing: 6) {
+                    micButton
+                    Text(micTipText)
+                        .font(.system(size: 12))
                         .foregroundColor(palette.textTertiary)
-                    Button("说完了") { controller.toggleMic() }
-                        .controlSize(.small)
-                        .buttonStyle(.borderedProminent)
+                        .lineLimit(1)
+                        .help(micTipText)
                 }
-                Text(phaseHint)
-                    .font(.system(size: 11))
-                    .foregroundColor(palette.textTertiary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer()
-                if controller.phase == .thinking {
-                    Button("跳过回复") { controller.skipReply() }
-                        .controlSize(.small)
+                HStack(spacing: 8) {
+                    if controller.phase == .thinking {
+                        SpeakGhostButton(title: "跳过回复", palette: palette) {
+                            controller.skipReply()
+                        }
                         .help("不等这次回复了，接着说下一句")
+                    }
+                    finishButton
                 }
-                shadowButton
-                reviewButton
+                .gridColumnAlignment(.trailing)
             }
-            // REVIEW-05：10 → 11pt。常驻提示不低于 macOS 辅助字号下限 11pt
-            //（Windows 网页 10px 在非 Retina 外接屏上发虚；px 值当上限而非下限）。
-            Text("「跟读打分」照 AI 最新一句读，报告卡会告诉你差在哪；右侧「发音详情」看你每轮发言的逐词得分")
-                .font(.system(size: 11))
-                .foregroundColor(palette.textTertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(palette.surface)
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
+        .padding(.bottom, 16)
+        .overlay(alignment: .top) {
+            Rectangle().fill(palette.glassBorder).frame(height: 1)
+        }
     }
 
-    /// 点击开麦按钮：idle/error/speaking 点击即开麦（speaking 打断播报插话）；
-    /// 录音中再点 = 立即说完；识别/回复中禁用。
+    /// 点击开麦按钮（.speak-mic）：idle/error/speaking 点击即开麦（speaking 打断播报
+    /// 插话）；录音中再点 = 立即说完；识别/回复中禁用。64 圆，待机品牌色、录音语义红
+    /// + 电平光圈（说话越响圈越大）。
     private var micButton: some View {
         let recording = controller.phase == .recording
+        let lv = Double(min(1, max(0, controller.level * 3)))
         return Button {
             controller.toggleMic()
         } label: {
-            ZStack {
-                Circle()
-                    .fill(recording ? palette.err : palette.accent)
-                    .frame(width: 40, height: 40)
-                    .shadow(color: (recording ? palette.err : palette.accent).opacity(0.35), radius: recording ? 8 : 4)
-                Image(systemName: recording ? "stop.fill" : "mic.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white)
-            }
+            Image(systemName: recording ? "stop.fill" : "mic.fill")
+                .font(.system(size: 22, weight: .medium))
+                .foregroundColor(.white)
+                .frame(width: 64, height: 64)
+                .background(Circle().fill(recording ? palette.err : palette.accent))
+                .shadow(color: recording ? palette.errSoft : Color.clear, radius: 4 + 14 * lv)
+                .shadow(color: recording ? palette.err.opacity(0.35) : palette.shadowPill,
+                        radius: recording ? 18 : 12, y: recording ? 6 : 5)
+                .contentShape(Circle())
+                .animation(.linear(duration: 0.09), value: controller.level)
         }
         .buttonStyle(.plain)
         .disabled(!canToggleMic)
-        .opacity(canToggleMic ? 1 : 0.4)
+        .opacity(canToggleMic ? 1 : 0.55)
         .help(micTitle)
-        .accessibilityLabel(recording ? "说完（点击结束录音）" : "点击开始说话")
+        .accessibilityLabel(recording ? "说完（点击发送）" : "点击开始说话")
     }
 
+    /// 跟读按钮（.speak-btn）：照 AI 最新一句读，讯飞评测打分。
     private var shadowButton: some View {
-        Button {
+        SpeakGhostButton(title: shadowLabel, palette: palette) {
             if controller.phase == .shadowRecording {
                 controller.finishShadowRecord()
             } else {
                 controller.beginShadowRecord()
             }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "waveform.badge.mic").font(.system(size: 11))
-                Text(shadowLabel).font(.system(size: 11.5))
-            }
         }
-        .buttonStyle(.plain)
-        .foregroundColor(palette.accent)
         .disabled(shadowDisabled)
         .help("照着 AI 最新一句读，讯飞评测打分")
     }
@@ -1389,54 +1563,37 @@ struct SpeakView: View {
         }
     }
 
-    /// 跟读按钮文案（对齐 SpeakView.tsx:1395-1405）：录音中「说完」/ 评分中 /
-    /// 已出分「跟读 X 分 · 再跟读」/ 异常卡在场「跟读失败 · 重试」/ 缺省「跟读打分」。
+    /// 跟读按钮文案（对齐 SpeakView.tsx:1906-1914）：录音中「松开结束跟读」/ 评分中 /
+    /// 已出分「跟读 X 分 · 再跟读」/ 异常卡在场「再跟读一次」/ 缺省「跟读这句」。
     private var shadowLabel: String {
         switch controller.phase {
-        case .shadowRecording: return "说完（跟读）"
+        case .shadowRecording: return "松开结束跟读"
         case .shadowAssessing: return "评分中…"
         default:
             if let total = lastShadowReport?.totals.last {
                 return String(format: "跟读 %.1f 分 · 再跟读", total)
             }
             if controller.shadowFailure != nil {
-                return "跟读失败 · 重试"
+                return "再跟读一次"
             }
-            return "跟读打分"
+            return "跟读这句"
         }
     }
 
-    private var reviewButton: some View {
-        Button {
+    /// 收尾动作（.speak-finish）：无边框文字按钮，无跟读数据时禁用（Windows 同文案）。
+    private var finishButton: some View {
+        SpeakTextButton(title: "结束并复盘 →", palette: palette) {
             controller.stopSpeaking()
             reviewShown = true
-        } label: {
-            HStack(spacing: 4) {
-                Circle().fill(palette.accent).frame(width: 5, height: 5)
-                Text("结束本轮并复盘").font(.system(size: 11.5))
-            }
         }
-        .buttonStyle(.plain)
-        .foregroundColor(hasAssessments && !drillOpen ? palette.accent : palette.textTertiary)
+        .opacity(hasAssessments && !drillOpen ? 1 : 0.5)
         .disabled(!hasAssessments || drillOpen)
         .help(hasAssessments
             ? "复盘本轮跟读中没掌握的词，确认后加入生词本"
-            : "还没有跟读记录——先「跟读打分」一次再来复盘")
+            : "还没有跟读记录——先「跟读这句」一次再来复盘")
     }
 
-    private func levelBar(_ level: Float) -> some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(palette.surfaceAlt)
-                Capsule()
-                    .fill(level > 0.05 ? palette.ok : palette.warn)
-                    .frame(width: max(4, min(1, Double(level)) * geo.size.width))
-            }
-        }
-        .frame(width: 48, height: 5)
-    }
-
-    // MARK: - 发音详情透镜卡（右侧常驻）
+    // MARK: - 发音反馈面板（右栏常驻，Windows .speak-panel / PronPanel）
 
     /// 最新带 pron 的 user 轮（pron 引用在会话其它更新间保持稳定，选中态不重置）。
     private var lastPronTurn: SpeakTurn? {
@@ -1450,39 +1607,95 @@ struct SpeakView: View {
     private var lastPron: ShadowAttempt? { lastPronTurn?.pron }
     private var lastPronText: String { lastPronTurn?.text ?? "" }
 
-    private var pronunciationLens: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("发音详情").font(.system(size: 12.5, weight: .semibold))
-                Spacer()
-                Text("逐音标打分")
-                    .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
-                    .foregroundColor(palette.accent)
-            }
-            Divider().opacity(0.6)
-            if let pron = lastPron {
-                lensSections(pron)
+    /// 右栏三段玻璃卡：head（这句的发音）/ body（空态预览或总分+选词卡+曲线）/ foot。
+    private var pronunciationPanel: some View {
+        VStack(spacing: 0) {
+            panelHead
+            panelBody
+            panelFoot
+        }
+        .glassCard(palette: palette, radius: 22, heavyShadow: true)
+    }
+
+    private var panelHead: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(lastPron != nil ? "这句的发音" : "发音反馈")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(palette.text)
+            Spacer(minLength: 8)
+            Text(lastPron != nil ? "点句中标色的词看细节" : "每说一句自动更新")
+                .font(.system(size: 11.5))
+                .foregroundColor(palette.textTertiary)
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(palette.glassBorder).frame(height: 1)
+        }
+    }
+
+    @ViewBuilder
+    private var panelBody: some View {
+        if let pron = lastPron {
+            ScrollView {
+                panelPronSections(pron)
                     .onChange(of: pron.at) { newAt in
                         selectWorstWordIfNeeded(newAt: newAt)
                     }
                     .onAppear {
                         selectWorstWordIfNeeded(newAt: pron.at)
                     }
-            } else {
-                Text("点选单词查看发音细节")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundColor(palette.textSecondary)
-                Text("还没有你的发音评分——说一句话（或配好讯飞评测凭据后再说一句），这里会给出逐词得分、逐音标拆解和慢速示范。")
-                    .font(.system(size: 11))
-                    .foregroundColor(palette.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(9)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(palette.surface, in: RoundedRectangle(cornerRadius: 8))
-                Spacer()
+            }
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    panelPreviewRow(icon: "star", text: "整句总分，准确 / 流利 / 完整三项")
+                    panelPreviewRow(icon: "highlighter", text: "读得不准的词会在你的句子里标色")
+                    panelPreviewRow(icon: "arrow.down.forward.square", text: "点那个词，看哪个音偏了、听慢速示范")
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
-        .padding(14)
+    }
+
+    /// 空态预览行（.speak-panel-preview）：28px 图标方块 + 一句说明。
+    private func panelPreviewRow(icon: String, text: String) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .foregroundColor(palette.textTertiary)
+                .frame(width: 28, height: 28)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.background))
+            Text(text)
+                .font(.system(size: 13))
+                .foregroundColor(palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var panelFoot: some View {
+        HStack(spacing: 0) {
+            Text("发音评分由讯飞提供 · ")
+            Button {
+                (NSApp.delegate as? AppDelegate)?.openVoiceSettings()
+            } label: {
+                Text("凭据设置")
+                    .underline()
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("讯飞评测/听写凭据在主窗口 设置 → 语音 里集中配置")
+        }
+        .font(.system(size: 11.5))
+        .foregroundColor(palette.textTertiary)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .overlay(alignment: .top) {
+            Rectangle().fill(palette.glassBorder).frame(height: 1)
+        }
     }
 
     /// 新评测到达：默认选中得分最低的词（含漏读 0 分）。
@@ -1500,211 +1713,202 @@ struct SpeakView: View {
         pronSel = PronSelection(wordIdx: worst, phoneIdx: 0)
     }
 
-    @ViewBuilder
-    private func lensSections(_ pron: ShadowAttempt) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                // 总分 + 词着色句
-                HStack {
-                    Text("点选单词查看发音细节")
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundColor(palette.textSecondary)
-                    Spacer()
-                    Text(String(format: "%.1f / 5.0", pron.total))
-                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                        .foregroundColor(palette.accent)
+    /// 已出分区（.speak-panel-body 内容）：总分圆环 + 三项分条 + 选中词卡 + 逐词曲线。
+    private func panelPronSections(_ pron: ShadowAttempt) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 16) {
+                scoreRing(total: pron.total)
+                VStack(spacing: 7) {
+                    scoreSubBar("准确", value: pron.accuracy, help: "准确度：每个音发得准不准")
+                    scoreSubBar("流利", value: pron.fluency, help: "流畅度：语速与停顿是否自然")
+                    scoreSubBar("完整", value: pron.integrity, help: "完整度：有没有漏词、添词")
                 }
-                pronMarkedSentence(pron)
+            }
+            .padding(.top, 2)
+            if let sel = pronSel, let word = pron.words[safe: sel.wordIdx] {
+                panelWordSection(word, sel: sel)
+            } else {
+                Text(weakCount == 0 ? "这句没有明显读错的词，继续保持。" : "点你句子里标色的词，看具体哪个音偏了。")
+                    .font(.system(size: 12.5))
+                    .foregroundColor(palette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            panelCurve(pron)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
 
-                if let sel = pronSel, let word = pron.words[safe: sel.wordIdx] {
-                    selectedWordSection(word, sel: sel)
-                }
-
-                // 逐词得分曲线
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("逐词得分对比")
-                            .font(.system(size: 10.5, weight: .semibold))
-                            .foregroundColor(palette.textSecondary)
-                        Spacer()
-                        Text("虚线：5 分基准")
-                            .font(.system(size: 9.5))
-                            .foregroundColor(palette.textTertiary)
-                    }
-                    wordScoreChart(wordScorePath(pron.words), words: pron.words)
-                    Text("连线是这一轮每个词的真实得分（点击圆点同步选中上方单词）")
-                        .font(.system(size: 9.5))
-                        .foregroundColor(palette.textTertiary)
-                }
-                .padding(9)
-                .background(palette.surface, in: RoundedRectangle(cornerRadius: 8))
-                Spacer(minLength: 0)
+    /// 总分圆环（.speak-ring）：conic 进度环 + 内嵌 glass-elevated 圆。
+    private func scoreRing(total: Double) -> some View {
+        let tone = scoreToneOf(total)
+        return ZStack {
+            Circle().fill(palette.background)
+            Circle()
+                .trim(from: 0, to: scorePctOf(total) / 100)
+                .stroke(toneColor(tone), style: StrokeStyle(lineWidth: 7, lineCap: .butt))
+                .rotationEffect(.degrees(-90))
+            Circle()
+                .fill(palette.glassElevated)
+                .padding(7)
+            VStack(spacing: 0) {
+                Text(String(format: "%.1f", total))
+                    .font(.system(size: 18, weight: .semibold).monospacedDigit())
+                    .foregroundColor(palette.text)
+                Text("/ 5")
+                    .font(.system(size: 10))
+                    .foregroundColor(palette.textTertiary)
             }
         }
+        .frame(width: 68, height: 68)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(format: "总分 %.1f / 5", total))
     }
 
-    /// 词着色句（可点选同步透镜卡选词）。
-    private func pronMarkedSentence(_ pron: ShadowAttempt) -> some View {
-        let wordsXF = pron.words.map { $0.xfyunWordScore }
-        let marks = mapWordsToText(text: lastPronText, words: wordsXF)
-        return FlowLayout(lineSpacing: 4) {
-            ForEach(Array(pronTokens(text: lastPronText, marks: marks, wordsXF: wordsXF).enumerated()), id: \.offset) { _, token in
-                if let (mark, wordIdx) = token.markWithIndex {
-                    Button {
-                        pronSel = PronSelection(wordIdx: wordIdx, phoneIdx: 0)
-                    } label: {
-                        pronWordText(token.text, quality: mark.quality, selected: pronSel?.wordIdx == wordIdx)
-                    }
-                    .buttonStyle(.plain)
-                    .help(mark.quality == .missed ? "漏读了" : String(format: "%.1f 分 · 点击看音标拆解", mark.score))
-                } else {
-                    Text(verbatim: token.text)
-                        .font(.system(size: 13, design: .serif))
-                        .foregroundColor(palette.text)
+    /// 三项分条（.speak-sub）：30 标签 + 5px 进度条 + 数值。
+    private func scoreSubBar(_ label: String, value: Double, help: String) -> some View {
+        let tone = scoreToneOf(value)
+        return HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundColor(palette.textSecondary)
+                .frame(width: 30, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(palette.background)
+                    Capsule()
+                        .fill(toneColor(tone))
+                        .frame(width: geo.size.width * scorePctOf(value) / 100)
                 }
             }
+            .frame(height: 5)
+            Text(String(format: "%.1f", value))
+                .font(.system(size: 12).monospacedDigit())
+                .foregroundColor(palette.textSecondary)
+                .frame(width: 26, alignment: .trailing)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .help(help)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) \(String(format: "%.1f", value))")
     }
 
-    private struct PronToken {
-        let text: String
-        /// 词 token：命中的 mark + 在 pron.words 里的下标。
-        let markWithIndex: (XfyunCore.WordMark, Int)?
-    }
-
-    /// 按 marks 的 start/end 切原句；词 token 通过 WordScore 等值回找 pron.words 下标
-    /// （marks 与 pronWords 不一定一一对应：增读词被过滤、对不上原文的词被丢弃）。
-    private func pronTokens(text: String, marks: [XfyunCore.WordMark], wordsXF: [WordScore]) -> [PronToken] {
-        var out: [PronToken] = []
-        let ns = text as NSString
-        var pos = 0
-        var usedIdx = Set<Int>()
-        for m in marks {
-            guard m.start >= pos, m.end <= ns.length, m.end > m.start else { continue }
-            if m.start > pos {
-                out.append(PronToken(text: ns.substring(with: NSRange(location: pos, length: m.start - pos)), markWithIndex: nil))
-            }
-            var wordIdx: Int?
-            if let w = m.word, let idx = wordsXF.firstIndex(of: w), !usedIdx.contains(idx) {
-                usedIdx.insert(idx)
-                wordIdx = idx
-            }
-            out.append(PronToken(
-                text: ns.substring(with: NSRange(location: m.start, length: m.end - m.start)),
-                markWithIndex: wordIdx.map { (m, $0) }
-            ))
-            pos = m.end
-        }
-        if pos < ns.length {
-            out.append(PronToken(text: ns.substring(from: pos), markWithIndex: nil))
-        }
-        return out
-    }
-
-    @ViewBuilder
-    private func pronWordText(_ text: String, quality: XfyunCore.WordQuality, selected: Bool) -> some View {
-        let color: Color = {
-            switch quality {
-            case .good: return palette.ok
-            case .ok: return palette.warn
-            case .bad, .missed: return palette.err
-            }
-        }()
-        Text(verbatim: text)
-            .font(.system(size: 13, weight: selected ? .semibold : .regular, design: .serif))
-            .foregroundColor(color)
-            .padding(.horizontal, 2)
-            .padding(.vertical, 1)
-            .background(
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(selected ? color.opacity(0.14) : (quality == .missed ? palette.err.opacity(0.10) : Color.clear))
-            )
-            .overlay(alignment: .bottom) {
-                if quality == .bad || quality == .missed {
-                    Rectangle()
-                        .stroke(palette.err.opacity(0.55), style: StrokeStyle(lineWidth: 1, dash: quality == .bad ? [2, 2] : []))
-                        .frame(height: 1.5)
-                        .offset(y: 1)
-                }
-            }
-    }
-
-    /// 选中词的音素药丸 + 舌位建议 + 慢速示范/重读。
-    private func selectedWordSection(_ word: ShadowWord, sel: PronSelection) -> some View {
+    /// 选中词卡（.speak-word）：词头 + 音素药丸网格 + 舌位建议 + 示范动作。
+    private func panelWordSection(_ word: ShadowWord, sel: PronSelection) -> some View {
         let phones = word.sylls.flatMap(\.phones)
         let selPhone = phones[safe: sel.phoneIdx]
-        return VStack(alignment: .leading, spacing: 7) {
-            Text("音标拆解 · \(word.content)（\(String(format: "%.1f", word.totalScore)) 分）")
-                .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
-                .foregroundColor(palette.textSecondary)
+        let tone = scoreToneOf(word.totalScore)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(word.content)
+                    .font(.system(size: 20, design: .serif))
+                    .foregroundColor(palette.text)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text(String(format: "%.1f 分", word.totalScore))
+                    .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                    .foregroundColor(toneColor(tone))
+            }
             if phones.isEmpty {
                 Text("这个词没有返回音标明细")
-                    .font(.system(size: 10.5))
+                    .font(.system(size: 12.5))
                     .foregroundColor(palette.textTertiary)
             } else {
-                FlowLayout(lineSpacing: 4) {
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8),
+                        GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8),
+                    ],
+                    spacing: 8
+                ) {
                     ForEach(Array(phones.enumerated()), id: \.offset) { idx, phone in
-                        let active = idx == sel.phoneIdx
-                        Button {
+                        phonemeNode(phone, selected: idx == sel.phoneIdx) {
                             pronSel = PronSelection(wordIdx: sel.wordIdx, phoneIdx: idx)
-                        } label: {
-                            Text(verbatim: phone.content)
-                                .font(.system(size: 12, design: .serif))
-                                .foregroundColor(active ? .white : palette.textSecondary)
-                                .padding(.horizontal, 9)
-                                .padding(.vertical, 3.5)
-                                .background(
-                                    Capsule().fill(active ? palette.accent : palette.surface)
-                                        .overlay(Capsule().strokeBorder(active ? palette.accent : palette.border))
-                                )
                         }
-                        .buttonStyle(.plain)
-                        .help("音素 \(phone.content) — 点击看针对性建议")
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Text(selPhone.map { String(format: "/%@/：%@", $0.content, phoneTip($0.content)) } ?? "点上面的音素看针对性建议")
+                    .font(.system(size: 13))
+                    .foregroundColor(palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Text("发音建议（/\(selPhone?.content ?? "")/）：")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(palette.text)
-            Text(selPhone.map { phoneTip($0.content) } ?? "点上面的音素看针对性建议")
-                .font(.system(size: 11))
-                .foregroundColor(palette.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
-                Button {
+                SpeakGhostButton(title: "慢速示范", icon: "speaker.wave.2", palette: palette) {
                     controller.speakWordSlow(word.content)
-                } label: {
-                    Text("慢速示范 (0.75×)").frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .help("按当前 TTS 引擎原生慢速合成示范：Edge 走 SSML prosody -25%、讯飞走 speed 38；系统语音或云不可用时按 0.75× 朗读")
-                Button {
+                .help("云引擎按 0.75× 原生慢速合成示范；本地语音走普通朗读")
+                SpeakGhostButton(title: "重读这个词", palette: palette) {
                     controller.speakWord(word.content)
-                } label: {
-                    Text("重读这个词")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
             }
         }
-        .padding(9)
-        .background(palette.surface, in: RoundedRectangle(cornerRadius: 8))
+        .padding(.top, 16)
+        .overlay(alignment: .top) {
+            Rectangle().fill(palette.glassBorder).frame(height: 1)
+        }
     }
 
-    /// 逐词得分 SVG 折线（5 分基准虚线 + 点圆点同步选词）。
+    /// 音素药丸节点（.phoneme-node）：gwpp → ok/warn/bad 着色 + 状态行，选中描边。
+    private func phonemeNode(_ phone: ReaderCore.ShadowPhone, selected: Bool, onSelect: @escaping () -> Void) -> some View {
+        let status = phoneStatusOf(phone.gwpp)
+        return Button(action: onSelect) {
+            VStack(spacing: 2) {
+                Text("/\(phone.content)/")
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundColor(palette.text)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(status.label)
+                    .font(.system(size: 10))
+                    .foregroundColor(palette.textTertiary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(status.bg(palette))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(status.border(palette)))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(palette.text.opacity(selected ? 1 : 0), lineWidth: 2)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("点击查看这个音素的发音建议")
+    }
+
+    /// 逐词得分曲线（.speak-curve，Windows details 默认收起）。
+    private func panelCurve(_ pron: ShadowAttempt) -> some View {
+        DisclosureGroup(isExpanded: $curveExpanded) {
+            VStack(alignment: .leading, spacing: 6) {
+                wordScoreChart(wordScorePath(pron.words), words: pron.words)
+                Text("虚线是 5 分基准；点圆点同步选中上方单词。")
+                    .font(.system(size: 12.5))
+                    .foregroundColor(palette.textTertiary)
+            }
+            .padding(.top, 8)
+        } label: {
+            Text("逐词得分曲线")
+                .font(.system(size: 12.5))
+                .foregroundColor(palette.textTertiary)
+        }
+        .padding(.top, 14)
+        .overlay(alignment: .top) {
+            Rectangle().fill(palette.glassBorder).frame(height: 1)
+        }
+    }
+
+    /// 逐词得分折线（.word-score-svg：画布底圆角框 + 5 分基准虚线 + 点圆点同步选词）。
     private func wordScoreChart(_ path: ReaderCore.WordScorePath, words: [ShadowWord]) -> some View {
         ZStack(alignment: .topLeading) {
-            // 基准虚线（5 分）
             Path { p in
                 p.move(to: CGPoint(x: 12, y: path.baselineY))
                 p.addLine(to: CGPoint(x: path.width - 12, y: path.baselineY))
             }
             .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-            .foregroundColor(palette.border)
-            // 得分折线
+            .foregroundColor(palette.glassBorderStrong)
             if path.points.count > 1 {
                 Path { p in
                     p.move(to: CGPoint(x: path.points[0].x, y: path.points[0].y))
@@ -1730,7 +1934,46 @@ struct SpeakView: View {
         }
         .frame(width: path.width, height: path.height)
         .frame(maxWidth: .infinity)
+        .padding(6)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(palette.background))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(palette.glassBorder))
     }
+
+    // MARK: - 5 分制着色（Windows speakUi.scoreTone / scorePct 同阈值 ≥4 / ≥3）
+
+    private func scoreToneOf(_ score5: Double) -> SpeakScoreTone {
+        guard score5.isFinite else { return .bad }
+        if score5 >= 4 { return .good }
+        if score5 >= 3 { return .ok }
+        return .bad
+    }
+
+    /// 5 分制 → 0–100（圆环/进度条），越界夹取，非有限数按 0。
+    private func scorePctOf(_ score5: Double) -> Double {
+        guard score5.isFinite else { return 0 }
+        return Double(Int(min(5, max(0, score5)) * 20))
+    }
+
+    private func toneColor(_ tone: SpeakScoreTone) -> Color {
+        switch tone {
+        case .good: return palette.sonicTeal
+        case .ok: return palette.warn
+        case .bad: return palette.err
+        }
+    }
+
+    private func toneSoftColor(_ tone: SpeakScoreTone) -> Color {
+        switch tone {
+        case .good: return palette.sonicTealSoft
+        case .ok: return palette.warnSoft
+        case .bad: return palette.errSoft
+        }
+    }
+}
+
+/// 圆环/分条/药丸共用的三档着色（good=teal / ok=warn / bad=err）。
+enum SpeakScoreTone {
+    case good, ok, bad
 }
 
 // MARK: - 听力模式遮罩
@@ -2024,71 +2267,157 @@ struct WeightedHStack: Layout {
     }
 }
 
-// MARK: - 声波舞台画布（.harmonic-stage-card 的 #harmonicCanvas）
+// MARK: - 口语页小部件（.speak-btn / .text-action-btn / .speak-finish / 气泡形状）
 
-/// TimelineView 驱动的三层谐波（teal / accent / indigo 三色、波长与相速各异，
-/// 两端正弦包络收敛不撞边）：idle 低幅呼吸；录音 / 跟读振幅吃 controller.level
-/// 真实麦克风电平；播报态跟 TTS 说话包络起伏。系统「减弱动态效果」开启时
-/// 暂停时间轴，只画静态一帧（apple-design §14：减弱 ≠ 没有反馈）。
-private struct HarmonicCanvas: View {
-    let phase: SpeakViewController.Phase
-    let level: Float
-    @Environment(\.readerPalette) private var palette
-
-    private var reduceMotion: Bool {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-    }
-
-    /// 目标振幅（0…1）。
-    private func amplitude(at t: Double) -> Double {
-        switch phase {
-        case .recording, .shadowRecording:
-            return 0.14 + Double(min(max(level, 0), 1)) * 0.82
-        case .speaking:
-            return 0.46 + 0.16 * sin(t * 2.6) + 0.08 * sin(t * 7.3)
-        case .thinking, .transcribing, .shadowAssessing:
-            return 0.18 + 0.06 * sin(t * 1.6)
-        default:
-            return 0.11 + 0.05 * sin(t * 0.9)
-        }
-    }
+/// .speak-btn：次要动作按钮——glass-elevated 底 + 发丝边，悬停边与字加深。
+struct SpeakGhostButton: View {
+    let title: String
+    var icon: String? = nil
+    let palette: ReaderPalette
+    let action: () -> Void
+    @State private var hover = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: reduceMotion)) { timeline in
-            Canvas { ctx, size in
-                let t = timeline.date.timeIntervalSinceReferenceDate
-                let amp = amplitude(at: t)
-                let midY = size.height / 2
-                let swing = Double(size.height) * 0.30
-                let layers: [(speed: Double, wave: Double, scale: Double, width: CGFloat, color: Color)] = [
-                    (1.9, 88, 1.0, 2.2, palette.sonicTeal.opacity(0.55)),
-                    (-1.3, 132, 0.66, 1.6, palette.accent.opacity(0.5)),
-                    (3.1, 56, 0.4, 1.0, palette.clauseIndigo.opacity(0.35))
-                ]
-                for layer in layers {
-                    var path = Path()
-                    var x: CGFloat = 0
-                    var first = true
-                    while x <= size.width {
-                        let u = Double(x / max(size.width, 1))
-                        let envelope = sin(.pi * u)
-                        let phaseArg = Double(x) / layer.wave + t * layer.speed
-                        let y = midY + CGFloat(sin(phaseArg) * amp * envelope * swing * layer.scale)
-                        let point = CGPoint(x: x, y: y)
-                        if first {
-                            path.move(to: point)
-                            first = false
-                        } else {
-                            path.addLine(to: point)
-                        }
-                        x += 3
-                    }
-                    ctx.stroke(path, with: .color(layer.color), style: StrokeStyle(lineWidth: layer.width, lineCap: .round, lineJoin: .round))
+        Button(action: action) {
+            HStack(spacing: 5) {
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 11))
                 }
+                Text(title)
+                    .font(.system(size: 12.5))
+                    .lineLimit(1)
             }
+            .foregroundColor(hover ? palette.text : palette.textSecondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(palette.glassElevated)
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(hover ? palette.textTertiary.opacity(0.6) : palette.glassBorderStrong))
+            )
+            .contentShape(Rectangle())
         }
-        .accessibilityHidden(true)
+        .buttonStyle(.plain)
+        .onHover { h in
+            withAnimation(ReaderMotion.hover) { hover = h }
+        }
     }
+}
+
+/// .text-action-btn：行内文字小按钮（重听 / 看原文），悬停转强调色。
+/// （ReaderViews.swift 已有同名 private 组件，此处按口语页字段命名区分。）
+struct SpeakTextAction: View {
+    let title: String
+    let icon: String
+    let palette: ReaderPalette
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 10.5, weight: .medium))
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundColor(hover ? palette.accent : palette.textSecondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { h in
+            withAnimation(ReaderMotion.hover) { hover = h }
+        }
+    }
+}
+
+/// .speak-finish / .speak-scene-back：无边框文字按钮，悬停浮起一层画布底。
+struct SpeakTextButton: View {
+    let title: String
+    let palette: ReaderPalette
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12.5))
+                .foregroundColor(hover ? palette.text : palette.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(hover ? palette.glassBorder.opacity(0.7) : Color.clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { h in
+            withAnimation(ReaderMotion.hover) { hover = h }
+        }
+    }
+}
+
+/// .dialogue-turn.mine 气泡四角（18/18/4/18，右下收小成「尾巴」，对齐
+/// border-radius: 18px 18px 4px 18px）。macOS 13 无 UnevenRoundedRectangle，手绘。
+struct UserBubbleShape: Shape {
+    var radius: CGFloat = 18
+    var tail: CGFloat = 4
+
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let r = min(radius, min(rect.width, rect.height) / 2)
+        p.move(to: CGPoint(x: rect.minX + r, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX - r, y: rect.minY))
+        p.addArc(center: CGPoint(x: rect.maxX - r, y: rect.minY + r), radius: r,
+                 startAngle: .degrees(270), endAngle: .degrees(0), clockwise: false)
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - tail))
+        p.addArc(center: CGPoint(x: rect.maxX - tail, y: rect.maxY - tail), radius: tail,
+                 startAngle: .degrees(0), endAngle: .degrees(90), clockwise: false)
+        p.addLine(to: CGPoint(x: rect.minX + r, y: rect.maxY))
+        p.addArc(center: CGPoint(x: rect.minX + r, y: rect.maxY - r), radius: r,
+                 startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false)
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + r))
+        p.addArc(center: CGPoint(x: rect.minX + r, y: rect.minY + r), radius: r,
+                 startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
+        p.closeSubpath()
+        return p
+    }
+}
+
+/// 音素状态三档（Windows ShadowReport.phoneStatusOf：gwpp ≤ -1 bad / ≤ -0.4 warn / 其余 ok）。
+private enum PhoneStatus {
+    case ok, warn, bad
+
+    var label: String {
+        switch self {
+        case .bad: return "需多练"
+        case .warn: return "偏弱"
+        case .ok: return "还行"
+        }
+    }
+
+    func bg(_ p: ReaderPalette) -> Color {
+        switch self {
+        case .bad: return p.errSoft
+        case .warn: return p.warnSoft
+        case .ok: return p.background
+        }
+    }
+
+    func border(_ p: ReaderPalette) -> Color {
+        switch self {
+        case .bad: return p.err
+        case .warn: return p.warn
+        case .ok: return p.glassBorder
+        }
+    }
+}
+
+private func phoneStatusOf(_ gwpp: Double) -> PhoneStatus {
+    if gwpp <= -1.0 { return .bad }
+    if gwpp <= -0.4 { return .warn }
+    return .ok
 }
 
 // MARK: - ReaderCore → XfyunCore 桥接

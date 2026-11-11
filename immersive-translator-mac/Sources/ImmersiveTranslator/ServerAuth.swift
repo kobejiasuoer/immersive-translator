@@ -28,6 +28,11 @@ struct AuthError: Error {
     let message: String
     var httpStatus: Int?
     var retryAfterSeconds: Int?
+    /// 底层 URLError code（仅传输层 network_error 填，auth-3：登录窗红条按
+    /// 结构化码细分，不匹配 message；业务错误恒 nil）。
+    var underlyingURLErrorCode: Int?
+    /// 发起请求的完整地址（仅传输层 network_error 填；loopback 判定用）。
+    var requestURL: URL?
 
     /// 本地伪码构造（网络/存储/解析类失败，无 HTTP 状态）。
     static func local(_ code: String, _ message: String) -> AuthError {
@@ -71,6 +76,17 @@ struct AuthStatus: Equatable {
 /// 登出结果：服务端吊销尽力而为，网络失败时 serverRevoked=false。
 struct LogoutOutcome: Equatable {
     let serverRevoked: Bool
+}
+
+/// 沉浸云账号令牌来源（Windows translation.rs 的 platform_token / refresh_after_401
+/// 对应物；浮窗 TranslationClient 与阅读室 ReaderChatClient 共用）。闭包经
+/// ServerAuthClient.accountAccessToken 系列取发：临期单飞刷新、致命失效广播
+///（auth-4）都在门面完成，消费方只拿票或 AuthError。
+struct PlatformAccountTokenSource {
+    /// 取当前可用票（临期 ≤180s 自动单飞刷新）。nil/空 = 未登录。
+    let current: @MainActor () async throws -> String?
+    /// 401 token_expired 后的单飞刷新取票（红线 4：单飞 + 旧票比对搭车）。
+    let refreshAfter401: @MainActor (_ usedToken: String) async throws -> String
 }
 
 // MARK: - 可注入的传输层（红线可测试性的落点，§4.1）
@@ -173,6 +189,10 @@ final class URLSessionAuthTransport: AuthTransport {
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 60
         self.session = URLSession(configuration: config)
+        // auth-3 ③：登录窗此前的传输层失败只有一句「网络连接失败」，排查不到
+        // base 被覆盖文件指错方向的情形——把实际生效 base 留进诊断日志
+        //（明文非敏感，仍过一遍脱敏防手滑把 Key 拼进 URL）。
+        DiagnosticLogger.log("auth.transport.base \(TranslationClient.redactedURLString(self.baseURL))")
     }
 
     /// 响应头白名单：只放行 `x-quota-*`（语音网关 402 配额余量，契约 §一），
@@ -217,7 +237,12 @@ final class URLSessionAuthTransport: AuthTransport {
         } catch let error as AuthError {
             throw error
         } catch {
-            throw AuthError.local("network_error", "网络请求失败: \(error.localizedDescription)")
+            // auth-3 ①：保留底层 URLError code 与请求地址（结构化字段），
+            // 登录窗红条据此细分（authNetworkErrorDetailText）；message 仍兜底。
+            var networkError = AuthError.local("network_error", "网络请求失败: \(error.localizedDescription)")
+            networkError.underlyingURLErrorCode = (error as? URLError)?.code.rawValue
+            networkError.requestURL = url
+            throw networkError
         }
     }
 }
@@ -809,13 +834,16 @@ actor AuthTokenManager {
     // 工具
     // ------------------------------------------------------------------
 
-    /// §7-2：device 由原生层填 `{platform:"macos", name: 设备名截 64 字符,
+    /// §7-2：device 由原生层填 `{platform:"mac", name: 设备名截 64 字符,
     /// fallback "Mac"}`，前端/调用方不传（对齐 Windows device_payload）。
+    /// platform 必须取服务端枚举 'windows'|'mac'|'ios'|'android'|'other'
+    /// 之一——发 "macos" 会被 /v1/auth/otp/verify 以 validation_error 拒绝
+    /// （2026-11-05 实测：服务端 details 指明 device.platform 枚举）。
     private func devicePayloadJSON() -> String {
         let raw = deviceName().trimmingCharacters(in: .whitespacesAndNewlines)
         let base = raw.isEmpty ? "Mac" : raw
         let name = String(base.prefix(64))
-        return "{\"platform\":\"macos\",\"name\":\(escapeJSONString(name))}"
+        return "{\"platform\":\"mac\",\"name\":\(escapeJSONString(name))}"
     }
 }
 
@@ -856,6 +884,54 @@ struct AuthErrorTextResult: Equatable {
 /// 未知 / 解析失败等服务端或本地兜底文案。
 private let authErrorFallbackText = "服务响应异常，请稍后再试"
 
+/// network_error 细分（auth-3 fixIdea ①②；细分口径参照 ErrorMessageFormatter
+/// 的 networkMessage，文案按登录场景收敛）。只按结构化底层码分支，绝不匹配
+/// message（§3 纪律不变）。返回 nil → 维持 Windows authErrorText.ts 逐字对齐
+/// 的通用文案「网络连接失败，请检查网络后重试」。
+private func authNetworkErrorDetailText(_ error: AuthError) -> String? {
+    guard let raw = error.underlyingURLErrorCode else { return nil }
+    let urlErrorCode = URLError.Code(rawValue: raw)
+    switch urlErrorCode {
+    case .notConnectedToInternet:
+        return "当前没有网络连接，请联网后重试"
+    case .timedOut:
+        return "连接超时，请检查网络后重试"
+    case .cannotFindHost, .dnsLookupFailed:
+        return "无法解析服务地址，请检查网络或 DNS 后重试"
+    case .cannotConnectToHost:
+        if authRequestIsLoopback(error.requestURL) {
+            // 本机地址 + 连接被拒：大概率不是「网络问题」而是本地联调服务
+            // 没起 / base 被 server_endpoint.json 指到了本机（Seed A 场景）。
+            let endpoint = authEndpointDescription(error.requestURL) ?? "本机接口"
+            return "无法连接本机服务（\(endpoint)）。本地联调服务可能未启动；若不需要本地联调，请检查 ~/Library/Application Support/ImmersiveTranslator/server_endpoint.json 的接口地址配置"
+        }
+        return "无法连接服务，请检查网络、代理或防火墙后重试"
+    case .secureConnectionFailed,
+         .serverCertificateUntrusted,
+         .serverCertificateHasBadDate,
+         .serverCertificateNotYetValid:
+        return "安全连接建立失败，请检查网络代理或系统时间后重试"
+    case .networkConnectionLost:
+        return "网络连接中断，请检查网络后重试"
+    default:
+        return nil
+    }
+}
+
+/// 传输层请求地址是否指向本机（与 TranslationClient/ErrorMessageFormatter 的
+/// loopback 判定同口径）。
+private func authRequestIsLoopback(_ url: URL?) -> Bool {
+    guard let host = url?.host()?.lowercased() else { return false }
+    return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "0.0.0.0"
+}
+
+/// host[:port] 简写（红条内指路用；无 host 返回 nil 由调用方兜底）。
+private func authEndpointDescription(_ url: URL?) -> String? {
+    guard let host = url?.host, !host.isEmpty else { return nil }
+    guard let port = url?.port else { return host }
+    return "\(host):\(port)"
+}
+
 /// §3 映射表：code → 固定文案与呈现（rate_limited 单独插值）。
 private let authErrorTextTable: [String: (text: String, kind: AuthErrorTextKind)] = [
     "otp_invalid": ("验证码错误或已过期，请重新获取", .inline),
@@ -889,6 +965,13 @@ func authErrorText(_ error: AuthError) -> AuthErrorTextResult {
             ? "操作过于频繁，请 \(secs!) 秒后再试"
             : "操作过于频繁，请稍后再试"
         return AuthErrorTextResult(text: text, kind: .inline, code: code)
+    }
+    // auth-3 ①②：network_error 携带底层 URLError code 时按码细分；本地地址
+    // 连接被拒指向「本地联调服务/接口地址配置」而非「检查网络」（Seed A：
+    // server_endpoint.json 指向 127.0.0.1 而本地服务未启动，公网其实正常）。
+    // 无底层码（如既有用例的 .local 构造）维持 Windows 对齐的通用文案。
+    if code == "network_error", let detail = authNetworkErrorDetailText(error) {
+        return AuthErrorTextResult(text: detail, kind: .inline, code: code)
     }
     if let entry = authErrorTextTable[code] {
         return AuthErrorTextResult(text: entry.text, kind: entry.kind, code: code)
@@ -1055,19 +1138,22 @@ final class ServerAuthClient: ObservableObject {
     /// 广播已登录（离线也显示已登录）→ 后台单飞刷新校验存活；fatal 才转
     /// 未登录；网络等瞬时错误保留预填态，不回退 UI（§4.4 ③）。
     /// 对齐 auth_get_status 的 set_account 语义：预填即切命名空间。
+    /// 启动即未登录（无凭据）也广播一次 loggedOut 终态（port-12）：身份屏障
+    /// 消费方（阅读室首次装载前的等待）据此解除等待，guest 不被挂死；订阅方
+    /// 按同空间/同身份早退，多一次广播无副作用。
     func bootstrap() {
         Task { [weak self] in
             guard let self else { return }
-            guard let user = await self.manager.prefillFromStore() else { return }
-            self.learningStore?.setAccount(userId: user.id)
+            guard let user = await self.manager.prefillFromStore() else {
+                self.publish(AuthStatus.loggedOut)
+                return
+            }
             self.publish(AuthStatus(loggedIn: true, user: user, notice: nil))
             do {
                 let stored = try await self.manager.refresh()
-                self.learningStore?.setAccount(userId: stored.user.id)
                 self.publish(AuthStatus(loggedIn: true, user: stored.user, notice: nil))
             } catch let error as AuthError where isFatalAuthCode(error.code) {
-                // 凭据已清；广播失效态（D8 状态条载体）
-                self.learningStore?.setAccount(userId: nil)
+                // 凭据已清；广播失效态（D8 状态条载体；空间切换由 publish 收敛）
                 let snapshot = await self.manager.getStatus()
                 self.publish(AuthStatus(
                     loggedIn: false,
@@ -1089,7 +1175,7 @@ final class ServerAuthClient: ObservableObject {
     @discardableResult
     func verifyOTP(email: String, code: String) async throws -> AuthUser {
         let user = try await manager.verifyOTP(email: email, code: code)
-        afterLoginSuccess(user)
+        await afterLoginSuccess(user)
         return user
     }
 
@@ -1097,16 +1183,16 @@ final class ServerAuthClient: ObservableObject {
     @discardableResult
     func loginPassword(email: String, password: String) async throws -> AuthUser {
         let user = try await manager.loginPassword(email: email, password: password)
-        afterLoginSuccess(user)
+        await afterLoginSuccess(user)
         return user
     }
 
     /// 登出：本地清理成功（走到这里 clear 必已成功，§5.3：失败路径直接抛
-    /// storage_error，不广播登出）→ 切回 guest 命名空间 → 广播未登录。
+    /// storage_error，不广播登出）→ 广播未登录（publish 内随 nil user 切回
+    /// guest 命名空间）。
     @discardableResult
     func logout() async throws -> LogoutOutcome {
         let outcome = try await manager.logout()
-        learningStore?.setAccount(userId: nil)
         publish(.loggedOut)
         return outcome
     }
@@ -1156,23 +1242,62 @@ final class ServerAuthClient: ObservableObject {
     }
 
     // ------------------------------------------------------------------
+    // 沉浸云平台请求的取票出口（浮窗/阅读室共用，PlatformAccountTokenSource）
+    // ------------------------------------------------------------------
 
+    /// 取账号令牌（auth-4）：此前 App 侧 `try?` 吞掉一切错误，被踢（fatal 码）
+    /// 被折叠成「未登录」且不广播，账号区显示与真实凭据状态脱节。现统一在此
+    /// 收尾：致命鉴权码（凭据已被 manager 清除）经 emitFatalIfNeeded 广播失效
+    /// 态（D8 状态条出现、学习空间随 publish 回 guest）；unauthorized（未登录）
+    /// 不是致命码不广播，由调用方按未登录提示。
+    func accountAccessToken() async throws -> String {
+        do {
+            return try await manager.getAccessToken()
+        } catch let error as AuthError {
+            emitFatalIfNeeded(error)
+            throw error
+        }
+    }
+
+    /// 401 token_expired 后的单飞刷新取票（auth-2，红线 4；Windows
+    /// translation.rs refresh_after_401 对应物）。刷新 fatal 时同样广播失效态
+    /// ——凭据已被 manager 清除，与 getAccessToken 路径同收尾。
+    func accountAccessToken(after401 usedToken: String) async throws -> String {
+        do {
+            return try await manager.refreshAfter401(usedToken: usedToken).accessToken
+        } catch let error as AuthError {
+            emitFatalIfNeeded(error)
+            throw error
+        }
+    }
+
+    // ------------------------------------------------------------------
+
+    /// 广播登录态（先切学习空间再发布，Windows publish_auth_state 无条件
+    /// set_account(user 或 None) 再 emit 的对应物，port-2/98ef071）：窗口收到
+    /// 身份变化会立即读学习库，命名空间必须已就位。收敛到此处后覆盖全部广播
+    /// 路径——refreshNow 成功重选空间、emitFatalIfNeeded 的 sync/redeem/refresh
+    /// fatal 与登出/被踢一律回 guest，「不能继续读取原账号数据」。
     private func publish(_ next: AuthStatus) {
+        learningStore?.setAccount(userId: next.user?.id)
         status = next
     }
 
     /// 登录成功命令的公共收尾（auth.rs after_login_success :951-971 逐条）：
     /// ① adopt_guest（guest→账号单向、单事务、音频随迁；失败仅日志，游客数据
-    /// 保留）；② set_account 切命名空间；③ 广播登录态；④ fire-and-forget 拉取
-    /// 并落盘 me/config（D7：失败仅日志，账号区可手动重拉）。
-    private func afterLoginSuccess(_ user: AuthUser) {
+    /// 保留；仍先于 publish——命名空间此刻必须还是 guest 才并得进账号域）；
+    /// ② 广播登录态（publish 内切命名空间，port-2 收敛后的顺序保证）；
+    /// ③ fire-and-forget 拉取并落盘 me/config（D7：失败仅日志，账号区可手动重拉）。
+    private func afterLoginSuccess(_ user: AuthUser) async {
         if let learning = learningStore {
             do {
-                try learning.adoptGuest(userId: user.id)
+                // 并入随库体积线性耗时（migrate + 全实体扫描 + 五次 hydrate），走
+                // LearningStore 后台串行队列执行完再广播（仍先于 publish——命名
+                // 空间此刻必须还是 guest 才并得进账号域）；失败仅日志，游客数据保留。
+                try await learning.adoptGuestOffMain(userId: user.id)
             } catch {
                 DiagnosticLogger.log("learning.guest.adopt.failed（游客数据保留）: \(error)")
             }
-            learning.setAccount(userId: user.id)
         }
         publish(AuthStatus(loggedIn: true, user: user, notice: nil))
         loginSuccessSerial &+= 1
@@ -1197,7 +1322,8 @@ final class ServerAuthClient: ObservableObject {
         }
     }
 
-    /// 致命错误（凭据已清）时广播失效态，账号区状态条据此显示（D8）。
+    /// 致命错误（凭据已清）时广播失效态，账号区状态条据此显示（D8）；学习
+    /// 空间随 publish 切回 guest（port-2：被踢后不能继续读取原账号数据）。
     private func emitFatalIfNeeded(_ error: AuthError) {
         if let notice = noticeForAuthCode(error.code) {
             publish(AuthStatus(loggedIn: false, user: nil, notice: notice))

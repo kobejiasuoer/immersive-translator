@@ -41,7 +41,7 @@ swift run ImmersiveTranslator
 
 ```bash
 ./scripts/build_app.sh
-open dist/ImmersiveTranslator.app
+open dist/沉浸口语.app
 ```
 
 首次打包前建议先按下文“本地开发签名”创建固定的本地 Code Signing 证书，避免反复重新授权辅助功能和屏幕录制。
@@ -49,8 +49,8 @@ open dist/ImmersiveTranslator.app
 安装到应用程序目录：
 
 ```bash
-ditto dist/ImmersiveTranslator.app /Applications/ImmersiveTranslator.app
-open /Applications/ImmersiveTranslator.app
+ditto dist/沉浸口语.app /Applications/沉浸口语.app
+open /Applications/沉浸口语.app
 ```
 
 ## 下载
@@ -198,7 +198,7 @@ gpt-5.4-mini
 - `Sources/ImmersiveTranslator/Onboarding.swift`：首次启动引导。
 - `Sources/ImmersiveTranslator/Permissions.swift`：辅助功能、屏幕录制权限检查和系统设置跳转。
 - `Sources/ImmersiveTranslator/UpdateChecker.swift`：读取 release 更新清单、下载更新包、校验文件大小和 sha256，检查 zip 内 App 元数据与代码签名结构，并准备校验后的临时解包与后台替换安装脚本。
-- `scripts/build_app.sh`：构建 `dist/ImmersiveTranslator.app`。
+- `scripts/build_app.sh`：构建 `dist/沉浸口语.app`。
 - `scripts/package_release.sh`：生成 release zip、sha256 和 `update-manifest.json`。
 
 ## 构建与发布
@@ -341,7 +341,7 @@ NOTARYTOOL_PROFILE="immersive-translator" \
 - `ImmersiveTranslator-<version>-macOS.zip.sha256`
 - `update-manifest.json`
 
-如果要让 App 启动后每日低打扰检查更新、启用菜单里的“检查更新...”，并支持下载后自动校验文件大小、sha256、zip 内 App 元数据和代码签名结构，以及校验通过后的替换安装辅助，需要在构建正式包时设置更新清单地址：
+如果要让 App 启动后每日低打扰检查更新、启用菜单里的“检查更新...”，并支持下载后自动校验文件大小、sha256、zip 内 App 元数据和代码签名结构，以及校验通过后的替换安装辅助，需要在构建正式包时设置更新清单地址。本地 `build_app.sh` 在未显式设置时会自动推导两个默认值：版本号取 git 最近一次 `v*` 发布 tag，更新源取 `origin` 远程对应的 GitHub Release latest manifest（非 GitHub 远程则留空、禁用更新检查）；显式传入的 `APP_VERSION` / `APP_UPDATE_MANIFEST_URL` 环境变量始终优先：
 
 ```bash
 APP_BUNDLE_ID="com.example.ImmersiveTranslator" \
@@ -392,7 +392,7 @@ GitHub Actions 发布需要在仓库配置这些变量和密钥：
 
 开发阶段如果每次重新打包后都需要重新授权辅助功能或屏幕录制，通常是因为 App 使用了 ad-hoc 签名。macOS 会把每次重新打包后的二进制当成新的代码身份。
 
-`./scripts/build_app.sh` 默认会自动查找名为 `ImmersiveTranslator Local Dev` 的固定本地 Code Signing identity。找到后会直接复用；找不到时脚本会停止并给出提示，不再默认退回到 ad-hoc 签名。
+`./scripts/build_app.sh` 默认会优先选用钥匙串里带 Team ID 的签名证书（`Apple Development: ...` 或 `Developer ID Application: ...`）。Team ID 会让钥匙串把「始终允许」的授权记成 `teamid:XXX`，重编译后依然有效，不会反复弹「想要使用密钥串」要求输入密码。没有这类证书时，才回退查找名为 `ImmersiveTranslator Local Dev` 的固定本地 Code Signing identity；两者都没有则停止并给出提示，不默认退回 ad-hoc 签名。自签名证书（无 Team ID）只能按二进制哈希记钥匙串授权，每次重编译都会重新弹框。
 
 可以在“钥匙串访问 -> 证书助理 -> 创建证书...”里创建一个本地自签名证书：
 
@@ -405,7 +405,7 @@ GitHub Actions 发布需要在仓库配置这些变量和密钥：
 ```bash
 security find-identity -v -p codesigning
 ./scripts/build_app.sh
-codesign -dv --verbose=4 dist/ImmersiveTranslator.app 2>&1 | grep -E 'Authority|Signature'
+codesign -dv --verbose=4 dist/沉浸口语.app 2>&1 | grep -E 'Authority|Signature'
 ```
 
 如果你想使用其它稳定证书，可以显式指定：
@@ -422,7 +422,7 @@ ALLOW_ADHOC_CODESIGN=1 ./scripts/build_app.sh
 
 `./scripts/package_release.sh` 在没有传入 `CODESIGN_IDENTITY` 时会显式使用 ad-hoc 签名，保持当前开发 release 的打包路径可用。正式分发需要 Apple Developer ID 证书和 notarytool 公证；传入 `CODESIGN_IDENTITY` 并设置 `NOTARIZE=1` 后，脚本会开启 Hardened Runtime、使用 timestamp 签名、提交 notarytool、公证成功后 staple，并生成 sha256 校验文件。
 
-每次打包结束后，脚本会自动校验 `.app` 结构、可执行文件、Info.plist 里的版本/构建号/Bundle ID/更新源、release zip 非空、`.sha256` 文件可用、`update-manifest.json` 可被 Ruby/Python 解析为合法 JSON，确认 manifest 里的 `version`、`build`、`minimum_system_version`、`download_url` / `release_notes_url`、`size_bytes`、`sha256`、`published_at` 等字段格式可用，并确认 `size_bytes` 与 zip 实际字节数一致、`sha256` 与校验文件一致。随后脚本会临时解开最终 release zip，确认里面正好只有一个 `ImmersiveTranslator.app`，再核对 zip 内 App 的 Info.plist、可执行文件和代码签名结构；如果是 `NOTARIZE=1` 且没有设置 `SKIP_SPCTL_ASSESS=1`，还会对 zip 内 App 再跑一次 Gatekeeper `spctl --assess`，避免构建目录正确但压缩包内容错位，或公证/装订在最终包路径上不可用。App 端检查更新时也会拒绝格式异常的 manifest；下载后会再校验文件大小、sha256，并检查 zip 内 `.app` 的 Bundle ID、版本号、构建号、可执行文件和代码签名结构，避免用户安装不可信、不可比较、下载截断或打包错位的更新包。用户选择替换安装时，App 会在安装准备阶段重新核对已保存 zip 的大小和 sha256，重新解包并复用同一套 App 校验；后台替换复制完成后，还会对落地后的 App 再核对 Info.plist、可执行文件和 `codesign --verify --deep --strict`。
+每次打包结束后，脚本会自动校验 `.app` 结构、可执行文件、Info.plist 里的版本/构建号/Bundle ID/更新源、release zip 非空、`.sha256` 文件可用、`update-manifest.json` 可被 Ruby/Python 解析为合法 JSON，确认 manifest 里的 `version`、`build`、`minimum_system_version`、`download_url` / `release_notes_url`、`size_bytes`、`sha256`、`published_at` 等字段格式可用，并确认 `size_bytes` 与 zip 实际字节数一致、`sha256` 与校验文件一致。随后脚本会临时解开最终 release zip，确认里面正好只有一个 `沉浸口语.app`，再核对 zip 内 App 的 Info.plist、可执行文件和代码签名结构；如果是 `NOTARIZE=1` 且没有设置 `SKIP_SPCTL_ASSESS=1`，还会对 zip 内 App 再跑一次 Gatekeeper `spctl --assess`，避免构建目录正确但压缩包内容错位，或公证/装订在最终包路径上不可用。App 端检查更新时也会拒绝格式异常的 manifest；下载后会再校验文件大小、sha256，并检查 zip 内 `.app` 的 Bundle ID、版本号、构建号、可执行文件和代码签名结构，避免用户安装不可信、不可比较、下载截断或打包错位的更新包。用户选择替换安装时，App 会在安装准备阶段重新核对已保存 zip 的大小和 sha256，重新解包并复用同一套 App 校验；后台替换复制完成后，还会对落地后的 App 再核对 Info.plist、可执行文件和 `codesign --verify --deep --strict`。
 
 `CHECK_ONLY=1 ./scripts/package_release.sh <version>` 可以提前检查发布环境：必要命令、版本号/构建号、Bundle ID、签名身份、notarytool 凭据、更新清单地址、下载地址、发布说明地址和 release zip 指向。预检会提示 Bundle ID 是否像稳定 reverse-DNS、HTTPS manifest 是否混用了 HTTP 下载、`RELEASE_BASE_URL` 是否误填成文件地址、相对下载地址会按哪个 manifest 位置解析，以及最终 `download_url` 是否看起来直连 `.zip`。预检不会构建或删除产物；error 会阻断发布，warning 用来提醒可能影响公开分发体验的配置。
 
@@ -468,7 +468,7 @@ NOTARIZE=1 \
 
 ```bash
 shasum -a 256 -c release/ImmersiveTranslator-0.1.1-macOS.zip.sha256
-spctl --assess --type execute --verbose=4 dist/ImmersiveTranslator.app
+spctl --assess --type execute --verbose=4 dist/沉浸口语.app
 ruby -rjson -e 'JSON.parse(File.read("release/update-manifest.json")); puts "manifest OK"'
 ```
 
