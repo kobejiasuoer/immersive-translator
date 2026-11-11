@@ -9,7 +9,7 @@ import type { EpubBook } from "../../../immersive-translator-windows/src/core/bo
 
 export { formatFileSize, RECOMMENDED_FEEDS };
 export type { DiscoverBook, DiscoverPage, FeedEntryItem };
-export interface BookPreview { catalog: DiscoverBook; book: EpubBook; sourceOrigin: string; bookId: string }
+export interface BookPreview { catalog: DiscoverBook; book: EpubBook; sourceOrigin: string; bookId: string; curatedBookId?: string }
 export interface FeedSubscription { id: string; url: string; title: string; addedAt: number }
 export interface FeedPreview { subscription: FeedSubscription; entries: FeedEntryItem[]; fetchedAt: number }
 export interface EntryPreview { title: string; text: string; sourceUrl: string; feedTitle: string; summaryOnly: boolean }
@@ -88,6 +88,7 @@ export function articlesFromBook(preview: BookPreview, now = Date.now()): Articl
     ...sentenceContent(chapter.text), sourceType: "book", sourceUrl: preview.catalog.sourceUrl,
     bookTitle: preview.book.title, chapterTitle: chapter.title, chapterIndex: index, totalChapters: preview.book.chapters.length,
     author: preview.book.author || preview.catalog.author, cover: preview.book.coverDataUrl, sourceCatalogId: preview.catalog.id, catalogOrigin: preview.sourceOrigin,
+    sourceBookTitle: preview.book.title, sourceCatalogTitle: preview.catalog.title, curatedBookId: preview.curatedBookId,
     licenseName: preview.catalog.licenseName, licenseUrl: preview.catalog.licenseUrl,
     contentRevision: preview.catalog.sha256, createdAt: now, updatedAt: now,
   }));
@@ -99,7 +100,13 @@ export async function importBook(preview: BookPreview): Promise<{ firstArticleId
     const prior = current.articles.filter(article => article.bookId === preview.bookId);
     if (prior.some(article => article.contentRevision !== preview.catalog.sha256)) throw new Error("书架里已有这本书的其他版本，请先保留或移除旧版本后再导入；未混合章节");
     const existing = new Set(current.articles.map(article => article.id)), incoming = articles.filter(article => !existing.has(article.id));
-    added = incoming.length; return { articles: [...incoming, ...current.articles.map(article => article.bookId === preview.bookId ? { ...article, archived: false } : article)] };
+    added = incoming.length;
+    return { articles: [...incoming, ...current.articles.map(article => article.bookId === preview.bookId ? {
+      ...article, archived: false,
+      sourceBookTitle: article.sourceBookTitle || preview.book.title,
+      sourceCatalogTitle: article.sourceCatalogTitle || preview.catalog.title,
+      curatedBookId: article.curatedBookId || preview.curatedBookId,
+    } : article)] };
   });
   ctx.check(); window.dispatchEvent(new Event("mobile-state-change"));
   return { firstArticleId: articles[0].id, added };

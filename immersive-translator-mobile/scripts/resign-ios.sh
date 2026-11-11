@@ -14,6 +14,17 @@ APPLE_DIR="$(cd "$(dirname "$0")/../src-tauri/gen/apple" && pwd)"
 ARCHIVE="$APPLE_DIR/build/imreader-mobile_iOS.xcarchive"
 OUT="$APPLE_DIR/build/resign-$(date +%Y%m%d-%H%M)"
 
+# 防呆:归档里的可执行名必须是 ASCII 的 immersive-speaking。
+# 2026-11-07 实测 build/ 下的旧归档还是中文可执行名「沉浸口语」(11-04 启动闪退版),
+# 直接重签会把闪退包装回手机。归档过期时先跑 npm run tauri ios build 重新生成。
+ARCHIVE_EXE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
+  "$ARCHIVE/Products/Applications/"*.app/Info.plist 2>/dev/null || true)"
+if [ "$ARCHIVE_EXE" != "immersive-speaking" ]; then
+  echo "❌ 归档可执行名是「$ARCHIVE_EXE」,不是 immersive-speaking——这是 11-04 修复前的闪退产物。" >&2
+  echo "   先执行 npm run tauri ios build 生成新归档,再跑本脚本。" >&2
+  exit 1
+fi
+
 # xcodebuild 的 Apple ID 会话经常悄悄失效(报 "exportArchive No Accounts"),
 # 先启动一次 Xcode 让它恢复会话再导出——2026-10-19 实测这一步是关键
 open -a Xcode

@@ -30,7 +30,14 @@ export function widthAt(center: number, anchors: NavAnchor[]): number {
 /** Exact damped-spring solution: stable at 60/120Hz, retaining velocity on retarget. */
 export function springStep(value: number, velocity: number, target: number, elapsed: number, damping = 1, response = .32): [number, number] {
   const omega = 2 * Math.PI / response, offset = value - target, decay = Math.exp(-damping * omega * elapsed);
-  if (damping >= 1) {
+  if (damping > 1.0001) {
+    const root = Math.sqrt(damping * damping - 1);
+    const slow = -omega / (damping + root), fast = -omega * (damping + root);
+    const a = (velocity - fast * offset) / (slow - fast), b = offset - a;
+    const slowPart = a * Math.exp(slow * elapsed), fastPart = b * Math.exp(fast * elapsed);
+    return [target + slowPart + fastPart, slow * slowPart + fast * fastPart];
+  }
+  if (damping >= .9999) {
     const coefficient = velocity + omega * offset;
     return [target + (offset + coefficient * elapsed) * decay, (velocity - omega * coefficient * elapsed) * decay];
   }

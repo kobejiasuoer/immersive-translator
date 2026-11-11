@@ -1,0 +1,65 @@
+/* One expression on an open page. Supporting choices use inset lists, not tiles. */
+.learning-body.speaking-home { padding-top: 8px; }
+.speaking-home button { touch-action: manipulation; }
+.speaking-home button:active { opacity: .64; }
+.speaking-home h2 { font: 650 calc(20px * var(--fs-scale,1))/1.3 var(--font-sans); letter-spacing: -.35px; }
+.sp-home-resume { padding: 0 0 20px; margin: 0 0 24px; border-bottom: 1px solid var(--hairline); }
+.sp-home-resume-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--ink-3); font-size: var(--fs-meta); }
+.sp-home-resume-top button { min-height: 44px; padding: 0 0 0 8px; color: var(--accent); font-size: var(--fs-meta); flex: none; }
+.sp-home-resume-main { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 64px; padding: 0; text-align: left; }
+.sp-home-resume-icon { width: 32px; height: 44px; color: var(--accent); display: grid; place-items: center; flex: none; }
+.sp-home-resume-copy { flex: 1; min-width: 0; }
+.sp-home-resume-copy b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: var(--fs-body); line-height: 1.4; font-weight: 600; overflow-wrap: anywhere; }
+.sp-home-resume-copy small { display: block; color: var(--ink-3); font-size: var(--fs-meta); line-height: 1.5; margin-top: 4px; }
+.sp-home-resume-copy small span { display: block; }
+.sp-home-resume-go { display: flex; align-items: center; gap: 3px; color: var(--accent); font-size: calc(15px * var(--fs-scale,1)); font-weight: 500; flex: none; }
+.sp-expression { padding: 0 0 28px; margin: 0; border: 0; border-bottom: 1px solid var(--hairline); background: transparent; border-radius: 0; }
+.sp-expression-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; }
+.speaking-home .sp-expression-heading h2 { font-size: var(--fs-body); font-weight: 600; letter-spacing: 0; }
+.sp-home-link { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 44px; color: var(--accent); font-size: calc(15px * var(--fs-scale,1)); flex: none; }
+.sp-expression-content { padding: 16px 0 22px; }
+.speaking-home .sp-expression-word { color: var(--ink); font: 500 calc(30px * var(--fs-scale,1))/1.2 var(--font-serif); letter-spacing: -.6px; overflow-wrap: anywhere; }
+.speaking-home .sp-expression-meaning { color: var(--ink-2); font-size: calc(15px * var(--fs-scale,1)); line-height: 1.6; margin-top: 12px; }
+.speaking-home .sp-expression-source { display: flex; align-items: flex-start; gap: 5px; margin-top: 12px; color: var(--ink-3); font-size: var(--fs-meta); line-height: 1.5; }
+.sp-expression-source svg { flex: none; margin-top: 3px; }
+.sp-expression-source span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.sp-expression-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.sp-expression .sp-expression-start { width: auto; margin: 0; min-height: 44px; padding: 10px 15px; font-size: calc(15px * var(--fs-scale,1)); border-radius: 12px; }
+.sp-expression-more { display: flex; align-items: center; justify-content: center; gap: 4px; min-height: 44px; color: var(--accent); font-size: calc(15px * var(--fs-scale,1)); }
+.sp-expression-empty p { padding: 20px 0; font-size: var(--fs-body); line-height: 1.6; color: var(--ink-2); }
+.sp-expression-empty .btn { width: auto; font-size: calc(15px * var(--fs-scale,1)); }
+.sp-home-section { margin-top: 28px; }
+.sp-home-section-head { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.sp-home-section-head > span { color: var(--ink-3); font-size: var(--fs-meta); }
+.sp-scene-list,.sp-personal-list,.sp-history-list,.sp-custom-scenes { background: var(--surface); border-radius: 12px; padding-inline: 16px; }
+.sp-scene { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 82px; padding: 15px 0; text-align: left; }
+.sp-scene + .sp-scene { border-top: 1px solid var(--hairline); }
+.sp-scene-copy { flex: 1; min-width: 0; }
+.sp-scene-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.sp-scene-title b { font-size: var(--fs-body); font-weight: 500; }
+.sp-scene-title small { color: var(--ink-3); font-size: var(--fs-meta); }
+.sp-scene-description { display: block; margin-top: 4px; font-size: var(--fs-meta); line-height: 1.5; color: var(--ink-3); overflow-wrap: anywhere; }
+.sp-scene-foot { flex: none; font-size: var(--fs-meta); color: var(--ink-3); }
+.sp-scene > svg { flex: none; color: var(--ink-3); }
+.sp-custom-scenes { margin-top: 12px; }
+.sp-home-row { width: 100%; display: flex; gap: 10px; align-items: center; text-align: left; padding: 15px 0; border-bottom: 1px solid var(--hairline); min-height: 76px; }
+.sp-home-row:last-child { border-bottom: 0; }
+.sp-home-row-icon { display: grid; place-items: center; width: 28px; min-height: 40px; flex: none; color: var(--accent); }
+.sp-home-row-copy { display: block; flex: 1; min-width: 0; }
+.sp-home-row-copy b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: var(--fs-body); font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
+.sp-home-row-copy small { display: block; font-size: var(--fs-meta); line-height: 1.5; color: var(--ink-3); margin-top: 4px; overflow-wrap: anywhere; }
+.sp-home-row-meta { flex: none; color: var(--ink-3); font-size: var(--fs-meta); }
+.sp-home-row > svg { flex: none; color: var(--ink-3); }
+.sp-follow { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 76px; text-align: left; padding: 15px 0; }
+.sp-follow > svg { flex: none; color: var(--ink-3); }
+.speaking-home .sp-home-empty { color: var(--ink-3); line-height: 1.7; font-size: calc(15px * var(--fs-scale,1)); padding: 8px 0 12px; }
+.speaking-home .sp-home-storage { color: var(--ink-3); line-height: 1.6; font-size: var(--fs-meta); margin: 24px 0 0; }
+.speaking-home.sp-history-page { padding-top: 16px; }
+@media (min-width: 700px) {
+  .sp-expression-content { max-width: 50ch; }
+}
+@media (max-width: 350px) {
+  .sp-home-row-meta { max-width: 4em; text-align: right; }
+  .sp-scene-list,.sp-personal-list,.sp-history-list,.sp-custom-scenes { padding-inline: 12px; }
+  .sp-home-section-head > span { width: 100%; }
+}

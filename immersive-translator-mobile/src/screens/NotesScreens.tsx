@@ -14,6 +14,7 @@ import { useNav } from "../ui/nav";
 import { buildCard } from "../core/queue";
 import { chatStream, llmConfigured, type ChatStream } from "../services/translate";
 import type { Article, VocabWord } from "../core/types";
+import { vocabMeaning } from "../core/vocabMeaning";
 
 interface NoteDraft {
   overline: string;
@@ -159,10 +160,10 @@ export function NotesGen() {
       .filter((v) => v.dueAt > nowMs && v.dueAt <= nowMs + 2 * 86400_000)
       .sort((a, b) => a.dueAt - b.dueAt)
       .slice(0, 5)
-      .map((v) => `${v.word}（${v.senses[0]?.cn || "待补释义"}）`);
+      .map((v) => `${v.word}（${vocabMeaning(v)}）`);
     const recent = (vocab as VocabWord[])
       .slice(0, 5)
-      .map((v) => `${v.word}（${v.senses[0]?.cn || "待补释义"}）`);
+      .map((v) => `${v.word}（${vocabMeaning(v)}）`);
     const facts: NotesFacts = {
       date: draft.overline.split(" · ")[0],
       cleared: st.cleared,
@@ -235,7 +236,7 @@ export function NotesGen() {
     return (
       <>
         <PNav title="复习笔记" onBack={() => nav.pop()} />
-        <div className="pbody" />
+        <div className="pbody notes-workspace" />
       </>
     );
   }
@@ -243,11 +244,9 @@ export function NotesGen() {
   return (
     <>
       <PNav title="复习笔记" onBack={() => nav.pop()} />
-      <div className="pbody">
+      <div className="pbody notes-workspace">
         <div className="overline">{draft.overline}</div>
-        <div className="serif" style={{ fontSize: 22, fontWeight: 600, marginTop: 6 }}>
-          今日复习笔记
-        </div>
+        <h1 className="notes-title">今日复习笔记</h1>
         {source && (
           <div className="meta" style={{ marginTop: 6 }}>
             {source}
@@ -280,7 +279,7 @@ export function NotesGen() {
           )
         )}
         <div className="meta" style={{ marginTop: 12 }}>
-          笔记只汇总今天的复习，不改 SRS 排程。
+          记录今天的收获，复习计划保持不变。
         </div>
       </div>
     </>
@@ -293,7 +292,7 @@ export function NotesLib() {
   return (
     <>
       <PNav title="笔记库" onBack={() => nav.pop()} />
-      <div className="pbody">
+      <div className="pbody notes-workspace">
         {notes.length === 0 && (
           <>
             <div className="meta" style={{ textAlign: "center", padding: "60px 0" }}>
@@ -306,22 +305,22 @@ export function NotesLib() {
         )}
         {notes.map((n) => (
           <SwipeRow key={n.id} onDelete={() => actions.deleteNote(n.id)}>
-            <div
+            <button
               className="row"
-              style={{ borderBottom: 0, padding: "10px 0" }}
+              style={{ borderBottom: 0 }}
               onClick={() => nav.push("notedetail", { id: n.id })}
             >
               <span className="ico" style={{ color: "var(--ink)" }}>
                 <Icon name="note" size={19} />
               </span>
               <span className="grow" style={{ minWidth: 0 }}>
-                <span style={{ display: "block", fontSize: 16, fontWeight: 600 }}>{n.title}</span>
+                <span className="note-row-title">{n.title}</span>
                 <span className="sub" style={{ display: "block" }}>
                   {n.sub}
                 </span>
               </span>
               <Icon name="right" size={15} />
-            </div>
+            </button>
           </SwipeRow>
         ))}
       </div>
@@ -340,7 +339,7 @@ export function NoteDetail({ id }: { id?: string }) {
   return (
     <>
       <PNav title={title} onBack={() => nav.pop()} />
-      <div className="pbody">
+      <div className="pbody notes-workspace">
         <div className="note-stream note-body">
           {body.split(/\n+/).map((p, i) => (
             <p key={i}>{p}</p>

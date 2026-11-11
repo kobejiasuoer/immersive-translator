@@ -1,292 +1,130 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { GlassSwitch } from "../ui/GlassSwitch";
+import { useEffect, useMemo, useState } from "react";
 import { useLocalDraft } from "../core/useLocalDraft";
+import { vocabMeaning, vocabSearchText } from "../core/vocabMeaning";
 import { ContentsSheet } from "../components/reading/ContentsSheet";
 import { ReadingDrawer } from "../components/reading/Drawer";
-import { chapterIndexOf, coverOf, coverTone, shelfItems, sourceOf, type ShelfItem } from "../core/readingLibrary";
+import { chapterIndexOf, coverOf, coverTone, shelfItems, shelfVisibleChapters, sourceOf, type ShelfItem } from "../core/readingLibrary";
 import { minutesOf, levelLabelOf, timeLabelOf } from "../components/reading/meta";
-import { BUILTIN_SCENES, customSceneTaskInput, practiceStepTitle } from "../components/speaking/scenes";
-import { CustomSceneSheet } from "../components/speaking/CustomSceneSheet";
-import { ReplacePracticeSheet } from "../components/speaking/ReplacePracticeSheet";
-import { VoiceSettingsSheet } from "../components/speaking/VoiceSettingsSheet";
 import { VaultBody, WordbookBody } from "../components/vault/VaultBody";
 import { requestVaultSection, type VaultSection } from "../components/vault/sectionGate";
 import { ExportPanel } from "../components/vault/ExportPanel";
 import { WordDetailPage, WordDetailSheet } from "../components/vault/WordDetailSheet";
 import { AddLearningNoteSheet } from "../components/vault/AddLearningNoteSheet";
-import { actions, activeRepository, effectiveSentenceZh, flushPersist, readTodayCount, reviewStats, toast, useApp } from "../store";
-import { createPracticeTask, type PracticeTask } from "../services/practice";
-import { useCloud } from "../services/cloud";
-import { useSyncStatus } from "../services/sync";
+import { actions, activeRepository, effectiveSentenceZh, flushPersist, toast, useApp } from "../store";
+export { openPractice } from "../services/openPractice";
 import { useNav } from "../ui/nav";
 import { Icon } from "../ui/icons";
-import { openAccountSheet } from "../components/account/accountGate";
 import type { Article } from "../core/types";
-export async function openPractice(nav: ReturnType<typeof useNav>, input: Parameters<typeof createPracticeTask>[0], options: { replace?: boolean } = {}) {
-  const target = activeRepository();
-  try {
-    const task = createPracticeTask(input);
-    await actions.upsertTask(task);
-    if (target !== activeRepository()) throw new Error("账号已切换，练习保存在原账号。");
-    /* replace：复盘页「同一主题，再练一轮」顶替当前练习页，不叠栈（speaking-parity）。 */
-    if (options.replace) nav.replace("learningPractice", { taskId: task.id });
-    else nav.push("learningPractice", { taskId: task.id });
-  } catch (error) { toast(error instanceof Error ? error.message : String(error)); }
-}
-/* 根页页头（proto-parity · 原型 rhead）：左上 monogram 圆章（右下状态点 + 账号副标，
-   点按开账号页）+ 大标题 + 右上圆形按钮组（extra 由各根页传入，原型口径：阅读=生词本/搜索、
-   口语=语音设置、笔记与复习=导出）。状态点：绿=已同步 / 黄=本机·待同步 / 转圈=同步中。 */
-function Heading({ title, extra }: { title: string; extra?: ReactNode }) {
-  const {account}=useCloud(); const sync=useSyncStatus();
-  const stalled=!account||sync.phase==="offline"||sync.phase==="error";
-  const dot=!account?"off":sync.phase==="syncing"?"ing":stalled?"off":"";
-  const label=!account?"本机试用":stalled?"待同步":"账号与设置";
-  const letter=account?(account.nickname||account.email||"I").trim().slice(0,1).toUpperCase():"I";
-  return <header className="rhead">
-    {/* proto-parity-2026-11-01：账号入口改呼出底部抽屉（原型 SHEETS.account），不再推入整页 */}
-    <button className="account-entry" aria-label="账号与设置" onClick={openAccountSheet}>
-      <span className="seal">{letter}<i className={dot||undefined}/></span>
-      <small>{label}</small>
-    </button>
-    <h1 className="rtitle">{title}</h1>
-    <div className="rhead-acts">{extra}</div>
-  </header>;
-}
+import "./libraryExperience.css";
+import { Heading } from "../ui/LearningHeading";
 function readingStarted(article: Article, progress: Record<string, number>) {
   return progress[article.id] !== undefined && (!!article.lastReadAt || progress[article.id] > 0);
 }
 function readingState(item: ShelfItem, progress: Record<string, number>, completed: Record<string, boolean>) {
-  if (item.chapters.every(a => completed[a.id])) return "已读完";
-  if (!item.chapters.some(a => readingStarted(a, progress))) return "未开始";
+  const chapters = shelfVisibleChapters(item);
+  if (chapters.every(a => completed[a.id])) return "已读完";
+  if (!chapters.some(a => readingStarted(a, progress))) return "未开始";
   const p = Math.min(progress[item.article.id] ?? 0, Math.max(0, item.article.sentences.length - 1));
   return `${item.kind === "book" ? `第 ${chapterIndexOf(item.article) + 1} 章 · ` : ""}第 ${p + 1} / ${item.article.sentences.length} 句`;
+}
+function LibraryHeading() {
+  const nav = useNav();
+  return <Heading title="阅读" extra={<button className="ibtn" aria-label="导入阅读内容" onClick={() => nav.push("learningImport")}><Icon name="plus" size={23}/></button>}/>;
 }
 function ShelfCover({ item }: { item: ShelfItem }) {
   const cover = coverOf(item.article);
   const [broken, setBroken] = useState("");
-  return <span className="reading-item-cover serif" data-tone={coverTone(item.id)} aria-hidden="true">
-    {cover && broken !== cover ? <img className="reading-cover-image" src={cover} alt="" loading="lazy" onError={() => setBroken(cover)}/> : <><Icon name={item.kind === "book" ? "book" : "note"} size={18}/><span>{item.title.split(/\s+/).slice(0, 4).join(" ")}</span></>}
+  return <span className="library-cover" data-kind={item.kind} data-tone={coverTone(item.id)} aria-hidden="true">
+    {cover && broken !== cover ? <img src={cover} alt="" loading="lazy" onError={() => setBroken(cover)}/> : <><Icon name={item.kind === "book" ? "bookopen" : "note"} size={14}/><span>{item.title.split(/\s+/).slice(0, 5).join(" ")}</span></>}
   </span>;
 }
-function ShelfCard({ item, onToc, onManage, version }: { item: ShelfItem; onToc?: () => void; onManage: () => void; version?: string }) {
+function ShelfCard({ item, onToc, onManage, version, resume = false }: { item: ShelfItem; onToc?: () => void; onManage: () => void; version?: string; resume?: boolean }) {
   const nav = useNav(), progress = useApp(s => s.progress), completed = useApp(s => s.readingCompleted);
   const archived = item.chapters.every(a => a.archived);
   const state = archived ? "已移出 · 进度已保留" : readingState(item, progress, completed);
-  return <article className={`learning-card reading-shelf-item ${item.kind === "book" ? "v2-shelf-book" : "article-card"}`} aria-label={item.title}>
-    <div className="reading-item-row">
-    <button className="reading-item-main" onClick={() => { if (archived) { item.kind === "book" ? actions.restoreBook(item.id) : actions.restoreArticle(item.id); } nav.push("reader", {articleId: item.article.id}); }}>
+  const author = typeof item.article.author === "string" ? item.article.author.trim() : "";
+  const kindLabel = item.kind === "book" ? "书籍" : item.article.sourceType === "sample" ? "精选短文" : item.article.sourceType === "rss" ? "订阅文章" : "文章";
+  const credit = author || sourceOf(item.article);
+  const showCredit = credit !== kindLabel && !(item.kind === "book" && credit === "电子书");
+  const position = Math.min(Math.max(0, progress[item.article.id] ?? 0), Math.max(0, item.article.sentences.length - 1));
+  const percent = completed[item.article.id] ? 100 : Math.round(position / Math.max(1, item.article.sentences.length) * 100);
+  return <article className={`reading-shelf-item library-item${resume ? " library-resume" : ""}`} data-kind={item.kind} aria-label={item.title}>
+    <button className="library-item-main" aria-label={resume ? `${completed[item.article.id] ? "再读" : "继续阅读"} ${item.title}` : undefined} onClick={() => { if (archived) { item.kind === "book" ? actions.restoreBook(item.id) : actions.restoreArticle(item.id); } nav.push("reader", {articleId: item.article.id}); }}>
       <ShelfCover item={item}/>
-      <span className="reading-item-copy">
-        <b className="serif">{item.title}</b>
-        <small className="reading-item-meta">{[typeof item.article.author === "string" ? item.article.author : "", sourceOf(item.article)].filter(Boolean).join(" · ")}{version ? ` · ${version}` : ""}</small>
-        <small className="reading-item-meta">{item.kind === "book" ? `${item.chapters.length} 章` : `${item.article.sentences.length} 句 · 约 ${minutesOf(item.article)} 分钟`} · {levelLabelOf(item.article)}</small>
-        <span className="reading-item-state">{state}</span>
+      <span className="library-item-copy">
+        {resume && <span className="library-resume-label">继续阅读</span>}
+        <b>{item.title}</b>
+        <span className="library-item-byline"><span>{kindLabel}</span>{showCredit && <span>{credit}</span>}</span>
+        <span className="library-item-info"><span>{item.kind === "book" ? `${shelfVisibleChapters(item).length} 章` : `约 ${minutesOf(item.article)} 分钟`}</span><span className="library-item-state">{state}</span></span>
+        {resume && <span className="library-resume-bottom"><span className="library-progress" aria-hidden="true"><i style={{ width: `${percent}%` }}/></span><span>{completed[item.article.id] ? "再读一遍" : "接着读"}<Icon name="right" size={13}/></span></span>}
+        {version && <span className="library-item-version">{version}</span>}
       </span>
     </button>
-    <div className="reading-item-actions">
-      {onToc && <button className="tlink" aria-label={`${item.title}的目录`} title="目录" onClick={onToc}><Icon name="list" size={18}/></button>}
-      <button className="tlink" aria-label={`整理 ${item.title}`} title="整理" onClick={onManage}><Icon name="dots" size={19}/></button>
-    </div>
+    <div className="library-item-actions">
+      {onToc && <button aria-label={`${item.title}的目录`} title="目录" onClick={onToc}><Icon name="list" size={18}/></button>}
+      <button aria-label={`整理 ${item.title}`} title="整理" onClick={onManage}><Icon name="dots" size={19}/></button>
     </div>
   </article>;
 }
-function ArticleCard({ item, onManage, version }: { item: ShelfItem; onManage: () => void; version?: string }) {
-  return <ShelfCard item={item} onManage={onManage} version={version}/>;
-}
-function BookCard({ item, onToc, onManage, version }: { item: ShelfItem; onToc: () => void; onManage: () => void; version?: string }) {
-  return <ShelfCard item={item} onToc={onToc} onManage={onManage} version={version}/>;
-}
 export function ReadingHome() {
   const nav = useNav(), allArticles = useApp(s => s.articles), progress = useApp(s => s.progress), completed = useApp(s => s.readingCompleted);
-  const stats = useApp(reviewStats), readToday = useApp(readTodayCount), vocabCount = useApp(s => s.vocab.length);
-  const {account} = useCloud();
   const [toc, setToc] = useState<ShelfItem | null>(null), [manage, setManage] = useState<ShelfItem | null>(null), [name, setName] = useState("");
   const [type, setType] = useState<"all" | "book" | "article">("all"), [status, setStatus] = useState<"all" | "unread" | "reading" | "done" | "archived">("all");
+  const [online, setOnline] = useState(() => navigator.onLine);
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine);
+    window.addEventListener("online", update); window.addEventListener("offline", update);
+    return () => { window.removeEventListener("online", update); window.removeEventListener("offline", update); };
+  }, []);
   const items = useMemo(() => shelfItems(allArticles.filter(a => a.bookId || (a.sourceType !== "sample" || a.id !== "starter") || readingStarted(a, progress) || a.archived)), [allArticles, progress]);
   const visible = items.filter(item => {
-    const archived = item.chapters.every(a => a.archived), done = item.chapters.every(a => completed[a.id]), started = item.chapters.some(a => readingStarted(a, progress));
+    const chapters = shelfVisibleChapters(item);
+    const archived = item.chapters.every(a => a.archived), done = chapters.every(a => completed[a.id]), started = chapters.some(a => readingStarted(a, progress));
     return (type === "all" || item.kind === type) && (status === "archived" ? archived : !archived && (status === "all" || status === "done" && done || status === "unread" && !started && !done || status === "reading" && started && !done));
   });
   const recent = allArticles.filter(a => !a.archived && readingStarted(a, progress)).sort((a, b) => (b.lastReadAt || 0) - (a.lastReadAt || 0));
   const current = recent[0];
-  const openCurrent = () => { const target = current || visible[0]?.article || allArticles.find(a => !a.archived); if (target) nav.push("reader", {articleId: target.id}); };
+  const currentItem = visible.find(item => item.chapters.some(a => a.id === current?.id));
+  const ordered = currentItem ? [currentItem, ...visible.filter(item => item.id !== currentItem.id)] : visible;
+  const starter = allArticles.find(a => !a.archived && a.id === "starter") || allArticles.find(a => !a.archived);
+  const omittedChapters = manage?.kind === "book" && manage.chapters.some(a => !a.archived) ? manage.chapters.filter(a => a.archived).length : 0;
   const openVault = (section: VaultSection) => { requestVaultSection(section); actions.setTab("vocab"); };
   const openManage = (item: ShelfItem) => { setManage(item); setName(item.title); };
   const saveName = () => { if (!manage) return; try { manage.kind === "book" ? actions.renameBook(manage.id, name) : actions.renameArticle(manage.id, name); setManage(null); toast("名称已保存"); } catch (error) { toast(error instanceof Error ? error.message : String(error)); } };
   return <>
-    <Heading title="书架" extra={<><button className="ibtn" aria-label="打开生词本" onClick={() => openVault("words")}><Icon name="star"/></button><button className="ibtn" aria-label="搜索学习内容" onClick={() => nav.push("learningSearch")}><Icon name="search"/></button></>}/>
-    <main className="learning-body reading-shelf-body">
-      {!navigator.onLine && <div className="v2-offline-banner" role="status"><Icon name="phone" size={15}/>离线 · 已保存的内容可以继续读</div>}
-      {current ? <article className="learning-card reading-resume">
-        <div className="reading-resume-meta"><Icon name="bookopen" size={15}/><span>上次读到这里{current.lastReadAt ? ` · ${timeLabelOf(current.lastReadAt)}` : ""}</span></div>
-        <h2 className="reading-resume-title serif">{String(current.bookTitle || current.title)}</h2>
-        <p className="reading-resume-quote serif" lang="en">{current.sentences[progress[current.id] ?? 0]?.en}</p>
-        <div className="reading-resume-progress"><span>{completed[current.id] ? "已读完" : `${current.bookId ? `第 ${chapterIndexOf(current) + 1} 章 · ` : ""}第 ${(progress[current.id] ?? 0) + 1} / ${current.sentences.length} 句`}</span><span>{completed[current.id] ? "100%" : `${Math.min(99, Math.round((progress[current.id] ?? 0) / Math.max(1, current.sentences.length) * 100))}%`}</span></div>
-        <div className="reading-resume-actions"><button className="btn" onClick={openCurrent}>{completed[current.id] ? "再读这篇" : "继续阅读"}<Icon name="right" size={15}/></button>{current.bookId && <button className="btn-ghost" onClick={() => setToc(items.find(item => item.id === current.bookId) || null)}>目录</button>}</div>
-      </article> : <section className="learning-card reading-resume starter-card">
-        <span className="learning-tag">从一篇短文开始</span><h2>读一小段，学一个表达。</h2><p>点词查释义，点句查看解析；想练口语时再跟读。</p>
-        <button className="btn" onClick={() => { const starter = allArticles.find(a => !a.archived && a.id === "starter") || allArticles.find(a => !a.archived); if (starter) nav.push("reader", {articleId: starter.id}); }}>开始阅读<Icon name="right" size={15}/></button>
-      </section>}
-      {!account && (vocabCount > 0 || readToday > 0) && <div className="v2-local-save"><span><Icon name="lock" size={13}/>记录已保存在这台手机</span><button onClick={openAccountSheet}>登录保存</button></div>}
-      <div className="v2-today-row"><button onClick={openCurrent}><span><Icon name="book"/></span><b className="num">{readToday} 句</b><small>今日已读</small></button><button onClick={() => openVault("today")}><span><Icon name="mark"/></span><b className="num">{stats.due} 个</b><small>{stats.due ? "现在可复习" : "查看复习安排"}</small></button></div>
-      <div className="v2-sec-h"><b>我的内容</b><button className="tlink" onClick={() => nav.push("learningImport")}><Icon name="plus" size={15}/>导入</button></div>
+    <div className="library-experience">
+    <LibraryHeading/>
+    <main className="learning-body reading-shelf-body library-body">
+      <div className="library-heading-tools">
+        <button className="library-search" aria-label="搜索学习内容" onClick={() => nav.push("learningSearch")}><Icon name="search" size={18}/><span>搜索书名、文章或表达</span></button>
+      </div>
+      {!online && <div className="library-offline" role="status"><Icon name="phone" size={15}/>离线时也能阅读已保存的内容</div>}
+      <section className="library-discovery" aria-label="发现阅读内容">
+        <button onClick={() => nav.push("learningLibrary")}><span className="library-discovery-icon"><Icon name="bookopen" size={23}/></span><span><b>经典书库</b><small>找一本慢慢读</small></span><Icon name="right" size={14}/></button>
+        <button onClick={() => nav.push("learningFeeds")}><span className="library-discovery-icon"><Icon name="rss" size={21}/></span><span><b>短文与订阅</b><small>发现感兴趣的话题</small></span><Icon name="right" size={14}/></button>
+      </section>
+      <div className="library-section-heading"><div><h2>我的内容</h2>{items.length > 0 && <span className="reading-shelf-summary" role="status">{visible.length} 项</span>}</div><button className="library-wordbook" aria-label="打开生词本" onClick={() => openVault("words")}><Icon name="mark" size={16}/>生词本</button></div>
       {items.length > 0 && <div className="reading-shelf-toolbar">
-        <div className="reading-shelf-filters" aria-label="内容类型">{([["all", "全部"], ["book", "书籍"], ["article", "短文"]] as const).map(([id, label]) => <button key={id} className={`learning-chip${type === id ? " on" : ""}`} aria-pressed={type === id} onClick={() => setType(id)}>{label}</button>)}</div>
+        <GlassSwitch className="reading-shelf-filters" role="group" ariaLabel="内容类型" value={type} items={([ ["all", "全部"], ["book", "书籍"], ["article", "文章"] ] as const).map(([value,label]) => ({value,label}))} onChange={setType} />
         <select aria-label="筛选阅读状态" value={status} onChange={event => setStatus(event.target.value as typeof status)}>
           <option value="all">全部状态</option><option value="unread">未读</option><option value="reading">在读</option><option value="done">已读完</option><option value="archived">已移出</option>
         </select>
       </div>}
-      <div className="reading-shelf-summary">{visible.length ? `${visible.length} 项 · 最近阅读或导入的排在前面` : items.length ? "这个筛选下没有内容" : "书架还是空的，导入文章或选一本书开始。"}</div>
-      {visible.map(item => { const duplicates = items.filter(other => other.title === item.title).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)); const version = duplicates.length > 1 ? `${item.createdAt ? `导入 ${timeLabelOf(item.createdAt)} · ` : ""}版本 ${duplicates.indexOf(item) + 1}` : undefined; return item.kind === "book" ? <BookCard key={item.id} item={item} version={version} onToc={() => setToc(item)} onManage={() => openManage(item)}/> : <ArticleCard key={item.id} item={item} version={version} onManage={() => openManage(item)}/>; })}
-      <div className="v2-sec-h"><b>找下一篇想读的</b></div>
-      <section className="learning-card v2-discovery-list">{([["book", "精选经典", "先试读，再加入书架", () => nav.push("learningLibrary")], ["rss", "英文短文与资讯", "精选练习短文，也可订阅真实 RSS", () => nav.push("learningFeeds")], ["plus", "导入自己的内容", "粘贴正文或分享链接", () => nav.push("learningImport")]] as [string, string, string, () => void][]).map(([icon, title, subtitle, go]) => <button className="learning-row" key={title} onClick={go}><span style={{display:"flex", alignItems:"center", gap:12, minWidth:0}}><Icon name={icon} size={18}/><span className="tx"><b style={{display:"block"}}>{title}</b><small>{subtitle}</small></span></span><Icon name="right" size={15}/></button>)}</section>
+      {!items.length && <section className="library-empty starter-card"><span className="library-empty-label"><Icon name="bookopen" size={18}/>从一篇短文开始</span><h3>{starter?.title || "留一点时间，读点英文"}</h3>{starter?.sentences[0] && <blockquote lang="en">{starter.sentences[0].en}</blockquote>}<p>读到有用的表达，收藏下来，再试着说一句。</p>{starter ? <button className="library-start" onClick={() => nav.push("reader", {articleId: starter.id})}>开始阅读<Icon name="right" size={15}/></button> : <button className="library-start" onClick={() => nav.push("learningImport")}>导入一篇文章<Icon name="plus" size={15}/></button>}</section>}
+      {items.length > 0 && !visible.length && <section className="library-filter-empty"><Icon name="shelf" size={24}/><h3>暂时没有{status === "archived" ? "移出的" : status === "done" ? "读完的" : status === "reading" ? "正在读的" : status === "unread" ? "未读的" : "这类"}内容</h3><p>换个筛选，或导入一篇想读的文章。</p><button className="library-start" onClick={() => { setType("all"); setStatus("all"); }}>查看全部内容</button></section>}
+      <div className="library-list">
+      {ordered.map(item => { const duplicates = items.filter(other => other.title === item.title).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)); const version = duplicates.length > 1 ? `${item.createdAt ? `导入 ${timeLabelOf(item.createdAt)} · ` : ""}版本 ${duplicates.indexOf(item) + 1}` : undefined; return <ShelfCard key={item.id} item={item} version={version} resume={item === currentItem} onToc={item.kind === "book" ? () => setToc(item) : undefined} onManage={() => openManage(item)}/>; })}
+      </div>
     </main>
-    <ContentsSheet open={!!toc} onClose={() => setToc(null)} title={toc ? `${toc.title} · 目录` : ""} articles={toc?.chapters || []} onPick={a => { setToc(null); if(a.archived) a.bookId ? actions.restoreBook(a.bookId) : actions.restoreArticle(a.id); nav.push("reader", {articleId:a.id}); }}/>
+    </div>
+    <ContentsSheet open={!!toc} onClose={() => setToc(null)} title={toc ? `${toc.title} · 目录` : ""} articles={toc ? shelfVisibleChapters(toc) : []} onPick={a => { setToc(null); if(a.archived) a.bookId ? actions.restoreBook(a.bookId) : actions.restoreArticle(a.id); nav.push("reader", {articleId:a.id}); }}/>
     <ReadingDrawer open={!!manage} onClose={() => setManage(null)} label="整理阅读内容">
-      {manage && <div className="reading-manage-sheet"><div className="sheet-title plain">整理内容</div><label htmlFor="reading-item-name">名称</label><input id="reading-item-name" className="input" value={name} maxLength={160} onChange={e => setName(e.target.value)}/><button className="btn" onClick={saveName}>保存名称</button>{manage.kind === "article" && manage.article.sourceUrl && <button className="btn-ghost" onClick={() => { actions.setShareIn({text:manage.article.sourceUrl!,source:"shelf-refresh"}); setManage(null); nav.push("learningImport"); }}>重新提取原网页</button>}<p className="meta">移出后，阅读位置、收藏和笔记都会保留。可从「已移出」重新加入。</p><button className="btn-ghost" onClick={() => { const archived = manage.chapters.every(a => a.archived); if (manage.kind === "book") archived ? actions.restoreBook(manage.id) : actions.archiveBook(manage.id); else archived ? actions.restoreArticle(manage.id) : actions.archiveArticle(manage.id); setManage(null); }}>{manage.chapters.every(a => a.archived) ? "重新加入书架" : "移出书架"}</button></div>}
+      {manage && <div className="reading-manage-sheet"><div className="sheet-title plain">整理内容</div><label htmlFor="reading-item-name">名称</label><input id="reading-item-name" className="input" value={name} maxLength={160} onChange={e => setName(e.target.value)}/><button className="btn" onClick={saveName}>保存名称</button>{manage.kind === "article" && manage.article.sourceUrl && <button className="btn-ghost" onClick={() => { actions.setShareIn({text:manage.article.sourceUrl!,source:"shelf-refresh"}); setManage(null); nav.push("learningImport"); }}>重新提取原网页</button>}{omittedChapters > 0 && <button className="btn-ghost" onClick={() => { actions.restoreBook(manage.id); setManage(null); }}>恢复已移出的 {omittedChapters} 章</button>}<p className="meta">移出后，阅读位置、收藏和笔记都会保留。可从「已移出」重新加入。</p><button className="btn-ghost" onClick={() => { const archived = manage.chapters.every(a => a.archived); if (manage.kind === "book") archived ? actions.restoreBook(manage.id) : actions.archiveBook(manage.id); else archived ? actions.restoreArticle(manage.id) : actions.archiveArticle(manage.id); setManage(null); }}>{manage.chapters.every(a => a.archived) ? "重新加入书架" : "移出书架"}</button></div>}
     </ReadingDrawer>
   </>;
 }
-/* ---------- 口语首页（speaking-parity · 原型 VIEWS.speak，html:2611-2623） ----------
-   续练卡（v2-sp-resume：accent-soft）+ 开始卡（v2-sp-start：一个表达一句就好）+
-   四内置场景（级别 .lv 描边 chip）/我的场景/创建场景 + 跟读正在读的内容 +
-   最近练习（3 条，「查看全部」整页：原型 VIEWS.sessionHistory）+ 页头「语音与口音」抽屉。 */
-export function SpeakingHome() {
-  const nav=useNav();
-  const tasks=useApp(s=>s.tasks);
-  const words=useApp(s=>s.vocab);
-  const customScenes=useApp(s=>s.customScenes);
-  const articles=useApp(s=>s.articles);
-  const progress=useApp(s=>s.progress);
-  const [pending,setPending]=useState<Parameters<typeof createPracticeTask>[0]|null>(null);
-  const [sceneSheet,setSceneSheet]=useState(false);
-  const [voiceSheet,setVoiceSheet]=useState(false);
-  const [historyOpen,setHistoryOpen]=useState(false);
-  const sorted=[...tasks].sort((a,b)=>b.updatedAt-a.updatedAt);
-  const unfinished=sorted.find(t=>t.status!=="completed");
-  const unfinishedAnswered=new Set((unfinished?.attempts??[]).filter(a=>a.feedback).map(a=>a.step)).size;
-  const recent=sorted.slice(0,3);
-  const readyWords=words.filter(w=>!w.paused).slice(0,3);
-  /* 词专项任务：任务句用原型英文口径（html:2335 Try one short sentence using "…"），
-     标题用「用 X 说一句」（最近练习/续练卡可读，原型 html:1693 seed 同款）。 */
-  const wordInput=(word:string,origin?:{articleId:string;sentenceIdx:number}):Parameters<typeof createPracticeTask>[0]=>
-    ({mode:"word",title:`用 ${word} 说一句`,word,reference:`Try one short sentence using "${word}".`,
-      ...(origin?{source:origin}:{})});
-  const vocabChoice=(w:typeof readyWords[number])=>wordInput(w.word,w.sourceArticleId?{articleId:w.sourceArticleId,sentenceIdx:w.sourceSentenceIdx??0}:undefined);
-  /* 「跟读正在读的内容」：最近在读文档的当前句起，最多 3 句（复用 follow 模式）。 */
-  const reading=[...articles].filter(a=>!a.archived&&progress[a.id]!==undefined).sort((a,b)=>(b.lastReadAt||0)-(a.lastReadAt||0))[0];
-  const followLines=reading?[...reading.sentences].sort((x,y)=>x.idx-y.idx).filter(s=>s.idx>=(progress[reading.id]??0)).slice(0,3).map(s=>s.en):[];
-  /* 无生词时的默认词（原型 html:2614 words[0] || doc.terms[0]；原型 doc 缺省即入门文 starter，html:1579，
-     所以首次打开也有 take a break chip）：优先当前阅读文档的预置词条；当前文档没有词条（书目章节/导入文）
-     或还没开始读时，回退到书架上带预置词条的文章（首启种子入门文「A Small Break」→ take a break），
-     仍无则不渲染 chip、按钮 toast 引导。Article.terms 由内容源提供（types.ts 可选字段）。 */
-  const hasTerms=(a:typeof articles[number]|undefined)=>Boolean(a?.terms?.some(w=>w?.trim()));
-  const termDoc=hasTerms(reading)?reading:[...articles].filter(a=>!a.archived&&hasTerms(a)).sort((a,b)=>(b.lastReadAt||0)-(a.lastReadAt||0))[0];
-  const defaultWord=readyWords[0]?.word??termDoc?.terms?.find(w=>w?.trim());
-  /* 主按钮/续练卡「开始一轮新练习」的任务入参：有生词时与点第一枚 chip 同一口径（出处=该词的收藏句）；
-     预置词回退时出处取该词所在句（看看中文/回到原句可回查），找不到含词句再沿用阅读进度所在句。 */
-  const defaultWordInput=()=>{
-    if(readyWords[0]) return vocabChoice(readyWords[0]);
-    const word=defaultWord!;
-    const origin=termDoc?{articleId:termDoc.id,sentenceIdx:termDoc.sentences.find(s=>s.en.toLowerCase().includes(word.toLowerCase()))?.idx??progress[termDoc.id]??0}:undefined;
-    return wordInput(word,origin);
-  };
-  const startDefault=()=>{ if(defaultWord) void begin(defaultWordInput()); else toast("先从生词本挑一个表达，或从下面的场景开始。"); };
-  /* 已有未完成练习时，先走「练习选择」三选抽屉再决定新旧去留。 */
-  const begin=async(input:Parameters<typeof createPracticeTask>[0])=>{ if(unfinished){setPending(input);return;} await openPractice(nav,input); };
-  /* 「开启麦克风」：抽屉里直接向系统请求权限（真实链路），结果以 toast 反馈。 */
-  if(historyOpen) return <SpeakingHistory sorted={sorted} onBack={()=>setHistoryOpen(false)}/>;
-  return <>
-  <Heading title="口语" extra={<button className="ibtn" aria-label="语音与朗读" onClick={()=>setVoiceSheet(true)}><Icon name="wave"/></button>}/>
-  <main className="learning-body">
-    {unfinished&&<article className="learning-card v2-sp-resume">
-      <div className="v2-sp-overline">上次练到这里</div>
-      <h2>{unfinished.title}</h2>
-      <p>{practiceStepTitle(unfinished)} · 已回答 {unfinishedAnswered} / {unfinished.steps?.length||1} 步</p>
-      <button className="btn" onClick={()=>nav.push("learningPractice",{taskId:unfinished.id})}><Icon name="mic" size={15}/>继续上次练习</button>
-      <button className="v2-sp-text-action" onClick={()=>{ if(defaultWord) void begin(defaultWordInput()); else toast("先从生词本挑一个表达，或从下面的场景开始。"); }}>开始一轮新练习</button>
-    </article>}
-    <article className="learning-card v2-sp-start">
-      <div className="v2-sp-overline">先把读过的表达用起来</div>
-      <h2>一个表达，一句就好</h2>
-      <p>{readyWords.length?"从生词本选一个表达，试着说说自己的事。":"从刚读到的表达开始，可以先听、跟读，再换成自己的话。"}</p>
-      {readyWords.length>0&&<div className="v2-sp-word-choices">{readyWords.map(w=><button key={w.id} className="v2-sp-word-choice" onClick={()=>void begin(vocabChoice(w))}><b lang="en">{w.word}</b><Icon name="mic" size={15}/></button>)}</div>}
-      {readyWords.length===0&&defaultWord&&<div className="v2-sp-word-choices"><button className="v2-sp-word-choice" onClick={()=>void begin(defaultWordInput())}><b lang="en">{defaultWord}</b><Icon name="mic" size={15}/></button></div>}
-      {/* 原型 html:2619：有进行中练习时主按钮让位为描边次按钮（btn 无 primary），无续练卡时才是实底主按钮 */}
-      <button className={unfinished?"btn-ghost":"btn"} onClick={startDefault}><Icon name="mic" size={15}/>开始一句短练习</button>
-      {words.length>0&&<button className="v2-sp-text-action" onClick={()=>nav.push("learningWordbook")}>去生词本挑一个</button>}
-    </article>
-    <div className="v2-sec-h"><b>在生活里练一练</b><span>按沟通任务练</span></div>
-    <section className="learning-card" style={{padding:"4px 14px"}}>
-      {BUILTIN_SCENES.map(scene=><button className="learning-row" style={{borderBottom:"1px solid var(--hairline)",minHeight:72}} key={scene.title} onClick={()=>void begin({mode:"scenario",title:`场景对话 · ${scene.title}`,reference:scene.steps[0].prompt,steps:scene.steps.map(s=>s.prompt)})}>
-        <span style={{minWidth:0}}><b style={{display:"block"}}>{scene.title}</b><small>{scene.description}</small></span>
-        <span style={{display:"flex",alignItems:"center",gap:8,flex:"none"}}><span className="lv">{scene.level}</span><Icon name="right" size={15}/></span>
-      </button>)}
-      {customScenes.map(scene=><button className="learning-row" style={{borderBottom:"1px solid var(--hairline)"}} key={scene.id} onClick={()=>void begin(customSceneTaskInput(scene))}>
-        <span style={{minWidth:0}}><b style={{display:"block"}}>{scene.title}</b><small>{scene.goal}</small></span>
-        <span style={{display:"flex",alignItems:"center",gap:8,flex:"none"}}><span className="learning-tag">我的场景</span><Icon name="right" size={15}/></span>
-      </button>)}
-      <button className="learning-row" style={{borderBottom:"none"}} onClick={()=>setSceneSheet(true)}>
-        <span style={{display:"flex",alignItems:"center",gap:12,minWidth:0}}>
-          <span style={{color:"var(--accent)",flex:"none"}}><Icon name="plus" size={18}/></span>
-          <span style={{minWidth:0}}><b style={{display:"block"}}>创建我的场景</b><small>给一个主题，分三步说清楚</small></span>
-        </span>
-        <Icon name="right" size={15}/>
-      </button>
-    </section>
-    <div className="v2-sec-h"><b>跟读正在读的内容</b><span>同一篇，同一句</span></div>
-    {reading&&followLines.length?<section className="learning-card">
-      {/* follow 任务标题用原型口径「跟读原文」（html:2337；复盘 nhead 副标/最近练习列表同源） */}
-      <button className="learning-row" style={{borderBottom:"none"}} onClick={()=>void begin({mode:"follow",title:"跟读原文",reference:followLines[0],steps:followLines,source:{articleId:reading.id,sentenceIdx:progress[reading.id]??0}})}>
-        <span style={{minWidth:0}}><b style={{display:"block"}}>{reading.title}</b><small>从第 {(progress[reading.id]??0)+1} 句开始，最多练 {followLines.length} 句</small></span>
-        <Icon name="right" size={15}/>
-      </button>
-    </section>:<p className="learning-empty">先打开一篇文章，读到哪句就跟读哪句。</p>}
-    {/* 「最近练习」右端（原型 html:2621）：有记录即给「查看全部」整页入口（列表只列最近 3 条），无记录为引导副文 */}
-    <div className="v2-sec-h"><b>最近练习</b>{sorted.length?<button className="tlink" style={{fontSize:12.5}} onClick={()=>setHistoryOpen(true)}>查看全部</button>:<span>从今天这一句开始</span>}</div>
-    <section className="learning-card" style={{padding:"4px 14px"}}>
-      {recent.length?recent.map(task=><button className="learning-row" style={{borderBottom:"1px solid var(--hairline)"}} key={task.id} onClick={()=>nav.push("learningPractice",{taskId:task.id})}>
-        <span style={{minWidth:0}}><b style={{display:"block"}}>{task.title}</b><small>{when(task.updatedAt)} · {task.attempts.length} 次回答 · {task.status==="completed"?"本轮完成":"部分完成"}</small></span>
-        <Icon name="right" size={15}/>
-      </button>):<p className="learning-empty" style={{padding:"14px 4px"}}>还没有练习记录。第一句说完后，就能在这里回看。</p>}
-    </section>
-    <p className="learning-local">练习文字与反馈跟账号同步，原声留在录制的设备。</p>
-  </main>
-  <ReplacePracticeSheet open={!!pending} title={unfinished?.title??""} answered={unfinishedAnswered}
-    onClose={()=>setPending(null)}
-    onContinue={()=>{ const target=unfinished; setPending(null); if(target) nav.push("learningPractice",{taskId:target.id}); }}
-    onReplace={()=>{ const target=unfinished; const input=pending; setPending(null);
-      /* 结束旧的：已有作答先静默归档为复盘（无作答也一并结束，避免悬挂的「继续上次」），再开新练习。 */
-      void (async()=>{ if(target) await actions.upsertTask({...target,status:"completed"}); if(input) await openPractice(nav,input); })().catch(e=>toast(String(e)));
-    }}/>
-  <CustomSceneSheet open={sceneSheet} onClose={()=>setSceneSheet(false)} onSave={scene=>{
-    try { actions.saveCustomScene(scene); setSceneSheet(false); void begin(customSceneTaskInput(scene)); }
-    catch(e){ toast(String(e)); }
-  }}/>
-  <VoiceSettingsSheet open={voiceSheet} onClose={()=>setVoiceSheet(false)}/>
-  </>;
-}
-/* 时间标签（原型 timeLabel 口径）：今天/昨天带 HH:MM，更早 M/D HH:MM。练习记录详情页头副标同用（LearningPractice）。 */
-export function when(at:number){ const d=new Date(at),now=new Date(); const hm=d.toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}); if(d.toDateString()===now.toDateString()) return `今天 ${hm}`; const yesterday=new Date(now); yesterday.setDate(now.getDate()-1); if(d.toDateString()===yesterday.toDateString()) return `昨天 ${hm}`; return `${d.getMonth()+1}/${d.getDate()} ${hm}`; }
-/* 练习记录整页（speaking-parity · 原型 VIEWS.sessionHistory，html:2649）：
-   「查看全部」从口语首页进入，nhead 标题+副标，全部任务按行列出（本轮完成/部分完成）。 */
-function SpeakingHistory({ sorted,onBack }:{ sorted:PracticeTask[]; onBack:()=>void }) {
-  const nav=useNav();
-  return <>
-    <header className="learning-head nhead">
-      <button className="tlink" aria-label="返回" onClick={onBack}><Icon name="left" size={18}/></button>
-      <div className="nt"><h1>练习记录</h1><small>每次自己的回答，都能回看</small></div>
-      <span />
-    </header>
-    <main className="learning-body" style={{ paddingTop: 0 }}>
-      <section className="learning-card" style={{padding:"4px 14px",marginTop:0}}>
-        {sorted.length?sorted.map(task=><button className="learning-row" style={{borderBottom:"1px solid var(--hairline)"}} key={task.id} onClick={()=>nav.push("learningPractice",{taskId:task.id})}>
-          <span style={{minWidth:0}}><b style={{display:"block"}}>{task.title}</b><small>{when(task.updatedAt)} · {task.attempts.length} 次回答 · {task.status==="completed"?"本轮完成":"部分完成"}</small></span>
-          <Icon name="right" size={15}/>
-        </button>):<p className="learning-empty" style={{padding:"14px 4px"}}>还没有练习记录。</p>}
-      </section>
-    </main>
-  </>;
-}
+export { SpeakingHome, when } from "./SpeakingHome";
 /* 笔记与复习域（vault-review-parity）：主体实现迁至 components/vault/VaultBody（due 卡/
    续学行/掌握阶段三格/生词本/我的笔记，proto-parity-2026-11-01）。
    这里保留页头（Heading），其余首页不动。 */
@@ -304,7 +142,7 @@ export function WordbookScreen() {
   const [exportOpen,setExportOpen]=useState(false);
   return <>
     <header className="learning-head nhead">
-      <button className="tlink" aria-label="返回" onClick={()=>nav.pop()}><Icon name="left" size={18}/></button>
+      <button className="tlink" data-nav-back aria-label="返回" onClick={()=>nav.pop()}><Icon name="left" size={18}/></button>
       <div className="nt"><h1>生词本</h1><small>共 {total} 条 · 随时回到原句</small></div>
       <button className="v2-note-edit" aria-label="导出学习资料" onClick={()=>setExportOpen(true)}><Icon name="share" size={18}/></button>
     </header>
@@ -331,7 +169,7 @@ export function LearningNote({id}:{id?:string}) {
   const {title,body}=draft;const setTitle=(title:string)=>setDraft(d=>({...d,title}));const setBody=(body:string)=>setDraft(d=>({...d,body}));
   if(!id){
     if(!ready)return <div className="learning-body" role="status">正在恢复笔记草稿…</div>;
-    return <><header className="learning-head"><button className="tlink" onClick={nav.pop}>返回</button><h1>写一条学习笔记</h1><span style={{width:44}}/></header>
+    return <><header className="learning-head"><button className="tlink" data-nav-back onClick={nav.pop}>返回</button><h1>写一条学习笔记</h1><span style={{width:44}}/></header>
       <form className="learning-body" onSubmit={e=>{e.preventDefault();if(target!==activeRepository()){toast("账号已切换，请重新打开笔记");return;}actions.saveNote({id:crypto.randomUUID(),title:title||"学习笔记",body,sub:"我的心得",insight:"",createdAt:Date.now()});void flushPersist().then(clearDraft).then(()=>{toast("笔记已保存");nav.pop();}).catch(e=>toast(String(e)));}}>
         <label>标题（选填）<input className="input" value={title} maxLength={100} placeholder="今天学到的小发现" onChange={e=>setTitle(e.target.value)}/></label>
         <label>内容<textarea className="input" rows={12} required value={body} maxLength={6000} onChange={e=>setBody(e.target.value)}/></label>
@@ -340,7 +178,7 @@ export function LearningNote({id}:{id?:string}) {
   }
   return <>
     <header className="learning-head nhead">
-      <button className="tlink" aria-label="返回" onClick={()=>nav.pop()}><Icon name="left" size={18}/></button>
+      <button className="tlink" data-nav-back aria-label="返回" onClick={()=>nav.pop()}><Icon name="left" size={18}/></button>
       <div className="nt"><h1>{note?.title || "学习笔记"}</h1>{note?.createdAt?<small>{noteTimeLabel(note.createdAt)}</small>:null}</div>
       <button className="v2-note-edit" aria-label="编辑笔记" onClick={()=>setEditOpen(true)}><Icon name="pen" size={17}/></button>
     </header>
@@ -399,7 +237,7 @@ export function LearningSearch(){
     }
     return out;
   },[state.articles,state.sentenceZh,q]);
-  const words=state.vocab.filter(w=>w.word.toLowerCase().includes(q)||w.senses.some(s=>s.cn.toLowerCase().includes(q)));
+  const words=state.vocab.filter(w=>vocabSearchText(w).includes(q));
   const notes=state.notes.filter(n=>(n.title+n.body).toLowerCase().includes(q));
   const total=docs.length+words.length+notes.length;
   const inScope=(kind:"docs"|"words"|"notes")=>scope==="all"||scope===kind;
@@ -410,25 +248,23 @@ export function LearningSearch(){
   const startList=recentList.length?recentList:state.articles.filter(a=>!a.archived&&a.id==="starter").slice(0,3);
   const more=(kind:"docs"|"words"|"notes")=>setLimits(l=>({...l,[kind]:l[kind]+6}));
   return <>
-    <header className="learning-head nhead"><button className="iconbtn" aria-label="返回" onClick={()=>nav.pop()}><Icon name="left" size={20}/></button><div className="nt"><h1>搜索</h1><small>文章、词条与笔记一起找</small></div><span/></header>
-    <main className="learning-body">
+    <header className="learning-head nhead"><button className="iconbtn" data-nav-back aria-label="返回" onClick={()=>nav.pop()}><Icon name="left" size={20}/></button><div className="nt"><h1>搜索</h1><small>文章、词条与笔记一起找</small></div><span/></header>
+    <main className="learning-body reading-search-body">
       <div className="v2-search-toolbar">
         <label className="v2-search-field">
           <Icon name="search" size={17}/>
-          <input className="input" type="search" value={query} maxLength={80} onChange={e=>setQuery(e.target.value)} placeholder="英文、中文或文章标题…" aria-label="搜索学习内容"/>
+          <input className="input" type="search" autoFocus value={query} maxLength={80} onChange={e=>setQuery(e.target.value)} placeholder="英文、中文或文章标题…" aria-label="搜索学习内容"/>
         </label>
         {query&&<button className="v2-search-clear" aria-label="清空关键词" onClick={()=>setQuery("")}><Icon name="close" size={16}/></button>}
       </div>
-      <div className="v2-filter-row">
-        {([["all","全部",total],["docs","原文",docs.length],["words","词条",words.length],["notes","笔记",notes.length]] as const).map(([id,label,count])=>
-          <button key={id} className={`learning-chip${scope===id?" on":""}`} aria-pressed={scope===id} onClick={()=>setScope(id)}>{label}{q&&id!=="all"?` ${count}`:""}</button>)}
-      </div>
+      <GlassSwitch className="v2-filter-row" role="group" ariaLabel="搜索范围" value={scope} onChange={setScope}
+        items={([["all","全部",total],["docs","原文",docs.length],["words","词条",words.length],["notes","笔记",notes.length]] as const).map(([value,label,count]) => ({value,label: label + (q && value!=="all" ? ` ${count}` : "")}))} />
       {!q&&<>
         <div className="v2-search-start">
           <p>搜文章标题、原句、收藏或纠偏，都能回到来源。</p>
           <div className="v2-search-suggestions">{["take a break","休息","quiet"].map(t=><button key={t} className="learning-chip" onClick={()=>setQuery(t)}>{t}</button>)}</div>
         </div>
-        <div className="v2-sec-h"><b>最近读过 / 推荐开始</b></div>
+        <div className="v2-sec-h"><b>{recentList.length ? "最近阅读" : "从这里开始"}</b></div>
         <section className="learning-card" style={{padding:"2px 14px"}}>
           {startList.map(a=><button className="learning-row" key={a.id} onClick={()=>nav.push("reader",{articleId:a.id})}>
             <span style={{minWidth:0}}><b className="serif" style={{display:"block",fontSize:15}}>{a.title}</b><small>{levelLabelOf(a)} · {minutesOf(a)} 分钟</small></span>
@@ -457,7 +293,7 @@ export function LearningSearch(){
           {words.slice(0,limits.words).map(w=><button className="learning-row v2-search-result" key={w.id} onClick={()=>setWordSheet(w.id)}>
             <span className="tx">
               <b className="serif" lang="en"><Mark text={w.word} q={q}/></b>
-              <small><Mark text={w.senses.map(s=>s.cn).join("；")} q={q}/></small>
+              <small><Mark text={vocabMeaning(w)} q={q}/></small>
               <small className="v2-result-source">生词本 · {w.senses[0]?.pos||"词条"}</small>
             </span>
             <Icon name="chevr" size={15}/>

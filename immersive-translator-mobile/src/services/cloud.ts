@@ -211,6 +211,9 @@ export async function cloudChat(system: string, messages: { role: "user" | "assi
   if (signal?.aborted || generation !== state.generation) throw new DOMException("账号已切换或操作已取消", "AbortError");
   const model = config.models[0];
   if (!model) throw new Error("当前账号没有可用模型");
-  const result = await cloudRequest<{ choices?: { message?: { content?: string } }[] }>(config.gateway.llm, "POST", { model: typeof model === "string" ? model : model.id, stream: false, messages: [{ role: "system", content: system }, ...input] }, signal);
-  const text = result.choices?.[0]?.message?.content; if (!text?.trim()) throw new Error("模型没有返回有效内容"); return text;
+  const result = await cloudRequest<{ choices?: { message?: { content?: string }; finish_reason?: string | null }[] }>(config.gateway.llm, "POST", { model: typeof model === "string" ? model : model.id, stream: false, messages: [{ role: "system", content: system }, ...input] }, signal);
+  const choice = result.choices?.[0];
+  if (choice?.finish_reason === "length") throw new Error("模型输出被截断，未保存结果。请重试或缩短原文。");
+  if (choice?.finish_reason && choice.finish_reason !== "stop") throw new Error("模型未完整返回内容，未保存结果。请重试。");
+  const text = choice?.message?.content; if (!text?.trim()) throw new Error("模型没有返回有效内容"); return text;
 }

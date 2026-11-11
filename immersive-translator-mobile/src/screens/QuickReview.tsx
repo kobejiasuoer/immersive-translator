@@ -51,7 +51,7 @@ export default function QuickReview({ wordId, fromNotify }: QuickProps) {
     return (
       <>
         <QuickTop fromNotify={fromNotify} onExit={() => nav.popAll()} />
-        <div className="qk-stage">
+        <div className="qk-stage review-workspace">
           <div className="qk-done">
             <div className="big">已清完，明天见</div>
             <div className="sub">现在没有到期的卡片</div>
@@ -84,7 +84,7 @@ export default function QuickReview({ wordId, fromNotify }: QuickProps) {
   return (
     <>
       <QuickTop fromNotify={fromNotify} onExit={() => nav.popAll()} />
-      <div className="qk-stage">
+      <div className="qk-stage review-workspace">
         {phase === "done" ? (
           <div className="qk-done rv-flip">
             <div style={{ display: "flex", justifyContent: "center", color: "var(--ok)" }}>
@@ -228,15 +228,15 @@ export default function QuickReview({ wordId, fromNotify }: QuickProps) {
 
 function QuickTop({ fromNotify, onExit }: { fromNotify?: boolean; onExit: () => void }) {
   return (
-    <div className="qk-top">
-      <span className="qk-src">
+    <header className="qk-top vault-quick-top">
+      <div><h1>快速复习</h1><p className="qk-src">
         {fromNotify && <Icon name="mark" size={13} />}
-        {fromNotify ? "来自今晚的复习提醒" : "快速复习 · 不强制评分"}
-      </span>
-      <button className="tlink" style={{ fontSize: 15 }} onClick={onExit}>
+        {fromNotify ? "来自学习提醒" : "一次回忆，一个表达"}
+      </p></div>
+      <button className="tlink" data-nav-back style={{ fontSize: 15 }} onClick={onExit}>
         完成
       </button>
-    </div>
+    </header>
   );
 }
 

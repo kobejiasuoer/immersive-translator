@@ -9,6 +9,7 @@ import { invokeRaw, isTauri, shareText, writeClipboard } from "../../services/de
 import { ReadingDrawer } from "../reading/Drawer";
 import { formatDueAt, savedCorrections, stageOf, STAGE_LABEL, vocabDerived } from "./derive";
 import { Icon } from "../../ui/icons";
+import { chineseVocabMeaning, contextExplanationOf } from "../../core/vocabMeaning";
 
 function exportDate(): string {
   const d = new Date();
@@ -28,7 +29,12 @@ export function markdownExport(s: AppState, now = Date.now()): string {
       const article = w.sourceArticleId ? s.articles.find((a) => a.id === w.sourceArticleId) : undefined;
       const sent = article?.sentences[w.sourceSentenceIdx];
       lines.push(`### ${w.word}${w.phonetic ? ` \`${w.phonetic}\`` : ""} · ${STAGE_LABEL[stageOf(w)]}`);
-      if (w.senses.length) lines.push(`- 释义：${w.senses.map((x) => `${x.pos} ${x.cn}`.trim()).join("；")}`);
+      const chinese = chineseVocabMeaning(w), english = contextExplanationOf(w.contextExplanation);
+      if (chinese) lines.push(`- 释义：${chinese}`);
+      if (english) {
+        lines.push(`- 英文解释：${english.meaning}`, `  - 对应语境：${english.sentence}`);
+        if (english.example) lines.push(`  - 英文例句：${english.example}`);
+      }
       if (article) lines.push(`- 来源：《${article.title}》第 ${w.sourceSentenceIdx + 1} 句`);
       if (sent) {
         lines.push(`- 原句：${sent.en}`);

@@ -93,6 +93,18 @@ test('chat snapshots messages and filters duplicate system entry', async () => {
   const login = deferred(), rt = runtime({ profile: 'guest', ensureResult: () => login.promise }), messages = [{ role: 'system', content: 'duplicate' }, { role: 'user', content: 'original' }];
   rt.service.chatStream('system', messages, rt.handlers); messages[1].content = 'edited'; rt.switchProfile('u1'); login.resolve(true); await tick(); assert.deepEqual(rt.cloudCalls[0][1], [{ role: 'user', content: 'original' }]);
 });
+test('reader direction overrides the general setting and is captured before login', async () => {
+  const login = deferred(), rt = runtime({ profile: 'guest', ensureResult: () => login.promise });
+  rt.state.settings.dir = 'c2e';
+  const options = { direction: 'e2c' };
+  rt.service.startTranslate('An English reading sentence.', rt.handlers, options);
+  options.direction = 'c2e'; rt.state.settings.dir = 'auto';
+  rt.switchProfile('u1'); login.resolve(true); await tick();
+  assert.equal(rt.cloudCalls.length, 1);
+  assert(rt.cloudCalls[0][0].includes('英文翻译成中文'));
+  assert(!rt.cloudCalls[0][0].includes('中文翻译成英文'));
+  assert.equal(rt.state.settings.dir, 'auto');
+});
 test('llmConfigured requires matched account profile and ignores saved key', () => {
   const rt = runtime({ profile: 'guest' }); assert.equal(rt.service.llmConfigured(), false); rt.switchProfile('u1'); assert.equal(rt.service.llmConfigured(), true); rt.switchProfile('u2', false); assert.equal(rt.service.llmConfigured(), false);
 });

@@ -3,6 +3,7 @@ import { articleFromEntities, canonicalJson, entitiesFromArticle, initialSrs, is
 import { activeRepository, commitRepository, deviceId, flushPersist, getState, profileIdentity, replaceSyncedState, type AppState, type NoteItem } from "../store";
 import type { Article, VocabWord } from "../core/types";
 import { hydrateBookMetadata } from "../core/readingLibrary";
+import { reconcileRepairedVocabReferences } from "../core/repairSentenceBoundaries";
 import { isUnmodifiedDemoVocab } from "../core/demoVocab";
 import type { CommitInput, OutboxItem, RecordWrite, Repository } from "../core/persistence";
 import { CloudError, cloudRequest, cloudState, loadCloudConfig, type CloudConfig } from "./cloud";
@@ -72,7 +73,7 @@ function project(state: AppState, device: string, targetBytes: number): Map<Coll
   for (const word of state.vocab) {
     const baseline = word.srsBaseline ?? word.baseline ?? word.srs ?? initialSrs(word.dueAt);
     const baselineRecall = word.baselineRecall ?? (state.reviewEvents.some(e => e.wordId === word.id) ? undefined : word.recall) ?? {total:{pass:0,wrong:0,trap:0},byMode:{}};
-    add("reading-vocab", entity(word.id, { ...word, v: 2, source: { ...(object(word.source) ? word.source : {}), articleId: word.sourceArticleId, sentenceIdx: word.sourceSentenceIdx }, srs: word.srs ?? initialSrs(word.dueAt), srsBaseline: baseline, baseline, baselineRecall, addedAt: numeric(word.addedAt, numeric(word.createdAt)) }, numeric(word.updatedAt, numeric(word.createdAt))));
+    add("reading-vocab", entity(word.id, { ...word, v: 2, source: { ...(object(word.source) ? word.source : {}), articleId: word.sourceArticleId, sentenceIdx: word.sourceSentenceIdx, ...(typeof word.sourceBoundaryKey === "string" ? { boundaryKey: word.sourceBoundaryKey } : {}) }, srs: word.srs ?? initialSrs(word.dueAt), srsBaseline: baseline, baseline, baselineRecall, addedAt: numeric(word.addedAt, numeric(word.createdAt)) }, numeric(word.updatedAt, numeric(word.createdAt))));
   }
   for (const review of state.reviewEvents) { if (!isReviewEvent(review)) throw new Error("本地复习事件格式异常，已保留原始记录"); add("review-events", entity(review.id, review, review.reviewedAt)); }
   for (const note of state.notes) {
@@ -116,11 +117,14 @@ function restore(state: AppState, collection: Collection, rows: Map<string, Mirr
     // A manifest is only visible after every referenced chunk has arrived. Never fall back to a deleted local article.
     return { articles, progress, readingCompleted };
   }
-  if (collection === "reading-vocab") return { vocab: [...live.flatMap(row => {
+  if (collection === "reading-vocab") {
+    const vocab = [...live.flatMap(row => {
     const p = row.payload as Json; if (typeof p.word !== "string") return [];
     const source = object(p.source) ? p.source : {}, srs = object(p.srs) ? p.srs : {};
     return [{ ...p, id: row.id, word: p.word, generation: typeof p.generation === "string" ? p.generation : `legacy-${numeric(p.addedAt, numeric(p.createdAt))}`, senses: Array.isArray(p.senses) ? p.senses : [], dueAt: numeric(srs.dueAt, numeric(p.dueAt)), srsBaseline: p.srsBaseline ?? p.baseline ?? p.srs, baselineRecall: p.baselineRecall ?? (state.reviewEvents.some(e => e.wordId === row.id) ? undefined : p.recall) ?? {total:{pass:0,wrong:0,trap:0},byMode:{}}, sourceArticleId: String(source.articleId ?? p.sourceArticleId ?? ""), sourceSentenceIdx: numeric(source.sentenceIdx, numeric(p.sourceSentenceIdx)) } as VocabWord];
-  }), ...state.vocab.filter(word => !rows.has(word.id) && isUnmodifiedDemoVocab(word, state.reviewEvents, state.notes))] };
+    }), ...state.vocab.filter(word => !rows.has(word.id) && isUnmodifiedDemoVocab(word, state.reviewEvents, state.notes))];
+    return { vocab: reconcileRepairedVocabReferences(state.vocab, vocab, state.articles) };
+  }
   if (collection === "review-events") {
     const reviewEvents = live.map(e => e.payload).filter(isReviewEvent);
     const vocab = state.vocab.map(word => {
@@ -197,7 +201,9 @@ export class MobileSync {
             if (shadow[id] !== signature) { shadow[id] = signature; changed = true; }
             continue;
           }
-          if (shadow[id] === signature && (collection !== "reading-vocab" || previous && (previous.dirty || previous.baseVersion > 0))) continue;
+          // Legacy inline articles project new chunks before those chunks have a mirror.
+          // A matching shadow alone cannot confirm that their content has been queued.
+          if (shadow[id] === signature && previous && (collection !== "reading-vocab" || previous.dirty || previous.baseVersion > 0)) continue;
           if (previous && previous.schemaVersion > local.schemaVersion) throw new Error(`当前版本不能写回较新格式的数据：${id}`);
           const payload = withoutAudio(mergePracticePayload(previous?.payload, local.payload) ?? mergeUnknown(previous?.payload, local.payload));
           if (collection === "review-events" && previous && canonicalJson(previous.payload) !== canonicalJson(payload)) throw new Error(`复习事件 ID 内容冲突：${id}`);
@@ -314,6 +320,16 @@ export class MobileSync {
       }
       const patch = restore(current, collection, merged), next = { ...current, ...patch };
       const shadow = Object.fromEntries([...project(next, this.deps.deviceId(), 262144).get(collection)!].map(([id, value]) => [id, fingerprint(value)]));
+      // A proven old locator can be corrected during restore. Keep its server
+      // fingerprint until queueLocal persists that correction as a new mutation.
+      // Otherwise the normalized shadow would hide the difference from the wire.
+      if (collection === "reading-vocab" && patch.vocab) for (const word of patch.vocab) {
+        const wire = merged.get(word.id), payload = wire?.payload;
+        if (!wire || !object(payload) || typeof word.sourceBoundaryKey !== "string") continue;
+        const source = object(payload.source) ? payload.source : {};
+        if (numeric(source.sentenceIdx, numeric(payload.sourceSentenceIdx)) !== word.sourceSentenceIdx
+          || (source.boundaryKey ?? payload.sourceBoundaryKey) !== word.sourceBoundaryKey) shadow[word.id] = fingerprint(wire);
+      }
       for (const [id, value] of merged) records.push({ collection: mirrorCollection(collection), id, payload: value });
       if (full) for (const id of old.keys()) if (!merged.has(id)) records.push({ collection: mirrorCollection(collection), id, payload: null, deleted: true });
       records.push({ collection: "sync.v2.meta", id: collection, payload: { cursor, shadow } satisfies Meta });

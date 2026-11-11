@@ -66,6 +66,10 @@ export interface Article {
   sourceUrl?: string;
   sourceType?: "sample" | "paste" | "url" | "book" | "rss" | "relay";
   bookId?: string;
+  /** 导入来源身份独立于可修改的书名，供精选书库离线恢复已有版本。 */
+  curatedBookId?: string;
+  sourceCatalogTitle?: string;
+  sourceBookTitle?: string;
   archived?: boolean;
   [key: string]: unknown;
   id: string;
@@ -97,6 +101,12 @@ export interface VocabSense {
   cn: string;
 }
 
+export interface ContextExplanation {
+  sentence: string;
+  meaning: string;
+  example?: string;
+}
+
 export interface VocabWord {
   createdAt?: number;
   updatedAt?: number;
@@ -112,6 +122,8 @@ export interface VocabWord {
   chunkType?: string;
   phonetic?: string;
   senses: VocabSense[];
+  /** 主动查询后收藏的英语解释，只有原句相同时才能复用。 */
+  contextExplanation?: ContextExplanation;
   pattern?: string;
   trap?: string;
   sourceArticleId: string;

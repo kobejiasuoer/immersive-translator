@@ -1,10 +1,11 @@
+import { GlassSwitch } from "../../ui/GlassSwitch";
 /**
  * 词条详情底部抽屉（proto-parity · sheet-word-detail / sheet-word-edit / sheet-word-remove，
  * 原型 SHEETS.wordDetail/wordEdit/wordRemove，html:2858-2889）：
  * 抽屉头词头（28px 衬线词 + 圆形发音钮 + 音标 + 类型 tag + 释义）→「我对这个词的感觉」三档
  * （刚收集/眼熟/能说出口，选中 accent 实底白字）→ 原句 trunk（accent-soft，词高亮）→
  * 我的助记与例句（编辑进二级编辑抽屉）→ 复习安排卡（暂停/现在练一次）→ 学习记录时间线 →
- * 底部「🎤用这个表达说一句」主按钮 +「移除词条」→ 移除两钮确认抽屉（保留词条/确认移除）。
+ * 词义之后直接「用这个表达说一句」，管理信息之后「移除词条」→ 移除确认抽屉。
  * 我的例句为设备本地数据（local.vocabExample，同 local.vocabFeel 口径：不进同步载荷）。
  * 生词本/复习安排/搜索/复习星标等入口均以抽屉打开；词典卡「查看词条」保留既有 push 页
  * （WordDetailPage，同内容整页形态）。
@@ -21,6 +22,7 @@ import { openPractice } from "../../screens/LearningHome";
 import { BUCKET_FEEL, FEEL_KEYS, formatDueAt, GRADE_LABEL, MODE_LABEL, phoneticLabel, stageBucketOf, timeLabel, vocabDerived, type Feel } from "./derive";
 import { FEEL_EVENT } from "./feels";
 import type { VocabWord } from "../../core/types";
+import { chineseVocabMeaning, contextExplanationOf, vocabMeaning } from "../../core/vocabMeaning";
 
 /* 原型「我对这个词的感觉」三档（html:2863-2864）：存储键沿用 local.vocabFeel 既有
    forgot/hard/easy（主观自评标记，不参与同步），仅展示文案对齐原型阶段命名。 */
@@ -56,6 +58,10 @@ export function WordDetailBody({ word, onEdit, onRemove }: { word: VocabWord; on
   const articles = useApp((s) => s.articles);
   const [feel, setFeel] = useState<Feel | null>(null);
   const [example, setExample] = useState("");
+  const [showChinese, setShowChinese] = useState(false);
+  const english = contextExplanationOf(word.contextExplanation);
+  const chinese = chineseVocabMeaning(word);
+  useEffect(() => setShowChinese(false), [word.id]);
 
   useEffect(() => {
     let alive = true;
@@ -120,7 +126,7 @@ export function WordDetailBody({ word, onEdit, onRemove }: { word: VocabWord; on
         : `下次复习 · ${formatDueAt(word.dueAt, now)}`;
 
   return (
-    <>
+    <div className="vault-word-detail">
       <div className="v2-word-hero">
         <div className="v2-word-line">
           <b className="en">{word.word}</b>
@@ -132,25 +138,42 @@ export function WordDetailBody({ word, onEdit, onRemove }: { word: VocabWord; on
           {phonetic && <span className="en">{phonetic}</span>}
           <span className="learning-tag">{kindLabel}</span>
         </div>
-        <p>{word.senses.map((s) => `${s.pos} ${s.cn}`.trim()).join("；")}</p>
+        {english ? <>
+          <p className="reader-english-meaning" lang="en">{english.meaning}</p>
+          {english.example && <p className="reader-english-example" lang="en">{english.example}</p>}
+          {chinese && <button className="reader-chinese-toggle" onClick={() => setShowChinese(value => !value)}>{showChinese ? "收起中文释义" : "查看中文释义"}</button>}
+          {showChinese && <p>{chinese}</p>}
+        </> : <p>{vocabMeaning(word)}</p>}
       </div>
+
+      <button
+        className="btn v2-word-practice"
+        style={{ width: "100%" }}
+        onClick={() =>
+          void openPractice(nav, {
+            mode: "word",
+            title: word.word,
+            word: word.word,
+            reference: `用 ${word.word} 说一句自己的话。`,
+            source: { articleId: word.sourceArticleId, sentenceIdx: word.sourceSentenceIdx },
+          })
+        }
+      >
+        <Icon name="mic" size={15} />
+        用这个表达说一句
+      </button>
 
       <div className="v2-word-detail">
         <div className="v2-learning-title"><b>我对这个词的感觉</b></div>
-        <div className="v2-learning-filters" role="group" aria-label="我对这个词的感觉">
-          {FEELS.map((f) => (
-            <button key={f.key} className={`learning-chip${activeFeel === f.key ? " on" : ""}`} aria-pressed={activeFeel === f.key} onClick={() => chooseFeel(f.key)}>
-              {f.label}
-            </button>
-          ))}
-        </div>
+        <GlassSwitch allowReselect className="v2-learning-filters" role="group" ariaLabel="我对这个词的感觉" value={activeFeel} onChange={chooseFeel}
+          items={FEELS.map(f => ({value:f.key,label:f.label}))} />
         <p className="v2-learning-caption">“能说出口”表示你自评能主动使用，可随时调整。</p>
 
         <div className="v2-word-context">
-          <small>原句 · {article?.title || "手动记录"}</small>
-          <div className="en" lang="en">
-            {sentence?.en ? highlight(sentence.en, word.word) : word.pattern || "还没有记录原句"}
-          </div>
+          <small>{english ? "收藏时的语境" : "原句"} · {article?.title || "手动记录"}</small>
+          {english?.sentence || sentence?.en || word.pattern ? <div className="en" lang="en">
+            {english?.sentence ? highlight(english.sentence, word.word) : sentence?.en ? highlight(sentence.en, word.word) : word.pattern}
+          </div> : <p>还没有记录原句</p>}
           {sentence?.zh && <p>{sentence.zh}</p>}
           {article && (
             <button className="btn-ghost" style={{ width: "100%", border: "1px solid var(--hairline-strong)" }} onClick={backToSource}>
@@ -211,28 +234,12 @@ export function WordDetailBody({ word, onEdit, onRemove }: { word: VocabWord; on
           )}
         </div>
 
-        <button
-          className="btn v2-word-practice"
-          style={{ width: "100%" }}
-          onClick={() =>
-            void openPractice(nav, {
-              mode: "word",
-              title: word.word,
-              word: word.word,
-              reference: `用 ${word.word} 说一句自己的话。`,
-              source: { articleId: word.sourceArticleId, sentenceIdx: word.sourceSentenceIdx },
-            })
-          }
-        >
-          <Icon name="mic" size={15} />
-          用这个表达说一句
-        </button>
         <button className="btn-ghost v2-word-remove" aria-label="移除词条" onClick={onRemove}>
           <Icon name="trash" size={15} />
           移除词条
         </button>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -240,7 +247,8 @@ export function WordDetailBody({ word, onEdit, onRemove }: { word: VocabWord; on
  *  我的例句（选填，设备本地 local.vocabExample）。保存后保留原句来源，toast 报真实结果。 */
 export function WordEditSheet({ word, onClose }: { word: VocabWord; onClose: () => void }) {
   /* 「释义与词性」合写（原型 d.pos = w.pos「n. 志愿者（复数）」，html:3093）：预填带词性前缀。 */
-  const [meaning, setMeaning] = useState(word.senses.map((s) => `${s.pos} ${s.cn}`.trim()).join("；"));
+  const english = contextExplanationOf(word.contextExplanation);
+  const [meaning, setMeaning] = useState(chineseVocabMeaning(word));
   const [note, setNote] = useState(word.note || "");
   const [example, setExample] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -261,13 +269,13 @@ export function WordEditSheet({ word, onClose }: { word: VocabWord; onClose: () 
 
   function save() {
     const text = meaning.trim();
-    if (!text) {
+    if (!text && !english) {
       setError("请写下这个词的释义。");
       return;
     }
     /* 行首词性前缀拆回 pos（n. / phr. / adj. / phrasal …），其余为中文释义；无前缀则只存释义。 */
     const hit = text.match(POS_PREFIX);
-    actions.updateWord(word.id, { senses: [hit ? { pos: hit[1], cn: hit[2].trim() } : { pos: "", cn: text }], note: note.trim() || undefined });
+    actions.updateWord(word.id, { ...(text ? { senses: [hit ? { pos: hit[1], cn: hit[2].trim() } : { pos: "", cn: text }] } : {}), note: note.trim() || undefined });
     if (example !== null) {
       void commitRepository({ records: [{ collection: "local.vocabExample", id: word.id, payload: { example: example.trim() } }] }).catch((e) => toast(String(e)));
     }
@@ -284,7 +292,7 @@ export function WordEditSheet({ word, onClose }: { word: VocabWord; onClose: () 
       </div>
       <div style={{ marginTop: 12 }}>
         <label htmlFor="v2-word-edit-pos" style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--ink-2)", marginBottom: 5 }}>
-          释义与词性
+          {english ? "中文释义与词性（选填）" : "释义与词性"}
         </label>
         <input id="v2-word-edit-pos" className="input" value={meaning} maxLength={500} onChange={(e) => { setMeaning(e.target.value); setError(""); }} aria-label="释义与词性" />
       </div>

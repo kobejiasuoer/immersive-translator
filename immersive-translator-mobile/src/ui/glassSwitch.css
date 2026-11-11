@@ -1,0 +1,58 @@
+/* One material for in-page switching. Specific selectors override legacy segmented
+   skins while preserving the caller's margins, width and placement. */
+div.glass-switch[data-glass-switch] {
+  --switch-glass: color-mix(in srgb,var(--surface) 64%,transparent);
+  --switch-highlight: var(--nav-glass-highlight, rgba(255,255,255,.95));
+  --switch-shadow: var(--nav-glass-shadow, rgba(20,24,30,.1));
+  display:flex;position:relative;isolation:isolate;align-items:stretch;justify-content:stretch;
+  flex-wrap:nowrap;gap:0;height:auto;min-height:52px;min-width:0;padding:4px;
+  border:.5px solid var(--nav-line,rgba(255,255,255,.8));border-radius:28px;
+  background:var(--switch-glass);box-shadow:inset 0 1px 0 var(--switch-highlight),inset 0 -1px 0 color-mix(in srgb,var(--ink) 8%,transparent),0 3px 12px var(--switch-shadow);
+  backdrop-filter:blur(12px) saturate(1.2);-webkit-backdrop-filter:blur(12px) saturate(1.2);
+  touch-action:pan-y pinch-zoom;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;overflow:visible;
+}
+.glass-switch[data-glass-switch] > button.glass-switch-item,
+.glass-switch[data-glass-switch] > button.glass-switch-item.on {
+  position:relative;z-index:1;flex:1 1 0;display:flex;align-items:center;justify-content:center;gap:5px;
+  min-width:0;width:auto;height:auto;min-height:44px;margin:0;padding:8px 9px;
+  border:0;border-radius:24px;background:transparent;color:var(--ink-2);box-shadow:none;
+  font:500 calc(14px * var(--fs-scale,1))/1.3 var(--font-sans);letter-spacing:0;
+  white-space:normal;overflow-wrap:anywhere;text-align:center;text-decoration:none;
+  touch-action:pan-y pinch-zoom;transition:color 120ms ease;
+}
+.glass-switch[data-glass-switch] > button.glass-switch-item.on { color:var(--accent);font-weight:600; }
+.glass-switch[data-glass-switch] > button.glass-switch-item::before,
+.glass-switch[data-glass-switch] > button.glass-switch-item::after { display:none; }
+.glass-switch[data-glass-switch] > button.glass-switch-item:active,
+.glass-switch[data-glass-switch] > button.glass-switch-item[data-pressed] { color:var(--accent);opacity:1;transform:none; }
+.glass-switch[data-glass-switch] > button.glass-switch-item:disabled { color:var(--ink-3);opacity:.42;cursor:default; }
+.glass-switch[data-glass-switch] > button.glass-switch-item:focus-visible { outline:2px solid var(--accent);outline-offset:-3px; }
+.glass-switch[data-glass-switch] .glass-switch-content { display:flex;align-items:inherit;justify-content:inherit;gap:inherit;flex:1;min-width:0;align-self:stretch;pointer-events:none; }
+.glass-switch[data-glass-switch] .glass-switch-content > svg { flex:none;width:16px;height:16px; }
+.glass-switch[data-glass-switch] > .glass-switch-bubble {
+  position:absolute;z-index:0;left:0;top:4px;pointer-events:none;transform-origin:50% 50%;
+  height:44px;border:.5px solid var(--nav-line,rgba(255,255,255,.8));border-radius:24px;
+  background:color-mix(in srgb,var(--accent-soft) 55%,transparent);
+  box-shadow:inset 0 1px 1px var(--switch-highlight),inset 0 -1px 1px color-mix(in srgb,var(--ink) 10%,transparent),0 3px 9px var(--switch-shadow);
+}
+.glass-switch[data-glass-switch] > .glass-switch-bubble::after {
+  content:"";position:absolute;inset:0;border-radius:inherit;opacity:var(--glass-switch-light,0);
+  background:radial-gradient(ellipse at var(--glass-switch-light-x,50%) 0%,var(--switch-highlight),transparent 75%);
+}
+.glass-switch[data-glass-switch][data-liquid-active] > .glass-switch-bubble { will-change:transform; }
+/* Large sheets already blur the page. Nested segmented controls keep one local
+   optical lens, avoiding a second live backdrop surface for every control. */
+:is(.sheet,.account-panel) .glass-switch[data-glass-switch] { backdrop-filter:none;-webkit-backdrop-filter:none; }
+.glass-switch[data-glass-switch][aria-disabled=true] { opacity:.65; }
+@media(prefers-reduced-motion:reduce) {
+  .glass-switch[data-glass-switch] > button.glass-switch-item { transition:none; }
+  .glass-switch[data-glass-switch] > .glass-switch-bubble::after { display:none; }
+}
+@media(prefers-reduced-transparency:reduce),(prefers-contrast:more) {
+  div.glass-switch[data-glass-switch] { background:var(--surface);backdrop-filter:none;-webkit-backdrop-filter:none;border-color:var(--hairline-strong);box-shadow:none; }
+  .glass-switch[data-glass-switch] > .glass-switch-bubble { background:var(--accent-soft);border-color:var(--accent-line);box-shadow:none; }
+}
+@media(prefers-contrast:more) {
+  .glass-switch[data-glass-switch] > .glass-switch-bubble { border:1px solid var(--accent); }
+  .glass-switch[data-glass-switch] > button.glass-switch-item { color:var(--ink); }
+}

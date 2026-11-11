@@ -3,12 +3,14 @@
  * 系统学习提醒 + 首启 Onboarding + 深链（ita:// 等价 hash）。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { actions, flushPersist, rolloverIfDue, toast, useApp } from "./store";
+import { actions, getState, profileIdentity, flushPersist, rolloverIfDue, toast, useApp } from "./store";
 import { NavCtx, type Nav, type PushName, type PushProps } from "./ui/nav";
+import { attachEdgeBack } from "./ui/edgeBack";
 import { SheetHost } from "./ui/sheets";
 import { haptic, invoke, onDeepLink, registerDiagSink } from "./services/device";
 /* 静态导入（非动态 chunk）：诊断模块共享 store/voice 模块，动态 import 会让
    rollup 给入口 chunk 加 export 门面，jsdom 冒烟的 new Function 执行不了 */
+import { cloudState } from "./services/cloud";
 import { runTtsSelftest } from "./services/selftest";
 
 import ReaderScreen from "./screens/ReaderScreen";
@@ -33,6 +35,7 @@ import { acknowledgeNotificationAction, reconcileStudyNotifications, takeNotific
 
 interface Entry {
   id: number;
+  owner: string;
   name: PushName;
   props: PushProps;
   entered: boolean;
@@ -71,6 +74,10 @@ const PUSH_TITLES: Record<PushName, string> = { learningPractice: "口语练习"
 };
 
 export default function App() {
+  useEffect(() => {
+    const app = document.querySelector<HTMLElement>(".app");
+    return app ? attachEdgeBack(app) : undefined;
+  }, []);
   const tab = useApp((s) => s.tab);
   const onboarded = useApp((s) => s.onboarded);
   const articles = useApp((s) => s.articles);
@@ -84,12 +91,16 @@ export default function App() {
 
   /* ---------- push 栈 ---------- */
   const stackRef = useRef<Entry[]>([]);
-  const [stack, setStack] = useState<Entry[]>([]);
+  const [entries, setStack] = useState<Entry[]>([]);
+  const previousProfile = useRef(profileIdentity());
+  const [profileScope, setProfileScope] = useState(profileIdentity());
+  const navigationEpoch = useRef(0);
+  const stack = entries.filter(entry => entry.owner === tab);
   const idRef = useRef(0);
   /** 600ms 同名防重入（P-54：双击行叠两层复习页）；pop/popAll 清守卫，不误伤「返回后再进」 */
   const lastPushRef = useRef<{ name: PushName; at: number } | null>(null);
   /** U-17：进栈前抓当前焦点，栈清空后归还（中途 pop 回到上一层时聚焦其标题） */
-  const lastFocusRef = useRef<HTMLElement | null>(null);
+  const lastFocusRef = useRef<Record<string, HTMLElement | null>>({});
   /* mobile-push-change：push 栈变化广播（tab 层页面据此刷新「继续上次复习」等跨页状态） */
   const sync = useCallback(() => {
     setStack([...stackRef.current]);
@@ -97,21 +108,25 @@ export default function App() {
   }, []);
 
   const focusPushTitle = useCallback((id: number) => {
-    const el = document.querySelector<HTMLElement>(`.push[data-push-id="${id}"] .ttl`);
-    if (el) {
+    const el = document.querySelector<HTMLElement>(`.push[data-push-id="${id}"] .ttl, .push[data-push-id="${id}"] .nt h1`);
+    if (el && !el.closest(".tab-inactive")) {
       el.tabIndex = -1;
       el.focus({ preventScroll: true });
     }
   }, []);
 
-  const nav: Nav = {
+  const createNav = (owner: string, active = owner === tab): Nav => {
+    const epoch = navigationEpoch.current;
+    return ({
+    active,
     push: (name, props = {}) => {
+      if (epoch !== navigationEpoch.current) return;
       const now = Date.now();
       const last = lastPushRef.current;
       if (last && last.name === name && now - last.at < 600) return;
       lastPushRef.current = { name, at: now };
-      lastFocusRef.current = document.activeElement as HTMLElement | null;
-      const entry: Entry = { id: ++idRef.current, name, props, entered: false, closing: false };
+      if (!stackRef.current.some(entry => entry.owner === owner)) lastFocusRef.current[owner] = document.activeElement as HTMLElement | null;
+      const entry: Entry = { id: ++idRef.current, owner, name, props, entered: false, closing: false };
       stackRef.current = [...stackRef.current, entry];
       sync();
       requestAnimationFrame(() =>
@@ -124,8 +139,9 @@ export default function App() {
       haptic("light");
     },
     pop: () => {
+      if (epoch !== navigationEpoch.current) return;
       lastPushRef.current = null;
-      const last = stackRef.current[stackRef.current.length - 1];
+      const last = stackRef.current.filter(entry => entry.owner === owner).at(-1);
       if (!last) return;
       last.closing = true;
       sync();
@@ -133,27 +149,32 @@ export default function App() {
         stackRef.current = stackRef.current.filter((e) => e.id !== last.id);
         sync();
         /* U-17：出栈归还焦点——还有上层则聚焦其标题，栈空则还原进栈前位置 */
-        const top = stackRef.current[stackRef.current.length - 1];
+        if (getState().tab !== owner) return;
+        const top = stackRef.current.filter(entry => entry.owner === owner).at(-1);
         if (top) focusPushTitle(top.id);
-        else lastFocusRef.current?.focus?.();
+        else lastFocusRef.current[owner]?.focus?.();
       }, 350); /* >.push 340ms 出场过渡，动画收尾后再卸载 */
     },
     popAll: () => {
+      if (epoch !== navigationEpoch.current) return;
       lastPushRef.current = null;
-      if (!stackRef.current.length) return;
-      stackRef.current.forEach((e) => (e.closing = true));
+      const current = stackRef.current.filter(entry => entry.owner === owner);
+      if (!current.length) return;
+      current.forEach((e) => (e.closing = true));
       sync();
-      const ids = stackRef.current.map((e) => e.id);
+      const ids = current.map((e) => e.id);
       setTimeout(() => {
         stackRef.current = stackRef.current.filter((e) => !ids.includes(e.id));
         sync();
-        lastFocusRef.current?.focus?.();
+        if (getState().tab === owner) lastFocusRef.current[owner]?.focus?.();
       }, 350);
     },
     replace: (name, props = {}) => {
+      if (epoch !== navigationEpoch.current) return;
       /* U-32：replace 与 push 同款入场（entered:false + 双 rAF），新屏 320ms 滑入、旧屏即刻卸载露 tab 层 */
-      const entry: Entry = { id: ++idRef.current, name, props, entered: false, closing: false };
-      stackRef.current = [...stackRef.current.slice(0, -1), entry];
+      const entry: Entry = { id: ++idRef.current, owner, name, props, entered: false, closing: false };
+      const previous = stackRef.current.filter(item => item.owner === entry.owner).at(-1);
+      stackRef.current = [...stackRef.current.filter(item => item.id !== previous?.id), entry];
       sync();
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
@@ -164,16 +185,14 @@ export default function App() {
       );
       haptic("light");
     },
-  };
+  }); };
+  const nav = createNav(tab);
 
-  /* ---------- 主题接线（visual-theme-cleanup）：阅读主题档选「暖黄」时整应用切 sepia，
-     纸色/纯黑保持既有行为（纯黑只作用于阅读正文 .rd-black，全局仍随 themePref light/dark）。
-     store.applyThemeDom 仍是 light/dark 的写入口；本 effect 在其之后收敛最终值，二者不冲突。 ---------- */
+  // Paper colour belongs to the reader; it must not override system/app appearance.
   const theme = useApp((s) => s.theme);
-  const readerTopic = useApp((s) => s.reader.topic);
   useEffect(() => {
-    document.documentElement.dataset.theme = readerTopic === "sepia" ? "sepia" : theme;
-  }, [readerTopic, theme]);
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
 
   /* ---------- 深链（#quick / #vocab / #shelf / #share?text=…；
      ita://share?text=… 经 onDeepLink（iOS 系统分享/浏览器地址栏）；通知深链落点 §3.14） ---------- */
@@ -221,7 +240,7 @@ export default function App() {
     if (!onboarded) return; /* 首启引导未完成不插队 */
     if (loginIntent) return; /* 登录浮层打开时不插队 */
     if (accountOpen) return; /* 账号抽屉打开时不插队（推入页会落在抽屉之下不可见） */
-    if (stackRef.current.length) return; /* 已有盖层不叠加 */
+    if (stackRef.current.some(entry => entry.owner === getState().tab)) return; /* 当前区域已有盖层不叠加 */
     const items = await invoke<ShareQueueItem[]>("share_queue_read");
     const item = items?.[0];
     if (!item) return;
@@ -261,20 +280,37 @@ export default function App() {
     });
   }, []);
 
-  /* ---------- 切 Tab 收起 push 盖层（P-46：toast「去看看」setTab 后真正离开盖层、落地目标 Tab） ---------- */
-  const tabRef = useRef(tab);
+  // A profile switch must discard every section's mounted local state and article props.
   useEffect(() => {
-    if (tabRef.current === tab) return;
-    tabRef.current = tab;
-    if (stackRef.current.length) nav.popAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+    const clear = () => {
+      const next = profileIdentity();
+      // A user-triggered guest login deliberately resumes the protected operation.
+      const continueGuestLogin = previousProfile.current === "guest" && next === cloudState().account?.id && !!loginIntent;
+      stackRef.current = continueGuestLogin ? stackRef.current.filter(entry => entry.owner === getState().tab) : [];
+      if (!continueGuestLogin) navigationEpoch.current++;
+      previousProfile.current = next; setProfileScope(next);
+      lastPushRef.current = null; lastFocusRef.current = {}; sync();
+    };
+    window.addEventListener("mobile-profile-change", clear);
+    return () => window.removeEventListener("mobile-profile-change", clear);
+  }, [sync, loginIntent]);
+
+  // Keep each section's mounted navigation tree and local form/scroll state.
+  useEffect(() => {
+    lastPushRef.current = null;
+    const top = stackRef.current.filter(entry => entry.owner === tab).at(-1);
+    if (top) requestAnimationFrame(() => focusPushTitle(top.id));
+  }, [tab, focusPushTitle]);
 
   /* OS-owned reminders are restored after hydration and refreshed on foreground.
      Startup never requests permission; the reminder switch owns that request. */
   useEffect(() => {
-    if (!onboarded) return;
-    const reconcile = () => void reconcileStudyNotifications(reminderSettings, reminderWords);
+    // A newly selected profile may not be onboarded yet. It must still cancel
+    // schedules inherited from the previous profile, without requesting permission.
+    const reconcile = () => void reconcileStudyNotifications(
+      onboarded ? reminderSettings : { ...reminderSettings, daily: false },
+      onboarded ? reminderWords : [],
+    );
     reconcile();
     const visible = () => { if (document.visibilityState === "visible") reconcile(); };
     document.addEventListener("visibilitychange", visible);
@@ -365,20 +401,25 @@ export default function App() {
     // The navigation owner is imperative; stack rerenders must not replay the tap.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notificationAction, onboarded, loginIntent, accountOpen, goalOpen]);
-  const overlayOpen = stack.length > 0 || !!sheet || !onboarded || !!loginIntent || !!goalOpen || accountOpen;
+  const modalOpen = !!sheet || !onboarded || !!loginIntent || !!goalOpen || accountOpen;
+  const overlayOpen = stack.length > 0 || modalOpen;
+  const immersiveViews: PushName[] = ["reader", "learningPractice", "review", "quick", "onboarding"];
+  const focusedFlow = stack.some(entry => immersiveViews.includes(entry.name));
 
   return (
     <NavCtx.Provider value={nav}>
       <div className="app">
         {TABS.map((t) => (
-          <div key={t.key} className={`pane ${tab === t.key ? "on" : ""}`} inert={overlayOpen || undefined}>
+          <div key={`${profileScope}-${t.key}`} className={`pane ${tab === t.key ? "on" : ""}`} inert={overlayOpen || undefined}>
+            <NavCtx.Provider value={createNav(t.key, t.key === tab && stack.length === 0)}>
             {t.key === "today" && <ReadingHome />}
             {t.key === "practice" && <SpeakingHome />}
             {t.key === "vocab" && <LearningVault />}
+            </NavCtx.Provider>
           </div>
         ))}
 
-        <GlassNav hidden={stack.length > 0} inert={overlayOpen} />
+        <GlassNav hidden={focusedFlow} inert={modalOpen || focusedFlow} />
         <LoginHost />
         {/* 账号抽屉（原型 SHEETS.account：根页页头圆章/本地保存行/阅读页「登录同步」呼出） */}
         <AccountScreen />
@@ -389,18 +430,18 @@ export default function App() {
         <div className={`push-scrim ${stack.length > 0 ? "on" : ""}`} />
 
         {/* push 栈（U-17：dialog 语义；U-07：阅读主题作用域已收敛进 ReaderScreen 正文容器） */}
-        {stack.map((e, i) => (
+        {entries.map((e) => (
           <div
             key={e.id}
             data-push-id={e.id}
-            role="dialog"
-            aria-modal="true"
+            role={focusedFlow ? "dialog" : "region"}
+            aria-modal={focusedFlow && e.owner === tab ? true : undefined}
             aria-label={PUSH_TITLES[e.name]}
-            className={`push ${e.entered && !e.closing ? "in" : ""} ${e.closing ? "out" : ""}`}
+            className={`push ${e.entered && !e.closing ? "in" : ""} ${e.closing ? "out" : ""} ${e.owner !== tab ? "tab-inactive" : ""} ${!focusedFlow ? "with-tabbar" : ""}`}
             data-view={e.name} /* 阅读页整页 surface 等视图级令牌挂在 push 根（原型 .view.reading 的对位） */
-            inert={!!loginIntent || !!goalOpen || !!sheet || i < stack.length - 1 || undefined}
+            inert={modalOpen || e.owner !== tab || e.id !== stack.at(-1)?.id || undefined}
           >
-            {view(e)}
+            <NavCtx.Provider value={createNav(e.owner, e.owner === tab && e.id === stack.at(-1)?.id)}>{view(e)}</NavCtx.Provider>
           </div>
         ))}
 

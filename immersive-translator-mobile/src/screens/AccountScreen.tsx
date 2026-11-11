@@ -1,3 +1,4 @@
+import { GlassSwitch } from "../ui/GlassSwitch";
 /**
  * 邮箱登录、资料认领与「账号与设置」面板。
  * 登录和新账号引导共用推入页，学习偏好在账号的子抽屉中调整。
@@ -115,10 +116,9 @@ export function LoginHost() {
   }
   /* 登录方式切换后清空当前凭证与错误。 */
   const form = <form className="ob-form" onSubmit={e => { e.preventDefault(); void submit(); }}>
-    <div className="learning-seg soft ob-auth-tabs">
-      <button type="button" className={mode === "otp" ? "on" : ""} onClick={() => { setMode("otp"); setCredential(""); setShowPwd(false); setError(""); }}>验证码</button>
-      <button type="button" className={mode === "password" ? "on" : ""} onClick={() => { setMode("password"); setCredential(""); setError(""); }}>密码</button>
-    </div>
+    <GlassSwitch className="learning-seg soft ob-auth-tabs" role="group" ariaLabel="登录方式" value={mode}
+      items={[{value:"otp",label:"验证码"},{value:"password",label:"密码"}]}
+      onChange={value => { setMode(value); setCredential(""); setShowPwd(false); setError(""); }} />
     <div className="ob-field">
       <div className="ob-field-row"><label htmlFor="login-account">邮箱</label></div>
       <input id="login-account" className="input" type="email" autoComplete="email" required value={email} onChange={e => { setEmail(e.target.value); setSent(false); setCredential(""); setError(""); }} placeholder="name@example.com" />

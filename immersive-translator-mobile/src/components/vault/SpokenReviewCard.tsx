@@ -2,8 +2,8 @@
  * 开口使用卡（vault-review-parity · CardMode "spoken" + proto-parity review-speak-question/
  * recorded/confirmed，原型 html:2933-2935）：录音试说 → 核对识别文字（可改写）→ 核对用法
  * （出处句/释义/句式）→ 人工三档自评。录音与 ASR 复用 services/practice 的管线
- * （startDurableRecording / transcribeRecording / playOriginal），麦克风确认改为底部抽屉
- * （sheet-review-mic-permission：「准备开口说一句」+ 原型文案 + 上下全宽双钮）。
+ * （startDurableRecording / transcribeRecording / playOriginal）。点录音直接进入系统授权，
+ * 识别后的回答仍由用户确认，再自行选择记忆程度。
  * 复检 r1：录音盒/草稿区在已录与确认态常驻（原型 recorded/confirmed 同屏），确认态不再附加
  * 原句/释义卡；提示盒经 hint 插槽放在题目块之后；出错时才露出「听我的原声/重新识别原声」。
  * 题面 = tag/来源 + eyebrow「用这个表达，说一个关于自己的句子」+ 28px 衬线目标词 + 释义行；
@@ -15,21 +15,27 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon } from "../../ui/icons";
-import { activeRepository, speak, toast } from "../../store";
+import { activeRepository, speak, stopSpeak, toast } from "../../store";
 import { ensureAccount } from "../../services/authGate";
 import { cloudState } from "../../services/cloud";
 import { playOriginal, practiceError, practiceId, startDurableRecording, transcribeRecording, type DurableRecording } from "../../services/practice";
-import { ReadingDrawer } from "../reading/Drawer";
 import type { Repository } from "../../core/persistence";
 import type { Article } from "../../core/types";
 import type { ReviewCard } from "../../core/queue";
 import { useLocalRecording } from "../../core/useLocalRecording";
+
+const RECORDING_FINALIZED = "mobile-spoken-review-recording-finalized";
+function notifyRecordingFinalized(repo: Repository, clipId: string) {
+  window.dispatchEvent(new window.CustomEvent(RECORDING_FINALIZED, { detail: { identity: repo.identity, clipId } }));
+}
 
 export interface SpokenState {
   /** ask=试说（录音/文字）；confirm=核对识别文字；check=核对用法+三档自评。 */
   stage: "ask" | "confirm" | "check";
   /** 已保存的原声（跨草稿恢复可再听/再识别；录音会话本身不可跨进程恢复）。 */
   clipId?: string;
+  /** In-progress replacement reference; never presented as saved until its manifest is durable. */
+  pendingClipId?: string;
   /** 已确认/识别的回答文字。 */
   text: string;
   /** 最近一次有效录音时长（毫秒，展示「已录 N 秒」用）。 */
@@ -68,26 +74,47 @@ export function SpokenReviewCard({
 }) {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const [micIntro, setMicIntro] = useState(false);
   const [recording, setRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [recognizing, setRecognizing] = useState(false);
   const current = useRef<{ session: DurableRecording; repo: Repository; clipId: string; generation: number; startedAt: number } | null>(null);
+  const preparation = useRef<AbortController | null>(null);
   const request = useRef<AbortController | null>(null);
   const playing = useRef<(() => void) | null>(null);
   const mounted = useRef(true);
+  const starting = useRef(false);
+  const draftRef = useRef<HTMLTextAreaElement>(null);
   const finishRef = useRef<() => void>(() => {});
   const localRecording = useLocalRecording(activeRepository(), state.clipId, recording);
+  const [recoveryTick, setRecoveryTick] = useState(0);
+  const pendingRecording = useLocalRecording(activeRepository(), state.pendingClipId, `${recording}:${recoveryTick}`);
+  useEffect(() => {
+    const clipId = state.pendingClipId, identity = activeRepository().identity;
+    if (!clipId) return;
+    const finalized = (event: Event) => {
+      const detail = (event as CustomEvent<{ identity: string; clipId: string }>).detail;
+      if (detail?.identity === identity && detail.clipId === clipId) setRecoveryTick(tick => tick + 1);
+    };
+    // A previous mounted card may still be finalizing its native recording.
+    // Re-read on completion; a clip already finalized is found by the initial read.
+    window.addEventListener(RECORDING_FINALIZED, finalized);
+    return () => window.removeEventListener(RECORDING_FINALIZED, finalized);
+  }, [state.pendingClipId]);
+  useEffect(() => {
+    if (recording || busy || !state.pendingClipId || !pendingRecording) return;
+    patch({ clipId: pendingRecording.clipId, recordedMs: pendingRecording.durationMs, pendingClipId: undefined, stage: "confirm" });
+  }, [state.pendingClipId, pendingRecording, recording, busy, patch]);
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      preparation.current?.abort();
       request.current?.abort();
       playing.current?.();
       const active = current.current;
       current.current = null;
-      if (active) void active.session.stop().catch(() => undefined);
+      if (active) void active.session.stop().catch(() => undefined).finally(() => notifyRecordingFinalized(active.repo, active.clipId));
     };
   }, []);
 
@@ -103,27 +130,35 @@ export function SpokenReviewCard({
 
   /** 录音（与 LearningPractice.startRecord 同管线：durable 分片 + 电平回调 + 云代数守卫）。 */
   async function beginRecording() {
-    if (busy || recording) return;
-    setBusy("正在准备录音");
+    if (busy || recording || recognizing || starting.current || current.current) return;
+    starting.current = true;
+    const controller = new AbortController(); preparation.current = controller;
+    setBusy("正在打开麦克风");
     setError("");
     try {
       if (!await ensureAccount({ reason: "spoken-review" })) {
         if (mounted.current) setError("未登录不能使用语音识别，可以先用文字回答。");
         return;
       }
+      if (!mounted.current || controller.signal.aborted) return;
       const repo = activeRepository();
       const clipId = practiceId("clip");
-      const session = await startDurableRecording(repo, clipId, { review: "spoken", wordId: card.id, word: card.word }, () => undefined);
+      playing.current?.(); playing.current = null; stopSpeak();
+      const session = await startDurableRecording(repo, clipId, { review: "spoken", wordId: card.id, word: card.word }, () => undefined, controller.signal);
       if (!mounted.current || repo !== activeRepository()) {
         await session.stop();
         return;
       }
       current.current = { session, repo, clipId, generation: cloudState().generation, startedAt: Date.now() };
+      setRecoveryTick(0);
+      patch({ pendingClipId: clipId });
       setSeconds(0);
       setRecording(true);
     } catch (failure) {
       if (mounted.current) setError(practiceError(failure));
     } finally {
+      if (preparation.current === controller) preparation.current = null;
+      starting.current = false;
       if (mounted.current) setBusy("");
     }
   }
@@ -140,16 +175,17 @@ export function SpokenReviewCard({
       const result = await active.session.stop();
       if (active.generation !== cloudState().generation || !mounted.current) return;
       recorded = true;
-      patch({ clipId: active.clipId, recordedMs: result.ms });
+      patch({ clipId: active.clipId, recordedMs: result.ms, pendingClipId: undefined });
       if (result.peak < 0.01 || result.ms < 350) {
         setError("声音太轻或录音太短，原声已保留。可以重新说一句，或改用文字回答。");
         return;
       }
       await recognize(active.clipId, active.repo, true);
     } catch (failure) {
-      if (mounted.current && !recorded) setError(practiceError(failure));
+      if (mounted.current && !recorded) { patch({ pendingClipId: undefined }); setError(practiceError(failure)); }
       else if (mounted.current) patch({ stage: "confirm" });
     } finally {
+      notifyRecordingFinalized(active.repo, active.clipId);
       if (mounted.current) setBusy("");
     }
   }
@@ -163,7 +199,7 @@ export function SpokenReviewCard({
       current.current = null;
       setRecording(false);
       await active.session.discard();
-      if (active.clipId === state.clipId && mounted.current) patch({ clipId: undefined });
+      if (mounted.current) patch({ pendingClipId: undefined, ...(active.clipId === state.clipId ? { clipId: undefined } : {}) });
     } catch (failure) {
       if (mounted.current) setError(practiceError(failure));
     } finally {
@@ -222,10 +258,7 @@ export function SpokenReviewCard({
 
   const source = card.articleId ? articles.find((a) => a.id === card.articleId)?.sentences[card.sentIdx] : undefined;
   const recordedSeconds = localRecording ? Math.max(1, Math.round(localRecording.durationMs / 1000)) : 0;
-  const goTextAnswer = () => {
-    setMicIntro(false);
-    patch({ stage: "confirm" });
-  };
+  const goTextAnswer = () => draftRef.current?.focus();
 
   return (
     <>
@@ -237,9 +270,10 @@ export function SpokenReviewCard({
         {definition || card.hint}
       </p>
       {error && (
-        <p className="learning-notice" role="alert" style={{ textAlign: "left" }}>
-          {error}
-        </p>
+        <>
+          <p className="learning-notice" role="alert" style={{ textAlign: "left" }}>{error}</p>
+          {!recording && <button className="btn-ghost" disabled={Boolean(busy) || recognizing} onClick={goTextAnswer}>用文字回答</button>}
+        </>
       )}
 
       {/* 录音盒（原型 .v2-speaking-recorder，html:2933）：非录音中常驻——已录（有原声）显示
@@ -247,7 +281,7 @@ export function SpokenReviewCard({
           「听我的原声 / 重新识别原声」只在出错时出现（声音太轻/识别失败的恢复路径）。 */}
       {!recording && (
         <div className="v2-speaking-recorder">
-          <button className="btn" style={{ width: "100%" }} disabled={Boolean(busy)} onClick={() => setMicIntro(true)}>
+          <button className="btn" style={{ width: "100%" }} disabled={Boolean(busy) || recognizing} onClick={() => void beginRecording()}>
             <Icon name="mic" size={15} />
             {localRecording ? "重新录一次" : "录音试说"}
           </button>
@@ -294,6 +328,7 @@ export function SpokenReviewCard({
             {localRecording ? "确认或改写我的回答" : "先写一份草稿"}
           </label>
           <textarea
+            ref={draftRef}
             id="v2-review-speaking-draft"
             className="input"
             rows={3}
@@ -362,33 +397,12 @@ export function SpokenReviewCard({
         </div>
       )}
 
-      {state.stage === "ask" && !recording && !micIntro && busy && (
+      {!recording && busy && (
         <p className="meta" role="status" style={{ textAlign: "center", marginTop: 10 }}>
           {busy}…
         </p>
       )}
 
-      {/* 麦克风授权确认抽屉（原型 SHEETS.reviewMicPermission，html:3019） */}
-      <ReadingDrawer open={micIntro && !recording} onClose={() => setMicIntro(false)} label="准备开口说一句">
-        <div className="v2-sh-head">
-          <div className="sheet-title plain">准备开口说一句</div>
-        </div>
-        <p className="v2-learning-copy">录音用于保留这次回答。你可以取消、重录，也可以先看提示、写一份草稿。</p>
-        <button
-          className="btn"
-          style={{ width: "100%" }}
-          disabled={Boolean(busy)}
-          onClick={() => {
-            setMicIntro(false);
-            void beginRecording();
-          }}
-        >
-          允许并开始
-        </button>
-        <button className="btn-ghost v2-learning-secondary" style={{ border: "1px solid var(--hairline-strong)", width: "100%" }} onClick={goTextAnswer}>
-          先不开启，继续看提示
-        </button>
-      </ReadingDrawer>
     </>
   );
 }

@@ -1,13 +1,6 @@
 import { openPractice } from "./LearningHome";
-/**
- * 阅读页（push）—— §3.6「从读到练」轴心。
- * 点句 → 句子解析抽屉（朗读保留在抽屉动作行：听原句/跟读/改译文）；点词 → 词典卡、点词块 → 词块卡；
- * 已收藏词墨蓝 8% 底 / 词块点状下划线，同行只出现一种（治 V5，tokenize 保证）；
- * 遮罩按句揭底 + 长按 peek（#37）；阅读设置抽屉（字号/行距/语速档位 + 实时样例）；滚动即写进度（治 I5）；
- * 逐句 TTS 连播（#44，onend + 兜底双保险）；段级翻译重试（#35，导入文章 zh=null）；
- * 句级译文覆盖（本地 sentenceZh 表）+ 修改译文抽屉 + 阅读目录抽屉 + 手动查询表达 + 读后收尾卡。
- */
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
+/** Continuous English reading, with help requested only after selecting text. */
+import { useCallback, useEffect, useMemo, useRef, useState, useId, type CSSProperties } from "react";
 import { actions, activeRepository, effectiveSentenceZh, flushPersist, getState, speak, stopSpeak, toast, useApp } from "../store";
 import { Icon } from "../ui/icons";
 import { useNav } from "../ui/nav";
@@ -15,16 +8,17 @@ import { cloudState, useCloud } from "../services/cloud";
 import { tokenize, useSavedKeys } from "../tokenizer";
 import { norm } from "../core/judge";
 import { startTranslate } from "../services/translate";
-import type { Article, SentenceChunk, SentencePair } from "../core/types";
+import type { Article, SentenceChunk } from "../core/types";
 import type { DictEntry } from "../store";
 import { SentenceSheet } from "../components/reading/SentenceSheet";
 import { EditTranslationSheet } from "../components/reading/EditTranslationSheet";
 import { ContentsSheet } from "../components/reading/ContentsSheet";
 import { LookupSheet } from "../components/reading/LookupSheet";
 import { SettingsSheet } from "../components/reading/SettingsSheet";
-import { docMetaOf, sourceLabelOf } from "../components/reading/meta";
-import { openAccountSheet } from "../components/account/accountGate";
+import { minutesOf, sourceLabelOf } from "../components/reading/meta";
 import { clampSentence, readingParagraphs } from "../core/readerPresentation";
+import { chapterIndexOf } from "../core/readingLibrary";
+import "../ui/readerExperience.css";
 
 /* 语速档（与阅读设置抽屉同一档位；播放条 pill 循环切换，原型 read-cycle-speed 口径） */
 const RATE_TIERS = [0.65, 0.85, 1, 1.15];
@@ -49,14 +43,13 @@ export default function ReaderScreen({ article }: { article: Article }) {
   const savedSent = useApp((s) => s.progress[article.id] ?? 0);
   const readerTarget = useApp((s) => s.readerTarget);
   const allArticles = useApp((s) => s.articles);
-  const taskCount = useApp((s) => s.tasks.length);
   const zhOverrides = useApp((s) => s.sentenceZh[article.id]);
   const finished = useApp((s) => !!s.readingCompleted[article.id]);
   const fontScale = useApp((s) => s.settings.fsScale);
   const paragraphs = useMemo(() => readingParagraphs(article), [article.sentences, article.paragraphStarts]);
   const sourceKey = useMemo(() => article.sentences.map(s => s.en).join("\u001f"), [article.sentences]);
   const previousSource = useRef(sourceKey);
-  const masked = prefs.mode === "bi" && prefs.mask;
+  const masked = true;
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
 
@@ -65,13 +58,21 @@ export default function ReaderScreen({ article }: { article: Article }) {
     if (article.bookId) {
       return allArticles
         .filter((a) => a.bookId === article.bookId && !a.archived)
-        .sort((a, b) => Number(a.chapterIndex ?? 0) - Number(b.chapterIndex ?? 0));
+        .sort((a, b) => chapterIndexOf(a) - chapterIndexOf(b));
     }
     return allArticles.filter((a) => !a.archived);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allArticles, article.bookId]);
 
   const [drawer, setDrawer] = useState<ReadingDrawerState>(null);
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const controlsId = useId();
+  const [selection, setSelection] = useState<ReaderSelection | null>(null);
+  const selectionBarRef = useRef<HTMLDivElement>(null);
+  const dismissedSelection = useRef("");
+  const helpButtonRef = useRef<HTMLButtonElement>(null);
+  const globalSheet = useApp(s => s.sheet);
+
   const savedKeys = useSavedKeys(vocab.map((v) => v.word));
   const [sent, setSent] = useState(clampSentence(savedSent, article.sentences.length));
   const [playingIdx, setPlayingIdx] = useState(-1);
@@ -83,8 +84,10 @@ export default function ReaderScreen({ article }: { article: Article }) {
   const [translationDrafts, setTranslationDrafts] = useState<Record<number, string>>({});
   const [translationErrors, setTranslationErrors] = useState<Record<number, string>>({});
   const [temporaryTranslations, setTemporaryTranslations] = useState<Record<number, string>>({});
-  const [batch, setBatch] = useState<{ done: number; total: number } | null>(null);
-  const batchCancelled = useRef(false);
+  const presentedArticle = useMemo(() => Object.keys(temporaryTranslations).length ? {
+    ...article,
+    sentences: article.sentences.map(sentence => ({ ...sentence, zh: temporaryTranslations[sentence.idx] || sentence.zh })),
+  } : article, [article, temporaryTranslations]);
   const mounted = useRef(true);
   const pendingRead = useRef<number | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -93,7 +96,6 @@ export default function ReaderScreen({ article }: { article: Article }) {
   const playGen = useRef(0);
   /** 程序性滚动锁：scrollToSent 后 600ms 内不按「视口顶句」回写进度/计数（治 P-21） */
   const progLockUntil = useRef(0);
-  const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const translations = useRef(new Map<number, { stop(): void }>());
   const previousCloud = useRef({ id: account?.id ?? null, generation: cloudGeneration });
@@ -102,17 +104,17 @@ export default function ReaderScreen({ article }: { article: Article }) {
   /* 打开即恢复断点 */
   useEffect(() => {
     mounted.current = true;
-    batchCancelled.current = false;
     actions.setReading(article.id);
     const initial = clampSentence(savedSent, article.sentences.length);
     setSent(initial);
     setDrawer(null);
+    setControlsOpen(false);
+    clearSelection();
     setRevealed(new Set());
     setTranslationDrafts({});
     setTranslationErrors({});
     setTemporaryTranslations({});
     setTranslating(new Set());
-    setBatch(null);
     pendingRead.current = null;
     if (article.sentences.length) {
       actions.setProgress(article.id, initial);
@@ -121,7 +123,6 @@ export default function ReaderScreen({ article }: { article: Article }) {
     const t = setTimeout(() => scrollToSent(clampSentence(savedSent, article.sentences.length), true), 60);
     return () => {
       mounted.current = false;
-      batchCancelled.current = true;
       if (pendingRead.current !== null) actions.setProgress(article.id, pendingRead.current);
       clearTimeout(t);
       play.current.active = false;
@@ -131,7 +132,6 @@ export default function ReaderScreen({ article }: { article: Article }) {
       translations.current.clear();
       /* 滚动防抖一并清（治 home-6）：退出前 300ms 内最后一次滚动的回调在卸载后触发，
          bodyRef 已被置空直接 return——最后一段滚动进度不落盘，断点回退到旧句 */
-      if (peekTimer.current) clearTimeout(peekTimer.current);
       if (scrollTimer.current) clearTimeout(scrollTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -142,10 +142,14 @@ export default function ReaderScreen({ article }: { article: Article }) {
       cancelTranslation();
       stopPlay();
       setDrawer(null);
+      clearSelection();
       setRevealed(new Set());
       setTemporaryTranslations({});
       setTranslationErrors({});
       pendingRead.current = null;
+      const restored = clampSentence(savedSent, article.sentences.length);
+      setSent(restored);
+      scrollToSent(restored, true);
     }
     previousSource.current = sourceKey;
   }, [sourceKey]);
@@ -159,6 +163,7 @@ export default function ReaderScreen({ article }: { article: Article }) {
       stopPlay();
       pendingRead.current = null;
       setDrawer(null);
+      clearSelection();
       setRevealed(new Set());
     }
     previousCloud.current = { id, generation: cloudGeneration };
@@ -169,7 +174,7 @@ export default function ReaderScreen({ article }: { article: Article }) {
       const next = activeRepository();
       const guestLogin = previousRepository.current.identity === "guest" && next.identity === cloudState().account?.id;
       if (!guestLogin) {
-        cancelTranslation(); stopPlay(); pendingRead.current = null; setDrawer(null); setRevealed(new Set());
+        cancelTranslation(); stopPlay(); pendingRead.current = null; setDrawer(null); clearSelection(); setRevealed(new Set());
         const current = getState().articles.find(a => a.id === article.id);
         if (current) setSent(clampSentence(getState().progress[article.id] ?? 0, current.sentences.length));
       }
@@ -206,21 +211,35 @@ export default function ReaderScreen({ article }: { article: Article }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [article.sentences.length]);
 
-  // Language and type changes can reflow the document; keep its logical place.
+  // Type changes can reflow the document; keep its logical place.
   useEffect(() => {
+    clearSelection();
+    const target = pendingRead.current ?? sent;
+    if (pendingRead.current !== null) {
+      setSent(target);
+      actions.setProgress(article.id, target);
+      actions.markRead(article.id, target);
+    }
     progLockUntil.current = Date.now() + 600;
-    const timer = setTimeout(() => scrollToSent(sent, true), 40);
+    const timer = setTimeout(() => scrollToSent(target, true), 40);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefs.mode, prefs.fs, prefs.lh, fontScale]);
+  }, [prefs.fs, prefs.lh, fontScale]);
 
   const scrollToSent = useCallback(
     (i: number, instant = false) => {
+      // An explicit jump supersedes older manual scrolling, including its delayed save.
+      if (scrollTimer.current) { clearTimeout(scrollTimer.current); scrollTimer.current = null; }
+      pendingRead.current = null;
       /* 程序性滚动（断点恢复/词典定位/播放跳句/上下句）：600ms 内 onScroll 不回写（治 P-21） */
       progLockUntil.current = Date.now() + 600;
       const body = bodyRef.current;
       const el = body?.querySelector(`[data-si="${i}"]`);
       if (!body || !el) return;
+      if (i === 0 && instant) {
+        body.scrollTo({ top: 0, behavior: "auto" });
+        return;
+      }
       /* U-06：连播推进时目标句在视口 25%–65% 舒适带内不滚，带外才动；
          断点恢复（instant）不做带判定，直接定位到视口 30% 处（proto-parity：reader-classic5）。 */
       const rect = el.getBoundingClientRect();
@@ -239,9 +258,10 @@ export default function ReaderScreen({ article }: { article: Article }) {
   useEffect(() => {
     const host = bodyRef.current?.closest(".push");
     if (!host) return;
+    host.setAttribute("data-reader-topic", prefs.topic);
     if (prefs.topic === "black") host.setAttribute("data-reader-dark", "1");
     else host.removeAttribute("data-reader-dark");
-    return () => host.removeAttribute("data-reader-dark");
+    return () => { host.removeAttribute("data-reader-dark"); host.removeAttribute("data-reader-topic"); };
   }, [prefs.topic]);
 
   /* 词典卡「定位回读」 */
@@ -254,19 +274,6 @@ export default function ReaderScreen({ article }: { article: Article }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readerTarget?.nonce]);
-
-  /* 「重新遮住全部译文」：MoreSheet → remaskReader() → 此处清空已揭示句（治 P-25） */
-  const remaskAt = useApp((s) => s.remaskAt);
-  useEffect(() => {
-    if (remaskAt > 0) setRevealed(new Set());
-  }, [remaskAt]);
-
-  /* 遮罩由关转开（Aa 面板/本篇菜单）：旧的揭示态一并清空（治 P-25） */
-  const prevMask = useRef(prefs.mask);
-  useEffect(() => {
-    if (!prevMask.current && prefs.mask) setRevealed(new Set());
-    prevMask.current = prefs.mask;
-  }, [prefs.mask]);
 
   function stepTo(next: number, gen: number) {
     const clamped = Math.max(0, Math.min(article.sentences.length - 1, next));
@@ -331,6 +338,7 @@ export default function ReaderScreen({ article }: { article: Article }) {
      「当前句」取视口 30% 阅读线上方最近的句子——与 scrollToSent 的断点定位（视口 30%）同一线，
      恢复断点后高亮句与停留位置一致（proto-parity reader-classic5）。 */
   function onScroll() {
+    clearSelection();
     if (scrollTimer.current) clearTimeout(scrollTimer.current);
     if (Date.now() < progLockUntil.current) return;
     pendingRead.current = currentViewportSentence();
@@ -421,47 +429,90 @@ export default function ReaderScreen({ article }: { article: Article }) {
     actions.setSheet({ kind: "dict", entry });
   }
 
-  function onBodyClick(e: MouseEvent) {
-    const tok = (e.target as HTMLElement).closest(".tok") as HTMLElement | null;
-    if (tok && !tok.classList.contains("pu")) {
-      stopPlay();
-      const sentEl = tok.closest("[data-si]") as HTMLElement | null;
-      const sentIdx = sentEl ? Number(sentEl.dataset.si) : sent;
-      const chunkIdx = tok.dataset.ck !== undefined ? Number(tok.dataset.ck) : -1;
-      const sentObj = article.sentences[sentIdx];
-      openDict(tok.dataset.t || tok.textContent || "", chunkIdx >= 0 ? sentObj?.chunks?.[chunkIdx] : undefined, sentIdx);
-      return;
-    }
-    const zh = (e.target as HTMLElement).closest(".sent-zh") as HTMLElement | null;
-    if (zh && masked) {
-      const si = Number(zh.dataset.zh);
-      setRevealed((prev) => new Set(prev).add(si));
-      return;
-    }
-    const sentEl = (e.target as HTMLElement).closest("[data-si]") as HTMLElement | null;
-    if (sentEl) {
-      const si = Number(sentEl.dataset.si);
-      /* 点句=打开句子解析抽屉（reading-parity 对齐定稿原型）：朗读保留在抽屉动作行，
-         连播入口仍在底部 playbar（点句连播旧路径由抽屉「听原句」+ playbar 承接） */
-      stopPlay();
-      setDrawer({ type: "sentence", idx: si });
-    }
+  function clearSelection() {
+    const current = window.getSelection()?.toString().trim().replace(/\s+/g, " ") || "";
+    if (current) dismissedSelection.current = current;
+    setSelection(null);
   }
 
-  /* 长按 peek（380ms，§3.6） */
-  function onBodyPointerDown(e: React.PointerEvent) {
-    if (!masked) return;
-    const zh = (e.target as HTMLElement).closest(".sent-zh") as HTMLElement | null;
-    if (!zh) return;
-    if (peekTimer.current) clearTimeout(peekTimer.current);
-    peekTimer.current = setTimeout(() => zh.classList.add("peek"), 380);
-  }
-  function clearPeek() {
-    if (peekTimer.current) {
-      clearTimeout(peekTimer.current);
-      peekTimer.current = null;
+  useEffect(() => {
+    const update = () => {
+      const chosen = window.getSelection();
+      if (!chosen || chosen.isCollapsed || !chosen.rangeCount) {
+        dismissedSelection.current = "";
+        // iOS can collapse its native selection before the toolbar receives
+        // pointerup/click. Keep the confirmed text as an action snapshot so
+        // that collapse does not unmount the button the user is pressing.
+        return;
+      }
+      const text = chosen.toString().trim().replace(/\s+/g, " ");
+      if (!text || text === dismissedSelection.current || !/[A-Za-z]/.test(text)) { setSelection(null); return; }
+      const range = chosen.getRangeAt(0);
+      const start = selectionSentence(range.startContainer, range.startOffset, false);
+      const end = selectionSentence(range.endContainer, range.endOffset, true);
+      const body = bodyRef.current;
+      if (!start || !end || !body?.contains(start) || !body.contains(end)) { setSelection(null); return; }
+      const idx = Number(start.dataset.si);
+      const sentence = article.sentences[idx];
+      if (!sentence) { setSelection(null); return; }
+      const crossSentence = start !== end;
+      const wholeSentence = normalizeSelection(text) === normalizeSelection(sentence.en);
+      setSelection({ text, idx, kind: crossSentence ? "invalid" : wholeSentence || text.length > 80 ? "sentence" : "word" });
+    };
+    const dismiss = (event: KeyboardEvent) => { if (event.key === "Escape") clearSelection(); };
+    const dismissOutside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !selectionBarRef.current?.contains(event.target)) clearSelection();
+    };
+    document.addEventListener("selectionchange", update);
+    document.addEventListener("pointerdown", dismissOutside, true);
+    document.addEventListener("pointerup", update);
+    document.addEventListener("keydown", dismiss);
+    window.addEventListener("resize", clearSelection);
+    return () => {
+      document.removeEventListener("selectionchange", update);
+      document.removeEventListener("pointerdown", dismissOutside, true);
+      document.removeEventListener("pointerup", update);
+      document.removeEventListener("keydown", dismiss);
+      window.removeEventListener("resize", clearSelection);
+    };
+    // The English source, not translation writes, defines a selection's identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [article.id, sourceKey]);
+
+  useEffect(() => { if (drawer || globalSheet) clearSelection(); }, [drawer, globalSheet]);
+
+  function explainSelection() {
+    if (!selection || selection.kind === "invalid") return;
+    const chosen = selection;
+    clearSelection();
+    stopPlay();
+    // The selection action disappears on open. Give modal focus a surviving
+    // return point next to reading assistance rather than the top navigation.
+    helpButtonRef.current?.focus({ preventScroll: true });
+    if (chosen.kind === "sentence") {
+      setDrawer({ type: "sentence", idx: chosen.idx });
+      return;
     }
-    bodyRef.current?.querySelectorAll(".sent-zh.peek").forEach((x) => x.classList.remove("peek"));
+    const chunk = article.sentences[chosen.idx]?.chunks?.find(value =>
+      normalizeSelection(value.text) === normalizeSelection(chosen.text) || normalizeSelection(value.word || "") === normalizeSelection(chosen.text),
+    );
+    openDict(chosen.text, chunk, chosen.idx);
+  }
+
+  function openSentenceHelp() {
+    clearSelection();
+    stopPlay();
+    setDrawer({ type: "sentence", idx: sent });
+  }
+
+  function jumpSentence(next: number) {
+    clearSelection();
+    stopPlay();
+    const idx = clampSentence(next, article.sentences.length);
+    setSent(idx);
+    actions.setProgress(article.id, idx);
+    actions.markRead(article.id, idx);
+    scrollToSent(idx);
   }
 
   /* 段级翻译（导入文章 zh=null，#35）；未配置 → 清加载态呈引导，不产出伪译文；
@@ -504,311 +555,114 @@ export default function ReaderScreen({ article }: { article: Article }) {
          translating，否则 skeleton 永挂；引导文案走组件态而非 fillSentenceZh——
          那会把文案持久化成正式译文，配置 Key 后这句就再也进不了真翻译（!s.zh 挡住） */
       onUnconfigured: () => {
-        if (mounted.current) setUncfg((prev) => new Set(prev).add(i));
+        if (mounted.current && !settled) setUncfg((prev) => new Set(prev).add(i));
         finish(false);
       },
-    });
+    }, { direction: "e2c" });
     if (!settled) translations.current.set(i, { stop() { engine.stop(); finish(false); } });
     });
   }
 
-  async function translateMissing() {
-    if (batch) return;
-    const missing = article.sentences.filter(s => !(effectiveSentenceZh(zhOverrides, s.idx, s.zh) || temporaryTranslations[s.idx]));
-    batchCancelled.current = false;
-    setBatch({ done: 0, total: missing.length });
-    for (let index = 0; index < missing.length; index++) {
-      if (batchCancelled.current || !mounted.current) break;
-      const success = await translateSentence(missing[index].idx);
-      if (!success || batchCancelled.current || !mounted.current) break;
-      setBatch({ done: index + 1, total: missing.length });
-    }
-    if (mounted.current) setBatch(null);
+  function cancelTranslation() {
+    translations.current.forEach(engine => engine.stop());
   }
 
-  function cancelTranslation() {
-    batchCancelled.current = true;
-    translations.current.forEach(engine => engine.stop());
-    if (mounted.current) setBatch(null);
-  }
+  const translationHelpIdx = drawer?.type === "sentence" ? drawer.idx : null;
+  useEffect(() => () => cancelTranslation(), [article.id, translationHelpIdx]);
 
   const total = article.sentences.length;
-  /** 「已读完」= 显式动作（先记为读完）之后的末句进度；被动滚动到末句只写断点（可恢复位置），
-      不改收尾卡 tag——原型 progress.completed 仅由 read-finish-only 置位（html:1803）。
-      state 而非 ref：点「先记为读完」时进度可能已是末句（快照值不变不触发重渲染），需要显式重渲染。 */
-  const atLast = sent >= total - 1;
-  /** 收尾卡练习词（原型 html:1800 practiceWord = collected[0]?.w || terms[0]?.w）：
-      本篇已收藏的第一个表达优先，无收藏则回退本篇第一个预置词条。 */
-  const collectedFromDoc = vocab.filter((v) => v.sourceArticleId === article.id);
-  const practiceWord = collectedFromDoc[0]?.word || article.termMeta?.[0]?.w;
-  /** 该词是否已在生词本（原型 findWord，html:1627）：决定主按钮是「用这个表达说一句」
-      （mic，已收藏）还是「收藏并练一句」（star，未收藏的预置词，html:1803 分支文案）。 */
-  const practiceSaved = !!practiceWord && vocab.some((v) => norm(v.word) === norm(practiceWord));
-  const practiceTerm = practiceWord ? (article.termMeta || []).find((t) => norm(t.w) === norm(practiceWord)) : undefined;
-  /** 新手引导条：未收起且还没开过口（原型 newUser 口径，html:1799） */
-  const showCoach = !prefs.coachDismissed && taskCount === 0;
+  const nextChapter = article.bookId ? tocArticles.find(a => chapterIndexOf(a) > chapterIndexOf(article) && a.sentences.length > 0) : undefined;
+  const showCoach = !prefs.coachDismissed;
   const headTitle = article.bookId && typeof article.chapterTitle === "string" && article.chapterTitle ? article.chapterTitle : article.title;
-  const missingCount = article.sentences.filter(s => !(effectiveSentenceZh(zhOverrides, s.idx, s.zh) || temporaryTranslations[s.idx])).length;
+  const author = typeof article.author === "string" ? article.author : "";
+  const bookTitle = article.bookId ? String(article.bookTitle || article.title) : "";
+  const currentHelpIdx = drawer?.type === "sentence" ? drawer.idx : sent;
 
-  function renderTranslation(s: SentencePair) {
-    const translated = effectiveSentenceZh(zhOverrides, s.idx, s.zh) || temporaryTranslations[s.idx];
-    const pending = translating.has(s.idx);
-    const error = translationErrors[s.idx];
-    if (pending) return <span className="sent-zh reveal rd-pending-translation" aria-live="polite">{translationDrafts[s.idx] || "正在翻译…"}</span>;
-    if (translated) {
-      if (masked && !revealed.has(s.idx)) return <button type="button" className="rd-translation-action" onClick={event => { event.stopPropagation(); setRevealed(prev => new Set(prev).add(s.idx)); }}><Icon name="eye" size={15} />显示第 {s.idx + 1} 句译文</button>;
-      return <span className="sent-zh reveal" data-zh={s.idx}>{translated}{" "}</span>;
-    }
-    return <span className="rd-missing-translation">
-      {error && <span className="rd-translation-error" role="status">{error}</span>}
-      {uncfg.has(s.idx) && <span>尚未设置翻译服务</span>}
-      <button type="button" className="rd-translation-action" onClick={event => { event.stopPropagation(); void translateSentence(s.idx); }}><Icon name="translate" size={15} />{error ? "重试" : `翻译第 ${s.idx + 1} 句`}</button>
-    </span>;
-  }
-
-  if (!total) return <><header className="learning-head"><button className="iconbtn" aria-label="返回" onClick={() => nav.pop()}><Icon name="left" size={20}/></button><h1>阅读</h1></header><div className="learning-body learning-empty"><p>这篇内容还没有可读正文。</p><button className="btn-ghost" onClick={() => nav.pop()}>返回书架</button></div></>;
+  if (!total) return <><header className="learning-head"><button className="iconbtn" data-nav-back aria-label="返回" onClick={() => nav.pop()}><Icon name="left" size={20}/></button><h1>阅读</h1></header><div className="learning-body learning-empty"><p>这篇内容还没有可读正文。</p><button className="btn-ghost" onClick={() => nav.pop()}>返回书架</button></div></>;
 
   return (
     <>
-      {/* 页头（原型 .nhead）：返回 + 居中标题/衬线副标 + 目录(list 图标)/AA 两钮（html:1803） */}
-      <header className="learning-head nhead rd-nhead">
-        <button
-          className="iconbtn"
-          aria-label="返回"
-          onClick={() => {
-            stopPlay();
-            setDrawer(null);
-            actions.setReading(null);
-            nav.pop();
-          }}
-        >
-          <Icon name="left" size={20} />
-        </button>
-        <div className="nt">
-          <h1 className="serif">{headTitle}</h1>
-          <small>{docMetaOf(article)}</small>
-        </div>
-        <div className="rd-nhead-acts">
-          <button className="iconbtn" aria-label="阅读目录" onClick={() => setDrawer({ type: "toc" })}>
-            <Icon name="list" size={18} />
-          </button>
-          <button className="iconbtn" aria-label="阅读设置" onClick={() => setDrawer({ type: "settings" })}>
-            <Icon name="aa" size={18} />
-          </button>
+      <header className="reader-toolbar">
+        <button className="reader-back reader-icon-button" data-nav-back aria-label="返回书架" onClick={() => {
+          stopPlay(); clearSelection(); setDrawer(null); actions.setReading(null); nav.pop();
+        }}><Icon name="left" size={21}/><span>书架</span></button>
+        <span className="reader-running-title" title={bookTitle || headTitle}>{bookTitle || headTitle}</span>
+        <div className="reader-toolbar-actions">
+          <button className="reader-icon-button" aria-label="阅读目录" onClick={() => setDrawer({ type: "toc" })}><Icon name="list" size={20}/></button>
+          <button className="reader-icon-button" aria-label="阅读设置" onClick={() => setDrawer({ type: "settings" })}><Icon name="aa" size={21}/></button>
         </div>
       </header>
-      <div className="rd-prog">
-        <i style={{ transform: `scaleX(${total ? (sent + 1) / total : 0})` }} />
-      </div>
-      <div className="rd-language-tools">
-        <span className="rd-sentence-count">{total} 句</span>
-        <div className="rd-language-mode" role="group" aria-label="正文语言">
-          {([['en', '英文'], ['bi', '双语'], ['zh', '中文']] as const).map(([mode, label]) => (
-            <button
-              key={mode}
-              type="button"
-              aria-pressed={prefs.mode === mode}
-              className={prefs.mode === mode ? "on" : ""}
-              onClick={() => actions.setReaderPrefs({ mode })}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div
-        ref={bodyRef}
-        className={`pbody v2-reader-body rd-body rd-continuous rd-mode-${prefs.mode} ${masked ? "reader-mask" : ""}`}
-        style={
-          {
-            paddingLeft: 24,
-            paddingRight: 24,
-            paddingBottom: 28,
-            /* Aa 字号档注入正文容器；英文与译文都随阅读字号调整。 */
-            "--rd-fs": `${prefs.fs * fontScale}px`,
-            "--rd-lh": prefs.lh,
-          } as CSSProperties
-        }
-        onClick={onBodyClick}
-        onPointerDown={onBodyPointerDown}
-        onPointerUp={clearPeek}
-        onPointerCancel={clearPeek}
-        onPointerMove={clearPeek}
-        onScroll={onScroll}
-      >
-        {showCoach && (
-          <div className="v2-reader-coach rd-reader-coach">
-            <div>
-              <span className="ico">
-                <Icon name="bulb" size={16} />
-              </span>
-              <span>
-                <b>点词查义，点底部句数查看本句</b>
-              </span>
+      <main ref={bodyRef} className="pbody rd-body rd-continuous reader-flow" style={{
+        "--rd-fs": `${prefs.fs * fontScale}px`, "--rd-lh": prefs.lh,
+      } as CSSProperties} onScroll={onScroll}>
+        <article className="reader-document">
+          <header className="reader-document-heading">
+            {author && <p className="reader-author">{author}</p>}
+            <h1 className="rd-article-title" lang="en">{headTitle}</h1>
+            <p className="reader-document-meta">
+              <span>{article.bookId ? `第 ${chapterIndexOf(article) + 1} 章` : sourceLabelOf(article)}</span>
+              <span>约 {minutesOf(article)} 分钟</span>
+            </p>
+          </header>
+          {showCoach && <div className="reader-first-hint">
+            <span>选中不懂的词句，再点「解释」。</span>
+            <button className="reader-icon-button" aria-label="收起提示" onClick={() => actions.setReaderPrefs({ coachDismissed: true })}><Icon name="close" size={15}/></button>
+          </div>}
+          <div className="v2-prose reader-prose">
+            {paragraphs.map((paragraph, index) => <p className="rd-original reader-paragraph" key={paragraph[0]?.idx ?? index} lang="en">{paragraph.map(sentence =>
+              <span key={sentence.idx} data-si={sentence.idx} className={`sent ${sent === sentence.idx ? "active" : ""} ${playingIdx === sentence.idx ? "playing" : ""}`}><SentEn s={sentence} savedKeys={savedKeys} prefs={prefs}/></span>,
+            )}</p>)}
+          </div>
+          <footer className="reader-document-end">
+            <div className="reader-end-mark" aria-hidden="true"><Icon name="bookopen" size={22}/></div>
+            <p>{finished ? "已读完" : article.bookId ? "本章结束" : "正文结束"}</p>
+            <div className="reader-end-actions">
+              {!finished && <button className="reader-text-button" onClick={() => { actions.setCompleted(article.id, true); toast("已标记读完"); }}><Icon name="check" size={17}/>标记读完</button>}
+              {nextChapter && <button className="reader-next-chapter" onClick={() => {
+                stopPlay(); cancelTranslation(); clearSelection(); pendingRead.current = null;
+                actions.setProgress(article.id, total - 1); actions.markRead(article.id, total - 1); actions.setCompleted(article.id, true);
+                nav.replace("reader", { articleId: nextChapter.id });
+              }}>继续下一章<Icon name="right" size={16}/></button>}
             </div>
-            <button
-              aria-label="收起提示"
-              onClick={() => actions.setReaderPrefs({ coachDismissed: true })}
-            >
-              <Icon name="close" size={15} />
-            </button>
-          </div>
-        )}
-        <div className="ch-kick">{sourceLabelOf(article)}</div>
-        {(prefs.mode !== "zh" || !article.titleCn) && <h2 className="rd-article-title" lang="en">{headTitle}</h2>}
-        {prefs.mode !== "en" && article.titleCn ? <h2 className="rd-title-translation" lang="zh">{article.titleCn}</h2> : null}
-        {prefs.mode !== "en" && missingCount > 0 && <div className="rd-translate-all" role="status">
-          <span>{batch ? `正在翻译 ${batch.done} / ${batch.total} 句` : `${missingCount} 句还没有译文`}</span>
-          <button className="tlink" onClick={() => batch ? cancelTranslation() : void translateMissing()}>{batch ? "停止翻译" : "翻译剩余全文"}</button>
-        </div>}
-        <div className="v2-prose">
-          {paragraphs.map((paragraph, index) => <section className="rd-paragraph" key={paragraph[0]?.idx ?? index}>
-            {prefs.mode !== "zh" && <p className="rd-original" lang="en">{paragraph.map(s => <span key={s.idx} data-si={s.idx} className={`sent ${sent === s.idx ? "active" : ""} ${playingIdx === s.idx ? "playing" : ""}`}><SentEn s={s} savedKeys={savedKeys} prefs={prefs} /></span>)}</p>}
-            {prefs.mode !== "en" && <p className="rd-translated" lang="zh">{paragraph.map(s => <span key={s.idx} data-si={prefs.mode === "zh" ? s.idx : undefined} className={`rd-translated-sentence ${sent === s.idx ? "active" : ""}`}>{renderTranslation(s)}</span>)}</p>}
-          </section>)}
+          </footer>
+        </article>
+      </main>
+      {selection && <div ref={selectionBarRef} className="reader-selection" role={selection.kind === "invalid" ? "status" : "toolbar"} aria-label="选文帮助">
+        <span className="reader-selection-text" title={selection.text}>{selection.kind === "invalid" ? "请选一个词组或单句" : selection.text}</span>
+        {selection.kind !== "invalid" && <button className="reader-explain" onClick={explainSelection}><Icon name="bulb" size={16}/>{selection.kind === "sentence" ? "理解这句" : "解释"}</button>}
+        <button className="reader-icon-button" aria-label="收起选文帮助" onClick={clearSelection}><Icon name="close" size={16}/></button>
+      </div>}
+      <div className={`reader-listen${controlsOpen ? " expanded" : ""}`}>
+        <div className="reader-position-track" role="progressbar" aria-label="当前阅读位置" aria-valuemin={1} aria-valuemax={total} aria-valuenow={sent + 1} aria-valuetext={`第 ${sent + 1} 句，共 ${total} 句`}><span style={{ width: `${((sent + 1) / total) * 100}%` }}/></div>
+        <div className="reader-listen-main">
+          <button className="reader-play-button" aria-label={playing ? "暂停朗读" : "播放"} title={playing ? "暂停；再次播放从本句开头继续" : "从当前句开始朗读"} onClick={() => { clearSelection(); playing ? stopPlay() : playFrom(sent, false); }}><Icon name={playing ? "pause" : "play"} size={21}/></button>
+          <div className="reader-listen-label"><span>{playing ? "正在朗读" : "听这篇英文"}</span><small>第 {sent + 1} / {total} 句</small></div>
+          <button ref={helpButtonRef} className="reader-icon-button reader-help-button" aria-label="阅读帮助" onClick={openSentenceHelp}><Icon name="bulb" size={20}/></button>
+          <button className="reader-icon-button reader-expand-button" aria-label={controlsOpen ? "收起朗读控制" : "展开朗读控制"} aria-expanded={controlsOpen} aria-controls={controlsId} onClick={() => { clearSelection(); setControlsOpen(value => !value); }}><Icon name="right" size={18}/></button>
         </div>
-        {/* 手动查询表达入口（原型 read-manual-lookup）：居中文字链形态 */}
-        <button className="v2-word-select" onClick={() => setDrawer({ type: "lookup", idx: sent })}>
-          <Icon name="search" size={15} />
-          没标出的词也可以查
-        </button>
-        {!account && vocab.length > 0 && (
-          <div className="v2-local-save">
-            <span>
-              <Icon name="lock" size={14} />
-              记录已保存在这台手机
-            </span>
-            <button onClick={openAccountSheet}>登录同步</button>
+        {controlsOpen && <div className="reader-listen-controls" id={controlsId}>
+          <div className="reader-transport">
+            <button className="reader-icon-button" aria-label="上一句" disabled={sent === 0} onClick={() => jumpSentence(sent - 1)}><Icon name="prev" size={19}/></button>
+            <button className="reader-current-sentence" aria-label={`查看第 ${sent + 1} 句，共 ${total} 句`} onClick={openSentenceHelp}>这句的意思<Icon name="chat" size={16}/></button>
+            <button className="reader-icon-button" aria-label="下一句" disabled={sent >= total - 1} onClick={() => jumpSentence(sent + 1)}><Icon name="next" size={19}/></button>
+            <button className="reader-rate" aria-label="切换语速" onClick={() => { const current = RATE_TIERS.indexOf(nearestRate(prefs.rate)); actions.setReaderPrefs({ rate: RATE_TIERS[(current + 1) % RATE_TIERS.length] }); }}>{nearestRate(prefs.rate)}×</button>
           </div>
-        )}
-        {/* 读后收尾卡（最后一句 / 已读完时出现） */}
-        {(atLast || finished) && (
-          <section className="learning-card v2-reader-finish">
-            <span className="learning-tag">{finished ? "这段已经读完" : "读到这一段的最后一句了"}</span>
-            <h2 style={{ marginTop: 10 }}>把读到的表达，用一次。</h2>
-            <p>{practiceWord ? `试着用 ${practiceWord} 说一句自己的话。` : "可以跟读当前句，模仿停顿与重音。"}</p>
-            {practiceWord ? (
-              <button
-                className="btn"
-                onClick={() => {
-                  stopPlay();
-                  /* 未收藏的练习词先收进生词本再开口（原型 ACT read-finish-practice，html:1865
-                     先 collectWord 再 startPractice），词条释义用内容预置数据（有则带）。 */
-                  if (!practiceSaved) {
-                    actions.saveWord(
-                      {
-                        word: practiceWord,
-                        kind: "word",
-                        phonetic: practiceTerm?.ph,
-                        senses: practiceTerm ? [{ pos: practiceTerm.pos, cn: practiceTerm.cn }] : [],
-                      },
-                      "word",
-                      { articleId: article.id, sentIdx: sent },
-                    );
-                  }
-                  void openPractice(nav, { mode: "word", title: practiceWord, word: practiceWord, reference: `用 ${practiceWord} 说一句自己的话。`, source: { articleId: article.id, sentenceIdx: sent } }).catch((error) => toast(String(error)));
-                }}
-              >
-                <Icon name={practiceSaved ? "mic" : "star"} size={15} />
-                {practiceSaved ? "用这个表达说一句" : "收藏并练一句"}
-              </button>
-            ) : (
-              <button
-                className="btn"
-                onClick={() => {
-                  stopPlay();
-                  void openPractice(nav, { mode: "follow", title: article.title, reference: article.sentences[sent]?.en || article.sentences[0]?.en || "", source: { articleId: article.id, sentenceIdx: sent } }).catch((error) => toast(String(error)));
-                }}
-              >
-                <Icon name="mic" size={15} />
-                跟读这一句
-              </button>
-            )}
-            <button
-              className="v2-text-link"
-              onClick={() => {
-                actions.setCompleted(article.id, true);
-                toast("这一段已记为读完，下次可以从书架继续");
-              }}
-            >
-              先记为读完，稍后再练
-            </button>
-          </section>
-        )}
-      </div>
-      {/* 悬浮胶囊播放条（原型 .playbar.v2-reader-playbar）：黑圆播放钮 + N / M 计数 + 跟读 + 语速 pill */}
-      <div className="rd-playbar">
-        <button
-          className="iconbtn"
-          aria-label="上一句"
-          onClick={() => {
-            stopPlay();
-            const nx = Math.max(0, sent - 1);
-            setSent(nx);
-            actions.setProgress(article.id, nx);
-            actions.markRead(article.id, nx);
-            scrollToSent(nx);
-          }}
-        >
-          <Icon name="prev" size={18} />
-        </button>
-        <button
-          className="pp"
-          aria-label={playing ? "停止朗读" : "播放"}
-          title={playing ? "停止朗读；再次播放会从本句开头开始" : "从当前句开始朗读"}
-          onClick={() => (playing ? stopPlay() : playFrom(sent, false))}
-        >
-          <Icon name={playing ? "stop" : "play"} size={20} />
-        </button>
-        <button
-          className="iconbtn"
-          aria-label="下一句"
-          onClick={() => {
-            stopPlay();
-            const nx = Math.min(total - 1, sent + 1);
-            setSent(nx);
-            actions.setProgress(article.id, nx);
-            actions.markRead(article.id, nx);
-            scrollToSent(nx);
-          }}
-        >
-          <Icon name="next" size={18} />
-        </button>
-        <button className="cnt num rd-current-sentence" aria-label={`查看第 ${sent + 1} 句，共 ${total} 句`} onClick={() => { stopPlay(); setDrawer({ type: "sentence", idx: sent }); }}>
-          <span>{sent + 1}/{total}</span><Icon name="list" size={14} />
-        </button>
-        <button
-          className="follow"
-          aria-label="跟读此句"
-          onClick={() => {
-            stopPlay();
-            void openPractice(nav, { mode: "follow", title: article.title, reference: article.sentences.find(s => s.idx === sent)?.en || "", source: { articleId: article.id, sentenceIdx: sent } });
-          }}
-        >
-          <Icon name="wave" size={15} />
-          跟读
-        </button>
-        <button
-          className="spd num"
-          aria-label="切换语速"
-          onClick={() => {
-            const cur = RATE_TIERS.indexOf(nearestRate(prefs.rate));
-            actions.setReaderPrefs({ rate: RATE_TIERS[(cur + 1) % RATE_TIERS.length] });
-          }}
-        >
-          {nearestRate(prefs.rate)}×
-        </button>
+          <div className="reader-extra-tools">
+            <button className="reader-text-button" onClick={() => { clearSelection(); stopPlay(); setDrawer({ type: "lookup", idx: sent }); }}><Icon name="search" size={17}/>查一个词或表达</button>
+            <button className="reader-text-button" aria-label="跟读此句" onClick={() => { clearSelection(); stopPlay(); void openPractice(nav, { mode: "follow", title: article.title, reference: article.sentences[sent]?.en || "", source: { articleId: article.id, sentenceIdx: sent } }).catch(error => toast(String(error))); }}><Icon name="wave" size={17}/>跟读</button>
+          </div>
+        </div>}
       </div>
 
       {/* ---------- 阅读域抽屉（本页局部；词典卡仍走全局 setSheet 叠在上层） ---------- */}
       <SentenceSheet
         open={drawer?.type === "sentence"}
-        onClose={() => setDrawer(null)}
-        article={article}
+        onClose={() => { stopPlay(); setDrawer(null); }}
+        article={presentedArticle}
         sentIdx={drawer?.type === "sentence" ? drawer.idx : sent}
         mask={masked}
         revealed={revealed.has(drawer?.type === "sentence" ? drawer.idx : sent)}
-        onReveal={() => setRevealed((prev) => new Set(prev).add(drawer?.type === "sentence" ? drawer.idx : sent))}
+        onReveal={() => setRevealed(prev => { const next = new Set(prev); next.has(currentHelpIdx) ? next.delete(currentHelpIdx) : next.add(currentHelpIdx); return next; })}
         onHear={() => playFrom(drawer?.type === "sentence" ? drawer.idx : sent, true)}
         onFollow={() => {
           const idx = drawer?.type === "sentence" ? drawer.idx : sent;
@@ -819,6 +673,9 @@ export default function ReaderScreen({ article }: { article: Article }) {
         onManualLookup={() => setDrawer({ type: "lookup", idx: drawer?.type === "sentence" ? drawer.idx : sent })}
         onTranslate={drawer?.type === "sentence" ? () => { void translateSentence(drawer.idx, true); } : undefined}
         translating={drawer?.type === "sentence" ? translating.has(drawer.idx) : false}
+        translationError={translationErrors[currentHelpIdx]}
+        translationDraft={translationDrafts[currentHelpIdx]}
+        translationUnconfigured={uncfg.has(currentHelpIdx)}
       />
       <EditTranslationSheet
         open={drawer?.type === "edit"}
@@ -858,11 +715,11 @@ function SentEn({
 }: {
   s: { idx: number; en: string; chunks?: SentenceChunk[] };
   savedKeys: Set<string>;
-  prefs: { mode: "bi" | "en" | "zh"; chunkMark: boolean; fs: number };
+  prefs: { chunkMark: boolean };
 }) {
   const toks = tokenize(s.en, s.chunks, savedKeys);
   return (
-    <span className={`sent-en ${prefs.mode === "zh" ? "rd-hidden-en" : ""}`}>
+    <span className="sent-en">
       {toks.map((t, i) =>
         !t.isWord ? (
           <span key={i} className="tok pu">
@@ -871,7 +728,7 @@ function SentEn({
         ) : (
           <span
             key={i}
-            className={`tok ${t.chunkIdx >= 0 ? (prefs.chunkMark ? "ck" : "") : t.saved ? "known" : ""}`}
+            className={`tok ${t.saved ? "known" : t.chunkIdx >= 0 && prefs.chunkMark ? "ck" : ""}`}
             data-t={t.text}
             data-ck={t.chunkIdx >= 0 ? t.chunkIdx : undefined}
           >
@@ -889,3 +746,19 @@ const CHUNK_TYPE_LABEL: Record<string, string> = {
   idiom: "习语",
   pattern: "句式",
 };
+
+interface ReaderSelection { text: string; idx: number; kind: "word" | "sentence" | "invalid" }
+
+function normalizeSelection(text: string): string {
+  return text.trim().replace(/\s+/g, " ").replace(/[’‘]/g, "'").toLocaleLowerCase();
+}
+
+/** Native ranges may terminate on a paragraph child boundary rather than a text node. */
+function selectionSentence(node: Node, offset: number, end: boolean): HTMLElement | null {
+  let endpoint: Node | null = node;
+  if (node.nodeType === Node.ELEMENT_NODE && node.childNodes.length) {
+    endpoint = node.childNodes[end ? Math.max(0, offset - 1) : offset] || node;
+  }
+  const element = endpoint instanceof HTMLElement ? endpoint : endpoint?.parentElement;
+  return element?.closest<HTMLElement>("[data-si]") || null;
+}

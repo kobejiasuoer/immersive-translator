@@ -1,3 +1,4 @@
+import { GlassSwitch } from "../ui/GlassSwitch";
 import { useEffect, useRef, useState } from "react";
 import { useLocalDraft } from "../core/useLocalDraft";
 import { actions, activeRepository, flushPersist, getState, toast, useApp } from "../store";
@@ -24,6 +25,34 @@ export default function LearningImport({ shareQueueId }: { shareQueueId?: string
   const setSourceUrl = (sourceUrl: string) => setDraft(d => ({ ...d, sourceUrl }));
   const setPreview = (preview: boolean) => setDraft(d => ({ ...d, preview }));
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const bodyRef = useRef<HTMLElement>(null);
+  const receivedShare = useRef<typeof incoming>(null);
+  const observedShare = useRef<typeof incoming>(null);
+  const operationScope = useRef(scopeRepository);
+  const operationVersion = useRef(0);
+  type ImportJob = { version: number; target: typeof scopeRepository; controller: AbortController };
+  const activeJob = useRef<ImportJob | null>(null);
+  const isTopmost = () => !bodyRef.current?.closest(".push")?.hasAttribute("inert");
+  const canContinue = (job: ImportJob) => activeJob.current === job && operationVersion.current === job.version && job.target === activeRepository() && !getState().shareIn && !!bodyRef.current?.isConnected && isTopmost();
+  function stopJob() {
+    operationVersion.current++;
+    activeJob.current?.controller.abort();
+    activeJob.current = null;
+    setBusy(false);
+  }
+  function beginJob(): ImportJob | null {
+    if (!ready || !isTopmost()) return null;
+    stopJob();
+    const job = { version: ++operationVersion.current, target: scopeRepository, controller: new AbortController() };
+    activeJob.current = job;
+    setBusy(true); setError("");
+    return job;
+  }
+  useEffect(() => () => {
+    operationVersion.current++;
+    activeJob.current?.controller.abort();
+    activeJob.current = null;
+  }, []);
 
   /* ---------- Safari 入站分享队列接线（App.tsx 消费队列后把 shareQueueId 传入） ----------
      · 确认保存（save 成功落库）→ share_queue_ack 删除队列项（恰好一次）；
@@ -50,18 +79,30 @@ export default function LearningImport({ shareQueueId }: { shareQueueId?: string
       }, 500);
     };
   }, [shareQueueId]);
-  /* 队列项进入时以分享内容重置导入草稿：旧草稿可能是上次未保存的输入，直接沿用
-     会让分享内容进不了预览（深链 shareIn 同样受益）。相等时不重写避免循环。 */
+  /* 新分享优先于旧草稿；普通打开仍恢复本地草稿。App 保留隐藏的 push 页，因此只由
+     顶层导入页接收。接收后清空交接槽，避免重开或 StrictMode 再次覆盖用户后续编辑。 */
   useEffect(() => {
-    if ((!shareQueueId && incoming?.source !== "shelf-refresh") || !ready || !incoming) return;
+    if (operationScope.current !== scopeRepository) {
+      const pending = !!activeJob.current;
+      operationScope.current = scopeRepository;
+      stopJob();
+      if (pending) setError("账号已切换，导入草稿仍在原账号保留。");
+    }
+    if (!incoming) { observedShare.current = null; receivedShare.current = null; return; }
+    // Hidden pages share the draft key too; their pending work must also be superseded.
+    if (observedShare.current !== incoming) { observedShare.current = incoming; stopJob(); }
+    if (!ready || scopeRepository !== activeRepository() || getState().shareIn !== incoming || receivedShare.current === incoming || !isTopmost()) return;
+    receivedShare.current = incoming;
     const mode = incoming.text.startsWith("http") ? "url" as const : "paste" as const;
-    setDraft(d => (d.input === incoming.text && d.url === incoming.text && d.mode === mode && !d.preview) ? d : { ...d, mode, input: mode === "paste" ? incoming.text : "", url: mode === "url" ? incoming.text : "", title: "", content: "", sourceUrl: "", preview: false });
-    // setDraft 每次渲染都是新引用，不进依赖（等值守卫已防重写循环）
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shareQueueId, ready, incoming]);
+    setDraft(d => ({ ...d, mode, input: mode === "paste" ? incoming.text : "", url: mode === "url" ? incoming.text : "", title: "", content: "", sourceUrl: "", preview: false }));
+    setError("");
+    actions.setShareIn(null);
+    // Run after each render so an uncovered push can receive its pending share as well.
+  });
 
   async function prepare() {
-    const target = scopeRepository; setBusy(true); setError("");
+    const job = beginJob(); if (!job) return;
+    const target = job.target;
     try {
       if (target !== activeRepository()) throw new Error("账号已切换，请重新打开导入");
       if (mode === "paste") {
@@ -72,8 +113,9 @@ export default function LearningImport({ shareQueueId }: { shareQueueId?: string
         try { urlObj = new URL(url.trim()); } catch { throw new Error("请输入完整的 http 或 https 文章链接。"); }
         if (!["http:", "https:"].includes(urlObj.protocol) || urlObj.username || urlObj.password) throw new Error("请输入公开网页的 HTTP(S) 地址");
         let response;
-        try { response = await httpRequest(urlObj.toString(), "GET", undefined, {}, undefined, true); }
+        try { response = await httpRequest(urlObj.toString(), "GET", undefined, {}, job.controller.signal, true); }
         catch { throw new Error("这篇网页暂时无法提取正文。链接已保留，请复制英文正文后切换到粘贴。"); }
+        if (!canContinue(job)) return;
         if (target !== activeRepository()) throw new Error("账号已切换，已停止导入");
         if (response.status !== 200) throw new Error(`网页暂时无法读取（${response.status}），可以改为粘贴正文`);
         const page = extractReadingPage(response.body);
@@ -81,12 +123,13 @@ export default function LearningImport({ shareQueueId }: { shareQueueId?: string
         if (page.text.length > 300000) throw new Error("正文过长，请分章粘贴，未截断原文");
         setContent(page.text); setTitle(title.trim() || page.title || urlObj.hostname); setSourceUrl(response.url || urlObj.toString());
       }
-      setPreview(true);
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
+      if (canContinue(job)) setPreview(true);
+    } catch (e) { if (canContinue(job)) setError(e instanceof Error ? e.message : String(e)); }
+    finally { if (activeJob.current === job) { activeJob.current = null; setBusy(false); } }
   }
   async function save() {
-    const target = scopeRepository; setBusy(true); setError("");
+    const job = beginJob(); if (!job) return;
+    const target = job.target;
     try {
       if (target !== activeRepository()) throw new Error("账号已切换，请返回后重新打开导入");
       if (!content.trim()) throw new Error("正文不能为空");
@@ -94,28 +137,31 @@ export default function LearningImport({ shareQueueId }: { shareQueueId?: string
       const split = splitImportedText(content), contentKey = readingContentKey(split);
       if (!split.sentences.length) throw new Error("正文没有可阅读的句子，请检查内容");
       const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(contentKey));
+      if (!canContinue(job)) return;
       if (target !== activeRepository()) throw new Error("账号已切换，请回原账号继续导入");
       const existing = getState().articles.find(a => !a.bookId && readingContentKey(a) === contentKey);
       const id = existing?.id || "import-" + Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 24);
       if (existing) { if (existing.archived) actions.restoreArticle(existing.id); toast("这篇正文已保存，已打开原有阅读位置"); }
       else actions.addArticle({id, title: importedTitle(title, content), titleCn: "", ...split, sourceUrl, sourceType: mode, contentRevision: id, createdAt: Date.now()});
       await flushPersist();
+      if (!canContinue(job)) return;
       if (target !== activeRepository()) throw new Error("账号已切换，原文在原账号保留");
       if (shareQueueId && !ackedRef.current) { ackedRef.current = true; void invokeRaw("share_queue_ack", {id: shareQueueId}).catch(e => toast(`确认导入状态失败：${e}`)); }
-      await clearDraft(); actions.setShareIn(null); nav.replace("reader", {articleId: id});
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
+      await clearDraft();
+      if (canContinue(job)) nav.replace("reader", {articleId: id});
+    } catch (e) { if (canContinue(job)) setError(e instanceof Error ? e.message : String(e)); }
+    finally { if (activeJob.current === job) { activeJob.current = null; setBusy(false); } }
   }
   if (!ready) return <div className="learning-body" role="status">正在恢复导入草稿…</div>;
   const previewSentences = splitImportedText(content).sentences;
   const previewTitle = importedTitle(title, content);
   return <>
     <header className="learning-head nhead">
-      <button className="iconbtn" aria-label="返回" onClick={()=>preview?setPreview(false):nav.pop()}><Icon name="left" size={20}/></button>
+      <button className="iconbtn" data-nav-back aria-label="返回" onClick={()=>preview?setPreview(false):nav.pop()}><Icon name="left" size={20}/></button>
       <div className="nt"><h1>{preview?"确认正文":"导入自己的内容"}</h1><small>{preview?"保存前可以核对和修改":"预览确认之后，再加入书架"}</small></div>
       <span/>
     </header>
-    <main className="learning-body">
+    <main className="learning-body reading-import-body" ref={bodyRef}>
       {preview ? <>
         {/* 只读预览卡（原型 VIEWS.importPreview，html:2106-2109）：tag + 23px 衬线标题 + 分句正文 */}
         <section className="learning-card v2-import-preview">
@@ -134,10 +180,8 @@ export default function LearningImport({ shareQueueId }: { shareQueueId?: string
           <button className="btn-ghost" style={{border:"1px solid var(--hairline-strong)"}} onClick={()=>setPreview(false)}>返回修改</button>
         </div>
       </> : <>
-        <div className="learning-seg soft" role="tablist" aria-label="导入方式">
-          <button className={mode==="paste"?"on":""} onClick={()=>setMode("paste")}>粘贴英文正文</button>
-          <button className={mode==="url"?"on":""} onClick={()=>setMode("url")}>网页链接</button>
-        </div>
+        <GlassSwitch className="learning-seg soft" role="group" ariaLabel="导入方式" value={mode} onChange={setMode}
+          items={[{value:"paste",label:"粘贴英文正文"},{value:"url",label:"网页链接"}]} />
         <section className="learning-card v2-import-form">
           <div className="v2-field">
             <label htmlFor="import-title">标题<span>可不填</span></label>

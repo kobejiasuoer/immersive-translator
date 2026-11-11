@@ -42,10 +42,14 @@ try {
   assert.equal(api.isWebNoise("The estimated read time depends on the reader."), false);
   const actualStructure = api.extractReadingPage(`<article><div class="beneath-title"><p class="summary">A useful article summary.</p><p class="primary-office">Energy.gov</p><span class="display-date">October 30, 2026</span><div class="read-time"><span>Estimated Read Time&nbsp;</span><span id="read-time"></span><span>&nbsp;min</span></div></div><p>October 30, 2026 was the first day of work. HTTPS remains useful.</p><div class="press-release-buttons"><div>View Next Press Release</div><p>A different unrelated story.</p></div></article>`);
   assert.equal(actualStructure.text, "A useful article summary.\n\nOctober 30, 2026 was the first day of work. HTTPS remains useful.");
+  const footerStructure = api.extractReadingPage(`<article><p>The inline marker ### is part of this real sentence.</p><p>&nbsp; ### &nbsp;</p><div class="tags linked-topic-tags"><span>Explore more on these topics:</span><ul><li>Unrelated topic links</li></ul></div></article><footer>Contact the department</footer>`);
+  assert.equal(footerStructure.text, "The inline marker ### is part of this real sentence.");
+  assert.equal(api.isWebNoise("####"), false, "Only the exact standalone press-release marker is filtered");
   if (process.env.READING_PAGE_FIXTURE) {
     const official = api.extractReadingPage(await readFile(process.env.READING_PAGE_FIXTURE, "utf8"));
     assert(official.title.includes("Energy Department Announces"));
     assert(!official.text.includes("Estimated Read Time")); assert(!official.text.includes("A .gov website")); assert(!official.text.includes("View Next")); assert(!official.text.includes("View Previous"));
+    assert(!official.text.includes("Explore more on these topics")); assert(!official.text.split(/\n\n/).includes("###"));
     assert(official.text.includes("Applicants must submit a concept paper by November 20, 2026"), "Real dates in the body must survive");
     assert(api.splitReadingText(official.text).paragraphStarts.length > 5, "Official story must preserve natural paragraphs");
     console.log("PASS: official Energy.gov HTML extraction (site chrome removed, real body dates and paragraphs preserved)");
@@ -59,10 +63,21 @@ try {
   const book = {id:"b1",kind:"book",title:"Alice in Wonderland",author:"Lewis Carroll",cover:"data:image/png;base64,AAA",chapters:[{articleId:"c1",title:"Chapter I"},{articleId:"c2",title:"Chapter II"}]};
   const hydrated = api.hydrateBookMetadata(chapter, [book]);
   assert.equal(hydrated.bookTitle, book.title); assert.equal(hydrated.author, book.author); assert.equal(hydrated.chapterIndex, 1); assert.equal(hydrated.chapterTitle, "Chapter II");
+  assert.equal(hydrated.sourceBookTitle, book.title);
   assert.equal(api.hydrateBookMetadata({...hydrated,bookTitle:"My custom title"},[book]).bookTitle, "My custom title", "Local rename must not be replaced by old desktop metadata");
+  assert(api.matchesCuratedBook({...hydrated,bookTitle:"My custom title"},{id:"alice",title:book.title}));
+  assert(api.matchesCuratedBook({...chapter,title:"Alice in Wonderland · Chapter II",chapterTitle:"Chapter II",bookTitle:"Renamed before this upgrade"},{id:"alice",title:book.title}));
+  assert(api.matchesCuratedBook({...chapter,bookTitle:"My custom title",curatedBookId:"alice"},{id:"alice",title:"A new catalogue title"}));
+  assert(!api.matchesCuratedBook({...chapter,bookTitle:book.title,curatedBookId:"other"},{id:"alice",title:book.title}), "An explicit catalogue identity must not fall back to a coincidental heading");
   const items = api.shelfItems([{...hydrated,createdAt:10}, {id:"new-import",title:"New story",sentences:[],paragraphStarts:[0],createdAt:30}, {...hydrated,id:"c1",chapterIdx:0,chapterIndex:0,createdAt:10}]);
   assert.equal(items[0].id, "new-import", "Recently imported short prose must not be buried beneath all books");
   assert.deepEqual(items[1].chapters.map(a=>a.id), ["c1","c2"]);
+  const mixedArchive = api.shelfItems([{...hydrated,id:"active",chapterIndex:0}, {...hydrated,id:"hidden",chapterIndex:1,archived:true,lastReadAt:40}])[0];
+  assert.equal(mixedArchive.article.id, "active", "Continuation cannot choose a more recently read archived chapter");
+  assert.deepEqual(api.shelfVisibleChapters(mixedArchive).map(a=>a.id), ["active"]);
+  assert.deepEqual(mixedArchive.chapters.map(a=>a.id), ["active","hidden"], "Omitted chapters must remain available for explicit restoration");
+  const fullyArchived = api.shelfItems(mixedArchive.chapters.map(a=>({...a,archived:true})))[0];
+  assert.deepEqual(api.shelfVisibleChapters(fullyArchived).map(a=>a.id), ["active","hidden"], "The archived shelf still exposes the full book for restoration");
   assert.equal(api.coverOf({cover:"javascript:alert(1)"}), undefined);
 
   await build({ entryPoints: [fileURLToPath(new URL("../src/services/discovery.ts", import.meta.url))], outfile: discoveryOutput, bundle: true, platform: "browser", format: "esm", plugins: [{name:"reading-state-fixtures",setup(b) {

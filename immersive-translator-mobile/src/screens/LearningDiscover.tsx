@@ -1,3 +1,4 @@
+import { GlassSwitch } from "../ui/GlassSwitch";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { actions, useApp } from "../store";
 import { useCloud } from "../services/cloud";
@@ -14,6 +15,7 @@ import { FeedPreviewSheet, type FeedSample } from "../components/reading/FeedPre
 import { ReadingDrawer } from "../components/reading/Drawer";
 import { minutesOf, levelLabelOf, sourceLabelOf } from "../components/reading/meta";
 import { CURATED_BOOKS, CURATED_DOCS, CURATED_FEEDS, curatedFeed, curatedFeedDocs, type CuratedBook } from "../core/curated";
+import { matchesCuratedBook } from "../core/readingLibrary";
 
 /** 书库/资讯难度筛选（原型 VIEWS.library，html:2040-2042）：全部 / 入门·中级 / 进阶；
     入门·中级=level 命中 /入门|日常|四六级/（原型 f==='easy' 的正则口径）。 */
@@ -45,7 +47,7 @@ function useRun() {
 
 function PushHead({ title, subtitle, onBack, right }: { title: string; subtitle: string; onBack: () => void; right?: ReactNode }) {
   return <header className="learning-head nhead">
-    <button className="iconbtn" aria-label="返回" onClick={onBack}><Icon name="left" size={20}/></button>
+    <button className="iconbtn" data-nav-back aria-label="返回" onClick={onBack}><Icon name="left" size={20}/></button>
     <div className="nt"><h1>{title}</h1><small>{subtitle}</small></div>
     <span>{right}</span>
   </header>;
@@ -77,7 +79,7 @@ export function LearningLibrary() {
         const found = page.books.find(b => b.title.toLowerCase() === item.title.toLowerCase());
         if (!found) throw new Error("这本书的电子书还没有上架，上架后即可试读与加入书架。");
         const preview = await previewBook(found, signal);
-        if (valid()) setBook(preview);
+        if (valid()) setBook({ ...preview, curatedBookId: item.id });
       });
     } catch (cause) { setError(discoveryError(cause)); }
   }
@@ -88,10 +90,10 @@ export function LearningLibrary() {
   }
   const importedBook = !!book && articles.some(article => article.bookId === book.bookId && !article.archived);
   const shownBooks = CURATED_BOOKS.filter(item => levelIn(item.level, grade));
-  const onShelf = (item: CuratedBook) => articles.some(article => !article.archived && article.bookTitle === item.title);
+  const onShelf = (item: CuratedBook) => articles.some(article => !article.archived && matchesCuratedBook(article, item));
   const saving = busy.includes("保存");
   function readExisting(item: CuratedBook) {
-    const matches = articles.filter(article => article.bookTitle === item.title);
+    const matches = articles.filter(article => matchesCuratedBook(article, item));
     const active = matches.filter(article => !article.archived);
     const target = [...(active.length ? active : matches)].sort((a, b) => (b.lastReadAt || 0) - (a.lastReadAt || 0) || Number(a.chapterIndex ?? a.chapterIdx ?? 0) - Number(b.chapterIndex ?? b.chapterIdx ?? 0))[0];
     if (target) { if (target.bookId) actions.restoreBook(target.bookId); nav.push("reader", {articleId: target.id}); }
@@ -99,14 +101,12 @@ export function LearningLibrary() {
   }
   return <>
     <PushHead title="精选经典书库" subtitle="先试读，找到适合自己的篇章" onBack={nav.pop} />
-    <main className="learning-body">
+    <main className="learning-body reading-discover-body">
       {busy && <div className="learning-notice" role="status">{busy}{!saving && <button className="tlink" onClick={() => { pending.current?.abort(); setBusy(""); }}>取消</button>}</div>}
       {error && <div className="learning-error" role="alert">{error}</div>}
       {/* 难度筛选 chips（原型 .v2-filter-row .chip.on：散排胶囊 + accent 实底白字激活态） */}
-      <div className="v2-filter-row">
-        {([["all", "全部"], ["easy", "入门 / 中级"], ["advanced", "进阶"]] as [GradeFilter, string][]).map(([id, label]) =>
-          <button key={id} className={`learning-chip${grade === id ? " on" : ""}`} aria-pressed={grade === id} onClick={() => setGrade(id)}>{label}</button>)}
-      </div>
+      <GlassSwitch className="v2-filter-row" role="group" ariaLabel="书籍难度" value={grade} onChange={setGrade}
+        items={([["all", "全部"], ["easy", "入门 / 中级"], ["advanced", "进阶"]] as const).map(([value,label]) => ({value,label}))} />
       {/* 书卡（原型 html:2041）：封面 = .cover/.c2/.c3 三色渐变；元信息 = 级别 + 章数 */}
       {shownBooks.map(item => {
         const added = onShelf(item);
@@ -125,7 +125,7 @@ export function LearningLibrary() {
           </div>
           <div className="v2-book-actions">
             <button className="btn-ghost" style={{ border: "1px solid var(--hairline-strong)" }} disabled={!!busy} onClick={() => void openBook(item)}>试读</button>
-            <button className="btn" disabled={!!busy} onClick={() => readExisting(item)}>{added ? "继续阅读" : articles.some(a => a.bookTitle === item.title) ? "重新加入" : "加入书架"}</button>
+            <button className="btn" disabled={!!busy} onClick={() => readExisting(item)}>{added ? "继续阅读" : articles.some(a => matchesCuratedBook(a, item)) ? "重新加入" : "加入书架"}</button>
           </div>
         </article>;
       })}
@@ -242,7 +242,7 @@ export function LearningFeeds() {
   const saving = busy.includes("保存") || busy.includes("移除");
   return <>
     <PushHead title="英文短文与资讯" subtitle="练习精选短文，或订阅自己的 RSS" onBack={nav.pop} />
-    <main className="learning-body">
+    <main className="learning-body reading-discover-body">
       {busy && <div className="learning-notice" role="status">{busy}{!saving && <button className="tlink" onClick={() => { pending.current?.abort(); setBusy(""); }}>取消</button>}</div>}
       {error && <div className="learning-error" role="alert">{error}{failedEntry?.summary && <button className="btn-ghost" disabled={!!busy} onClick={() => void openEntry(failedEntry, true)}>改为预览订阅摘要</button>}</div>}
       {notice && <p className="learning-notice" role="status">{notice}</p>}

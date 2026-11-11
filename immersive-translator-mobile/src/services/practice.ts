@@ -31,7 +31,7 @@ export interface PracticeAttempt {
 }
 export interface PracticeTask {
   id: string; mode: "word" | "scenario" | "follow"; title: string; reference: string;
-  word?: string; source?: { articleId: string; sentenceIdx: number }; steps?: string[];
+  word?: string; source?: { articleId: string; sentenceIdx: number; sentenceIndices?: number[]; boundaryKey?: string }; steps?: string[];
   step: number; attempts: PracticeAttempt[]; draft: string;
   status: "active" | "paused" | "completed"; updatedAt: number; createdAt: number;
   skippedSteps?: number[];
@@ -49,6 +49,10 @@ export function createPracticeTask(input: Pick<PracticeTask, "mode" | "title" | 
   return { ...input, id: practiceId("practice"), step: 0, attempts: [], draft: "", status: "active", updatedAt: now, createdAt: now };
 }
 export function taskReference(task: PracticeTask): string { return task.steps?.[task.step] ?? task.reference; }
+/** Original practice steps stay fixed when reading sentence boundaries are repaired. */
+export function taskSentenceIndex(task: Pick<PracticeTask, "source" | "step">, step = task.step): number {
+  return task.source?.sentenceIndices?.[step] ?? (task.source?.sentenceIdx ?? 0) + step;
+}
 export function isUnknownRequest(error: unknown): boolean {
   return error instanceof TypeError || error instanceof DOMException && error.name === "AbortError" || error instanceof CloudError && (error.status === 0 || error.status >= 500) || typeof error === "string";
 }
@@ -91,8 +95,13 @@ export interface DurableRecording {
   stop(): Promise<CaptureStopResult & { manifest: AudioManifest }>;
   discard(): Promise<void>;
 }
-export async function startDurableRecording(repo: Repository, clipId: string, metadata: unknown, onLevel: (value: number) => void): Promise<DurableRecording> {
+/** Capture has already stopped; calling stop again cannot recover missing samples. */
+export class RecordingContentError extends Error {
+  constructor(readonly kind: "empty" | "incomplete", message: string, options?: ErrorOptions) { super(message, options); }
+}
+export async function startDurableRecording(repo: Repository, clipId: string, metadata: unknown, onLevel: (value: number) => void, signal?: AbortSignal): Promise<DurableRecording> {
   await repo.audioBegin(clipId, metadata);
+  if (signal?.aborted) { await repo.audioDelete(clipId); throw new DOMException("录音已取消", "AbortError"); }
   let sequence = 0; let queue = Promise.resolve(); let failure: unknown; let capture: Capture | null = null;
   const append = (pcm: string) => {
     const index = sequence++;
@@ -102,14 +111,15 @@ export async function startDurableRecording(repo: Repository, clipId: string, me
     });
   };
   try { capture = await startPcmCapture({ onLevel, onChunk: append }); } catch (error) { await repo.audioDelete(clipId); throw error; }
+  if (signal?.aborted) { if (capture) await capture.stop(); await queue; await repo.audioDelete(clipId); throw new DOMException("录音已取消", "AbortError"); }
   if (!capture) { await repo.audioDelete(clipId); throw new Error("麦克风未开启。你可以在系统设置中允许，或先使用文字回答。"); }
   let stopResult: Promise<CaptureStopResult> | null = null;
   const stopCapture = () => stopResult ??= capture!.stop();
   return {
     async stop() {
       const result = await stopCapture(); await queue;
-      if (failure) throw new Error("这次录音未能完整保存。已有片段仍保留，可以先用文字回答。", { cause: failure });
-      if (!result.pcmB64) { await repo.audioDelete(clipId); throw new Error("没有录到有效声音，请靠近麦克风后再试。"); }
+      if (failure) throw new RecordingContentError("incomplete", "这次录音未能完整保存。已有片段仍保留，可以先用文字回答。", { cause: failure });
+      if (!result.pcmB64) { await repo.audioDelete(clipId); throw new RecordingContentError("empty", "没有录到有效声音，请靠近麦克风后再试。"); }
       const manifest = await repo.audioFinalize(clipId);
       return { ...result, manifest };
     },

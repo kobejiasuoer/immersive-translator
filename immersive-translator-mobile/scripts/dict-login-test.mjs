@@ -13,26 +13,29 @@ const tests=[],test=(name,run)=>tests.push([name,run]);
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 async function runtime() {
   const dom=new JSDOM('<html><body><div id="app" class="app"></div></body></html>',{url:'https://preview.local'}),w=dom.window;
-  w.matchMedia=()=>({matches:false,addEventListener(){}});
-  Object.assign(globalThis,{window:w,document:w.document,Event:w.Event,CustomEvent:w.CustomEvent,localStorage:w.localStorage,requestAnimationFrame:fn=>fn()});
+  w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});
+  Object.assign(globalThis,{window:w,document:w.document,Node:w.Node,Element:w.Element,HTMLElement:w.HTMLElement,Event:w.Event,CustomEvent:w.CustomEvent,MouseEvent:w.MouseEvent,KeyboardEvent:w.KeyboardEvent,getComputedStyle:w.getComputedStyle.bind(w),localStorage:w.localStorage,requestAnimationFrame:fn=>fn()});
   const data=new Map(),hooks={},cache=new Map();
-  const persistence=async identity=>{let saved=data.get(identity);if(!saved){saved={revision:0,state:null,records:new Map()};data.set(identity,saved);}let closed=false;return {identity,close(){closed=true;},async loadSnapshot(){await hooks.load?.(identity);return structuredClone({revision:saved.revision,state:saved.state});},async get(collection,id){return structuredClone(saved.records.get(collection+':'+id)??null);},async saveSnapshot(state,expectedRevision){return this.commit({state,expectedRevision});},async commit(input){assert(!closed);assert.equal(input.expectedRevision,saved.revision);for(const row of input.records??[]){const key=row.collection+':'+row.id,old=saved.records.get(key);assert.equal(row.expectedVersion,old?.version??0);saved.records.set(key,structuredClone({...row,version:(old?.version??0)+1}));}saved.revision++;if(input.state!==undefined)saved.state=structuredClone(input.state);return {revision:saved.revision,alreadyApplied:false};},async audioRead(){throw new Error('CLIP_NOT_FOUND');},async audioManifest(){return null;}};};
+  const persistence=async identity=>{let saved=data.get(identity);if(!saved){saved={revision:0,state:null,records:new Map()};data.set(identity,saved);}let closed=false;return {identity,close(){closed=true;},async loadSnapshot(){await hooks.load?.(identity);return structuredClone({revision:saved.revision,state:saved.state});},async get(collection,id){return structuredClone(saved.records.get(collection+':'+id)??null);},async list(collection){return structuredClone([...saved.records.values()].filter(row=>row.collection===collection));},async saveSnapshot(state,expectedRevision){return this.commit({state,expectedRevision});},async commit(input){assert(!closed);assert.equal(input.expectedRevision,saved.revision);for(const row of input.records??[]){const key=row.collection+':'+row.id,old=saved.records.get(key);if(row.expectedVersion!==undefined)assert.equal(row.expectedVersion,old?.version??0);saved.records.set(key,structuredClone({...row,version:(old?.version??0)+1}));}saved.revision++;if(input.state!==undefined)saved.state=structuredClone(input.state);return {revision:saved.revision,alreadyApplied:false};},async audioRead(){throw new Error('CLIP_NOT_FOUND');},async audioManifest(){return null;}};};
   const device={isTauri:()=>false,invokeRaw:async()=>null,invoke:async()=>null,haptic(){},reportDiag(){},scheduleDailyReminder(){},readClipboard:async()=>'',writeClipboard:async()=>{},shareText:async()=>{}};
   function load(file){file=path.resolve(file);if(cache.has(file))return cache.get(file).exports;const mod=new Module(file);cache.set(file,mod);mod.filename=file;mod.paths=Module._nodeModulePaths(path.dirname(file));mod.require=name=>{
     if(name==='react')return React;
-    if(name==='../screens/LearningHome')return {openPractice:async()=>{}};
+    // Styles are rendered by browser acceptance; this loader executes component logic only.
+    if(name.endsWith('.css'))return {};
+
+    if(name.endsWith('/screens/LearningHome'))return {openPractice:async()=>{}};
     if(name==='./device'||name==='./services/device'||name==='../services/device')return device;
     if(name==='./services/voice')return {cloudAvailable:()=>false,speakCloud(){throw new Error('unused');}};
     if(name==='./core/persistence'||name==='../core/persistence')return {createPersistence:persistence};
     if(name.startsWith('.')){let next=path.resolve(path.dirname(file),name);if(!path.extname(next))next=fs.existsSync(next+'.ts')?next+'.ts':fs.existsSync(next+'.tsx')?next+'.tsx':path.join(next,'index.ts');return load(next);}
     return require(name);
-  };const source=fs.readFileSync(file,'utf8').replaceAll('import.meta.env','({DEV:true,VITE_API_BASE_URL:"https://api.local"})').replaceAll('import.meta.hot','undefined');const code=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;mod._compile('const setTimeout=globalThis.window.setTimeout.bind(globalThis.window);const clearTimeout=globalThis.window.clearTimeout.bind(globalThis.window);\n'+code,file);return mod.exports;}
+  };const source=fs.readFileSync(file,'utf8').replaceAll('import.meta.env','({DEV:true,VITE_API_BASE_URL:"https://api.local"})').replaceAll('import.meta.hot','undefined');const code=ts.transpileModule(source,{fileName:file,compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;mod._compile('const setTimeout=globalThis.window.setTimeout.bind(globalThis.window);const clearTimeout=globalThis.window.clearTimeout.bind(globalThis.window);\n'+code,file);return mod.exports;}
   const s=load(path.join(root,'src/store.ts')),c=load(path.join(root,'src/services/cloud.ts')),gate=load(path.join(root,'src/services/authGate.ts')),ui=load(path.join(root,'src/ui/sheets.tsx'));
   await s.initializeStore();const {createRoot}=require('react-dom/client'),app=createRoot(document.getElementById('app'));
   function Host(){const intent=gate.useLoginIntent();return React.createElement(ui.SheetHost,{inert:!!intent});}
   await act(async()=>{app.render(React.createElement(Host));});
   let queries=0,query=async()=>JSON.stringify({defs:[{pos:'n.',cn:'已续接释义'}]});
-  globalThis.fetch=async(url,opts)=>{let body;if(url.endsWith('/auth/login')){const id=JSON.parse(opts.body).email.split('@')[0];body={user:{id,email:id+'@test.local',nickname:null,plan:'free'},accessToken:'a-'+id,refreshToken:'r-'+id,expiresIn:900};}else if(url.endsWith('/me/config'))body={models:['test'],gateway:{llm:'/v1/gateway/llm'}};else if(url.endsWith('/gateway/llm')){queries++;body={choices:[{message:{content:await query(opts)}}]};}else if(url.endsWith('/auth/logout'))body={};else throw new Error('Unexpected request '+url);return new Response(JSON.stringify(body),{status:200,headers:{'content-type':'application/json'}});};
+  globalThis.fetch=async(url,opts)=>{let body;if(url.endsWith('/auth/login')){const id=JSON.parse(opts.body).email.split('@')[0];body={user:{id,email:id+'@test.local',nickname:null,plan:'free'},accessToken:'a-'+id,refreshToken:'r-'+id,expiresIn:900};}else if(url.endsWith('/me/config'))body={models:['test'],gateway:{llm:'/v1/gateway/llm'}};else if(url.endsWith('/gateway/llm')){queries++;const response=await query(opts);body=typeof response==='string'?{choices:[{message:{content:response}}]}:response;}else if(url.endsWith('/auth/logout'))body={};else throw new Error('Unexpected request '+url);return new Response(JSON.stringify(body),{status:200,headers:{'content-type':'application/json'}});};
   const entry=(type='word',word='hello')=>({type,word,senses:type==='missing'?[]:[{pos:'n.',cn:'内置释义'}],saved:false,articleId:s.getState().articles[0].id,sentIdx:0});
   const open=async e=>{await act(async()=>{s.actions.setSheet({kind:'dict',entry:e});});};
   const click=async text=>{await act(async()=>{const button=[...document.querySelectorAll('button')].find(node=>node.textContent.includes(text)||(text==='查询释义'&&node.textContent.includes('重试查询')));assert(button,'Missing button '+text);button.click();await tick();});};
@@ -51,8 +54,147 @@ test('late lookup from account A cannot update a card after switching to B',asyn
 test('cancelling during target load preserves the original card and never publishes account data',async()=>{const rt=await runtime();try{const e=rt.entry('missing');await rt.open(e);await rt.click('查询释义');await act(async()=>{await rt.c.login('u1@test.local','p','password');});const entered=deferred(),release=deferred(),profiles=[];window.addEventListener('mobile-profile-change',()=>profiles.push(rt.s.profileIdentity()));rt.hooks.load=async id=>{if(id==='u1'){entered.resolve();await release.promise;}};let claim,rejected,cancel;await act(async()=>{claim=rt.gate.completeLogin(false);rejected=assert.rejects(claim,error=>error.name==='AbortError');await entered.promise;cancel=rt.gate.cancelLogin();await tick();release.resolve();await Promise.all([rejected,cancel]);await tick();});assert.equal(rt.s.profileIdentity(),'guest');assert.equal(rt.c.cloudState().account,null);assert.equal(rt.s.getState().sheet.entry,e);assert(document.body.textContent.includes('已取消登录'));assert(!profiles.includes('u1'));assert.equal(rt.queries,0);}finally{await rt.close();}});
 test('successful lookup displays and persists every sense and example',async()=>{const rt=await runtime();try{const defs=[{pos:'n.',cn:'第一条释义'},{pos:'v.',cn:'第二条释义'}];rt.setQuery(async()=>JSON.stringify({defs,ex:'A useful example.'}));await rt.open(rt.entry('missing','newword'));await rt.click('查询释义');await rt.login();assert(document.body.textContent.includes('第一条释义'));assert(document.body.textContent.includes('第二条释义'));assert(document.body.textContent.includes('A useful example.'));assert(!document.body.textContent.includes('暂无释义'));await rt.click('收藏到生词本');const saved=rt.s.getState().vocab.find(w=>w.word==='newword');assert.deepEqual(saved.senses,defs);assert.equal(saved.example,'A useful example.');await rt.s.flushPersist();await rt.s.switchProfile('guest',false);await rt.s.switchProfile('u1',false);assert.deepEqual(rt.s.getState().vocab.find(w=>w.word==='newword').senses,defs);}finally{await rt.close();}});
 test('failed dictionary lookup is an error and can retry before collection',async()=>{const rt=await runtime();try{rt.setQuery(async()=>'{invalid');await rt.open(rt.entry('missing','newword'));await rt.click('查询释义');await rt.login();assert(document.querySelector('[role=alert]'));assert(!document.body.textContent.includes('释义已查到'));assert.equal(rt.s.getState().vocab.length,0);rt.setQuery(async()=>JSON.stringify({defs:[{pos:'n.',cn:'恢复成功'}]}));await rt.click('重试查询');assert(document.body.textContent.includes('恢复成功'));await rt.click('收藏到生词本');assert.equal(rt.s.getState().vocab[0].senses[0].cn,'恢复成功');}finally{await rt.close();}});
+for(const reason of ['length','content_filter'])test('truncated '+reason+' responses cannot become dictionary senses or completed translations',async()=>{const rt=await runtime();try{rt.setQuery(async()=>({choices:[{message:{content:JSON.stringify({defs:[{pos:'n.',cn:'貌似完整的释义'}]})},finish_reason:reason}]}));await rt.open(rt.entry('missing','newword'));await rt.click('查询释义');await rt.login();assert(document.querySelector('[role=alert]'));assert(!document.body.textContent.includes('释义已查到'));assert.equal(rt.s.getState().vocab.length,0);const service=rt.load('src/services/translate.ts'),events=[];await act(async()=>{service.startTranslate('An English sentence.',{onDelta:text=>events.push(['delta',text]),onDone:text=>events.push(['done',text]),onFail:text=>events.push(['fail',text])},{direction:'e2c'});await tick();});assert.equal(events.length,1);assert.equal(events[0][0],'fail');assert(events[0][1].includes('未保存'));rt.setQuery(async()=>({choices:[{message:{content:JSON.stringify({defs:[{pos:'n.',cn:'恢复完整的释义'}]})},finish_reason:'stop'}]}));await rt.click('重试查询');await rt.click('收藏到生词本');assert.equal(rt.s.getState().vocab[0].senses[0].cn,'恢复完整的释义');}finally{await rt.close();}});
 test('progress, explicit completion, daily reading and restore are independent and durable',async()=>{const rt=await runtime();try{const article=rt.s.getState().articles[0],id=article.id;rt.s.actions.setProgress(id,article.sentences.length-1);assert.equal(rt.s.readTodayCount(rt.s.getState()),0);assert.equal(rt.s.getState().readingCompleted[id],undefined);rt.s.actions.markRead(id,article.sentences.length-1);rt.s.actions.markRead(id,article.sentences.length-1);assert.equal(rt.s.readTodayCount(rt.s.getState()),1);rt.s.actions.markRead(id,0);assert.equal(rt.s.readTodayCount(rt.s.getState()),2);rt.s.actions.setCompleted(id);rt.s.actions.archiveArticle(id);rt.s.actions.restoreArticle(id);rt.s.actions.renameArticle(id,'我的书名');await rt.s.flushPersist();await rt.s.switchProfile('u1',false);await rt.s.switchProfile('guest',false);assert.equal(rt.s.getState().readingCompleted[id],true);assert.equal(rt.s.getState().progress[id],article.sentences.length-1);assert.equal(rt.s.getState().articles.find(a=>a.id===id).archived,false);assert.equal(rt.s.getState().articles.find(a=>a.id===id).title,'我的书名');await rt.s.replaceSyncedState({readLog:{day:'2000-1-1',count:99,seen:{[id]:[0]}}});rt.s.actions.markRead(id,0);assert.equal(rt.s.readTodayCount(rt.s.getState()),1);assert.deepEqual(rt.s.getState().readLog.seen[id],[0]);}finally{await rt.close();}});
 test('legacy highest-index metrics never become completion or inflated actual reads',async()=>{const rt=await runtime();try{await rt.s.flushPersist();const snapshot=rt.data.get('guest').state,id=snapshot.articles[0].id;snapshot.version=4;delete snapshot.readingCompleted;snapshot.progress[id]=snapshot.articles[0].sentences.length-1;snapshot.readLog={day:rt.s.getState().readLog.day,count:113,high:{[id]:99}};await rt.s.switchProfile('u1',false);await rt.s.switchProfile('guest',false);assert.equal(rt.s.getState().readingCompleted[id],undefined);assert.equal(rt.s.getState().progress[id],snapshot.articles[0].sentences.length-1);assert.equal(rt.s.readTodayCount(rt.s.getState()),0);rt.s.actions.markRead(id,0);assert.equal(rt.s.readTodayCount(rt.s.getState()),1);}finally{await rt.close();}});
 test('opening sentence tools never requests login or analysis, successful explicit parse is cached',async()=>{const rt=await runtime();try{const article=rt.s.getState().articles[0],sentence=article.sentences[0];article.sentences[0]={...sentence,parse:undefined};const {SentenceSheet}=rt.load('src/components/reading/SentenceSheet.tsx');let intent;function Probe(){intent=rt.gate.useLoginIntent();return null;}const props={open:true,onClose(){},article,sentIdx:0,mask:false,revealed:true,onReveal(){},onHear(){},onFollow(){},onEdit(){},onManualLookup(){}};await rt.render(React.createElement(React.Fragment,null,React.createElement(Probe),React.createElement(SentenceSheet,props)));assert.equal(rt.queries,0);assert.equal(intent,null);assert(document.body.textContent.includes('解析这句'));rt.setQuery(async()=>JSON.stringify({zh:'完整译文',trunk:'A useful trunk.',parts:[{label:'主语',text:'A short pause'},{label:'谓语',text:'helps me'}]}));await rt.click('解析这句');await rt.login();assert.equal(rt.queries,1);assert(document.body.textContent.includes('A useful trunk.'));assert.equal(rt.s.getState().sentenceParseCache[article.id]['0'].en,sentence.en);await rt.render(React.createElement(SentenceSheet,{...props,open:false}));await rt.render(React.createElement(SentenceSheet,props));assert.equal(rt.queries,1);assert(document.body.textContent.includes('A useful trunk.'));}finally{await rt.close();}});
 test('manual lookup uses saved definitions without requesting the network',async()=>{const rt=await runtime();try{const article=rt.s.getState().articles[0];rt.s.actions.saveWord({word:'unlisted',kind:'word',senses:[{pos:'adj.',cn:'已收藏的解释'}]},'word',{articleId:article.id,sentIdx:0});const {LookupSheet}=rt.load('src/components/reading/LookupSheet.tsx');await rt.render(React.createElement(LookupSheet,{open:true,onClose(){},article,sentIdx:0}));await act(async()=>{const input=document.querySelector('input');Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(input,'unlisted');input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));});await rt.click('查看表达');assert.equal(rt.s.getState().sheet.entry.type,'word');assert.equal(rt.s.getState().sheet.entry.saved,true);assert.equal(rt.s.getState().sheet.entry.senses[0].cn,'已收藏的解释');assert.equal(rt.queries,0);}finally{await rt.close();}});
+test('contextual English help is explicit, survives login, and persists with the selected sentence', async()=>{
+  const rt=await runtime();try{
+    const sentence=rt.s.getState().articles[0].sentences[0].en;
+    const e={...rt.entry('missing','pause'),sentence};
+    const result={meaning:'A short time when you stop what you are doing.',example:'Take a short pause before you answer.'};
+    rt.setQuery(async()=>JSON.stringify(result));
+    await rt.open(e);
+    assert.equal(rt.queries,0);assert(document.body.textContent.includes('用英文解释这里的用法'));
+    await rt.click('用英文解释这里的用法');assert.equal(rt.queries,0);
+    await rt.login();assert.equal(rt.queries,1);
+    assert(document.querySelector('.reader-english-meaning').textContent.includes(result.meaning));
+    assert.equal(document.querySelectorAll('.sense').length,0);
+    await rt.click('收藏到生词本');
+    assert.deepEqual(rt.s.getState().vocab.find(word=>word.word==='pause').contextExplanation,{sentence,...result});
+    await rt.s.flushPersist();await rt.s.switchProfile('guest',false);await rt.s.switchProfile('u1',false);
+    await rt.open({...e,saved:true});assert.equal(rt.queries,1);
+    assert(document.querySelector('.reader-english-meaning').textContent.includes(result.meaning));
+    await rt.open({...e,sentence:'Pause the video here.'});
+    assert(!document.querySelector('.reader-english-meaning'),'A different context must not reuse the saved explanation');
+    assert(document.body.textContent.includes('用英文解释这里的用法'));assert.equal(rt.queries,1);
+  }finally{await rt.close();}
+});
+test('existing Chinese senses stay behind an explicit reveal in context help',async()=>{
+  const rt=await runtime();try{
+    await rt.open({...rt.entry('word','pause'),sentence:rt.s.getState().articles[0].sentences[0].en});
+    assert(!document.querySelector('.sense'));assert(!document.querySelector('.src-cn'));assert.equal(rt.queries,0);
+    await rt.click('查看中文释义');assert(document.querySelector('.sense').textContent.includes('内置释义'));assert.equal(rt.queries,0);
+    await rt.click('收起中文释义');assert(!document.querySelector('.sense'));assert.equal(rt.queries,0);
+  }finally{await rt.close();}
+});
+test('new English context updates a saved word without deleting its Chinese senses or review state',async()=>{
+  const rt=await runtime();try{
+    const e={...rt.entry('word','pause'),sentence:rt.s.getState().articles[0].sentences[0].en};
+    rt.s.actions.saveWord({word:'pause',kind:'word',senses:[{pos:'n.',cn:'保留的中文释义'}]},'word',{articleId:e.articleId,sentIdx:0});
+    await rt.open(e);rt.setQuery(async()=>JSON.stringify({meaning:'A brief stop in an activity.'}));
+    await rt.click('用英文解释这里的用法');await rt.login('u1',true);
+    const before=rt.s.getState().vocab.find(word=>word.word==='pause');
+    await rt.click('保存新释义');const after=rt.s.getState().vocab.find(word=>word.word==='pause');
+    assert.equal(after.id,before.id);assert.equal(after.dueAt,before.dueAt);assert.deepEqual(after.senses,[{pos:'n.',cn:'保留的中文释义'}]);
+    assert.equal(after.contextExplanation.meaning,'A brief stop in an activity.');
+  }finally{await rt.close();}
+});
+test('closing English help during login cannot submit or revive the request',async()=>{
+  const rt=await runtime();try{
+    await rt.open({...rt.entry('missing','pause'),sentence:rt.s.getState().articles[0].sentences[0].en});
+    await rt.click('用英文解释这里的用法');await act(async()=>{rt.s.actions.setSheet(null);});await rt.login();
+    assert.equal(rt.queries,0);assert.equal(rt.s.getState().sheet,null);
+  }finally{await rt.close();}
+});
+test('English help rejects truncated or wrong-language output and retries without saving failure',async()=>{
+  const rt=await runtime();try{
+    await rt.open({...rt.entry('missing','pause'),sentence:rt.s.getState().articles[0].sentences[0].en});
+    rt.setQuery(async()=>({choices:[{message:{content:JSON.stringify({meaning:'An apparently complete explanation.'})},finish_reason:'length'}]}));
+    await rt.click('用英文解释这里的用法');await rt.login();assert(document.querySelector('[role=alert]'));assert(!document.querySelector('.reader-english-meaning'));
+    rt.setQuery(async()=>JSON.stringify({meaning:'这是中文解释'}));await rt.click('重试英文解释');assert(document.querySelector('[role=alert]'));assert(!document.querySelector('.reader-english-meaning'));assert.equal(rt.s.getState().vocab.length,0);
+    rt.setQuery(async()=>JSON.stringify({meaning:'A brief stop.'}));await rt.click('重试英文解释');assert.equal(document.querySelector('.reader-english-meaning').textContent,'A brief stop.');
+    assert.equal(rt.queries,3);
+  }finally{await rt.close();}
+});
+test('an English explanation from an old account cannot appear under a new profile',async()=>{
+  const rt=await runtime();try{
+    const source=rt.s.getState().articles[0].sentences[0].en;
+    await rt.open({...rt.entry('missing','pause'),sentence:source});
+    const started=deferred(),answer=deferred();rt.setQuery(async()=>{started.resolve();return answer.promise;});
+    await rt.click('用英文解释这里的用法');await rt.login();await started.promise;
+    await act(async()=>{await rt.c.logout();await rt.s.switchProfile('guest',false);await rt.c.login('u2@test.local','p','password');await rt.s.switchProfile('u2',false);rt.s.actions.setSheet({kind:'dict',entry:{type:'missing',word:'different',sentence:'A different source.',senses:[],saved:false}});});
+    await act(async()=>{answer.resolve(JSON.stringify({meaning:'Private explanation for the former account.'}));await tick();});
+    assert(!document.body.textContent.includes('Private explanation'));assert(document.body.textContent.includes('different'));
+  }finally{await rt.close();}
+});
+test('sentence paraphrase is explicit and a changed source rejects the late result',async()=>{
+  const rt=await runtime();try{
+    const article=rt.s.getState().articles[0],{SentenceSheet}=rt.load('src/components/reading/SentenceSheet.tsx');
+    const props={open:true,onClose(){},article,sentIdx:0,mask:true,revealed:false,onReveal(){},onHear(){},onFollow(){},onEdit(){},onManualLookup(){}};
+    await rt.render(React.createElement(SentenceSheet,props));assert.equal(rt.queries,0);
+    const started=deferred(),answer=deferred();rt.setQuery(async()=>{started.resolve();return answer.promise;});
+    await rt.click('用简单英文解释');await rt.login();await started.promise;
+    const updated={...article,sentences:article.sentences.map((s,i)=>i===0?{...s,en:'A completely new sentence.'}:s)};
+    await rt.render(React.createElement(SentenceSheet,{...props,article:updated}));
+    await act(async()=>{answer.resolve(JSON.stringify({meaning:'Old sentence explained.'}));await tick();});
+    assert(!document.body.textContent.includes('Old sentence explained.'));
+    rt.setQuery(async()=>JSON.stringify({meaning:'This sentence is entirely new.',example:''}));await rt.click('用简单英文解释');
+    assert(document.querySelector('.reader-english-meaning').textContent.includes('This sentence is entirely new.'));
+    assert.equal(rt.queries,2);
+  }finally{await rt.close();}
+});
+test('reopening the same English context uses the session result and can still collect it',async()=>{
+  const rt=await runtime();try{
+    const e={...rt.entry('missing','pause'),sentence:rt.s.getState().articles[0].sentences[0].en};
+    rt.setQuery(async()=>JSON.stringify({meaning:'A short break in what you are doing.'}));
+    await rt.open(e);await rt.click('用英文解释这里的用法');await rt.login();
+    await act(async()=>{rt.s.actions.setSheet(null);});await rt.open({...e});
+    assert.equal(rt.queries,1);assert(document.querySelector('.reader-english-meaning'));
+    await rt.click('收藏到生词本');assert.equal(rt.s.getState().vocab[0].contextExplanation.meaning,'A short break in what you are doing.');
+  }finally{await rt.close();}
+});
+test('cancelling login for English help leaves a retryable card without sending the sentence',async()=>{
+  const rt=await runtime();try{
+    const e={...rt.entry('missing','pause'),sentence:rt.s.getState().articles[0].sentences[0].en};
+    await rt.open(e);await rt.click('用英文解释这里的用法');await act(async()=>{await rt.gate.cancelLogin();await tick();});
+    assert.equal(rt.s.getState().sheet.entry,e);assert.equal(rt.queries,0);assert(document.body.textContent.includes('已取消登录'));
+    rt.setQuery(async()=>JSON.stringify({meaning:'A short stop.'}));await rt.click('重试英文解释');await rt.login();
+    assert.equal(rt.queries,1);assert.equal(document.querySelector('.reader-english-meaning').textContent,'A short stop.');
+  }finally{await rt.close();}
+});
+test('requesting Chinese after English preserves both results and collects both',async()=>{
+  const rt=await runtime();try{
+    const sentence=rt.s.getState().articles[0].sentences[0].en;
+    await rt.open({...rt.entry('missing','pause'),sentence});
+    rt.setQuery(async()=>JSON.stringify({meaning:'A short stop.'}));await rt.click('用英文解释这里的用法');await rt.login();
+    rt.setQuery(async()=>JSON.stringify({defs:[{pos:'n.',cn:'停顿'}],ex:'Please pause here.'}));await rt.click('查询中文释义');
+    assert.equal(rt.queries,2);assert.equal(document.querySelector('.reader-english-meaning').textContent,'A short stop.');assert(document.querySelector('.sense').textContent.includes('停顿'));
+    await rt.click('收起中文释义');assert(!document.querySelector('.sense'));assert(document.querySelector('.reader-english-meaning'));
+    await rt.click('收藏到生词本');const word=rt.s.getState().vocab.find(v=>v.word==='pause');
+    assert.equal(word.contextExplanation.meaning,'A short stop.');assert.deepEqual(word.senses,[{pos:'n.',cn:'停顿'}]);assert.equal(word.example,'Please pause here.');
+  }finally{await rt.close();}
+});
+test('English-only vocabulary remains readable, searchable, editable and exportable',async()=>{
+  const rt=await runtime();try{
+    const article=rt.s.getState().articles[0],english={sentence:article.sentences[0].en,meaning:'A brief interruption in an activity.',example:'We took a short pause.'};
+    rt.s.actions.saveWord({word:'pause',kind:'word',senses:[],contextExplanation:english},'word',{articleId:article.id,sentIdx:0});
+    const word=rt.s.getState().vocab.find(v=>v.word==='pause');
+    const {WordbookBody}=rt.load('src/components/vault/VaultBody.tsx');
+    await rt.render(React.createElement(WordbookBody));assert(document.querySelector('.v2-word-definition').textContent.includes(english.meaning));
+    await act(async()=>{const input=document.querySelector('[aria-label="搜索生词"]');Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(input,'interruption');input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));await tick();});
+    assert(document.querySelector('.v2-word-item').textContent.includes('pause'));
+    const {WordDetailBody,WordEditSheet}=rt.load('src/components/vault/WordDetailSheet.tsx');
+    await rt.render(React.createElement(WordDetailBody,{word,onEdit(){},onRemove(){}}));
+    assert(document.querySelector('.v2-word-hero').textContent.includes(english.meaning));assert(!document.querySelector('.v2-word-hero').textContent.includes('暂无释义'));
+    assert(document.querySelector('.v2-word-context').textContent.includes(english.sentence));
+    await rt.render(React.createElement(WordEditSheet,{word,onClose(){}}));
+    assert.equal(document.querySelector('#v2-word-edit-pos').value,'');
+    await act(async()=>{const input=document.querySelector('#v2-word-edit-note');Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set.call(input,'My own reminder');input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));await tick();});
+    await rt.click('保存修改');assert.equal(rt.s.getState().vocab.find(v=>v.id===word.id).note,'My own reminder');assert.deepEqual(rt.s.getState().vocab.find(v=>v.id===word.id).contextExplanation,english);
+    const {markdownExport}=rt.load('src/components/vault/ExportPanel.tsx'),output=markdownExport(rt.s.getState());
+    assert(output.includes('英文解释：'+english.meaning));assert(output.includes('对应语境：'+english.sentence));assert(output.includes('英文例句：'+english.example));assert(!output.includes('暂无释义'));assert.equal(rt.queries,0);
+  }finally{await rt.close();}
+});
 let passed=0;const originalFetch=globalThis.fetch;try{for(const[name,run]of tests){try{await run();console.log('PASS '+name);passed++;}catch(error){console.error('FAIL '+name,error);process.exitCode=1;}}}finally{globalThis.fetch=originalFetch;}console.log(passed+'/'+tests.length+' dictionary/login component tests passed');

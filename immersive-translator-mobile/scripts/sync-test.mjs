@@ -197,4 +197,35 @@ test('completion is explicitly relayed and a final-sentence breakpoint never inf
   const other=setup();for(const [id,row]of t.remote.get('reading-articles'))other.remote.get('reading-articles').set(id,clone(row));await other.engine.sync();assert.equal(other.state().readingCompleted['article-1'],true);
   const legacy=setup();legacy.setRemote('reading-articles','article-1',article(),Date.now(),1);await legacy.engine.sync();assert.notEqual(legacy.state().readingCompleted['article-1'],true);
 });
+test('renamed book source identities survive legacy hydration and a second device sync',async()=>{
+  const t=setup();
+  t.setRemote('reading-articles','legacy-book',{id:'legacy-book',kind:'book',title:'Classic Short Stories',chapters:[{id:'legacy-chapter',title:'First'}]});
+  t.setRemote('reading-articles','legacy-chapter',{...article(),id:'legacy-chapter',title:'First',bookId:'legacy-book',bookTitle:'My collection'},Date.now(),1);
+  await t.engine.sync();
+  assert.equal(t.state().articles[0].bookTitle,'My collection');assert.equal(t.state().articles[0].sourceBookTitle,'Classic Short Stories');
+  t.change({articles:t.state().articles.map(a=>({...a,bookTitle:'Renamed again',curatedBookId:'b1',sourceCatalogTitle:'Classic Short Stories'}))});await t.engine.sync();
+  const other=setup();for(const [id,row]of t.remote.get('reading-articles'))other.remote.get('reading-articles').set(id,clone(row));await other.engine.sync();
+  const restored=other.state().articles[0];assert.equal(restored.bookTitle,'Renamed again');assert.equal(restored.sourceBookTitle,'Classic Short Stories');assert.equal(restored.sourceCatalogTitle,'Classic Short Stories');assert.equal(restored.curatedBookId,'b1');
+  assert.equal(restored.sentences[0].en,'Hello world.');assert.equal(restored.sentences[0].zh,'你好');
+  const before=other.calls.filter(c=>c.method==='POST').length;await other.engine.sync();assert.equal(other.calls.filter(c=>c.method==='POST').length,before);assert.equal(other.outbox.size,0);
+  const {matchesCuratedBook}=load(root+'/immersive-translator-mobile/src/core/readingLibrary.ts');assert(matchesCuratedBook(restored,{id:'b1',title:'New catalogue heading'}));
+});
+test('a late legacy vocabulary locator stays aligned after boundary repair and converges back to the server',async()=>{
+  const {repairSentenceBoundaries}=load(root+'/immersive-translator-mobile/src/core/repairSentenceBoundaries.ts');
+  const a={...article(),sourceType:'paste',sentences:['The U.S.','Department approved it.','It starts today.'].map((en,idx)=>({idx,paragraphIdx:0,en,zh:null,zhState:'empty'}))};
+  const word={id:'real-word',word:'Department',generation:'same',sourceArticleId:a.id,sourceSentenceIdx:1,senses:[{pos:'n.',cn:'部门'}],dueAt:1,createdAt:1,updatedAt:1};
+  const original={articles:[a],vocab:[word],notes:[],tasks:[],progress:{[a.id]:1},sentenceZh:{},sentenceParseCache:{},readLog:{day:'2026-11-05',count:0,seen:{}}};
+  const repaired={...original,...repairSentenceBoundaries(original).patch};
+  const t=setup(repaired);await t.engine.sync();await t.engine.sync();
+  const remote=clone(t.remote.get('reading-vocab').get(word.id).payload);
+  delete remote.sourceBoundaryKey;delete remote.source.boundaryKey;remote.source.sentenceIdx=1;remote.sourceSentenceIdx=1;
+  remote.senses=[{pos:'n.',cn:'远端补充的部门释义'}];
+  t.setRemote('reading-vocab',word.id,remote,Date.now()+10000);
+  await t.engine.sync();
+  assert.equal(t.state().vocab[0].sourceSentenceIdx,0);
+  assert.equal(t.state().vocab[0].senses[0].cn,'远端补充的部门释义');
+  assert.equal(t.remote.get('reading-vocab').get(word.id).payload.source.sentenceIdx,0);
+  const before=t.calls.filter(c=>c.method==='POST').length;await t.engine.sync();
+  assert.equal(t.calls.filter(c=>c.method==='POST').length,before);
+});
 (async()=>{let passed=0;for(const[name,fn]of tests){try{await fn();console.log('PASS '+name);passed++;}catch(e){console.error('FAIL '+name,e);process.exitCode=1;}}console.log(`${passed}/${tests.length} tests passed`);})();

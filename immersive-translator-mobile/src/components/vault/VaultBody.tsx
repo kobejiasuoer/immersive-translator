@@ -1,19 +1,8 @@
+import { GlassSwitch } from "../../ui/GlassSwitch";
 /**
- * 笔记与复习域主体（proto-parity-2026-11-01 · vault 域）：
- * 今日复习 = 续学行（v2-resume-review，进行中复习轮时出现）+ due 卡（v2-due-card：eyebrow +
- * 「现在有 N 条可复习」大数字 + 首次/到期/时长拆分 + 三模式 chips + 模式说明 + 角标说明）+
- * 待强化卡（v2-reinforcement：warn 时间 tag + 说明 + 词行）+ 下一次复习安排卡（v2-next-review）+
- * 掌握阶段三格（v2-word-stats：刚收集/眼熟/能说出口 + 衬线大数字）+ 这一轮要见面的表达 +
- * 学习提醒行（v2-reminder-row → ReminderSheet）。
- * 生词本 = 搜索框（放大镜 + × 清空）+ 排序下拉 +「+ 记生词」pill + 阶段/类型 chips（accent 实底
- * 选中 + 清除全部筛选）+ 计数行 + 合并词条卡（衬线词 + chev + 音标 + 阶段 tag + 释义 + 来源·查词次数）
- * + 顶部撤销条（v2-undo-row）+ 加词抽屉（五字段 + 类型下拉 + 保存并查看词条）。
- * 我的笔记 = 类型筛选 chips（含计数）+「✏️ 写一条学习笔记」block pill + 合并笔记卡（tag + 来源·时间
- * meta + 标题 + 摘要 + 链接行，口语纠偏 tag 为 accent-soft）。
- * 全部只读派生自既有 store 数据，不新增同步字段；移除走词条详情确认抽屉 + 既有 5s 撤销 toast。
- * 复检 r1：掌握阶段读「我对这个词的感觉」自评（useVocabFeels，未自评回退 srs 推导）；
- * 最早一条待强化到点时实时重算并 toast 提示（原型「快进十分钟」返场的真实时间版）；
- * 复习模式选择跨页面保留（原型 APP.ui.vault.mode）。
+ * 笔记与复习：一个可立即开始的复习任务，以及可筛选的个人表达与笔记。
+ * 数据仍从既有 store 派生：到期队列、十分钟强化、掌握自评、学习笔记、已保存纠偏。
+ * 今日/生词/笔记选择只影响呈现，不改变复习排程、同步字段和保存行为。
  */
 import { useEffect, useMemo, useState } from "react";
 import { actions, activeRepository, getState, toast, useApp, type AppState } from "../../store";
@@ -29,6 +18,7 @@ import { useVocabFeels } from "./feels";
 import { consumeVaultSection, subscribeVaultSection, type VaultSection } from "./sectionGate";
 import { formatDueAt, pendingReinforcements, phoneticLabel, savedCorrections, stageBucketOf, STAGE_BUCKET_LABEL, timeLabel, vocabDerived, type StageBucket, type VocabDerived } from "./derive";
 import type { SavedCorrection } from "./derive";
+import { vocabMeaning, vocabSearchText } from "../../core/vocabMeaning";
 
 type SortKey = "recent" | "lookups" | "alpha";
 type ReviewMode = "cloze" | "listen" | "speak";
@@ -88,14 +78,9 @@ export function VaultBody() {
   for (const w of state.vocab) bucketCounts[stageBucketOf(w, feels.get(w.id))]++;
 
   return (
-    <main className="learning-body">
-      <div className="learning-seg soft v2-vault-seg">
-        {([["today", "今日复习"], ["words", `生词本 ${state.vocab.length}`], ["notes", "我的笔记"]] as ["today" | "words" | "notes", string][]).map(([key, label]) => (
-          <button key={key} className={section === key ? "on" : ""} onClick={() => setSection(key)}>
-            {label}
-          </button>
-        ))}
-      </div>
+    <main className="learning-body vault-body">
+      <GlassSwitch className="learning-seg soft v2-vault-seg vault-tabs" role="group" ariaLabel="笔记与复习内容" value={section} onChange={setSection}
+        items={([["today", "今日复习"], ["words", "生词本"], ["notes", "我的笔记"]] as const).map(([value,label]) => ({value,label}))} />
 
       {section === "today" ? (
         <TodaySection state={state} pending={pending} bucketCounts={bucketCounts} derived={derived} onGoWords={() => setSection("words")} />
@@ -168,6 +153,7 @@ function TodaySection({
   const nextScheduled = [...state.vocab].filter((w) => !w.paused && w.dueAt > Date.now()).sort((a, b) => a.dueAt - b.dueAt)[0];
   const modeDesc = REVIEW_MODES.find(([key]) => key === mode)?.[2] ?? "";
   const lastGradeForgot = new Set([...derived.entries()].filter(([, d]) => d.lastGrade === "forgot").map(([id]) => id));
+  const empty = state.vocab.length === 0;
 
   return (
     <>
@@ -184,38 +170,39 @@ function TodaySection({
         </button>
       )}
 
-      <section className="learning-card v2-due-card" style={{ marginTop: 12 }}>
-        <span className="v2-eyebrow">你读过的，值得再见一次</span>
-        <h3>
+      <section className={`v2-due-card vault-review-task${empty ? " is-empty" : ""}`} aria-labelledby="vault-today-title">
+        <div className="vault-task-heading"><span>温故知新</span>{due.length > 0 && <span>约 {Math.max(1, Math.ceil(due.length * 0.6))} 分钟</span>}</div>
+        <h2 id="vault-today-title" className="vault-due-title">
           {due.length ? (
             <>
-              现在有 <span className="en">{due.length}</span> 条可复习
+              <span className="vault-due-number">{due.length}</span><span>条表达待复习</span>
             </>
+          ) : empty ? (
+            "从读到，到记住"
           ) : pending.length ? (
-            "本轮已完成，还有待强化的表达"
+            "这一轮已完成"
           ) : state.vocab.some((w) => !w.paused) ? (
             "今天暂时没有到期复习"
           ) : (
             "所有词条都已暂停复习"
           )}
-        </h3>
+        </h2>
         <p>
           {due.length
-            ? `首次复习 ${fresh} 条 · 到期回顾 ${due.length - fresh} 条 · 约 ${Math.max(1, Math.ceil(due.length * 0.6))} 分钟`
-            : pending.length
+            ? `首次复习 ${fresh} 条，温习 ${due.length - fresh} 条。`
+            : empty
+              ? "在阅读中收藏一个词或表达，它就会来到这里。"
+              : pending.length
               ? `${pending.length} 条在 ${formatDueAt(pending[0].dueAt)} 可再练。`
               : state.vocab.some((w) => !w.paused)
                 ? "可以继续阅读，也可以挑一个词再练一次。"
                 : "在生词详情中恢复，就会重新进入复习队列。"}
         </p>
-        <div className="v2-review-modes" role="group" aria-label="复习模式">
-          {REVIEW_MODES.map(([key, label]) => (
-            <button key={key} className={`learning-chip${mode === key ? " on" : ""}`} aria-pressed={mode === key} onClick={() => setMode(key)}>
-              {label}
-            </button>
-          ))}
-        </div>
-        <p className="v2-mode-description">{modeDesc}</p>
+        {due.length > 0 && <>
+        <GlassSwitch className="v2-review-modes" role="group" ariaLabel="复习模式" ariaDescribedBy="vault-mode-description" value={mode} onChange={setMode}
+          items={REVIEW_MODES.map(([value,label]) => ({value,accessibleLabel:label,label:<><Icon name={value === "cloze" ? "pen" : value === "listen" ? "speaker" : "mic"} size={17} />{label}</>}))} />
+        <p id="vault-mode-description" className="v2-mode-description">{modeDesc}</p>
+        </>}
         {due.length ? (
           <button className="btn" style={{ width: "100%" }} onClick={() => nav.push("review", { mode })}>
             开始这一轮
@@ -225,7 +212,7 @@ function TodaySection({
             继续阅读
           </button>
         )}
-        <div className="v2-badge-explain">底部角标只表示现在到期的复习条数。</div>
+        {empty && <button className="vault-text-link" onClick={onGoWords}>也可以手动记下一个表达<Icon name="right" size={14}/></button>}
       </section>
 
       {pending.length > 0 && (
@@ -259,7 +246,29 @@ function TodaySection({
         </button>
       )}
 
-      <section className="learning-card v2-word-stats">
+      {due.length > 0 && (
+        <>
+          <div className="vault-section-heading">
+            <h2>这一轮的表达</h2>
+            <span>{due.length} 条</span>
+          </div>
+          <section className="v2-review-preview vault-expression-preview">
+            {due.slice(0, 4).map((w) => (
+              <button key={w.id} onClick={() => setWordSheet(w.id)}>
+                <span>
+                  <b>{w.word}</b>
+                  <small>{vocabMeaning(w)}</small>
+                </span>
+                <span className="learning-tag">{lastGradeForgot.has(w.id) ? "待强化" : (w.srs?.reps ?? 0) === 0 ? "首次复习" : "到期"}</span>
+              </button>
+            ))}
+          </section>
+        </>
+      )}
+
+      {!empty && <>
+      <div className="vault-section-heading"><h2>我的积累</h2><button onClick={onGoWords}>查看生词本<Icon name="right" size={14}/></button></div>
+      <section className="vault-progress" aria-label="表达掌握阶段">
         {(["fresh", "familiar", "spoken"] as StageBucket[]).map((bucket) => (
           <button
             key={bucket}
@@ -269,34 +278,16 @@ function TodaySection({
               onGoWords();
             }}
           >
-            <small>{STAGE_BUCKET_LABEL[bucket]}</small>
+            <span>{STAGE_BUCKET_LABEL[bucket]}</span>
             <b>{bucketCounts[bucket]}</b>
+            <Icon name="right" size={15} />
           </button>
         ))}
       </section>
-      <p className="v2-learning-caption" style={{ marginTop: 8 }}>
-        掌握阶段是你的学习感受；刚收集的词也会进入首轮复习。
+      <p className="v2-learning-caption vault-progress-caption">
+        按你对表达的熟悉程度整理，可在词条中调整。
       </p>
-
-      {due.length > 0 && (
-        <>
-          <div className="v2-sec-h" style={{ margin: "20px 2px 10px" }}>
-            <b>这一轮要见面的表达</b>
-            <span>{due.length} 条</span>
-          </div>
-          <section className="learning-card v2-review-preview">
-            {due.slice(0, 4).map((w) => (
-              <button key={w.id} onClick={() => setWordSheet(w.id)}>
-                <span>
-                  <b>{w.word}</b>
-                  <small>{w.senses.map((s) => `${s.pos} ${s.cn}`.trim()).join("；")}</small>
-                </span>
-                <span className="learning-tag">{lastGradeForgot.has(w.id) ? "待强化" : (w.srs?.reps ?? 0) === 0 ? "首次复习" : "到期"}</span>
-              </button>
-            ))}
-          </section>
-        </>
-      )}
+      </>}
 
       <button className="v2-reminder-row" onClick={() => setReminderOpen(true)}>
         <Icon name="bell" size={14} />
@@ -311,7 +302,7 @@ function TodaySection({
   );
 }
 
-/* 统计三格 → 生词本的跨组件桶筛选传递（同文件内模块级种子，落点页挂载即消费）。 */
+/* 掌握阶段列表 → 生词本的跨组件桶筛选传递（同文件内模块级种子，落点页挂载即消费）。 */
 let stageFilterSeed: StageBucket | null = null;
 let stageFilterSeedAt = 0;
 
@@ -328,7 +319,7 @@ export function WordbookBody() {
   const trash = state.trash;
   const feels = useVocabFeels();
 
-  /* 掌握阶段三格跳入：带桶筛选落到生词本（模块级种子，仅刚发生时消费）。 */
+  /* 掌握阶段列表跳入：带桶筛选落到生词本（模块级种子，仅刚发生时消费）。 */
   useEffect(() => {
     if (stageFilterSeed && Date.now() - stageFilterSeedAt < 1500) {
       setStageFilter(stageFilterSeed);
@@ -342,7 +333,7 @@ export function WordbookBody() {
     .filter((w) => {
       const stageOk = stageFilter === "all" || (stageFilter === "paused" ? w.paused : stageBucketOf(w, feels.get(w.id)) === stageFilter);
       const typeOk = typeFilter === "all" || (w.kind ?? "word") === typeFilter;
-      const text = `${w.word} ${w.phonetic ?? ""} ${w.senses.map((s) => s.cn).join(" ")} ${w.note ?? ""}`.toLowerCase();
+      const text = vocabSearchText(w);
       return stageOk && typeOk && (!q || text.includes(q));
     })
     .sort((a, b) => {
@@ -353,7 +344,7 @@ export function WordbookBody() {
   const filtered = Boolean(q) || stageFilter !== "all" || typeFilter !== "all";
 
   return (
-    <>
+    <div className="vault-wordbook">
       {trash?.kind === "vocab" && trash.vocab && (
         <div className="v2-undo-row" role="status">
           <span>
@@ -363,9 +354,9 @@ export function WordbookBody() {
         </div>
       )}
 
-      <div className="v2-word-search">
+      <div className="v2-word-search vault-search">
         <Icon name="search" size={15} />
-        <input className="input" value={query} type="search" onChange={(e) => setQuery(e.target.value)} placeholder="搜索词、释义、原句或助记" aria-label="搜索生词" />
+        <input className="input" value={query} type="search" onChange={(e) => setQuery(e.target.value)} placeholder="搜索表达、释义或原句" aria-label="搜索生词" />
         {query && (
           <button aria-label="清空搜索" onClick={() => setQuery("")}>
             <Icon name="close" size={15} />
@@ -391,51 +382,44 @@ export function WordbookBody() {
         </button>
       </div>
 
-      <div className="v2-learning-filters" aria-label="按掌握阶段筛选">
-        {([["all", "全部阶段"], ["fresh", "刚收集"], ["familiar", "眼熟"], ["spoken", "能说出口"], ["paused", "已暂停"]] as [StageBucket | "all" | "paused", string][]).map(([key, label]) => (
-          <button key={key} className={`learning-chip${stageFilter === key ? " on" : ""}`} aria-pressed={stageFilter === key} onClick={() => setStageFilter(key)}>
-            {label}
-          </button>
-        ))}
-      </div>
-      <div className="v2-learning-filters" aria-label="按词条类型筛选">
-        {([["all", "全部类型"], ["word", "单词"], ["chunk", "词块"]] as ["all" | "word" | "chunk", string][]).map(([key, label]) => (
-          <button key={key} className={`learning-chip${typeFilter === key ? " on" : ""}`} aria-pressed={typeFilter === key} onClick={() => setTypeFilter(key)}>
-            {label}
-          </button>
-        ))}
-        {filtered && (
-          <button
-            className="v2-clear-filters"
-            onClick={() => {
-              setQuery("");
-              setStageFilter("all");
-              setTypeFilter("all");
-            }}
-          >
-            清除全部筛选
-          </button>
-        )}
+      <div className="vault-filter-row">
+        <label>
+          <span className="sr-only">掌握阶段</span>
+          <select value={stageFilter} onChange={(event) => setStageFilter(event.target.value as StageBucket | "all" | "paused")} aria-label="按掌握阶段筛选">
+            {([["all", "全部阶段"], ["fresh", "刚收集"], ["familiar", "眼熟"], ["spoken", "能说出口"], ["paused", "已暂停"]] as const).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+          </select>
+        </label>
+        <label>
+          <span className="sr-only">词条类型</span>
+          <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as "all" | "word" | "chunk")} aria-label="按词条类型筛选">
+            <option value="all">全部类型</option>
+            <option value="word">单词</option>
+            <option value="chunk">词块</option>
+          </select>
+        </label>
+        {filtered && <button className="v2-clear-filters" onClick={() => {
+          setQuery(""); setStageFilter("all"); setTypeFilter("all");
+        }}>重置</button>}
       </div>
 
-      <p className="v2-result-count">{filtered ? `符合条件 ${list.length} / 共 ${state.vocab.length} 条` : `共 ${state.vocab.length} 条生词与词块`}</p>
+      <p className="v2-result-count" role="status">{filtered ? `符合条件 ${list.length} / 共 ${state.vocab.length} 条` : `共 ${state.vocab.length} 条生词与词块`}</p>
 
       {list.length ? (
-        <section className="learning-card v2-word-list">
+        <section className="v2-word-list vault-expression-list">
           {list.map((w) => {
             const article = w.sourceArticleId ? state.articles.find((a) => a.id === w.sourceArticleId) : undefined;
             const phonetic = phoneticLabel(w.phonetic);
             return (
               <button key={w.id} className="v2-word-item" onClick={() => setWordSheet(w.id)}>
                 <span className="v2-word-line">
-                  <b className="en">{w.word}</b>
+                  <b className="en" lang="en">{w.word}</b>
                   <Icon name="right" size={15} />
                 </span>
                 <span className="v2-word-meta">
                   {phonetic && <span className="en">{phonetic}</span>}
                   <span className="learning-tag">{w.paused ? "已暂停" : STAGE_BUCKET_LABEL[stageBucketOf(w, feels.get(w.id))]}</span>
                 </span>
-                <span className="v2-word-definition">{w.senses.map((s) => `${s.pos} ${s.cn}`.trim()).join("；")}</span>
+                <span className="v2-word-definition">{vocabMeaning(w)}</span>
                 <span className="v2-word-origin">
                   {article?.title || "手动收集"} · 查词 {derived.get(w.id)?.lookups ?? 0} 次
                 </span>
@@ -467,7 +451,7 @@ export function WordbookBody() {
       <AddWordSheet open={addOpen} onClose={() => setAddOpen(false)} onSaved={(id) => id && setWordSheet(id)} />
       {/* 生词本内移除：顶部 v2-undo-row 承担撤销，toast 不再内嵌撤销钮（原型 v2-word-remove，html:3114） */}
       {wordSheet && <WordDetailSheet wordId={wordSheet} inlineUndo onClose={() => setWordSheet(null)} />}
-    </>
+    </div>
   );
 }
 
@@ -484,6 +468,7 @@ function NotesSection({
 }) {
   const nav = useNav();
   const [filter, setFilter] = useState<"all" | "correction" | "word" | "note">("all");
+  const [query, setQuery] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [wordSheet, setWordSheet] = useState<string | null>(null);
 
@@ -517,28 +502,28 @@ function NotesSection({
       go: () => nav.push("learningNote", { id: n.id }),
     })),
   ]
-    .filter((r) => filter === "all" || filter === r.type)
+    .filter((r) => (filter === "all" || filter === r.type) && (!query.trim() || `${r.title} ${r.text} ${r.src}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())))
     .sort((a, b) => b.at - a.at);
   const counts = { correction: corrections.length, word: wordNotes.length, note: state.notes.length };
 
   return (
-    <>
+    <div className="vault-notes">
+      <div className="vault-section-heading vault-notes-heading">
+        <h2>{counts.correction + counts.word + counts.note} 条学习记录</h2>
+        <button aria-label="写一条学习笔记" onClick={() => setAddOpen(true)}><Icon name="pen" size={16} />写笔记</button>
+      </div>
+      <div className="v2-word-search vault-search">
+        <Icon name="search" size={18} />
+        <input className="input" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索笔记与心得" aria-label="搜索笔记" />
+        {query && <button aria-label="清空笔记搜索" onClick={() => setQuery("")}><Icon name="close" size={16} /></button>}
+      </div>
       <div className="v2-note-toolbar">
-        <div className="v2-learning-filters">
-          {([["all", "全部"], ["correction", `口语纠偏 ${counts.correction}`], ["word", `生词助记 ${counts.word}`], ["note", `学习笔记 ${counts.note}`]] as ["all" | "correction" | "word" | "note", string][]).map(([key, label]) => (
-            <button key={key} className={`learning-chip${filter === key ? " on" : ""}`} aria-pressed={filter === key} onClick={() => setFilter(key)}>
-              {label}
-            </button>
-          ))}
-        </div>
-        <button className="btn-ghost" style={{ width: "100%", border: "1px solid var(--hairline-strong)" }} onClick={() => setAddOpen(true)}>
-          <Icon name="pen" size={15} />
-          写一条学习笔记
-        </button>
+        <GlassSwitch className="v2-learning-filters" role="group" ariaLabel="笔记分类" value={filter} onChange={setFilter}
+          items={([["all", "全部"], ["correction", "口语纠偏"], ["word", "生词助记"], ["note", "学习笔记"]] as const).map(([value,label]) => ({value,label}))} />
       </div>
 
       {records.length ? (
-        <section className="learning-card v2-note-list">
+        <section className="v2-note-list vault-note-list">
           {records.map((r) => (
             <button key={r.id} className="v2-note-item" onClick={r.go}>
               <span className="v2-note-h">
@@ -556,8 +541,8 @@ function NotesSection({
         </section>
       ) : (
         <section className="learning-card v2-empty-card">
-          <h3>{filter === "all" ? "让自己的心得，有地方可回看" : "这一类还没有笔记"}</h3>
-          <p>生词助记与口语纠偏会各自归档，你也可以记下学习时的小发现。</p>
+          <h3>{query.trim() ? "没有找到相关笔记" : filter === "all" ? "留住每一次发现" : "这一类还没有笔记"}</h3>
+          <p>{query.trim() ? "换个关键词试试，或记下此刻的想法。" : "生词助记与口语纠偏会各自归档，你也可以记下学习时的小发现。"}</p>
           <button className="btn" onClick={() => setAddOpen(true)}>
             写一条笔记
           </button>
@@ -566,7 +551,7 @@ function NotesSection({
 
       <AddLearningNoteSheet open={addOpen} onClose={() => setAddOpen(false)} />
       {wordSheet && <WordDetailSheet wordId={wordSheet} onClose={() => setWordSheet(null)} />}
-    </>
+    </div>
   );
 }
 

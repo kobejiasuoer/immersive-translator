@@ -4,6 +4,10 @@
  * 的 I 表同源。禁 emoji 与裸字符当图标（治 V6）。
  */
 
+// Apple platform previews and the iOS app use system-exported SF Symbols masks.
+// Other platforms retain the existing original SVG artwork.
+const applePlatform = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+const symbolNames = new Set(["aa", "bell", "bolt", "book", "bookopen", "bookopenFill", "bulb", "cam", "chat", "check", "chevr", "clip", "clock", "close", "copy", "dots", "eye", "eyeoff", "flask", "gear", "hist", "info", "kbd", "left", "list", "lock", "mark", "me", "mic", "next", "note", "noteFill", "pause", "pen", "phone", "play", "plus", "prev", "right", "rss", "search", "share", "shelf", "slow", "speaker", "star", "stop", "sync", "target", "today", "translate", "trash", "undo", "wave", "win"]);
 const P: Record<string, string> = {
   today: '<rect x="4" y="5.5" width="16" height="14.5" rx="2.5"/><path d="M4 10.2h16M8.5 3.2v3.6M15.5 3.2v3.6"/><circle cx="12" cy="15.2" r="1.5" fill="currentColor" stroke="none"/>',
   wave: '<path d="M4 10v4M8 7v10M12 4.5v15M16 7v10M20 10v4"/>',
@@ -68,18 +72,22 @@ const P: Record<string, string> = {
 };
 
 export function Icon({ name, size = 20 }: { name: string; size?: number }) {
+  const asset = applePlatform && symbolNames.has(name) ? `/symbols/${name}.png` : undefined;
+  const path = P[name] || P[name === "bookopenFill" ? "bookopen" : name === "noteFill" ? "note" : "none"];
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 24 24"
+      style={asset ? { backgroundColor: "currentColor", maskImage: `url("${asset}")`, WebkitMaskImage: `url("${asset}")`, maskSize: "contain", WebkitMaskSize: "contain", maskRepeat: "no-repeat", WebkitMaskRepeat: "no-repeat" } : undefined}
+      data-symbol={asset ? name : undefined}
       fill="none"
       stroke="currentColor"
       strokeWidth={1.6}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
-      dangerouslySetInnerHTML={{ __html: P[name] || "" }}
+      dangerouslySetInnerHTML={{ __html: asset ? "" : path }}
     />
   );
 }

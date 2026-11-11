@@ -13,7 +13,7 @@ let tests = 0;
 const originalWarn = console.warn;
 try {
   await build({
-    stdin: { contents: `${source}\nexport { WORKLET_SRC, makeFallbackBlockHandler, assemble };`, resolveDir: fileURLToPath(new URL("../src/services", import.meta.url)), sourcefile: "audio.ts", loader: "ts" },
+    stdin: { contents: `${source}\nexport { WORKLET_SRC, makeFallbackBlockHandler, assemble, isAudioRecordingActive };`, resolveDir: fileURLToPath(new URL("../src/services", import.meta.url)), sourcefile: "audio.ts", loader: "ts" },
     outfile: output, bundle: true, platform: "browser", format: "esm",
     plugins: [{ name: "device-preview-fixture", setup(api) {
       api.onResolve({ filter: /.*/ }, args => args.path === "./device" ? { path: args.path, namespace: "device-fixture" } : undefined);
@@ -53,6 +53,17 @@ try {
       assert.equal(worklet.messages.filter(message => message.type === "chunk").length, count); assert.equal(state.totalSamples, samples); tests++;
     }
   }
+  console.warn = () => {};
+  for (const errorName of ["NotAllowedError", "PermissionDeniedError", "NotFoundError", "NotReadableError", "AbortError", "SecurityError", "TypeError"]) {
+    const calls = [], session = { type: "auto" };
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { audioSession: session, mediaDevices: { async getUserMedia(constraints) { calls.push(constraints); throw Object.assign(new Error("Expected microphone failure"), { name: errorName }); } } } });
+    assert.equal(await api.startPcmCapture(), null);
+    assert.equal(calls.length, 1, `${errorName} must not trigger a second permission or device request`);
+    assert.deepEqual(calls[0], { audio: { channelCount: 1, echoCancellation: true } });
+    assert.equal(api.isAudioRecordingActive(), false, "A failed permission request must release its recording session");
+    assert.equal(session.type, "playback"); tests++;
+  }
+  console.warn = originalWarn;
   for (const fallbackMode of [false, true]) {
     let audioContext, node; const tracks = [{ stopped: false, stop() { this.stopped = true; } }];
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: { mediaDevices: { async getUserMedia() { return { getTracks: () => tracks }; } } } });
@@ -78,5 +89,21 @@ try {
     assert.equal((await capture.stop()).pcmB64, first.pcmB64); tests++;
     console.warn = originalWarn;
   }
-  console.log(`PASS: ${tests} audio scenarios (16k/44.1k/48k resampling, one-sample tail, flush idempotency, fallback and concurrent stop)`);
+  console.warn = () => {};
+  for (const errorName of ["OverconstrainedError", "ConstraintNotSatisfiedError"]) {
+    const calls = [], tracks = [{ stopped: false, stop() { this.stopped = true; } }], session = { type: "auto" };
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { audioSession: session, mediaDevices: { async getUserMedia(constraints) { calls.push(constraints); if (calls.length === 1) throw Object.assign(new Error("Expected constraint mismatch"), { name: errorName }); return { getTracks: () => tracks }; } } } });
+    const capture = await api.startPcmCapture();
+    assert.ok(capture, "Unsupported capture constraints should fall back to a basic microphone request");
+    assert.deepEqual(calls, [{ audio: { channelCount: 1, echoCancellation: true } }, { audio: true }]);
+    assert.equal(api.isAudioRecordingActive(), true);
+    await capture.stop(); assert.equal(tracks[0].stopped, true);
+    assert.equal(api.isAudioRecordingActive(), false); assert.equal(session.type, "playback"); tests++;
+  }
+  let failedFallbackCalls = 0;
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { mediaDevices: { async getUserMedia() { failedFallbackCalls++; throw Object.assign(new Error("Expected failed fallback"), { name: failedFallbackCalls === 1 ? "OverconstrainedError" : "NotAllowedError" }); } } } });
+  assert.equal(await api.startPcmCapture(), null); assert.equal(failedFallbackCalls, 2);
+  assert.equal(api.isAudioRecordingActive(), false); tests++;
+  console.warn = originalWarn;
+  console.log(`PASS: ${tests} audio scenarios (resampling, tail flush, permission denial once, constraint-only fallback and concurrent stop)`);
 } finally { console.warn = originalWarn; await rm(directory, { recursive: true, force: true }); }

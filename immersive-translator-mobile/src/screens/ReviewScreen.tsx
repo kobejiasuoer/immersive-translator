@@ -12,6 +12,7 @@
  * 回滚 dueAt 与计数。三档 UI 仅少一档展示位（good=3 天档不再直选），SRS 与事件协议不变。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { vocabMeaning } from "../core/vocabMeaning";
 import { actions, activeRepository, commitRepository, flushPersist, getState, profileIdentity, reviewStats, speak, stopSpeak, toast, useApp } from "../store";
 import { Icon } from "../ui/icons";
 import { useNav } from "../ui/nav";
@@ -41,9 +42,9 @@ const GRADES: [ReviewGrade, string, string][] = [
   ["easy", "记住了", "几天后再看"],
 ];
 
-/* 页头标题（原型 nhead 取 V2_LEARN_MODES[mode][0]）：识别卡归入「填空回忆」口径。 */
+/* 页头描述当前题型：没有原句的识别卡不冒充填空题。 */
 const MODE_TITLE: Record<ReviewCard["mode"], string> = {
-  recognition: "填空回忆",
+  recognition: "表达回忆",
   cloze: "填空回忆",
   dictation: "听音辨认",
   spoken: "开口使用",
@@ -132,11 +133,11 @@ export default function ReviewScreen({ wordId, from, cards, mode }: ReviewProps)
      预复习/加练不算今日复习：wordId 单卡预复习与生词页入口（from:"vocab"、传入 cards）
      的队列不含「进入时已到期」承诺，判完不 +1（治 home-2：streak 虚高且可同日反复刷）。 */
   const streakEligible = !wordId && from !== "vocab" && !(cards && cards.length);
-  function exitFinished() {
+  function exitFinished(destination: "back" | "home" = "back") {
     if (streakCommitted.current) return;
     streakCommitted.current = true;
     const eligible = streakEligible && queue.length > 0 && results.length === queue.length && st.due === 0;
-    void saveDraft.current.then(() => actions.completeReviewSession(wordId || "current", eligible)).then(() => nav.popAll()).catch(error => { streakCommitted.current = false; toast(String(error)); });
+    void saveDraft.current.then(() => actions.completeReviewSession(wordId || "current", eligible)).then(() => destination === "home" ? nav.popAll() : nav.pop()).catch(error => { streakCommitted.current = false; toast(String(error)); });
   }
 
   useEffect(() => {
@@ -189,8 +190,8 @@ export default function ReviewScreen({ wordId, from, cards, mode }: ReviewProps)
     };
     return (
       <>
-        <ReviewTop title="本轮完成" subtitle={`已复习 ${results.length} 条`} onExit={exitFinished} />
-        <div className="rv-stage">
+        <ReviewTop title="本轮完成" subtitle={`已复习 ${results.length} 条`} onExit={() => exitFinished()} />
+        <div className="rv-stage review-workspace">
           <div className="v2-review-done">
             <DoneRing />
             <h3>{tiers.forgot ? `${tiers.forgot} 条还需要巩固` : "这些表达，又熟悉了一点"}</h3>
@@ -237,7 +238,7 @@ export default function ReviewScreen({ wordId, from, cards, mode }: ReviewProps)
                 剩余到期 {st.due} 张 · 连续 {dayDone ? (getState().stats.lastReviewStreakDay === getState().stats.day ? st.streak : st.streak + 1) : st.streak} 天
               </div>
             )}
-            <button className="btn" style={{ width: "100%" }} onClick={exitFinished}>
+            <button className="btn" style={{ width: "100%" }} onClick={() => exitFinished("home")}>
               回今日复习，查看下一次安排
             </button>
             <button
@@ -271,8 +272,8 @@ export default function ReviewScreen({ wordId, from, cards, mode }: ReviewProps)
     /* 队列空 → 预复习入口式空态（§3.8） */
     return (
       <>
-        <ReviewTop title="复习" subtitle="" onExit={() => nav.popAll()} />
-        <div className="rv-stage">
+        <ReviewTop title="复习" subtitle="" onExit={nav.pop} />
+        <div className="rv-stage review-workspace">
           <div className="serif" style={{ fontSize: 24, fontWeight: 600, textAlign: "center" }}>
             现在没有到期的卡片
           </div>
@@ -393,18 +394,19 @@ export default function ReviewScreen({ wordId, from, cards, mode }: ReviewProps)
   const source = card.articleId ? articles.find((a) => a.id === card.articleId) : undefined;
   const example = card.mode === "dictation" ? card.answer : card.pre !== undefined ? `${card.pre} ${card.answer} ${card.post}`.trim() : source?.sentences[card.sentIdx]?.en || card.answer;
   /* 目标词「词性 释义」行（原型听音揭示态 word.pos，如「n. 志愿者（复数）」，html:2932）。 */
-  const definition = vocab.find((w) => w.id === card.id)?.senses.map((x) => `${x.pos} ${x.cn}`.trim()).join("；") || card.hint;
+  const sourceWord = vocab.find((w) => w.id === card.id);
+  const definition = sourceWord ? vocabMeaning(sourceWord) : card.hint;
 
   return (
     <>
       <ReviewTop
         title={MODE_TITLE[card.mode]}
         subtitle={`本轮 ${pos + 1} / ${queue.length}`}
-        onExit={() => (from === "vocab" ? nav.pop() : actions.setSheet({ kind: "confirm" }))}
+        onExit={nav.pop}
         progress={queue.length ? (results.length / queue.length) * 100 : 0}
         onStar={() => setStarWord(card.id)}
       />
-      <div className="rv-stage">
+      <div className="rv-stage review-workspace">
         <div className="rv-card learning-card v2-review-card" key={pos + card.mode}>
           <div className="v2-note-h">
             <span className="learning-tag">{card.kind === "chunk" ? card.chunkType || "词块" : "单词"}</span>
@@ -483,7 +485,7 @@ export default function ReviewScreen({ wordId, from, cards, mode }: ReviewProps)
                 换成{card.mode === "dictation" || card.mode === "spoken" ? "填空" : "听音"}试试
               </button>
               <button className="btn-ghost" style={{ border: "1px solid var(--hairline-strong)" }} onClick={() => nav.pop()}>
-                保存进度并返回
+                返回
               </button>
             </div>
           )}
@@ -512,12 +514,12 @@ function ReviewTop({
 }) {
   return (
     <>
-      <div className="rv-top">
-        <button className="iconbtn" aria-label="退出" onClick={onExit}>
+      <header className="rv-top vault-review-top">
+        <button className="iconbtn" data-nav-back aria-label="返回" onClick={onExit}>
           <Icon name="left" size={20} />
         </button>
         <div className="nt">
-          <b>{title}</b>
+          <h1 className="ttl">{title}</h1>
           {subtitle && <small>{subtitle}</small>}
         </div>
         {onStar ? (
@@ -527,9 +529,9 @@ function ReviewTop({
         ) : (
           <span />
         )}
-      </div>
+      </header>
       {progress !== undefined && (
-        <div className="rv-progress" aria-hidden="true">
+        <div className="rv-progress" role="progressbar" aria-label="本轮复习进度" aria-valuetext={subtitle} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(Math.min(100, Math.max(0, progress)))}>
           <i style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} />
         </div>
       )}

@@ -37,17 +37,19 @@ export async function requestStudyNotifications(): Promise<boolean> {
 
 // Serialize replacements, discarding requests superseded while another replacement is in flight.
 let generation = 0, queue: Promise<void> = Promise.resolve(), appliedPlan: string | null = null;
-export function reconcileStudyNotifications(settings: ReminderSettings, words: readonly ReminderWord[]): Promise<NotificationStatus> {
+export function reconcileStudyNotifications(settings: ReminderSettings, words: readonly ReminderWord[], isCurrent: () => boolean = () => true): Promise<NotificationStatus> {
+  if (!isCurrent()) return Promise.resolve(status);
   const revision = ++generation;
   let plan: ReturnType<typeof buildReminderPlan>;
   try { plan = buildReminderPlan(settings, words); }
   catch (error) { publish({ ...status, error: String(error) }); return Promise.resolve(status); }
   const key = JSON.stringify(plan);
   const run = queue.then(async () => {
-    if (revision !== generation) return status;
+    if (revision !== generation || !isCurrent()) return status;
     if (!isTauri()) { publish(unavailable()); return status; }
     try {
       const available = await native<NotificationStatus>("status");
+      if (revision !== generation || !isCurrent()) return status;
       if (!available.supported) { publish(available); return status; }
       if (appliedPlan === key && available.scheduled === plan.length && (available.permission === "granted" || !plan.length)) {
         if (revision === generation) publish(available);
@@ -55,10 +57,10 @@ export function reconcileStudyNotifications(settings: ReminderSettings, words: r
       }
       const next = await native<NotificationStatus>("replace", { notifications: plan });
       if (next.scheduled === plan.length && (next.permission === "granted" || !plan.length)) appliedPlan = key;
-      if (revision === generation) publish(next);
+      if (revision === generation && isCurrent()) publish(next);
     } catch (error) {
       reportDiag("notification", `系统提醒排程失败：${String(error)}`);
-      if (revision === generation) publish({ ...status, error: "系统提醒未能保存，请重试" });
+      if (revision === generation && isCurrent()) publish({ ...status, error: "系统提醒未能保存，请重试" });
     }
     return status;
   });
@@ -66,9 +68,10 @@ export function reconcileStudyNotifications(settings: ReminderSettings, words: r
   return run;
 }
 /** Every reminder entry follows the same explicit authorization and verified-save path. */
-export async function enableStudyReminder(settings: ReminderSettings, words: readonly ReminderWord[]): Promise<boolean> {
-  if (!(await requestStudyNotifications())) return false;
-  const next = await reconcileStudyNotifications({ ...settings, daily: true }, words);
+export async function enableStudyReminder(settings: ReminderSettings, words: readonly ReminderWord[], isCurrent: () => boolean = () => true): Promise<boolean> {
+  if (!isCurrent() || !(await requestStudyNotifications()) || !isCurrent()) return false;
+  const next = await reconcileStudyNotifications({ ...settings, daily: true }, words, isCurrent);
+  if (!isCurrent()) return false;
   if (next.error || next.permission !== "granted") return false;
   if (words.some(word => !word.paused) && next.scheduled === 0) {
     publish({ ...next, error: "每日提醒未能保存，请重试" });

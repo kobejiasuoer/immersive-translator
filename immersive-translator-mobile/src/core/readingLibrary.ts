@@ -27,6 +27,7 @@ const WEB_NOISE = [
   /^(?:Estimated\s*)?(?:Read(?:ing)?\s*Time)\s*:?\s*\d+\s*(?:min(?:ute)?s?)?\.?$/i,
   /^\d+\s*(?:min(?:ute)?s?)\s*read\.?$/i,
   /^(?:Skip to (?:main )?content|Back to top|Print this page)\.?$/i,
+  /^###$/, // A standalone press-release end marker; inline mentions remain prose.
 ];
 function normalizedBlock(text: string): string { return text.replace(/\s+/g, " ").trim(); }
 export function isWebNoise(text: string): boolean { return WEB_NOISE.some(pattern => pattern.test(normalizedBlock(text))); }
@@ -51,7 +52,7 @@ export function extractReadingPage(html: string): { title: string; text: string 
     el.parentElement?.querySelector(".display-date")?.remove();
     el.remove();
   });
-  doc.querySelectorAll("script,style,nav,header,footer,aside,form,noscript,template,svg,iframe,[hidden],[aria-hidden=true],.usa-banner,.usa-banner__inner,.primary-office,.press-release-buttons,[class*=cookie-banner],[class*=share-buttons]").forEach(el => el.remove());
+  doc.querySelectorAll("script,style,nav,header,footer,aside,form,noscript,template,svg,iframe,[hidden],[aria-hidden=true],.usa-banner,.usa-banner__inner,.primary-office,.press-release-buttons,.linked-topic-tags,[class*=cookie-banner],[class*=share-buttons]").forEach(el => el.remove());
   const candidates = Array.from(doc.querySelectorAll("article,main,[role=main]"));
   // Nested article beats a surrounding main containing a site banner or related cards.
   const root = candidates.filter(el => el.tagName === "ARTICLE").sort((a, b) => (b.textContent?.length || 0) - (a.textContent?.length || 0))[0] || candidates[0] || doc.body;
@@ -71,18 +72,45 @@ export function chapterIndexOf(article: Article): number {
 }
 type Json = Record<string, unknown>;
 function object(value: unknown): value is Json { return !!value && typeof value === "object" && !Array.isArray(value); }
+function text(value: unknown): string { return typeof value === "string" ? value.trim() : ""; }
+/** Older imports retained the original book heading in their chapter title after a rename. */
+function legacyBookTitle(article: Article): string {
+  const suffix = ` · ${text(article.chapterTitle)}`;
+  return text(article.chapterTitle) && article.title.endsWith(suffix) ? article.title.slice(0, -suffix.length).trim() : "";
+}
+export function sourceBookTitleOf(article: Article): string {
+  return text(article.sourceBookTitle) || legacyBookTitle(article) || text(article.bookTitle);
+}
+export function matchesCuratedBook(article: Article, item: { id: string; title: string }): boolean {
+  if (!article.bookId) return false;
+  if (article.curatedBookId) return article.curatedBookId === item.id;
+  const title = item.title.trim().toLocaleLowerCase();
+  return [article.sourceCatalogTitle, sourceBookTitleOf(article)].some(value => text(value).toLocaleLowerCase() === title);
+}
 export function hydrateBookMetadata(article: Article, books: readonly Json[]): Article {
   const book = books.find(b => b.id === article.bookId || Array.isArray(b.chapters) && b.chapters.some(c => object(c) && (c.articleId === article.id || c.id === article.id)));
   const chapter = book && Array.isArray(book.chapters) ? book.chapters.find(c => object(c) && (c.articleId === article.id || c.id === article.id)) as Json | undefined : undefined;
   const listedIndex = book && Array.isArray(book.chapters) ? book.chapters.findIndex(c => c === chapter) : -1;
   return {
     ...article,
-    ...(book ? { bookId: String(book.id), bookTitle: article.bookTitle || book.title, author: article.author || book.author, cover: article.cover || book.cover, totalChapters: Array.isArray(book.chapters) ? book.chapters.length : article.totalChapters } : {}),
+    ...(book ? {
+      bookId: String(book.id), bookTitle: article.bookTitle || book.title,
+      sourceBookTitle: text(article.sourceBookTitle) || legacyBookTitle(article) || text(book.sourceBookTitle) || text(book.title),
+      sourceCatalogTitle: article.sourceCatalogTitle || text(book.sourceCatalogTitle) || undefined,
+      curatedBookId: article.curatedBookId || text(book.curatedBookId) || undefined,
+      author: article.author || book.author, cover: article.cover || book.cover,
+      totalChapters: Array.isArray(book.chapters) ? book.chapters.length : article.totalChapters,
+    } : {}),
     ...(article.bookId || book ? { chapterIndex: article.chapterIndex ?? article.chapterIdx ?? (listedIndex >= 0 ? listedIndex : 0), chapterTitle: article.chapterTitle || chapter?.title || article.title } : {}),
   };
 }
 
 export interface ShelfItem { id: string; chapters: Article[]; article: Article; title: string; kind: "book" | "article"; at: number; createdAt: number }
+/** Active books use the same chapters as the reader; fully archived books remain browsable for restoration. */
+export function shelfVisibleChapters(item: ShelfItem): Article[] {
+  const available = item.chapters.filter(article => !article.archived);
+  return available.length ? available : item.chapters;
+}
 export function shelfItems(articles: Article[]): ShelfItem[] {
   const groups = new Map<string, Article[]>();
   for (const article of articles) { const key = article.bookId || article.id; groups.set(key, [...(groups.get(key) || []), article]); }

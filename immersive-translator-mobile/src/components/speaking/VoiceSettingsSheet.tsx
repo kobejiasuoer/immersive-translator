@@ -1,3 +1,4 @@
+import { GlassSwitch } from "../../ui/GlassSwitch";
 import { useEffect, useRef, useState } from "react";
 import { ReadingDrawer } from "../reading/Drawer";
 import { actions, toast, useApp } from "../../store";
@@ -73,9 +74,9 @@ export function VoicePreferences() {
       {voices.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
     </select>}
     <div className="rd-set-h">示范语速</div>
-    <div className="seg soft" role="radiogroup" aria-label="示范语速">
-      {[0.7, 0.85, 1].map(value => <button key={value} role="radio" aria-checked={speed === value} className={speed === value ? "on" : ""} onClick={() => setSpeed(writeDemoVoice({ speed: value }).speed)}>{value}×</button>)}
-    </div>
+    <GlassSwitch className="seg soft" ariaLabel="示范语速" value={String(speed)}
+      items={[0.7,0.85,1].map(value => ({value:String(value),label:`${value}×`}))}
+      onChange={value => setSpeed(writeDemoVoice({speed:Number(value)}).speed)} />
     <button className="btn-ghost" style={{ marginTop: 14 }} disabled={previewing || loading || unavailable} onClick={() => void preview()}>{previewing ? "正在试听…" : "试听示范声音"}</button>
     {account && config && <p className="meta" style={{ marginTop: 12 }}>语音识别{config.voice?.asrLanguages.length ? "已开放" : "暂未开放"} · 跟读评分{config.voice?.iseEnabled ? "已开放" : "暂未开放"}</p>}
     {error && <p role="alert" className="v2-form-error">{error}</p>}
