@@ -1,0 +1,10 @@
+PASS native browser Enter/Space activation and non-activating arrow/Home/End focus
+PASS dragging the glass indicator switches sections and the next tap remains available
+PASS reading library retains its mounted page, filter and scroll position across glass drags
+PASS reading search retains its query while switching sections
+PASS reader hides and disables section navigation until returning
+PASS voice practice hides section navigation and preserves its exit flow
+PASS modal sheet covers and inerts navigation, exposes its action, and contains keyboard focus
+PASS a hidden owner suppresses its portal while preserving that root pane’s local draft
+PASS switching to an isolated test profile clears every cached navigation entry and local form state
+PASS: Apple navigation browser acceptance

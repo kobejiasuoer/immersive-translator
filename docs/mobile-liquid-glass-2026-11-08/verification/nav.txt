@@ -1,0 +1,20 @@
+PASS normal clicks select all tabs using their real unequal bounds with immediate press feedback
+PASS touching an unequal-width button boundary selects that button once without an intermediate wrong tab
+PASS movement at the six-pixel threshold remains a click without pointer capture
+PASS drag follows continuously, springs to the nearest tab, suppresses its ghost click and permits the next tap
+PASS both boundaries resist progressively and cancellation restores the original selection
+PASS pointercancel replaces queued drag work with a settling spring without stranding the bubble
+PASS vertical intent cancels navigation without capture or stuck press feedback
+PASS lost capture cancels selection and never swallows the next keyboard activation
+PASS unrelated pointer IDs cannot move or finish the active gesture
+PASS resizing uses the new measured widths, including both borders, and preserves selection
+PASS native iOS touch stream stays glued to the finger after pointercancel and performs no per-move layout reads
+PASS a short flick projects to its neighbour, inherits release velocity and can be grabbed and reversed mid-spring
+PASS a pause before release removes stale momentum rather than unexpectedly switching tabs
+PASS release uses the final touch coordinates when WebKit coalesces the last move
+PASS a second finger outside the navigation cancels the active gesture
+PASS hidden and inert transitions cancel capture and spring work and ignore blocked activation
+PASS live reduced-motion preference removes spring, overshoot and stretch while preserving direct touch feedback
+PASS losing focus cancels gestures and stops background animation
+PASS StrictMode navigation unmounts without React errors, observers, media listeners or animation work
+PASS: 19 real GlassNav interaction and CSS regression scenarios

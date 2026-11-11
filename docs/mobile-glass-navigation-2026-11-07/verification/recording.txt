@@ -1,0 +1,25 @@
+PASS migrated practice steps keep their frozen prompts and attempts while source labels, Chinese context and reader return use each mapped sentence
+PASS a new single-expression practice starts at the current mapped sentence without rewriting the original recording prompts or attempts
+PASS native storage paths stay in diagnostics while the learner sees concise recovery guidance
+PASS failed recording preparation retains text and never manufactures a saved original
+PASS recording can be retried after storage recovery and reaches the real transcription flow once
+PASS existing failed attempts with stale clip identifiers cannot claim a saved original
+PASS spoken-review permission denial makes one capture request, preserves the draft and offers focused text recovery without an app permission sheet
+PASS spoken review transcribes immediately after saving rather than being blocked by its own busy guard
+PASS spoken review still requires explicit answer confirmation before displaying its unchanged three manual grades
+PASS a failed replacement recording preserves the previous playable original and confirmed text
+PASS ASR failure retains the saved original and retries only after an explicit tap
+PASS one microphone tap and one manual stop automatically transcribe and send once; correcting text retains the earlier answer and recording
+PASS two-question conversations wait after feedback, start the next recording with one explicit tap, and finish directly into the recap
+PASS initial quiet does not send, while sustained speech and a quiet pause end the scenario recording and send one answer
+PASS silent audio, short taps and blank ASR output never submit a blank answer
+PASS cancelling a recording retains its original audio without transcribing or sending
+PASS cancelling ASR ignores a late response, retains audio, and waits for explicit retry and send
+PASS automatic submission failure keeps the recording and transcription and retries that answer only on demand
+PASS backgrounding cancels automatic sending and rejects the delayed transcription
+PASS leaving an in-flight answer preserves its text and original recording; reopening cannot stay stuck processing or apply late feedback
+PASS cancelling during storage preparation prevents a delayed microphone prompt or recording from starting
+PASS automatic sending is scoped to scenario conversation; follow-reading recordings still wait for an explicit send
+PASS microphone denial does not send audio or create a blank answered turn and offers text recovery without an extra permission sheet
+PASS a delayed old-profile transcript cannot alter or submit the new profile, and returning to the old profile recovers its saved recording
+PASS: 24 recording failure/recovery regressions

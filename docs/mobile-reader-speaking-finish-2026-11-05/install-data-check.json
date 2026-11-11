@@ -1,0 +1,33 @@
+{
+  "profiles": [
+    {
+      "profile": "aad6a1bf7b44a3bcef00614715e3265b61d0e15758cdecfe4fb1847534605b5b",
+      "tablesEqual": {
+        "snapshot": true,
+        "records": true,
+        "events": true,
+        "outbox": true,
+        "migrations": true,
+        "migration_backups": true,
+        "audio_clips": true,
+        "audio_chunks": true
+      }
+    },
+    {
+      "profile": "84983c60f7daadc1cb8698621f802c0d9f9a3c3c295c810748fb048115c186ec",
+      "tablesEqual": {
+        "snapshot": true,
+        "records": true,
+        "events": true,
+        "outbox": true,
+        "migrations": true,
+        "migration_backups": true,
+        "audio_clips": true,
+        "audio_chunks": true
+      }
+    }
+  ],
+  "recordingFilesEqual": true,
+  "recordingFiles": 6,
+  "passed": true
+}

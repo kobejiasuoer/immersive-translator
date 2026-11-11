@@ -66,3 +66,6 @@ prototypes/shots/mobile-v3/
 # Python 字节码缓存（make-icon.py 等脚本的运行残留）
 __pycache__/
 *.pyc
+
+# QA 执行轮本地证据（580M 截图/录屏 + 构建产物/备份 patch，含锁屏等隐私画面；结论已沉淀为根目录 QA_*.md，本地留档不入公开仓库）
+qa-artifacts/

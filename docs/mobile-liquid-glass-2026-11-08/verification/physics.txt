@@ -1,0 +1,1 @@
+PASS: 60/120Hz equivalence, under/critical/overdamping, convergence, parameter bounds and capsule SDF symmetry

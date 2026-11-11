@@ -1,0 +1,13 @@
+PASS root learning page has no implicit back action
+PASS a short real touch drag cancels and restores the reader
+PASS reversing a real touch drag cancels the pending return
+PASS swiping article content away from the edge preserves reading
+PASS successful reader edge drag executes its stop/clear/back action
+PASS search returns by edge drag with its existing back action
+PASS first import swipe exits only preview; second exits with its draft preserved
+PASS delayed practice persistence holds the released page for 600ms, then continues outward without a rebound
+PASS practice swipe and back return directly; reopening restores the saved answer draft
+PASS in-pane practice history returns without inventing a navigation entry
+PASS a modal sheet retains ownership of edge input
+PASS Reduce Motion supports the same return without translating the page
+PASS: edge-back browser acceptance using real touch input

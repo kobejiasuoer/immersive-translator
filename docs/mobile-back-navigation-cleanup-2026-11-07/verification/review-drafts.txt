@@ -1,0 +1,29 @@
+PASS mounted hook ID change never writes old contents under the new ID
+PASS account switch isolates drafts and rejects stale setters/clear closures
+PASS late old-account draft reads cannot populate or persist into the new account
+PASS null and tombstoned drafts restore the initial value rather than obsolete contents
+PASS saving a new note clears its draft and the next new note is empty
+PASS returning to an edited note restores the draft without changing the saved note
+PASS switching accounts while SHA-256 awaits never imports into the new account and preserves the source draft
+PASS invalid URL and network import failures stay visible after draft persistence and unrelated state updates, retain the input and enable retry
+PASS hash deep-link share replaces a persisted webpage draft once under StrictMode, preserves later edits, and cannot replay after saving
+PASS safari deep-link share replaces a persisted webpage draft once under StrictMode, preserves later edits, and cannot replay after saving
+PASS a hidden import page cannot consume or overwrite the new topmost deep-link share
+PASS a delayed extraction from a retained hidden page cannot overwrite the newer shared draft
+PASS a delayed save from a retained hidden page cannot save, clear the newer draft or replace its navigation
+PASS renaming a legacy book through the real shelf preserves offline continuation, archived restoration and its saved position after reload
+PASS a curated identity opens the saved edition when catalogue title, EPUB title and user title all differ
+PASS partly archived books share visible chapters across status, filters and contents, and explicitly restore omitted chapters without losing learning records
+PASS rejoining a curated group through its real sample restores archived prose without losing translations, edits, position, completion, vocabulary or notes
+PASS cloze header and bottom return immediately without a dialog, preserve its unfinished answer, and never grade it
+PASS dictation header and bottom return immediately without a dialog, preserve its unfinished answer, and never grade it
+PASS spoken header and bottom return immediately without a dialog, preserve its unfinished answer, and never grade it
+PASS unmounting after durable grading restores completion and cannot score the card twice
+PASS completed review returns after its atomic completion write without an exit dialog or duplicate grade
+PASS the explicit completed-session home action still clears its navigation stack after atomic completion
+PASS undo permits regrading with a new event ID and keeps an auditable reversal
+PASS null, invalid-schema, and stale-word review drafts cannot fabricate a completed session
+PASS two completions on the same day increment streak once and commit state with each draft tombstone atomically
+PASS failed completion rolls back streak, retains its durable draft, and preserves concurrent user edits
+PASS no React or unhandled runtime errors
+PASS: 28 source-rendered draft/review regression scenarios

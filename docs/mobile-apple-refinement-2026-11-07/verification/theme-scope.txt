@@ -1,0 +1,1 @@
+PASS: warm reader paper stays scoped inside the dark app

@@ -1,0 +1,21 @@
+PASS three primary tabs
+PASS no fake history
+PASS single selected tab
+PASS dictionary source sentence
+PASS dictionary collection persisted
+PASS practice source expression
+PASS cancel login preserves draft
+PASS cancel makes no fake score
+PASS back preserves practice draft without confirmation
+PASS review schedule advances
+PASS undo appends audit event
+PASS review back has no confirmation
+PASS preview writes no article
+PASS preview final sentence
+PASS saved final sentence
+PASS duplicate import deduped
+PASS durable practice draft
+PASS durable imported article
+PASS local guest flow sends no network
+PASS no React hook or runtime errors
+PASS: 20 source-rendered mobile smoke assertions

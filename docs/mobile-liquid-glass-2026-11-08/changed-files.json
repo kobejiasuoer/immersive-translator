@@ -1,0 +1,15 @@
+[
+  "src/ui/GlassNav.tsx",
+  "src/ui/GlassSwitch.tsx",
+  "src/ui/LiquidLens.tsx",
+  "src/ui/liquidOptics.ts",
+  "src/ui/liquidGlass.css",
+  "src/ui/liquidNav.css",
+  "src/ui/glassSwitch.css",
+  "src/ui/liquidSurfaces.css",
+  "src/ui/navMotion.ts",
+  "src/main.tsx",
+  "scripts/liquid-physics-test.mjs",
+  "scripts/liquid-switch-test.mjs",
+  "scripts/liquid-glass-browser-test.mjs"
+]

@@ -1,0 +1,94 @@
+[
+  {
+    "path": "immersive-translator-mobile/src/components/vault/VaultBody.tsx",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/components/vault/WordDetailSheet.tsx",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/components/vault/vaultExperience.css",
+    "new": true
+  },
+  {
+    "path": "immersive-translator-mobile/src/main.tsx",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/screens/LearningDiscover.tsx",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/screens/LearningHome.tsx",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/screens/LearningImport.tsx",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/screens/LearningPractice.tsx",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/screens/NotesScreens.tsx",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/screens/QuickReview.tsx",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/screens/ReaderScreen.tsx",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/screens/ReviewScreen.tsx",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/screens/SpeakingHome.tsx",
+    "new": true
+  },
+  {
+    "path": "immersive-translator-mobile/src/screens/libraryExperience.css",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/screens/practiceConversation.css",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/screens/speakingExperience.css",
+    "new": true
+  },
+  {
+    "path": "immersive-translator-mobile/src/services/openPractice.ts",
+    "new": true
+  },
+  {
+    "path": "immersive-translator-mobile/src/ui/GlassNav.tsx",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/ui/LearningHeading.tsx",
+    "new": true
+  },
+  {
+    "path": "immersive-translator-mobile/src/ui/learning.css",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/ui/product.css",
+    "new": true
+  },
+  {
+    "path": "immersive-translator-mobile/src/ui/readerExperience.css",
+    "new": false
+  },
+  {
+    "path": "immersive-translator-mobile/src/ui/tokens.css",
+    "new": false
+  }
+]

@@ -1,0 +1,22 @@
+PASS left-edge drag follows the finger and invokes the actual back action once
+PASS short slow drag springs back without navigation
+PASS reversing direction cancels after a long outward drag
+PASS a slow reversal followed by a hold still cancels
+PASS the final release position participates in direction cancellation
+PASS a deliberate outward flick uses release velocity
+PASS gestures starting in the content never become back gestures
+PASS vertical intent stays available to the native scroller
+PASS inputs, buttons and switching controls do not initiate edge back
+PASS text selection is preserved
+PASS pointer cancellation restores the page and releases capture
+PASS touch drags claim only horizontal movement and additional fingers cancel
+PASS single-finger touch completion invokes back
+PASS a recording guard that declines navigation leaves the page in place
+PASS a draft confirmation is shown by the existing callback without dismissing its page
+PASS a local preview back action changes the preview without popping the route
+PASS modal presentation blocks edge navigation even before an inert effect runs
+PASS owner deactivation or modal inert cancels an active drag
+PASS a settling page can be grabbed again from its presentation position
+PASS Reduce Motion keeps the gesture but removes page travel and springs
+PASS unmount cleanup removes motion, capture and preference listeners
+PASS: 21 edge-back interaction scenarios
