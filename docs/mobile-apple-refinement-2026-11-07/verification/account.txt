@@ -1,0 +1,6 @@
+PASS account statistics count completed answers, excluding drafts and recordings
+PASS reading settings open the real reader preferences above the account and return in place
+PASS voice settings use the same account child layer and Escape returns to the account
+PASS login accepts email and password recovery offers real code login without a fake reset
+PASS signed-in identity avoids duplicate email and first sync uses a compact inline action
+5 account settings regression checks passed

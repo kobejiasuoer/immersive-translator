@@ -1,0 +1,30 @@
+PASS keyboard inset initializes before the first viewport event
+PASS pinch zoom preserves the last unscaled keyboard inset
+PASS dismissal, offset scrolling and window resize remeasure the keyboard
+PASS reading: horizontal intent preserves the sheet and subsequent button clicks
+PASS reading: unrelated pointer events are ignored; cancellation restores without closing or swallowing a click
+PASS reading: lost pointer capture cannot dismiss the sheet or consume a later click
+PASS reading: a second touch cancels dismissal so pinch zoom can continue
+PASS reading: scrolled content and text selections retain their native interactions
+PASS reading: a completed downward drag dismisses and suppresses only its synthetic click
+PASS reading: an incomplete drag snaps back and cannot suppress the next tap
+PASS reading: unmounting cancels active gestures and restores transient styles
+PASS global: horizontal intent preserves the sheet and subsequent button clicks
+PASS global: unrelated pointer events are ignored; cancellation restores without closing or swallowing a click
+PASS global: lost pointer capture cannot dismiss the sheet or consume a later click
+PASS global: a second touch cancels dismissal so pinch zoom can continue
+PASS global: scrolled content and text selections retain their native interactions
+PASS global: a completed downward drag dismisses and suppresses only its synthetic click
+PASS global: an incomplete drag snaps back and cannot suppress the next tap
+PASS global: unmounting cancels active gestures and restores transient styles
+PASS text inputs, textareas, selects, range controls, labels and editable descendants cannot start dismissal
+PASS inert global sheets cannot capture gestures under another modal
+PASS ordinary reading drawer enters focus, traps both Tab directions, closes on Escape and restores its trigger
+PASS stacked global and reading sheets give keyboard control to the upper modal and restore each trigger separately
+PASS closing a covered lower drawer retains upper focus and locks, then falls back from its hidden trigger
+PASS actual App React inert updates preserve the lower reading drawer lock until its own close
+PASS actual App compact playback expands into keyboard-accessible sentence help and restores its trigger
+PASS actual App selected-word dictionary restores stable help focus after the selection trigger disappears
+PASS HMR disposal removes viewport and window event listeners
+PASS fresh synchronization reinitializes safely and supports browsers without visualViewport
+PASS: 29 real sheet and keyboard regression scenarios

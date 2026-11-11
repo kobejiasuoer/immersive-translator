@@ -1,0 +1,26 @@
+PASS normal clicks select all tabs using their real unequal bounds with immediate press feedback
+PASS touching an unequal-width button boundary selects that button once without an intermediate wrong tab
+PASS movement at the six-pixel threshold remains a click without pointer capture
+PASS drag follows continuously, springs to the nearest tab, suppresses its ghost click and permits the next tap
+PASS both boundaries resist progressively and cancellation restores the original selection
+PASS pointercancel replaces queued drag work with a settling spring without stranding the bubble
+PASS vertical intent cancels navigation without capture or stuck press feedback
+PASS lost capture cancels selection and never swallows the next keyboard activation
+PASS unrelated pointer IDs cannot move or finish the active gesture
+PASS resizing uses the new measured widths, including both borders, and preserves selection
+PASS synthetic WebKit-style TouchEvent stream stays glued to the finger after pointercancel and performs no per-move layout reads
+PASS a short flick projects to its neighbour, inherits release velocity and can be grabbed and reversed mid-spring
+PASS a pause before release removes stale momentum rather than unexpectedly switching tabs
+PASS release uses the final touch coordinates when WebKit coalesces the last move
+PASS a second finger outside the navigation cancels the active gesture
+PASS hidden and inert transitions cancel capture and spring work and ignore blocked activation
+PASS hiding an owning pane mid-drag cancels its input and prevents a background selection
+PASS live reduced-motion preference removes spring, overshoot and stretch while preserving direct touch feedback
+PASS disabled items cannot activate and drag release selects an enabled destination
+PASS rejected controlled changes restore the actual selection and never repeat side effects on synthetic click
+PASS nullable values show no false selection and become selected only after the owner accepts a value
+PASS ordinary reselect is inert while explicit self-assessment reselect commits once without a duplicate touch click
+PASS radio/tab arrows select with roving focus, group arrows focus without activating, and labels retain their semantics
+PASS losing focus cancels gestures and stops background animation
+PASS StrictMode navigation unmounts without React errors, observers, media listeners or animation work
+PASS: 25 GlassSwitch interaction and CSS regression scenarios

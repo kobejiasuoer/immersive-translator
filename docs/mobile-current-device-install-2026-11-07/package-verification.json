@@ -1,0 +1,18 @@
+{
+  "bundleId": "com.kobejiasuoer.reader",
+  "executable": "immersive-speaking",
+  "profileExpiresAsiaShanghai": "2026-11-14T12:06:48+08:00",
+  "deviceIncluded": true,
+  "sourceMatchesBuild": true,
+  "embeddedAssets": [
+    "index-ezYpynXC.js",
+    "index-ChifOI7X.css",
+    "index-CS_J4tBI.js",
+    "core-D5QzJ8Hl.js",
+    "event-D-WVaGEl.js",
+    "bookImport-BxMQTfaP.js",
+    "index-CzI53oty.js",
+    "index-CEstNfrB.js"
+  ],
+  "binarySHA256": "01415d2a4bcb2da5f15f16b9c1a9c4e5a249dc51dc98f9482efa8ac5e6813ed4"
+}

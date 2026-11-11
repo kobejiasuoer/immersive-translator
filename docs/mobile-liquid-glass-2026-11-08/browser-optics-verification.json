@@ -1,0 +1,170 @@
+{
+  "scope": "Isolated desktop browser processes; Chromium trusted CDP touch, both engines trusted pointer input and touchscreen taps. No physical iPhone or native haptic measurement.",
+  "timingScope": "RAF delivery in the test process, not GPU/compositor completion or a guarantee of physical-device 60/120fps.",
+  "base": "http://127.0.0.1:5186",
+  "opticsOnly": true,
+  "runs": [
+    {
+      "engine": "chromium",
+      "checks": [
+        {
+          "name": "SDF refraction, RGB dispersion and zero-strength identity preserve the expected image",
+          "status": "passed",
+          "details": {
+            "refraction": {
+              "width": 368,
+              "height": 76,
+              "changedPixels": 3509,
+              "totalPixels": 27968,
+              "meanChannelDifference": 11.413317601067886,
+              "maxChannelSumDifference": 662
+            },
+            "dispersion": {
+              "width": 368,
+              "height": 76,
+              "changedPixels": 292,
+              "totalPixels": 27968,
+              "meanChannelDifference": 0.3707808924485126,
+              "maxChannelSumDifference": 213
+            },
+            "identity": {
+              "width": 368,
+              "height": 76,
+              "changedPixels": 0,
+              "totalPixels": 27968,
+              "meanChannelDifference": 0.11378480167810831,
+              "maxChannelSumDifference": 3
+            },
+            "screenshots": [
+              "chromium-optics-enabled.png",
+              "chromium-optics-disabled.png",
+              "chromium-optics-no-dispersion.png",
+              "chromium-optics-identity.png",
+              "chromium-optics-identity-unfiltered.png"
+            ],
+            "qualification": "Difference isolates ordinary SVG filtering of the local icon/text replay, not arbitrary page-backdrop resampling. Identity allows subpixel compositing/rounding differences below one mean RGB level."
+          }
+        }
+      ],
+      "screenshots": [],
+      "timing": null,
+      "optical": {
+        "refraction": {
+          "width": 368,
+          "height": 76,
+          "changedPixels": 3509,
+          "totalPixels": 27968,
+          "meanChannelDifference": 11.413317601067886,
+          "maxChannelSumDifference": 662
+        },
+        "dispersion": {
+          "width": 368,
+          "height": 76,
+          "changedPixels": 292,
+          "totalPixels": 27968,
+          "meanChannelDifference": 0.3707808924485126,
+          "maxChannelSumDifference": 213
+        },
+        "identity": {
+          "width": 368,
+          "height": 76,
+          "changedPixels": 0,
+          "totalPixels": 27968,
+          "meanChannelDifference": 0.11378480167810831,
+          "maxChannelSumDifference": 3
+        },
+        "screenshots": [
+          "chromium-optics-enabled.png",
+          "chromium-optics-disabled.png",
+          "chromium-optics-no-dispersion.png",
+          "chromium-optics-identity.png",
+          "chromium-optics-identity-unfiltered.png"
+        ],
+        "qualification": "Difference isolates ordinary SVG filtering of the local icon/text replay, not arbitrary page-backdrop resampling. Identity allows subpixel compositing/rounding differences below one mean RGB level."
+      },
+      "browserVersion": "156.0.8078.80",
+      "status": "passed"
+    },
+    {
+      "engine": "webkit",
+      "checks": [
+        {
+          "name": "SDF refraction, RGB dispersion and zero-strength identity preserve the expected image",
+          "status": "passed",
+          "details": {
+            "refraction": {
+              "width": 368,
+              "height": 76,
+              "changedPixels": 1692,
+              "totalPixels": 27968,
+              "meanChannelDifference": 4.563215102974828,
+              "maxChannelSumDifference": 641
+            },
+            "dispersion": {
+              "width": 368,
+              "height": 76,
+              "changedPixels": 117,
+              "totalPixels": 27968,
+              "meanChannelDifference": 0.15062452326468345,
+              "maxChannelSumDifference": 222
+            },
+            "identity": {
+              "width": 368,
+              "height": 76,
+              "changedPixels": 4,
+              "totalPixels": 27968,
+              "meanChannelDifference": 0.13806254767353165,
+              "maxChannelSumDifference": 16
+            },
+            "screenshots": [
+              "webkit-optics-enabled.png",
+              "webkit-optics-disabled.png",
+              "webkit-optics-no-dispersion.png",
+              "webkit-optics-identity.png",
+              "webkit-optics-identity-unfiltered.png"
+            ],
+            "qualification": "Difference isolates ordinary SVG filtering of the local icon/text replay, not arbitrary page-backdrop resampling. Identity allows subpixel compositing/rounding differences below one mean RGB level."
+          }
+        }
+      ],
+      "screenshots": [],
+      "timing": null,
+      "optical": {
+        "refraction": {
+          "width": 368,
+          "height": 76,
+          "changedPixels": 1692,
+          "totalPixels": 27968,
+          "meanChannelDifference": 4.563215102974828,
+          "maxChannelSumDifference": 641
+        },
+        "dispersion": {
+          "width": 368,
+          "height": 76,
+          "changedPixels": 117,
+          "totalPixels": 27968,
+          "meanChannelDifference": 0.15062452326468345,
+          "maxChannelSumDifference": 222
+        },
+        "identity": {
+          "width": 368,
+          "height": 76,
+          "changedPixels": 4,
+          "totalPixels": 27968,
+          "meanChannelDifference": 0.13806254767353165,
+          "maxChannelSumDifference": 16
+        },
+        "screenshots": [
+          "webkit-optics-enabled.png",
+          "webkit-optics-disabled.png",
+          "webkit-optics-no-dispersion.png",
+          "webkit-optics-identity.png",
+          "webkit-optics-identity-unfiltered.png"
+        ],
+        "qualification": "Difference isolates ordinary SVG filtering of the local icon/text replay, not arbitrary page-backdrop resampling. Identity allows subpixel compositing/rounding differences below one mean RGB level."
+      },
+      "browserVersion": "26.5",
+      "status": "passed"
+    }
+  ]
+}

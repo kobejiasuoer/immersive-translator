@@ -1,0 +1,14 @@
+[
+  "scripts/apple-navigation-test.mjs",
+  "scripts/draft-test.mjs",
+  "scripts/edge-back-browser-test.mjs",
+  "scripts/recording-regression-test.mjs",
+  "scripts/smoke.mjs",
+  "scripts/ui-visual-check.mjs",
+  "src/components/vault/SpokenReviewCard.tsx",
+  "src/screens/LearningPractice.tsx",
+  "src/screens/ReviewScreen.tsx",
+  "src/services/practice.ts",
+  "src/store.ts",
+  "src/ui/sheets.tsx"
+]

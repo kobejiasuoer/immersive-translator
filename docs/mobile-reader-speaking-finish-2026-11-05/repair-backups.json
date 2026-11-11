@@ -1,0 +1,17 @@
+{
+  "checks": [
+    {
+      "articleId": "amw0d87pkpceea0",
+      "originalArticleBackupExact": true,
+      "originalTranslationBackupExact": true,
+      "originalProgressBackupExact": true
+    },
+    {
+      "articleId": "import-24639361d293c7c076b5c810",
+      "originalArticleBackupExact": true,
+      "originalTranslationBackupExact": true,
+      "originalProgressBackupExact": true
+    }
+  ],
+  "passed": true
+}

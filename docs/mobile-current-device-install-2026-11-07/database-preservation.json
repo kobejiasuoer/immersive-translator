@@ -1,0 +1,96 @@
+[
+  {
+    "database": "com.kobejiasuoer.reader/profiles/84983c60f7daadc1cb8698621f802c0d9f9a3c3c295c810748fb048115c186ec/state.sqlite3",
+    "integrityBefore": "ok",
+    "integrityAfter": "ok",
+    "tables": {
+      "audio_chunks": {
+        "before": 0,
+        "after": 0,
+        "identicalRows": true
+      },
+      "audio_clips": {
+        "before": 0,
+        "after": 0,
+        "identicalRows": true
+      },
+      "events": {
+        "before": 0,
+        "after": 0,
+        "identicalRows": true
+      },
+      "migration_backups": {
+        "before": 0,
+        "after": 0,
+        "identicalRows": true
+      },
+      "migrations": {
+        "before": 0,
+        "after": 0,
+        "identicalRows": true
+      },
+      "outbox": {
+        "before": 0,
+        "after": 0,
+        "identicalRows": true
+      },
+      "records": {
+        "before": 1,
+        "after": 1,
+        "identicalRows": true
+      },
+      "snapshot": {
+        "before": 1,
+        "after": 1,
+        "identicalRows": true
+      }
+    }
+  },
+  {
+    "database": "com.kobejiasuoer.reader/profiles/aad6a1bf7b44a3bcef00614715e3265b61d0e15758cdecfe4fb1847534605b5b/state.sqlite3",
+    "integrityBefore": "ok",
+    "integrityAfter": "ok",
+    "tables": {
+      "audio_chunks": {
+        "before": 483,
+        "after": 483,
+        "identicalRows": true
+      },
+      "audio_clips": {
+        "before": 6,
+        "after": 6,
+        "identicalRows": true
+      },
+      "events": {
+        "before": 0,
+        "after": 0,
+        "identicalRows": true
+      },
+      "migration_backups": {
+        "before": 0,
+        "after": 0,
+        "identicalRows": true
+      },
+      "migrations": {
+        "before": 0,
+        "after": 0,
+        "identicalRows": true
+      },
+      "outbox": {
+        "before": 0,
+        "after": 0,
+        "identicalRows": true
+      },
+      "records": {
+        "before": 322,
+        "after": 322,
+        "identicalRows": false
+      },
+      "snapshot": {
+        "before": 1,
+        "after": 1,
+        "identicalRows": false
+      }
+    }
+  }
+]

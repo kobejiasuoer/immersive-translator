@@ -1,0 +1,29 @@
+PASS lookup card survives login and continues its original lookup once
+PASS missing-word fallback survives login and continues once
+PASS cancelled login keeps the original card and allows a later retry
+PASS cancel after authentication keeps the original card without running the lookup
+PASS closing a card while login waits does not revive or charge the old lookup
+PASS changing words while login waits does not revive the old card
+PASS closing during target-profile loading cannot retain the card
+PASS late lookup from account A cannot update a card after switching to B
+PASS cancelling during target load preserves the original card and never publishes account data
+PASS successful lookup displays and persists every sense and example
+PASS failed dictionary lookup is an error and can retry before collection
+PASS truncated length responses cannot become dictionary senses or completed translations
+PASS truncated content_filter responses cannot become dictionary senses or completed translations
+PASS progress, explicit completion, daily reading and restore are independent and durable
+PASS legacy highest-index metrics never become completion or inflated actual reads
+PASS opening sentence tools never requests login or analysis, successful explicit parse is cached
+PASS manual lookup uses saved definitions without requesting the network
+PASS contextual English help is explicit, survives login, and persists with the selected sentence
+PASS existing Chinese senses stay behind an explicit reveal in context help
+PASS new English context updates a saved word without deleting its Chinese senses or review state
+PASS closing English help during login cannot submit or revive the request
+PASS English help rejects truncated or wrong-language output and retries without saving failure
+PASS an English explanation from an old account cannot appear under a new profile
+PASS sentence paraphrase is explicit and a changed source rejects the late result
+PASS reopening the same English context uses the session result and can still collect it
+PASS cancelling login for English help leaves a retryable card without sending the sentence
+PASS requesting Chinese after English preserves both results and collects both
+PASS English-only vocabulary remains readable, searchable, editable and exportable
+28/28 dictionary/login component tests passed

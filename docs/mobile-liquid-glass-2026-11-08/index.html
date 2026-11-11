@@ -1,0 +1,63 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Liquid glass browser verification · 2026-11-08</title><style>
+  body{font:15px/1.6 system-ui;background:#f5f6f7;color:#19221e;max-width:1280px;margin:auto;padding:28px}h1{font-size:28px;line-height:1.2}h2{margin-top:0}section{background:white;border:1px solid #dce3de;border-radius:12px;padding:24px;margin:28px 0}p{max-width:900px;color:#48544d}li{margin:6px 0}.shots{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.shots img{width:100%;max-width:390px}.optical{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}.optical img{width:100%;max-width:736px}figure{margin:0}figcaption{font-size:12px;overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f3;padding:12px;border-radius:8px;font-size:12px}a{color:#246b52}
+  </style><h1>Liquid glass browser verification</h1><p>2026-11-08 · Isolated desktop browser processes; Chromium trusted CDP touch, both engines trusted pointer input and touchscreen taps. No physical iPhone or native haptic measurement.</p><p>RAF delivery in the test process, not GPU/compositor completion or a guarantee of physical-device 60/120fps.</p><p><a href="browser-verification.json">Machine-readable results</a></p><section><h2>chromium 156.0.8078.80 — passed</h2>
+    <ul><li><strong>passed</strong> · optical plane mounts and preserves all original button hit targets</li><li><strong>passed</strong> · trusted pointer long press wakes the lens without committing a tab</li><li><strong>passed</strong> · continuous multi-slot pointer drag commits exactly once on release and reuses filter nodes/textures</li><li><strong>passed</strong> · settled navigation releases its RAF and stays asleep</li><li><strong>passed</strong> · capture loss cancels a drag without committing</li><li><strong>passed</strong> · vertical intent cancels navigation without accidental activation</li><li><strong>passed</strong> · keyboard focus, Enter and Space activation remain intact</li><li><strong>passed</strong> · trusted browser touchscreen tap selects the underlying button</li><li><strong>passed</strong> · trusted CDP touch supports long press, continuous drag, release-only commit and touchcancel</li><li><strong>passed</strong> · light/dark layouts fit 320/390/430/768px with 44px minimum touch targets</li><li><strong>passed</strong> · reduced motion preserves dragging while removing optical motion and spring deformation</li><li><strong>passed</strong> · increased contrast removes optical replay and backdrop blur</li><li><strong>passed</strong> · reduced transparency switches to a solid readable surface</li><li><strong>passed</strong> · SDF filter changes visible pixels with independent refraction and RGB dispersion evidence</li></ul>
+    
+    <p>RAF delivery: median 16.70 ms, p95 16.70 ms, max 66.80 ms (59 intervals). This includes automated input and screenshot work; it is not a GPU or physical-device frame-rate measurement.</p>
+    <div class="shots"><figure><img src="chromium-nav-held.png" alt="chromium-nav-held.png" loading="lazy"><figcaption>chromium-nav-held.png</figcaption></figure><figure><img src="chromium-nav-drag-before-release.png" alt="chromium-nav-drag-before-release.png" loading="lazy"><figcaption>chromium-nav-drag-before-release.png</figcaption></figure><figure><img src="chromium-light-390.png" alt="chromium-light-390.png" loading="lazy"><figcaption>chromium-light-390.png</figcaption></figure><figure><img src="chromium-dark-390.png" alt="chromium-dark-390.png" loading="lazy"><figcaption>chromium-dark-390.png</figcaption></figure><figure><img src="chromium-reduced-motion.png" alt="chromium-reduced-motion.png" loading="lazy"><figcaption>chromium-reduced-motion.png</figcaption></figure></div>
+    <h3>Optical fixture</h3><p>The filtered and unfiltered images share the same source. Refraction and RGB dispersion are tested independently; the zero-strength case checks source-coordinate and glyph-coverage fidelity.</p><div class="optical"><figure><img src="chromium-optics-enabled.png" alt="chromium-optics-enabled.png"><figcaption>chromium-optics-enabled.png</figcaption></figure><figure><img src="chromium-optics-disabled.png" alt="chromium-optics-disabled.png"><figcaption>chromium-optics-disabled.png</figcaption></figure><figure><img src="chromium-optics-no-dispersion.png" alt="chromium-optics-no-dispersion.png"><figcaption>chromium-optics-no-dispersion.png</figcaption></figure><figure><img src="chromium-optics-identity.png" alt="chromium-optics-identity.png"><figcaption>chromium-optics-identity.png</figcaption></figure><figure><img src="chromium-optics-identity-unfiltered.png" alt="chromium-optics-identity-unfiltered.png"><figcaption>chromium-optics-identity-unfiltered.png</figcaption></figure></div><pre>{
+  &quot;refraction&quot;: {
+    &quot;width&quot;: 368,
+    &quot;height&quot;: 76,
+    &quot;changedPixels&quot;: 3509,
+    &quot;totalPixels&quot;: 27968,
+    &quot;meanChannelDifference&quot;: 11.413317601067886,
+    &quot;maxChannelSumDifference&quot;: 662
+  },
+  &quot;dispersion&quot;: {
+    &quot;width&quot;: 368,
+    &quot;height&quot;: 76,
+    &quot;changedPixels&quot;: 292,
+    &quot;totalPixels&quot;: 27968,
+    &quot;meanChannelDifference&quot;: 0.3707808924485126,
+    &quot;maxChannelSumDifference&quot;: 213
+  },
+  &quot;identity&quot;: {
+    &quot;width&quot;: 368,
+    &quot;height&quot;: 76,
+    &quot;changedPixels&quot;: 0,
+    &quot;totalPixels&quot;: 27968,
+    &quot;meanChannelDifference&quot;: 0.11378480167810831,
+    &quot;maxChannelSumDifference&quot;: 3
+  }
+}</pre></section><section><h2>webkit 26.5 — passed</h2>
+    <ul><li><strong>passed</strong> · optical plane mounts and preserves all original button hit targets</li><li><strong>passed</strong> · trusted pointer long press wakes the lens without committing a tab</li><li><strong>passed</strong> · continuous multi-slot pointer drag commits exactly once on release and reuses filter nodes/textures</li><li><strong>passed</strong> · settled navigation releases its RAF and stays asleep</li><li><strong>passed</strong> · capture loss cancels a drag without committing</li><li><strong>passed</strong> · vertical intent cancels navigation without accidental activation</li><li><strong>passed</strong> · keyboard focus, Enter and Space activation remain intact</li><li><strong>passed</strong> · trusted browser touchscreen tap selects the underlying button</li><li><strong>not available</strong> · continuous trusted touch drag<p>Playwright WebKit exposes trusted taps but no public touch-move API; trusted pointer drag is tested. No synthetic stream is counted as physical touch.</p></li><li><strong>passed</strong> · light/dark layouts fit 320/390/430/768px with 44px minimum touch targets</li><li><strong>passed</strong> · reduced motion preserves dragging while removing optical motion and spring deformation</li><li><strong>passed</strong> · increased contrast removes optical replay and backdrop blur</li><li><strong>not available</strong> · reduced transparency media emulation<p>No public Playwright WebKit emulation for this preference; native contrast media fallback is tested.</p></li><li><strong>passed</strong> · SDF filter changes visible pixels with independent refraction and RGB dispersion evidence</li></ul>
+    
+    <p>RAF delivery: median 14.00 ms, p95 15.00 ms, max 19.00 ms (63 intervals). This includes automated input and screenshot work; it is not a GPU or physical-device frame-rate measurement.</p>
+    <div class="shots"><figure><img src="webkit-nav-held.png" alt="webkit-nav-held.png" loading="lazy"><figcaption>webkit-nav-held.png</figcaption></figure><figure><img src="webkit-nav-drag-before-release.png" alt="webkit-nav-drag-before-release.png" loading="lazy"><figcaption>webkit-nav-drag-before-release.png</figcaption></figure><figure><img src="webkit-light-390.png" alt="webkit-light-390.png" loading="lazy"><figcaption>webkit-light-390.png</figcaption></figure><figure><img src="webkit-dark-390.png" alt="webkit-dark-390.png" loading="lazy"><figcaption>webkit-dark-390.png</figcaption></figure><figure><img src="webkit-reduced-motion.png" alt="webkit-reduced-motion.png" loading="lazy"><figcaption>webkit-reduced-motion.png</figcaption></figure></div>
+    <h3>Optical fixture</h3><p>The filtered and unfiltered images share the same source. Refraction and RGB dispersion are tested independently; the zero-strength case checks source-coordinate and glyph-coverage fidelity.</p><div class="optical"><figure><img src="webkit-optics-enabled.png" alt="webkit-optics-enabled.png"><figcaption>webkit-optics-enabled.png</figcaption></figure><figure><img src="webkit-optics-disabled.png" alt="webkit-optics-disabled.png"><figcaption>webkit-optics-disabled.png</figcaption></figure><figure><img src="webkit-optics-no-dispersion.png" alt="webkit-optics-no-dispersion.png"><figcaption>webkit-optics-no-dispersion.png</figcaption></figure><figure><img src="webkit-optics-identity.png" alt="webkit-optics-identity.png"><figcaption>webkit-optics-identity.png</figcaption></figure><figure><img src="webkit-optics-identity-unfiltered.png" alt="webkit-optics-identity-unfiltered.png"><figcaption>webkit-optics-identity-unfiltered.png</figcaption></figure></div><pre>{
+  &quot;refraction&quot;: {
+    &quot;width&quot;: 368,
+    &quot;height&quot;: 76,
+    &quot;changedPixels&quot;: 1692,
+    &quot;totalPixels&quot;: 27968,
+    &quot;meanChannelDifference&quot;: 4.563215102974828,
+    &quot;maxChannelSumDifference&quot;: 641
+  },
+  &quot;dispersion&quot;: {
+    &quot;width&quot;: 368,
+    &quot;height&quot;: 76,
+    &quot;changedPixels&quot;: 117,
+    &quot;totalPixels&quot;: 27968,
+    &quot;meanChannelDifference&quot;: 0.15062452326468345,
+    &quot;maxChannelSumDifference&quot;: 222
+  },
+  &quot;identity&quot;: {
+    &quot;width&quot;: 368,
+    &quot;height&quot;: 76,
+    &quot;changedPixels&quot;: 4,
+    &quot;totalPixels&quot;: 27968,
+    &quot;meanChannelDifference&quot;: 0.13806254767353165,
+    &quot;maxChannelSumDifference&quot;: 16
+  }
+}</pre></section></html>

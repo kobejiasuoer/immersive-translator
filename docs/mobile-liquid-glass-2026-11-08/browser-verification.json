@@ -1,0 +1,336 @@
+{
+  "scope": "Isolated desktop browser processes; Chromium trusted CDP touch, both engines trusted pointer input and touchscreen taps. No physical iPhone or native haptic measurement.",
+  "timingScope": "RAF delivery in the test process, not GPU/compositor completion or a guarantee of physical-device 60/120fps.",
+  "base": "http://127.0.0.1:5186",
+  "opticsOnly": false,
+  "runs": [
+    {
+      "engine": "chromium",
+      "checks": [
+        {
+          "name": "optical plane mounts and preserves all original button hit targets",
+          "status": "passed"
+        },
+        {
+          "name": "trusted pointer long press wakes the lens without committing a tab",
+          "status": "passed"
+        },
+        {
+          "name": "continuous multi-slot pointer drag commits exactly once on release and reuses filter nodes/textures",
+          "status": "passed",
+          "details": {
+            "sameFilters": true,
+            "sameMaps": true,
+            "encodes": 0
+          }
+        },
+        {
+          "name": "settled navigation releases its RAF and stays asleep",
+          "status": "passed",
+          "details": {
+            "count": 100,
+            "pending": 0
+          }
+        },
+        {
+          "name": "capture loss cancels a drag without committing",
+          "status": "passed"
+        },
+        {
+          "name": "vertical intent cancels navigation without accidental activation",
+          "status": "passed"
+        },
+        {
+          "name": "keyboard focus, Enter and Space activation remain intact",
+          "status": "passed"
+        },
+        {
+          "name": "trusted browser touchscreen tap selects the underlying button",
+          "status": "passed"
+        },
+        {
+          "name": "trusted CDP touch supports long press, continuous drag, release-only commit and touchcancel",
+          "status": "passed"
+        },
+        {
+          "name": "light/dark layouts fit 320/390/430/768px with 44px minimum touch targets",
+          "status": "passed"
+        },
+        {
+          "name": "reduced motion preserves dragging while removing optical motion and spring deformation",
+          "status": "passed"
+        },
+        {
+          "name": "increased contrast removes optical replay and backdrop blur",
+          "status": "passed"
+        },
+        {
+          "name": "reduced transparency switches to a solid readable surface",
+          "status": "passed"
+        },
+        {
+          "name": "SDF filter changes visible pixels with independent refraction and RGB dispersion evidence",
+          "status": "passed",
+          "details": {
+            "refraction": {
+              "width": 368,
+              "height": 76,
+              "changedPixels": 3509,
+              "totalPixels": 27968,
+              "meanChannelDifference": 11.413317601067886,
+              "maxChannelSumDifference": 662
+            },
+            "dispersion": {
+              "width": 368,
+              "height": 76,
+              "changedPixels": 292,
+              "totalPixels": 27968,
+              "meanChannelDifference": 0.3707808924485126,
+              "maxChannelSumDifference": 213
+            },
+            "identity": {
+              "width": 368,
+              "height": 76,
+              "changedPixels": 0,
+              "totalPixels": 27968,
+              "meanChannelDifference": 0.11378480167810831,
+              "maxChannelSumDifference": 3
+            },
+            "screenshots": [
+              "chromium-optics-enabled.png",
+              "chromium-optics-disabled.png",
+              "chromium-optics-no-dispersion.png",
+              "chromium-optics-identity.png",
+              "chromium-optics-identity-unfiltered.png"
+            ],
+            "qualification": "Difference isolates ordinary SVG filtering of the local icon/text replay, not arbitrary page-backdrop resampling. Identity allows subpixel compositing/rounding differences below one mean RGB level."
+          }
+        }
+      ],
+      "screenshots": [
+        "chromium-nav-held.png",
+        "chromium-nav-drag-before-release.png",
+        "chromium-trusted-touch-drag.png",
+        "chromium-light-320.png",
+        "chromium-light-390.png",
+        "chromium-light-430.png",
+        "chromium-light-768.png",
+        "chromium-dark-320.png",
+        "chromium-dark-390.png",
+        "chromium-dark-430.png",
+        "chromium-dark-768.png",
+        "chromium-reduced-motion.png",
+        "chromium-increased-contrast.png",
+        "chromium-reduced-transparency.png"
+      ],
+      "timing": {
+        "samples": 59,
+        "medianMs": 16.699999999999818,
+        "p95Ms": 16.700000000000273,
+        "maxMs": 66.80000000000018,
+        "above20ms": 1,
+        "above34ms": 1
+      },
+      "optical": {
+        "refraction": {
+          "width": 368,
+          "height": 76,
+          "changedPixels": 3509,
+          "totalPixels": 27968,
+          "meanChannelDifference": 11.413317601067886,
+          "maxChannelSumDifference": 662
+        },
+        "dispersion": {
+          "width": 368,
+          "height": 76,
+          "changedPixels": 292,
+          "totalPixels": 27968,
+          "meanChannelDifference": 0.3707808924485126,
+          "maxChannelSumDifference": 213
+        },
+        "identity": {
+          "width": 368,
+          "height": 76,
+          "changedPixels": 0,
+          "totalPixels": 27968,
+          "meanChannelDifference": 0.11378480167810831,
+          "maxChannelSumDifference": 3
+        },
+        "screenshots": [
+          "chromium-optics-enabled.png",
+          "chromium-optics-disabled.png",
+          "chromium-optics-no-dispersion.png",
+          "chromium-optics-identity.png",
+          "chromium-optics-identity-unfiltered.png"
+        ],
+        "qualification": "Difference isolates ordinary SVG filtering of the local icon/text replay, not arbitrary page-backdrop resampling. Identity allows subpixel compositing/rounding differences below one mean RGB level."
+      },
+      "browserVersion": "156.0.8078.80",
+      "status": "passed"
+    },
+    {
+      "engine": "webkit",
+      "checks": [
+        {
+          "name": "optical plane mounts and preserves all original button hit targets",
+          "status": "passed"
+        },
+        {
+          "name": "trusted pointer long press wakes the lens without committing a tab",
+          "status": "passed"
+        },
+        {
+          "name": "continuous multi-slot pointer drag commits exactly once on release and reuses filter nodes/textures",
+          "status": "passed",
+          "details": {
+            "sameFilters": true,
+            "sameMaps": true,
+            "encodes": 0
+          }
+        },
+        {
+          "name": "settled navigation releases its RAF and stays asleep",
+          "status": "passed",
+          "details": {
+            "count": 111,
+            "pending": 0
+          }
+        },
+        {
+          "name": "capture loss cancels a drag without committing",
+          "status": "passed"
+        },
+        {
+          "name": "vertical intent cancels navigation without accidental activation",
+          "status": "passed"
+        },
+        {
+          "name": "keyboard focus, Enter and Space activation remain intact",
+          "status": "passed"
+        },
+        {
+          "name": "trusted browser touchscreen tap selects the underlying button",
+          "status": "passed"
+        },
+        {
+          "name": "continuous trusted touch drag",
+          "status": "not available",
+          "details": "Playwright WebKit exposes trusted taps but no public touch-move API; trusted pointer drag is tested. No synthetic stream is counted as physical touch."
+        },
+        {
+          "name": "light/dark layouts fit 320/390/430/768px with 44px minimum touch targets",
+          "status": "passed"
+        },
+        {
+          "name": "reduced motion preserves dragging while removing optical motion and spring deformation",
+          "status": "passed"
+        },
+        {
+          "name": "increased contrast removes optical replay and backdrop blur",
+          "status": "passed"
+        },
+        {
+          "name": "reduced transparency media emulation",
+          "status": "not available",
+          "details": "No public Playwright WebKit emulation for this preference; native contrast media fallback is tested."
+        },
+        {
+          "name": "SDF filter changes visible pixels with independent refraction and RGB dispersion evidence",
+          "status": "passed",
+          "details": {
+            "refraction": {
+              "width": 368,
+              "height": 76,
+              "changedPixels": 1692,
+              "totalPixels": 27968,
+              "meanChannelDifference": 4.563215102974828,
+              "maxChannelSumDifference": 641
+            },
+            "dispersion": {
+              "width": 368,
+              "height": 76,
+              "changedPixels": 117,
+              "totalPixels": 27968,
+              "meanChannelDifference": 0.15062452326468345,
+              "maxChannelSumDifference": 222
+            },
+            "identity": {
+              "width": 368,
+              "height": 76,
+              "changedPixels": 4,
+              "totalPixels": 27968,
+              "meanChannelDifference": 0.13806254767353165,
+              "maxChannelSumDifference": 16
+            },
+            "screenshots": [
+              "webkit-optics-enabled.png",
+              "webkit-optics-disabled.png",
+              "webkit-optics-no-dispersion.png",
+              "webkit-optics-identity.png",
+              "webkit-optics-identity-unfiltered.png"
+            ],
+            "qualification": "Difference isolates ordinary SVG filtering of the local icon/text replay, not arbitrary page-backdrop resampling. Identity allows subpixel compositing/rounding differences below one mean RGB level."
+          }
+        }
+      ],
+      "screenshots": [
+        "webkit-nav-held.png",
+        "webkit-nav-drag-before-release.png",
+        "webkit-light-320.png",
+        "webkit-light-390.png",
+        "webkit-light-430.png",
+        "webkit-light-768.png",
+        "webkit-dark-320.png",
+        "webkit-dark-390.png",
+        "webkit-dark-430.png",
+        "webkit-dark-768.png",
+        "webkit-reduced-motion.png",
+        "webkit-increased-contrast.png"
+      ],
+      "timing": {
+        "samples": 63,
+        "medianMs": 14,
+        "p95Ms": 15,
+        "maxMs": 19,
+        "above20ms": 0,
+        "above34ms": 0
+      },
+      "optical": {
+        "refraction": {
+          "width": 368,
+          "height": 76,
+          "changedPixels": 1692,
+          "totalPixels": 27968,
+          "meanChannelDifference": 4.563215102974828,
+          "maxChannelSumDifference": 641
+        },
+        "dispersion": {
+          "width": 368,
+          "height": 76,
+          "changedPixels": 117,
+          "totalPixels": 27968,
+          "meanChannelDifference": 0.15062452326468345,
+          "maxChannelSumDifference": 222
+        },
+        "identity": {
+          "width": 368,
+          "height": 76,
+          "changedPixels": 4,
+          "totalPixels": 27968,
+          "meanChannelDifference": 0.13806254767353165,
+          "maxChannelSumDifference": 16
+        },
+        "screenshots": [
+          "webkit-optics-enabled.png",
+          "webkit-optics-disabled.png",
+          "webkit-optics-no-dispersion.png",
+          "webkit-optics-identity.png",
+          "webkit-optics-identity-unfiltered.png"
+        ],
+        "qualification": "Difference isolates ordinary SVG filtering of the local icon/text replay, not arbitrary page-backdrop resampling. Identity allows subpixel compositing/rounding differences below one mean RGB level."
+      },
+      "browserVersion": "26.5",
+      "status": "passed"
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+PASS: reading library regression (web chrome removal, natural paragraphs, abbreviations, title fidelity, version-aware dedupe, desktop metadata, mixed shelf order and archive restoration)

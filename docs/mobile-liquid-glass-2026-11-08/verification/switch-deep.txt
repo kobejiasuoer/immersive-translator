@@ -1,0 +1,5 @@
+PASS gradual press, long-press wake, haptic, cancellation and idle sleep
+PASS unselected long press remains a preview and hands off to continuous drag
+PASS continuous cross-slot preview, no per-frame geometry reads, paused velocity relaxation and release commit
+PASS nullable cancellation and configurable overdamped controlled release
+PASS preference changes and StrictMode unmount cancel timers and frames

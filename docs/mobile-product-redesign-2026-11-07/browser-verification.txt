@@ -1,0 +1,25 @@
+DICT 原句里的表达
+take a break
+/teɪk ə breɪk/
+听发音
+用英文解释这里的用法
+查看中文释义
+A Small Break · 第 1 句
+Every afternoon, I take a break from work.
+收藏到生词本
+收藏并用它说一句
+
+练完可以回到这句，阅读位置会保留。
+LAYOUT 320 reading { width: 320, scrollWidth: 320, bodyOverflow: [ false ] }
+LAYOUT 320 speaking { width: 320, scrollWidth: 320, bodyOverflow: [ false ] }
+LAYOUT 320 vault { width: 320, scrollWidth: 320, bodyOverflow: [ false ] }
+LAYOUT 390 reading { width: 390, scrollWidth: 390, bodyOverflow: [ false ] }
+LAYOUT 390 speaking { width: 390, scrollWidth: 390, bodyOverflow: [ false ] }
+LAYOUT 390 vault { width: 390, scrollWidth: 390, bodyOverflow: [ false ] }
+LAYOUT 430 reading { width: 430, scrollWidth: 430, bodyOverflow: [ false ] }
+LAYOUT 430 speaking { width: 430, scrollWidth: 430, bodyOverflow: [ false ] }
+LAYOUT 430 vault { width: 430, scrollWidth: 430, bodyOverflow: [ false ] }
+LAYOUT 768 reading { width: 768, scrollWidth: 768, bodyOverflow: [ false ] }
+LAYOUT 768 speaking { width: 768, scrollWidth: 768, bodyOverflow: [ false ] }
+LAYOUT 768 vault { width: 768, scrollWidth: 768, bodyOverflow: [ false ] }
+PASS: actual reading, collection, practice draft, return navigation and 12 mobile layouts

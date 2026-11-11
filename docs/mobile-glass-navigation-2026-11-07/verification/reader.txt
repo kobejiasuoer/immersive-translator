@@ -1,0 +1,37 @@
+PASS Continuous English remains visible with historical en preferences
+PASS Continuous English remains visible with historical bi preferences
+PASS Continuous English remains visible with historical zh preferences
+PASS Playback is compact by default and its expanded controls can be collapsed again
+PASS Ordinary source clicks retain native selection without opening dictionary or sentence tools
+PASS Explaining a selected phrase keeps the exact text and its source sentence identity
+PASS Native selection collapse before a touch click preserves the selected word action
+PASS Native selection collapse before a touch click preserves the selected sentence action
+PASS Cancelled selection-action touch never queries and a subsequent outside touch dismisses its snapshot
+PASS A whole source sentence opens help only after the explicit selection action
+PASS Cross-sentence selection never attributes the selected text to only the first sentence
+PASS A native range ending at a paragraph child boundary retains its sentence identity
+PASS Saved translations, overrides and vocabulary remain available through deliberate help
+PASS Next sentence saves the breakpoint and survives remount with collapsed controls
+PASS Current-sentence help has an explicit expanded control independent of source hit targets
+PASS Continuous playback consumes the latest speed on its next sentence
+PASS Failed on-demand drafts stay out of storage and the actual help panel offers retry
+PASS Leaving stops the active request and ignores its late translation result
+PASS Closing real sentence help cancels its draft and a new request rejects the old result
+PASS Unconfigured translation displays actionable feedback without persisting guidance
+PASS On-demand translation does not automatically request the remaining article
+PASS Reading help requests English-to-Chinese regardless of the general direction
+PASS Preview translations appear in actual sentence help without persisting the sample
+PASS Chapter footer skips archived and empty chapters, completes the current chapter and never starts audio
+PASS Final chapters and standalone articles do not offer a next-chapter action
+PASS Cancelled output cannot overwrite a fresh on-demand translation after remount
+PASS Manual sentence navigation invalidates previous playback callbacks
+PASS Explicit completion survives reopening without mutating saved translations
+PASS Reading type consumes global scaling and the actual line spacing preference
+PASS Changing accounts cancels on-demand translation, ignores late output and closes old help
+PASS An empty article offers recovery without playback or completion controls
+PASS Shortened content clamps both the current sentence and saved breakpoint
+PASS Backgrounding saves a pending manual scroll before its debounce expires
+PASS Explicit navigation supersedes a pending manual scroll on exit
+PASS Replacing source text cancels its request and cannot receive a stale translation
+PASS An active reader follows the remapped breakpoint when sentence boundaries change
+36/36 reader regression scenarios passed

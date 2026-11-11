@@ -1,0 +1,11 @@
+{
+  "beforeFiles": 9,
+  "afterFiles": 9,
+  "missing": [],
+  "added": [],
+  "changed": [
+    "com.kobejiasuoer.reader/profiles/84983c60f7daadc1cb8698621f802c0d9f9a3c3c295c810748fb048115c186ec/state.sqlite3",
+    "com.kobejiasuoer.reader/profiles/aad6a1bf7b44a3bcef00614715e3265b61d0e15758cdecfe4fb1847534605b5b/state.sqlite3"
+  ],
+  "wavFiles": 6
+}

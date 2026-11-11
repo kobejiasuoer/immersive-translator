@@ -1,0 +1,27 @@
+PASS [chromium] optical plane mounts and preserves all original button hit targets
+PASS [chromium] trusted pointer long press wakes the lens without committing a tab
+PASS [chromium] continuous multi-slot pointer drag commits exactly once on release and reuses filter nodes/textures
+PASS [chromium] settled navigation releases its RAF and stays asleep
+PASS [chromium] capture loss cancels a drag without committing
+PASS [chromium] vertical intent cancels navigation without accidental activation
+PASS [chromium] keyboard focus, Enter and Space activation remain intact
+PASS [chromium] trusted browser touchscreen tap selects the underlying button
+PASS [chromium] trusted CDP touch supports long press, continuous drag, release-only commit and touchcancel
+PASS [chromium] light/dark layouts fit 320/390/430/768px with 44px minimum touch targets
+PASS [chromium] reduced motion preserves dragging while removing optical motion and spring deformation
+PASS [chromium] increased contrast removes optical replay and backdrop blur
+PASS [chromium] reduced transparency switches to a solid readable surface
+PASS [chromium] SDF filter changes visible pixels with independent refraction and RGB dispersion evidence
+PASS [webkit] optical plane mounts and preserves all original button hit targets
+PASS [webkit] trusted pointer long press wakes the lens without committing a tab
+PASS [webkit] continuous multi-slot pointer drag commits exactly once on release and reuses filter nodes/textures
+PASS [webkit] settled navigation releases its RAF and stays asleep
+PASS [webkit] capture loss cancels a drag without committing
+PASS [webkit] vertical intent cancels navigation without accidental activation
+PASS [webkit] keyboard focus, Enter and Space activation remain intact
+PASS [webkit] trusted browser touchscreen tap selects the underlying button
+PASS [webkit] light/dark layouts fit 320/390/430/768px with 44px minimum touch targets
+PASS [webkit] reduced motion preserves dragging while removing optical motion and spring deformation
+PASS [webkit] increased contrast removes optical replay and backdrop blur
+PASS [webkit] SDF filter changes visible pixels with independent refraction and RGB dispersion evidence
+PASS: liquid glass browser acceptance; evidence: /Users/yangbishang/Projects/immersive-translator/docs/mobile-liquid-glass-2026-11-08/

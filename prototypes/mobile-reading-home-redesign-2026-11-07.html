@@ -1,0 +1,1557 @@
+<!doctype html>
+<!-- 
+  移动端「阅读首页改版」高保真交互原型（需求原型）
+  日期：2026-11-07
+  依据：定稿方案 mappings / prototypeBehaviors / openQuestions + 设计稿视觉规格
+  说明：单文件自包含，零外部请求；插画为 CSS 渐变/内联 SVG；文案与数据取自仓库真实内容样例
+        （immersive-translator-mobile/src/core/curated.ts、core/demo.ts）。
+        openQuestions 编号以需求文档 §10 的 1 基编号为准（#1 书架去留 … #12 账号章位置）。
+        触控目标对齐现有应用 44px 现状（learning.css:11 .learning-chip{min-height:44px}）。
+        右下角「标注」按钮进入标注模式：区块编号角标 → 点按弹出该区块的
+        现有功能 / 数据来源 / 策略(reuse-adapt-new-drop) / 优先级 / 待拍板问题。
+        标注模式下另有「演示控制」：模拟离线 / 新用户视角 / 未上架演示 / 复习角标三态 / 主题三档 /
+        方案A书架预览（openQuestions #1 对照）/ 榜单黄卡对位（openQuestions #7 对照，默认中性配色）。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>阅读首页改版 · 高保真原型（2026-11-07）</title>
+<style>
+/* ================= 基础 ================= */
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;touch-action:manipulation}
+/* 标注区块锚点：置顶定义，避免覆盖后文 .statusbar/.tabwrap 的 absolute 定位 */
+.annobox{position:relative}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Helvetica Neue",Arial,sans-serif;
+  background:linear-gradient(180deg,#efe9dc,#e2dccd);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:14px;padding:28px 12px;min-height:100vh;
+}
+.stagecap{color:#6f6a5c;font-size:13px;line-height:1.6;text-align:center;max-width:430px}
+.stagecap b{color:#3e4a3f}
+
+/* ================= 手机框 ================= */
+.phone{
+  width:390px;height:844px;flex:none;border-radius:52px;padding:10px;
+  background:linear-gradient(160deg,#2c2c2e,#111113);
+  box-shadow:0 30px 70px rgba(40,38,30,.42),0 6px 18px rgba(40,38,30,.25);
+}
+.screen{
+  position:relative;width:100%;height:100%;border-radius:42px;overflow:hidden;
+  background:var(--bg);color:var(--ink);
+  /* 温润自然系色板（设计稿 9 色 → 原型变量；亮色档即设计稿） */
+  --bg:#F5F0E6; --card:#FFFFFF; --ink:#242E24; --muted:#8C9288; --line:#EAE6DB;
+  --green:#1E4B2F; --green-soft:#DCE9D4; --gold:#E0B23C; --gold-card:#F9EAC8;
+  --tb:rgba(255,255,255,.9);
+  --shadow:0 10px 26px rgba(36,46,36,.08),0 2px 6px rgba(36,46,36,.06);
+  --shadow-sm:0 4px 12px rgba(36,46,36,.08);
+  --serif:Georgia,"Times New Roman","Songti SC",STSong,SimSun,serif;
+  --ease:cubic-bezier(.32,.72,0,1);
+}
+.screen[data-theme="dark"]{
+  --bg:#141a17; --card:#1e2723; --ink:#e8eeea; --muted:#9db0a4; --line:#2e3934;
+  --green:#9ac8b3; --green-soft:#243430; --gold:#d5ac57; --gold-card:#3a3323;
+  --tb:rgba(22,28,25,.92);
+  --shadow:0 10px 26px rgba(0,0,0,.4),0 2px 6px rgba(0,0,0,.3);
+}
+.screen[data-theme="sepia"]{
+  --bg:#faf6ed; --card:#fffdf6; --ink:#29281f; --muted:#756e5f; --line:#e6dfd0;
+  --green:#416351; --green-soft:#e6ecd9; --gold:#c79a35; --gold-card:#f6ecd2;
+}
+@media (max-width:520px){
+  body{padding:0;background:var(--bg,#F5F0E6)}
+  .stagecap{display:none}
+  .phone{width:100%;height:100dvh;border-radius:0;padding:0;box-shadow:none}
+  .screen{border-radius:0}
+}
+
+/* ================= 顶部山水晕染 ================= */
+.wash{position:absolute;top:0;left:0;right:0;height:330px;z-index:0;pointer-events:none}
+.wash svg{position:absolute;inset:0;width:100%;height:100%}
+
+/* ================= 状态栏（系统级示意，mapping #1 = drop） ================= */
+.statusbar{
+  position:absolute;top:0;left:0;right:0;height:50px;z-index:47;pointer-events:none;
+  display:flex;align-items:flex-end;justify-content:space-between;
+  padding:0 26px 6px 30px;color:var(--ink);transition:background .2s;
+}
+/* 根视图滚动后给状态栏加底色，避免文字压在内容上（显式 rgba，iOS 16 兼容） */
+.screen.scrolled .statusbar{background:rgba(245,240,230,.94);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.screen[data-theme="dark"].scrolled .statusbar{background:rgba(20,26,23,.94)}
+.screen[data-theme="sepia"].scrolled .statusbar{background:rgba(250,246,237,.94)}
+.statusbar .sb-l{display:flex;align-items:center;gap:7px;font-size:15px;font-weight:600}
+.statusbar .sb-r{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600}
+.sbbat{display:inline-flex;align-items:center;gap:3px;border:1.4px solid currentColor;border-radius:6px;padding:1px 5px;font-size:11px;opacity:.9}
+
+/* ================= 滚动区与根视图 ================= */
+.views{position:absolute;inset:0;z-index:1}
+.rootview{position:absolute;inset:0;overflow-y:auto;overscroll-behavior:contain;display:none;scrollbar-width:none}
+.rootview::-webkit-scrollbar{display:none}
+.rootview.on{display:block}
+.scrollpad{height:148px}
+
+/* ================= 通用组件 ================= */
+.sechead{display:flex;align-items:center;gap:8px;padding:0 16px;margin:22px 0 12px}
+.sechead .bar{width:4px;height:18px;border-radius:2px;background:var(--green);flex:none}
+.sechead h3{font-size:18px;font-weight:700;color:var(--ink);letter-spacing:.2px}
+.sechead .sub{font-size:13px;color:var(--muted)}
+.sechead .lnk{margin-left:auto;font-size:13px;color:var(--muted);display:flex;align-items:center;gap:2px;min-height:44px;padding:0 2px}
+.circbtn{
+  width:44px;height:44px;border-radius:50%;background:var(--card);color:var(--ink);
+  box-shadow:var(--shadow-sm);display:inline-flex;align-items:center;justify-content:center;
+  position:relative;flex:none;border:1px solid rgba(36,46,36,.05);
+}
+.circbtn svg{width:20px;height:20px}
+.circbtn:active{transform:scale(.94)}
+.card{background:var(--card);border-radius:20px;box-shadow:var(--shadow)}
+.pillbtn{
+  display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 18px;border-radius:999px;
+  background:#fff;color:#1d1f1a;font-size:15px;font-weight:700;box-shadow:0 4px 12px rgba(20,22,18,.22);
+}
+.pillbtn:active{transform:scale(.96)}
+.ghostbtn{
+  display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 14px;border-radius:999px;
+  border:1.4px solid rgba(255,255,255,.75);color:#fff;font-size:13px;font-weight:600;
+}
+.greencirc{
+  border-radius:50%;background:var(--green-soft);color:var(--green);
+  display:inline-flex;align-items:center;justify-content:center;flex:none;
+}
+.greencirc:active{transform:scale(.92)}
+.chip{
+  display:inline-flex;align-items:center;min-height:44px;padding:0 14px;border-radius:999px;
+  font-size:12.5px;color:var(--muted);background:var(--card);border:1px solid var(--line);flex:none;
+}
+.chip.on{background:var(--green-soft);color:var(--green);border-color:transparent;font-weight:600}
+.notecard{margin:0 16px;padding:14px 16px;border-radius:14px;background:var(--card);box-shadow:var(--shadow-sm);font-size:13px;color:var(--muted);line-height:1.6}
+
+/* ================= 首页 · 大标题区（mapping #2 = adapt P0） ================= */
+.homehead{position:relative;display:flex;align-items:flex-start;padding:64px 20px 4px}
+.homehead h1{font-family:var(--serif);font-size:40px;line-height:1.1;font-weight:700;color:var(--green);letter-spacing:2px}
+.homehead .tagline{font-size:14px;color:var(--muted);margin-top:5px}
+.homehead .hbtns{position:absolute;right:16px;top:66px;display:flex;gap:10px}
+.hbadge{
+  position:absolute;top:-4px;right:-6px;min-width:18px;height:18px;padding:0 5px;border-radius:999px;
+  background:var(--green);color:#fff;font-size:11px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;border:1.5px solid var(--card);
+}
+.hbadge.zero{display:none}
+.screen[data-theme="dark"] .hbadge{color:#141a17}
+
+/* ================= 离线条（mapping #9 = adapt P0） ================= */
+.offlinebar{
+  display:none;margin:12px 16px 0;padding:8px 12px;border-radius:12px;align-items:center;gap:8px;
+  background:#f9ecd2;border:1px solid #e8d5a4;color:#7a5d1e;font-size:12.5px;
+}
+.screen[data-theme="dark"] .offlinebar{background:#3a3323;border-color:#5a4d2c;color:#e2c98e}
+.offlinebar.on{display:flex}
+.offlinebar svg{width:15px;height:15px;flex:none}
+
+/* ================= Hero 轮播（mapping #3 = new P0） ================= */
+.herowrap{position:relative;margin:14px 16px 0}
+.car{
+  display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;
+  border-radius:26px;scrollbar-width:none;scroll-behavior:smooth;
+}
+.car::-webkit-scrollbar{display:none}
+.slide{
+  flex:0 0 100%;height:212px;border-radius:26px;overflow:hidden;position:relative;
+  scroll-snap-align:center;color:#fff;isolation:isolate;
+}
+.slide .art{position:absolute;inset:0;z-index:-2}
+.slide .art svg{width:100%;height:100%;display:block}
+.slide .veil{position:absolute;inset:0;z-index:-1;background:linear-gradient(98deg,rgba(28,30,24,.58) 8%,rgba(28,30,24,.12) 62%,rgba(28,30,24,.28))}
+.slide .inner{position:absolute;inset:0;padding:24px 22px;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;gap:7px}
+.slide h2{font-family:var(--serif);font-size:28px;line-height:1.18;font-weight:700;max-width:15ch;text-shadow:0 1px 10px rgba(0,0,0,.25)}
+.slide .zh{font-size:14px;color:rgba(255,255,255,.94)}
+.slide .caps{margin-top:9px}
+.slide .hicon{width:42px;height:42px;border-radius:14px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;margin-bottom:4px}
+.slide .hicon svg{width:22px;height:22px}
+.slide .datnum{font-family:var(--serif)}
+/* 第 4 卡默认中性配色（P0）；黄色为榜单方案②的对位演绎（openQuestions #7 待拍板，P2），由演示控制「榜单黄卡对位」切换 */
+.slide.dataslide{color:var(--green)}
+.slide.dataslide .art{background:var(--green-soft)}
+.slide.dataslide .datlabel{font-size:14px;font-weight:600;color:var(--green)}
+.slide.dataslide .datnum{font-size:46px;line-height:1;font-weight:700;color:var(--green);margin:4px 0 2px}
+.slide.dataslide .datnum small{font-size:18px;font-weight:600}
+.slide.dataslide .datsub{font-size:12.5px;color:var(--muted)}
+.slide.dataslide.gold{color:#5d4a1c}
+.slide.dataslide.gold .art{background:linear-gradient(155deg,#f9eac8,#f0dca4 60%,#e6cd8a)}
+.slide.dataslide.gold .datlabel{color:#8a6d2a}
+.slide.dataslide.gold .datnum{color:#4c3d15}
+.slide.dataslide.gold .datsub{color:#8a6d2a}
+.dots{position:absolute;right:16px;bottom:16px;display:flex;gap:6px;z-index:3}
+.dot{width:6px;height:6px;border-radius:999px;background:rgba(255,255,255,.45);transition:all .3s var(--ease);padding:0;position:relative}
+.dot::before{content:"";position:absolute;inset:-19px;border-radius:50%} /* 6px 视觉 + 44px 命中热区 */
+.dot.on{background:#fff;width:16px}
+.dot.dark{background:rgba(60,50,20,.3)}
+.dot.dark.on{background:#4c3d15;width:16px}
+
+/* ================= 四宫格（mapping #4 = adapt P0） ================= */
+.gridwrap{margin:14px 16px 0}
+.qgrid{display:flex}
+.qcell{flex:1;min-height:88px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;position:relative}
+.qcell + .qcell{border-left:1px solid var(--line)}
+.qcell svg{width:24px;height:24px;color:var(--green)}
+.qcell span{font-size:14px;color:var(--ink);font-weight:500}
+.qcell:active{background:var(--bg)}
+
+/* ================= 分类横滑（mapping #5 = adapt P0） ================= */
+.hscroll{display:flex;gap:12px;overflow-x:auto;padding:2px 16px 10px;scrollbar-width:none;scroll-snap-type:x proximity}
+.hscroll::-webkit-scrollbar{display:none}
+.catcard{
+  flex:0 0 108px;height:132px;border-radius:16px;position:relative;overflow:hidden;color:#fff;
+  box-shadow:var(--shadow-sm);scroll-snap-align:start;
+}
+.catcard .clabel{position:absolute;left:11px;bottom:11px;font-size:14px;font-weight:700;text-shadow:0 1px 6px rgba(0,0,0,.35);max-width:86px;line-height:1.3;text-align:left}
+.catcard .cico{position:absolute;right:9px;top:9px;width:30px;height:30px;border-radius:10px;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center}
+.catcard .cico svg{width:17px;height:17px}
+.catcard:active{transform:scale(.97)}
+
+/* ================= 精选推荐（mapping #6 = adapt P0） ================= */
+.reccard{position:relative;margin:0 16px;padding:16px;display:flex;gap:14px}
+.cov{border-radius:10px;position:relative;overflow:hidden;flex:none;display:flex;align-items:flex-end;padding:10px}
+.cov .ct{font-family:var(--serif);font-weight:700;line-height:1.25;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+.cov.navy{background:radial-gradient(120% 90% at 78% 12%,#3d4d86 0%,#26315e 46%,#1b2350 100%);color:#eef1fb}
+.cov.navy .stars i{position:absolute;width:2px;height:2px;border-radius:50%;background:rgba(255,255,255,.85)}
+.cov.amber{background:linear-gradient(165deg,#ecd9a4,#d3ab5c 70%,#b98d3e);color:#5d4310}
+.cov.rust{background:linear-gradient(165deg,#c99a8d,#9a5f52 70%,#7c463c);color:#fbeee9}
+.cov.sage{background:linear-gradient(165deg,#dfe8cf,#b9c9a2 70%,#96aa7e);color:#3c4a2c}
+.cov.paper{background:var(--green-soft);color:var(--green)}
+.cov .cmeta{position:absolute;top:8px;left:10px;right:10px;font-size:9px;letter-spacing:.4px;opacity:.75;font-family:var(--serif)}
+.recinfo{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;padding-right:56px}
+.recinfo h4{font-family:var(--serif);font-size:20px;line-height:1.25;font-weight:700;color:var(--ink)}
+.recinfo .by{font-size:13px;color:var(--muted)}
+.recinfo .intro{font-size:13px;color:var(--muted);line-height:1.55}
+.recinfo .meta{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-top:auto;flex-wrap:wrap}
+.metapill{display:inline-flex;align-items:center;gap:4px;background:var(--green-soft);color:var(--green);border-radius:999px;padding:3px 9px;font-size:11px;font-weight:600}
+.recarrow{position:absolute;right:14px;bottom:14px;width:48px;height:48px}
+.recarrow svg{width:20px;height:20px}
+.spin{animation:spin .6s var(--ease)}
+@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+
+/* ================= 书架预览（方案 A 演示区块 4a，默认隐藏） ================= */
+#abA{display:none;margin-top:18px}
+.screen.showprevA #abA{display:block}
+
+/* ================= 继续阅读（mapping #7 = adapt P0） ================= */
+.contcard{position:relative;margin:0 16px;padding:16px;display:flex;gap:14px;align-items:stretch}
+.continfo{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px;padding-right:4px}
+.continfo h4{font-family:var(--serif);font-size:17px;line-height:1.3;font-weight:700;color:var(--ink)}
+.continfo .by{font-size:13px;color:var(--muted)}
+.prow{display:flex;align-items:center;gap:10px;margin-top:auto}
+.ptrack{display:block;flex:1;height:4px;border-radius:999px;background:var(--line);overflow:hidden}
+.pfill{display:block;height:100%;border-radius:999px;background:var(--green);transition:width .5s var(--ease)}
+.plabel{font-size:12px;color:var(--muted);flex:none}
+.playbtn{width:52px;height:52px;align-self:center}
+.playbtn svg{width:20px;height:20px;margin-left:2px}
+.reread{font-size:14px;font-weight:700;letter-spacing:1px}
+
+/* ================= 底部胶囊 Tab（mapping #8 = adapt P1） ================= */
+.tabwrap{position:absolute;left:16px;right:16px;bottom:30px;z-index:35}
+.tabbar{
+  height:64px;border-radius:999px;background:var(--tb);box-shadow:var(--shadow);
+  display:flex;align-items:stretch;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  border:1px solid rgba(36,46,36,.05);
+}
+.tb{flex:1 1 0;min-width:0;position:relative;display:flex;align-items:center;justify-content:center;gap:7px;color:var(--muted);border-radius:999px}
+.tb[data-arg="vocab"]{flex-grow:1.6}
+.tb svg{width:22px;height:22px;flex:none}
+.tb span{font-size:15px;font-weight:600;white-space:nowrap}
+.tb::after{content:"";position:absolute;bottom:9px;left:50%;transform:translateX(-50%) scaleX(0);width:22px;height:3px;border-radius:2px;background:var(--green);transition:transform .25s var(--ease)}
+.tb.on{color:var(--green)}
+.tb.on::after{transform:translateX(-50%) scaleX(1)}
+.tbbadge{
+  min-width:26px;height:20px;padding:0 7px;border-radius:999px;background:var(--green-soft);color:var(--green);
+  font-size:12px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;
+}
+.tbbadge.big{font-size:10px}
+.homebar{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);width:134px;height:5px;border-radius:999px;background:#101210;z-index:46;opacity:.9}
+
+/* ================= Push 页栈 ================= */
+.pushlayer{position:absolute;inset:0;z-index:40;pointer-events:none}
+.pushpage{
+  position:absolute;inset:0;background:var(--bg);display:flex;flex-direction:column;
+  transform:translateX(100%);transition:transform .32s var(--ease);pointer-events:auto;
+}
+.pushpage.in{transform:translateX(0)}
+.pushpage.out{transform:translateX(100%)}
+.phead{
+  flex:none;display:flex;align-items:center;gap:8px;padding:56px 14px 10px;border-bottom:1px solid var(--line);
+  background:var(--bg);position:relative;
+}
+.phead .backb{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;color:var(--ink)}
+.phead .backb svg{width:20px;height:20px}
+.phead h2{font-size:17px;font-weight:700;color:var(--ink)}
+.phead .pact{margin-left:auto;font-size:13.5px;font-weight:600;color:var(--green);min-height:40px;display:flex;align-items:center;padding:0 8px}
+.pbody{flex:1;overflow-y:auto;padding:14px 16px 130px;scrollbar-width:none}
+.pbody::-webkit-scrollbar{display:none}
+.dim{position:absolute;inset:0;background:rgba(16,20,17,.28);opacity:0;transition:opacity .32s var(--ease);pointer-events:none}
+.dim.on{opacity:1}
+
+/* Push 页内列表行 */
+.row{display:flex;align-items:center;gap:12px;padding:12px;border-radius:16px;background:var(--card);box-shadow:var(--shadow-sm);margin-bottom:10px;width:100%;text-align:left}
+.row:active{transform:scale(.985)}
+.row .cov{width:56px;height:64px;border-radius:8px}
+.row .cov .ct{font-size:10px}
+.rmain{flex:1;min-width:0}
+.rmain b{display:block;font-size:15px;font-weight:600;color:var(--ink);line-height:1.3;font-family:var(--serif)}
+.rmain .rby{font-size:12px;color:var(--muted);margin-top:3px}
+.rstate{font-size:11px;color:var(--muted);background:var(--bg);border-radius:999px;padding:3px 9px;flex:none}
+.rstate.reading{background:var(--green-soft);color:var(--green);font-weight:600}
+.rstate.done{background:var(--gold-card);color:#8a6d2a}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:2px 0 12px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.seg{display:flex;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:3px;margin-bottom:14px}
+.seg button{flex:1;height:34px;border-radius:9px;font-size:13px;color:var(--muted)}
+.seg button.on{background:var(--green-soft);color:var(--green);font-weight:700}
+.searchbox{display:flex;align-items:center;gap:8px;background:var(--card);border-radius:14px;padding:0 14px;height:44px;box-shadow:var(--shadow-sm);margin-bottom:12px}
+.searchbox svg{width:17px;height:17px;color:var(--muted);flex:none}
+.searchbox input{flex:1;border:0;outline:0;background:transparent;font:inherit;font-size:15px;color:var(--ink);min-width:0}
+.listnote{font-size:12px;color:var(--muted);line-height:1.7;margin:4px 2px 12px}
+.emptycard{margin:8px 0;padding:22px 18px;border-radius:16px;border:1.5px dashed var(--line);text-align:center;color:var(--muted);font-size:13px;line-height:1.7}
+.emptycard b{color:var(--ink);font-size:14px}
+.emptbtn{margin-top:12px;display:inline-flex;align-items:center;gap:6px;height:40px;padding:0 16px;border-radius:999px;background:var(--green);color:#fff;font-size:14px;font-weight:600}
+.screen[data-theme="dark"] .emptbtn{color:#141a17}
+
+/* 阅读器 */
+.rdbody{padding:18px 20px 130px}
+.rdsent{padding:14px 2px;border-bottom:1px solid var(--line)}
+.rdsent .en{font-family:var(--serif);font-size:19px;line-height:1.5;color:var(--ink)}
+.rdsent .zh{font-size:14px;color:var(--muted);margin-top:6px;line-height:1.6}
+.rdsent.tapped .en{color:var(--green)}
+.wchips{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.wchip{position:relative;font-size:12px;color:var(--green);background:var(--green-soft);border-radius:999px;padding:4px 10px;font-weight:600}
+.wchip::before{content:"";position:absolute;inset:-11px;border-radius:999px} /* 命中热区扩到 ≥44px */
+.chaprow{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:13px 14px;border-radius:14px;background:var(--card);box-shadow:var(--shadow-sm);margin-bottom:9px}
+.chaprow .cn{font-size:14px;font-weight:600;color:var(--ink)}
+.chaprow .cgo{margin-left:auto;font-size:12px;color:var(--green);font-weight:600}
+.chaprow.cur{outline:1.5px solid var(--green)}
+.ttsbar{
+  position:absolute;left:16px;right:16px;bottom:calc(30px + 64px + 12px);
+  display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:999px;
+  background:var(--tb);box-shadow:var(--shadow);border:1px solid rgba(36,46,36,.05);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+}
+.ttsbar .greencirc{width:40px;height:40px}
+.ttsbar .greencirc svg{width:16px;height:16px;margin-left:1px}
+.ttsbar p{font-size:12px;color:var(--muted);line-height:1.4}
+.ttsbar p b{display:block;color:var(--ink);font-size:12.5px}
+
+/* ================= Sheet ================= */
+.sheetwrap{position:absolute;inset:0;z-index:50;pointer-events:none}
+.sheetback{position:absolute;inset:0;background:rgba(16,20,17,.42);opacity:0;transition:opacity .28s var(--ease)}
+.sheet{
+  position:absolute;left:0;right:0;bottom:0;background:var(--card);border-radius:22px 22px 0 0;
+  padding:10px 18px calc(18px + 26px);transform:translateY(102%);transition:transform .32s var(--ease);
+  max-height:76%;overflow-y:auto;scrollbar-width:none;
+}
+.sheet::-webkit-scrollbar{display:none}
+.sheetwrap.on{pointer-events:auto}
+.sheetwrap.on .sheetback{opacity:1}
+.sheetwrap.on .sheet{transform:translateY(0)}
+.grab{width:40px;height:4px;border-radius:999px;background:var(--line);margin:2px auto 14px}
+.sheet h3{font-family:var(--serif);font-size:20px;color:var(--ink);line-height:1.3;padding-right:60px}
+.sheet .sub13{font-size:13px;color:var(--muted);margin-top:4px;line-height:1.55}
+.sheet .chaplist{margin:14px 0 6px;border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.sheet .chaplist div{padding:11px 14px;font-size:13.5px;color:var(--ink);border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
+.sheet .chaplist div:last-child{border-bottom:0}
+.sheet .chaplist .try{margin-left:auto;font-size:10.5px;color:var(--green);background:var(--green-soft);padding:2px 8px;border-radius:999px;font-weight:700}
+.primary{
+  margin-top:14px;width:100%;height:48px;border-radius:999px;background:var(--green);color:#fff;
+  font-size:15px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;
+}
+.screen[data-theme="dark"] .primary{color:#141a17}
+.primary:disabled{opacity:.55}
+.primary.err{background:#a8492e}
+.errline{margin-top:12px;padding:11px 13px;border-radius:12px;background:rgba(168,73,46,.1);color:#a8492e;font-size:13px;line-height:1.5;display:none}
+.errline.on{display:block}
+.okline{margin-top:12px;padding:11px 13px;border-radius:12px;background:var(--green-soft);color:var(--green);font-size:13px;font-weight:600;display:none}
+.okline.on{display:flex;align-items:center;gap:8px}
+.wcard{text-align:center;padding:6px 0 2px}
+.wcard .ww{font-family:var(--serif);font-size:30px;color:var(--ink);font-weight:700}
+.wcard .wp{font-size:14px;color:var(--muted);margin-top:4px}
+.wcard .wg{font-size:15px;color:var(--ink);margin-top:8px}
+.wcard .wg.hide{color:transparent;user-select:none}
+.flipb{margin:16px auto 0;display:block;min-width:150px;min-height:44px;border-radius:999px;border:1.5px solid var(--green);color:var(--green);font-size:14px;font-weight:700;padding:0 20px}
+/* 书库行内主操作钮（试读/加入书架）：≥44px 触控目标，非 chip */
+.actbtn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 14px;border-radius:12px;font-size:13px;font-weight:700;flex:none}
+.actbtn.main{background:var(--green-soft);color:var(--green)}
+.actbtn.sub{background:var(--bg);color:var(--ink);border:1px solid var(--line)}
+
+/* ================= Toast ================= */
+.toast{
+  position:absolute;left:50%;bottom:132px;transform:translate(-50%,14px);z-index:95;
+  background:rgba(28,32,28,.92);color:#fff;font-size:13px;padding:10px 16px;border-radius:999px;
+  max-width:82%;text-align:center;line-height:1.5;opacity:0;transition:all .3s var(--ease);pointer-events:none;
+}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+
+/* ================= 标注模式（硬要求） ================= */
+.fab{
+  position:absolute;right:14px;bottom:calc(30px + 64px + 14px);z-index:80;
+  width:52px;height:52px;border-radius:50%;background:var(--green);color:#fff;
+  box-shadow:0 8px 20px rgba(20,40,30,.35);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+}
+.screen[data-theme="dark"] .fab{color:#141a17}
+.fab svg{width:18px;height:18px}
+.fab em{font-style:normal;font-size:9.5px;font-weight:700}
+.fab.on{background:#a8492e;color:#fff}
+.toolbar{
+  position:absolute;left:14px;right:78px;bottom:calc(30px + 64px + 14px);z-index:79;display:none;
+  background:var(--card);border-radius:16px;box-shadow:var(--shadow);padding:10px 12px;
+  border:1.5px dashed var(--muted);
+}
+.toolbar.on{display:block}
+.toolbar .tlab{font-size:10.5px;color:var(--muted);margin-bottom:8px;font-weight:600;letter-spacing:.5px}
+.toolbar .tchips{display:flex;flex-wrap:wrap;gap:7px}
+.tchip{
+  display:inline-flex;align-items:center;height:30px;padding:0 11px;border-radius:999px;
+  border:1px solid var(--line);font-size:11.5px;color:var(--ink);background:var(--bg);position:relative;
+}
+.tchip::before{content:"";position:absolute;inset:-7px;border-radius:999px} /* 命中热区扩到 ≥44px */
+.tchip.on{background:var(--green-soft);border-color:transparent;color:var(--green);font-weight:700}
+.screen.annotating .abadge{display:flex}
+.abadge{
+  display:none;position:absolute;top:-10px;left:-10px;z-index:60;pointer-events:auto;width:26px;height:26px;
+  border-radius:50%;background:#1E4B2F;color:#fff;border:2px solid #fff;
+  box-shadow:0 3px 8px rgba(20,30,22,.3);align-items:center;justify-content:center;
+  font-size:12.5px;font-weight:800;
+}
+.abadge::before{content:"";position:absolute;inset:-9px;border-radius:50%} /* 命中热区 ≥44px */
+.abadge:active{transform:scale(.9)}
+.annopop{position:absolute;inset:0;z-index:90;display:none;align-items:center;justify-content:center;background:rgba(16,20,17,.45)}
+.annopop.on{display:flex}
+.apop{
+  margin:22px;background:var(--card);border-radius:18px;padding:18px;max-height:78%;overflow-y:auto;
+  width:100%;scrollbar-width:none;box-shadow:0 24px 60px rgba(10,14,12,.35);
+}
+.apop::-webkit-scrollbar{display:none}
+.apop .ahead{display:flex;align-items:center;gap:9px;margin-bottom:4px}
+.apop .anum{width:28px;height:28px;border-radius:50%;background:#1E4B2F;color:#fff;font-size:13px;font-weight:800;display:flex;align-items:center;justify-content:center;flex:none}
+.apop h4{font-size:16px;color:var(--ink);flex:1}
+.apop .aflags{display:flex;gap:6px;margin:6px 0 12px;flex-wrap:wrap}
+.flag{font-size:10.5px;font-weight:800;padding:3px 9px;border-radius:999px;letter-spacing:.3px}
+.flag.adapt{background:#e8f0e4;color:#2f5d3a}
+.flag.new{background:#dce9f2;color:#2b567f}
+.flag.reuse{background:#ece7f5;color:#5a4390}
+.flag.drop{background:#eeeae2;color:#6f6a5c}
+.flag.p0{background:#f7e3d9;color:#a34a2a}
+.flag.p1{background:#f7ecd4;color:#8a6a1f}
+.flag.p2{background:#e6e6de;color:#6b6b60}
+.apop h5{font-size:11px;color:var(--muted);letter-spacing:1px;margin:12px 0 5px;font-weight:700}
+.apop p,.apop li{font-size:13px;color:var(--ink);line-height:1.65}
+.apop ul{padding-left:17px}
+.apop li{margin-bottom:4px}
+.apop code{
+  font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;background:var(--bg);
+  color:var(--green);border-radius:5px;padding:1px 5px;
+}
+.apop .oq li{color:#8a5a20}
+.aclose{position:absolute;top:10px;right:12px;width:32px;height:32px;border-radius:50%;background:var(--bg);color:var(--ink);display:flex;align-items:center;justify-content:center;font-size:15px}
+.aclose::before{content:"";position:absolute;inset:-6px;border-radius:50%} /* 命中热区扩到 ≥44px */
+.apop{position:relative}
+
+/* 动效（尊重 prefers-reduced-motion） */
+.fadein{animation:fadein .5s var(--ease) both}
+@keyframes fadein{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
+</style>
+</head>
+<body>
+
+<div class="phone">
+<div class="screen" id="screen" data-theme="light">
+
+  <!-- 顶部山水晕染（显式色值渐变，iOS 16 兼容） -->
+  <div class="wash" aria-hidden="true">
+    <svg viewBox="0 0 390 330" preserveAspectRatio="xMidYMin slice">
+      <defs>
+        <linearGradient id="wsky" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#e3ece4"/><stop offset=".55" stop-color="#f0ebda"/><stop offset="1" stop-color="#f5f0e6" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <rect width="390" height="330" fill="url(#wsky)"/>
+      <path d="M0 92 Q80 34 168 74 Q260 112 390 58 L390 0 L0 0 Z" fill="#c2d4c6" opacity=".5"/>
+      <path d="M0 118 Q110 66 205 102 Q310 138 390 92 L390 30 Q280 96 180 82 Q80 70 0 104 Z" fill="#cfdecf" opacity=".42"/>
+      <path d="M0 150 Q130 104 240 134 Q330 158 390 130 L390 80 Q290 136 190 120 Q90 106 0 140 Z" fill="#dfe7d8" opacity=".4"/>
+    </svg>
+  </div>
+
+  <!-- 状态栏 · 区块1（系统级示意） -->
+  <div class="statusbar annobox" id="ab1" style="position:absolute">
+    <button class="abadge" data-act="abadge" data-arg="1">1</button>
+    <div class="sb-l">12:35
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="m17 9 4 6M21 9l-4 6"/></svg>
+    </div>
+    <div class="sb-r">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="2" y="14" width="3" height="6" rx="1"/><rect x="8" y="11" width="3" height="9" rx="1"/><rect x="14" y="8" width="3" height="12" rx="1"/><rect x="20" y="5" width="3" height="15" rx="1" opacity=".35"/></svg>
+      4G <span class="sbbat">60</span>
+    </div>
+  </div>
+
+  <div class="views">
+    <!-- ============ 根视图：阅读（今日） ============ -->
+    <section class="rootview on" id="rv-today">
+
+      <!-- 大标题区 · 区块2（adapt P0） -->
+      <header class="homehead annobox" id="ab2">
+        <button class="abadge" data-act="abadge" data-arg="2">2</button>
+        <div>
+          <h1>阅读</h1>
+          <p class="tagline">在阅读中，遇见更大的世界</p>
+        </div>
+        <div class="hbtns">
+          <button class="circbtn" data-act="push" data-arg="search" aria-label="搜索">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+          </button>
+          <button class="circbtn" data-act="bell" aria-label="待复习">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M10.3 21a2 2 0 0 0 3.4 0"/></svg>
+            <i class="hbadge" id="bellbadge">13</i>
+          </button>
+          <button class="circbtn" data-act="acct" aria-label="账号">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.4-3.6 4.4-5.5 8-5.5s6.6 1.9 8 5.5"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- 离线条 · 区块9（adapt P0，离线时显示） -->
+      <div class="offlinebar annobox" id="ab9">
+        <button class="abadge" data-act="abadge" data-arg="9">9</button>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 8.5c5.5-5.5 14.5-5.5 20 0"/><path d="M5.5 12c3.5-3.5 9.5-3.5 13 0"/><path d="M9.5 15.5c1.5-1.5 3.5-1.5 5 0"/><circle cx="12" cy="19" r="1" fill="currentColor" stroke="none"/></svg>
+        <span>离线时也能阅读已保存的内容</span>
+      </div>
+
+      <!-- Hero 轮播 · 区块3（new P0） -->
+      <div class="herowrap annobox" id="ab3">
+        <button class="abadge" data-act="abadge" data-arg="3">3</button>
+        <div class="car" id="car">
+          <!-- ① 主卡：山湖帆船 CSS/SVG 示意 -->
+          <div class="slide">
+            <div class="art">
+              <svg viewBox="0 0 390 212" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+                <defs>
+                  <linearGradient id="hsky" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="#f3cf96"/><stop offset=".45" stop-color="#dfa36c"/><stop offset="1" stop-color="#96826c"/>
+                  </linearGradient>
+                  <linearGradient id="hsea" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="#a08a6d"/><stop offset="1" stop-color="#4f4a3e"/>
+                  </linearGradient>
+                </defs>
+                <rect width="390" height="212" fill="url(#hsky)"/>
+                <circle cx="268" cy="86" r="30" fill="#f9e2ae" opacity=".8"/>
+                <circle cx="268" cy="86" r="52" fill="#f7d795" opacity=".3"/>
+                <path d="M0 96 Q60 52 128 84 L128 128 L0 128 Z" fill="#5d6a55" opacity=".9"/>
+                <path d="M390 92 Q330 46 258 82 L258 128 L390 128 Z" fill="#55614e" opacity=".85"/>
+                <path d="M96 104 Q150 78 208 100 L208 128 L96 128 Z" fill="#6b7a5e" opacity=".8"/>
+                <rect y="118" width="390" height="94" fill="url(#hsea)"/>
+                <rect x="236" y="118" width="66" height="94" fill="#e8c489" opacity=".22"/>
+                <g stroke="#f2d9a4" stroke-linecap="round" opacity=".5">
+                  <path d="M30 142h70M150 152h56M250 148h80M60 168h90M210 176h70M110 190h60M280 196h70"/>
+                </g>
+                <g>
+                  <path d="M312 78 L312 120 L296 120 Z" fill="#f4ead6"/>
+                  <path d="M316 84 L316 120 L330 120 Z" fill="#e3cf9f"/>
+                  <path d="M292 122 L336 122 L328 132 L300 132 Z" fill="#3a3327"/>
+                </g>
+                <ellipse cx="120" cy="118" rx="90" ry="10" fill="#fff" opacity=".14"/>
+                <ellipse cx="300" cy="112" rx="70" ry="8" fill="#fff" opacity=".12"/>
+              </svg>
+            </div>
+            <div class="veil"></div>
+            <div class="inner">
+              <h2>Read More, Live&nbsp;Better</h2>
+              <p class="zh">阅读，让生活更有广度</p>
+              <button class="pillbtn caps" data-act="hero-start">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>
+                开始阅读
+              </button>
+            </div>
+          </div>
+          <!-- ② 经典书库 -->
+          <div class="slide" data-act="push" data-arg="library" role="button">
+            <div class="art" style="background:linear-gradient(150deg,#316253,#1E4B2F 62%,#153a26)"></div>
+            <div class="inner">
+              <div class="hicon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6c-1.8-1.8-4.6-2-8-2v14c3.4 0 6.2.2 8 2 1.8-1.8 4.6-2 8-2V4c-3.4 0-6.2.2-8 2z"/><path d="M12 6v14"/></svg></div>
+              <h2 style="font-size:22px">精选经典书库</h2>
+              <p class="zh">3 本经典 · 按难度试读</p>
+              <span class="ghostbtn caps">去看看 ›</span>
+            </div>
+          </div>
+          <!-- ③ 短文与订阅 -->
+          <div class="slide" data-act="push" data-arg="feeds" role="button">
+            <div class="art" style="background:linear-gradient(150deg,#8a6a48,#5f4630 60%,#463322)"></div>
+            <div class="inner">
+              <div class="hicon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M5 19a1 1 0 1 0 0-2 1 1 0 0 0 0 2z" fill="currentColor"/><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 5a15 15 0 0 1 15 15"/></svg></div>
+              <h2 style="font-size:22px">短文与订阅</h2>
+              <p class="zh">7 篇精选短文 · 3 个资讯订阅源</p>
+              <span class="ghostbtn caps">去看看 ›</span>
+            </div>
+          </div>
+          <!-- ④ 今日数据卡：默认中性配色（P0）。黄色异色仅为榜单方案②（openQuestions #7，P2 三选一待拍板）的对位演示，
+               用演示控制「榜单黄卡对位」切换；未拍板前实现应保持本中性样式，拍板①（砍）或③（接真榜单）时不引入黄色。 -->
+          <div class="slide dataslide" data-act="mock" data-arg="今日数据卡：N 随 readTodayCount 实时变化（原型中阅读器点句/推进章实时递增），跨日归零口径 store.ts:832-835。黄色异色为榜单方案②的对位演示（openQuestions #7 待拍板，P2），默认中性配色" role="button">
+            <div class="art"></div>
+            <div class="inner" style="justify-content:center">
+              <p class="datlabel">今日已读</p>
+              <p class="datnum"><span id="todayN">23</span><small> 句</small></p>
+              <p class="datsub">继续下去，语感是攒出来的</p>
+            </div>
+          </div>
+        </div>
+        <div class="dots" id="dots">
+          <button class="dot on" data-act="dot" data-arg="0" aria-label="第 1 卡"></button>
+          <button class="dot" data-act="dot" data-arg="1" aria-label="第 2 卡"></button>
+          <button class="dot" data-act="dot" data-arg="2" aria-label="第 3 卡"></button>
+          <button class="dot" data-act="dot" data-arg="3" aria-label="第 4 卡"></button>
+        </div>
+      </div>
+
+      <!-- 四宫格 · 区块4（adapt P0） -->
+      <div class="gridwrap annobox" id="ab4">
+        <button class="abadge" data-act="abadge" data-arg="4">4</button>
+        <div class="card qgrid">
+          <button class="qcell" data-act="push" data-arg="shelf">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6c-1.8-1.8-4.6-2-8-2v14c3.4 0 6.2.2 8 2 1.8-1.8 4.6-2 8-2V4c-3.4 0-6.2.2-8 2z"/><path d="M12 6v14"/></svg>
+            <span>书架</span>
+          </button>
+          <button class="qcell" data-act="push" data-arg="noteslib">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
+            <span>笔记</span>
+          </button>
+          <button class="qcell" data-act="push" data-arg="search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            <span>阅读历史</span>
+          </button>
+          <button class="qcell" data-act="grid-vocab">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 3 2.7 5.6 6.3.9-4.5 4.3 1 6.2-5.5-3-5.5 3 1-6.2L3 9.5l6.3-.9z"/></svg>
+            <span>生词本</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 分类横滑 · 区块5（adapt P0） -->
+      <div class="annobox" id="ab5">
+        <button class="abadge" data-act="abadge" data-arg="5">5</button>
+        <div class="sechead">
+          <i class="bar"></i><h3>找一些新内容</h3>
+          <button class="lnk" data-act="push" data-arg="library">查看更多 ›</button>
+        </div>
+        <div class="hscroll">
+          <button class="catcard" data-act="push" data-arg="library" style="background:linear-gradient(160deg,#2f5d54,#1E4B2F)">
+            <span class="cico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6c-1.8-1.8-4.6-2-8-2v14c3.4 0 6.2.2 8 2 1.8-1.8 4.6-2 8-2V4c-3.4 0-6.2.2-8 2z"/></svg></span>
+            <span class="clabel">精选经典</span>
+          </button>
+          <button class="catcard" data-act="push" data-arg="feeds" style="background:linear-gradient(160deg,#b98a5e,#7d5636 70%)">
+            <span class="cico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4z"/></svg></span>
+            <span class="clabel">短文精选</span>
+          </button>
+          <button class="catcard" data-act="push" data-arg="feeds" style="background:linear-gradient(160deg,#3f7268,#275047)">
+            <span class="cico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M5 19a1 1 0 1 0 0-2 1 1 0 0 0 0 2z" fill="currentColor"/><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 5a15 15 0 0 1 15 15"/></svg></span>
+            <span class="clabel">资讯订阅</span>
+          </button>
+          <button class="catcard" data-act="push" data-arg="import" style="background:linear-gradient(160deg,#8fae7c,#5d7f4c)">
+            <span class="cico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h3v16h-3"/><path d="M12 8v8m0-8-3 3m3-3 3 3"/></svg></span>
+            <span class="clabel">我的导入</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 精选推荐 · 区块6（adapt P0） -->
+      <div class="annobox" id="ab6">
+        <button class="abadge" data-act="abadge" data-arg="6">6</button>
+        <div class="sechead">
+          <i class="bar"></i><h3>精选推荐</h3><span class="sub">为你发现更多好书</span>
+          <button class="lnk" data-act="rec-shuffle" id="shufbtn">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+            换一批
+          </button>
+        </div>
+        <div id="reccard"></div>
+      </div>
+
+      <!-- 书架预览 · 区块4a：仅方案 A（openQuestions #1）存在此区块，默认隐藏，演示控制「方案A书架预览」开启对照；
+           原型默认按方案 B 形态演示（首页无预览，「书架」格直接 push 书架页） -->
+      <div class="annobox" id="abA">
+        <button class="abadge" data-act="abadge" data-arg="4a">4a</button>
+        <div class="sechead">
+          <i class="bar"></i><h3>书架</h3>
+          <button class="lnk" data-act="push" data-arg="shelf">查看全部 ›</button>
+        </div>
+        <div class="card" style="margin:0 16px;padding:6px"><div id="prevA"></div></div>
+      </div>
+
+      <!-- 继续阅读 · 区块7（adapt P0） -->
+      <div class="annobox" id="ab7">
+        <button class="abadge" data-act="abadge" data-arg="7">7</button>
+        <div class="sechead">
+          <i class="bar"></i><h3>继续阅读</h3>
+          <button class="lnk" data-act="push" data-arg="shelf">全部 ›</button>
+        </div>
+        <div id="contwrap"></div>
+      </div>
+
+      <div class="scrollpad"></div>
+    </section>
+
+    <!-- ============ 根视图：口语（轻量示意，支持 tab 回归） ============ -->
+    <section class="rootview" id="rv-practice">
+      <header class="homehead"><div><h1 style="font-size:34px">口语</h1><p class="tagline">每天开口，练真实场景</p></div></header>
+      <div class="notecard fadein" style="margin-top:10px">
+        续练卡 · 开始卡 · 内置场景 · 跟读正在读的内容 · 最近练习<br>（原型仅作 tab 切换回归示意，功能不在本期改版范围）
+      </div>
+      <div class="sechead"><i class="bar"></i><h3>内置场景</h3></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0 16px">
+        <button class="card" data-act="mock" data-arg="口语场景页为现有功能，原型不展开" style="padding:14px;text-align:left"><b style="font-size:15px">寒暄</b><p style="font-size:12px;color:var(--muted);margin-top:3px">Everyday small talk · 入门 · 8 轮</p></button>
+        <button class="card" data-act="mock" data-arg="口语场景页为现有功能，原型不展开" style="padding:14px;text-align:left"><b style="font-size:15px">旅行</b><p style="font-size:12px;color:var(--muted);margin-top:3px">Airport, hotel &amp; asking directions · 进阶 · 8 轮</p></button>
+        <button class="card" data-act="mock" data-arg="口语场景页为现有功能，原型不展开" style="padding:14px;text-align:left"><b style="font-size:15px">点餐</b><p style="font-size:12px;color:var(--muted);margin-top:3px">Ordering at a restaurant · 入门 · 8 轮</p></button>
+        <button class="card" data-act="mock" data-arg="口语场景页为现有功能，原型不展开" style="padding:14px;text-align:left"><b style="font-size:15px">面试</b><p style="font-size:12px;color:var(--muted);margin-top:3px">A practice job interview · 进阶 · 10 轮</p></button>
+      </div>
+      <div class="sechead"><i class="bar"></i><h3>跟读正在读的内容</h3></div>
+      <div class="notecard" style="margin-top:0">「跟读原文」· 用阅读里的句子练开口<br><span style="font-size:12px">（标题口径同现有首页 LearningHome.tsx:190）</span></div>
+      <div class="scrollpad"></div>
+    </section>
+
+    <!-- ============ 根视图：笔记与复习（轻量示意，支持 tab 回归） ============ -->
+    <section class="rootview" id="rv-vocab">
+      <header class="homehead"><div><h1 style="font-size:34px">笔记与复习</h1><p class="tagline">收集 · 眼熟 · 能说出口</p></div></header>
+      <div style="margin:10px 16px 0">
+        <div class="seg" id="vseg">
+          <button class="on" data-act="vseg" data-arg="review">今日复习</button>
+          <button data-act="vseg" data-arg="words">生词本 13</button>
+          <button data-act="vseg" data-arg="notes">我的笔记</button>
+        </div>
+      </div>
+      <div id="vcontent"></div>
+      <div class="scrollpad"></div>
+    </section>
+  </div>
+
+  <!-- Push 页栈 -->
+  <div class="pushlayer" id="pushlayer"></div>
+
+  <!-- 底部胶囊 Tab · 区块8（adapt P1） -->
+  <div class="tabwrap annobox" id="ab8">
+    <button class="abadge" data-act="abadge" data-arg="8">8</button>
+    <div class="tabbar">
+      <button class="tb on" data-act="tab" data-arg="today">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6c-1.8-1.8-4.6-2-8-2v14c3.4 0 6.2.2 8 2 1.8-1.8 4.6-2 8-2V4c-3.4 0-6.2.2-8 2z"/><path d="M12 6v14"/></svg>
+        <span>阅读</span>
+      </button>
+      <button class="tb" data-act="tab" data-arg="practice">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M3 12h2m4-6v12m4-16v20m4-14v8m4-5v2" transform="translate(-1)"/></svg>
+        <span>口语</span>
+      </button>
+      <button class="tb" data-act="tab" data-arg="vocab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
+        <span>笔记与复习</span>
+        <i class="tbbadge" id="tabbadge">13</i>
+      </button>
+    </div>
+  </div>
+  <div class="homebar"></div>
+
+  <!-- Sheet（试读抽屉 / 点词 / 账号） -->
+  <div class="sheetwrap" id="sheetwrap">
+    <div class="sheetback" data-act="close-sheet"></div>
+    <div class="sheet" id="sheetcard"></div>
+  </div>
+
+  <!-- Push 页内 TTS 提示条挂载点由各 reader 页自带 -->
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <!-- 标注模式 -->
+  <button class="fab" id="fab" data-act="anno">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M14 3v5h5"/><path d="M8 13h8M8 17h5"/></svg>
+    <em>标注</em>
+  </button>
+  <div class="toolbar" id="toolbar">
+    <div class="tlab">原型演示控制 · 非设计稿内容（验证 prototypeBehaviors 用）</div>
+    <div class="tchips">
+      <button class="tchip" data-act="demo-off">模拟离线</button>
+      <button class="tchip" data-act="demo-fresh">新用户视角</button>
+      <button class="tchip" data-act="demo-unlist">未上架演示</button>
+      <button class="tchip" data-act="demo-due">复习角标: 13</button>
+      <button class="tchip" data-act="demo-prevA">方案A书架预览</button>
+      <button class="tchip" data-act="demo-gold">榜单黄卡对位</button>
+      <span style="flex:none;width:1px;background:var(--line);margin:2px 1px"></span>
+      <button class="tchip on" data-act="theme" data-arg="light">亮</button>
+      <button class="tchip" data-act="theme" data-arg="dark">暗</button>
+      <button class="tchip" data-act="theme" data-arg="sepia">纸</button>
+    </div>
+    <div class="tlab" style="margin:8px 0 0">第 9 区块（离线条）在「模拟离线」开启后随横条出现；「方案A书架预览」为 openQuestions #1 的对照区块（4a）；「榜单黄卡对位」为 openQuestions #7 方案②的对位演示（P2 待拍板，默认中性配色）；「新书上架」「热门榜单」「消息中心」按定稿方案不渲染，理由见各区块标注浮层。</div>
+  </div>
+  <div class="annopop" id="annopop">
+    <div style="position:absolute;inset:0" data-act="anno-close"></div>
+    <div class="apop" id="apopcard"></div>
+  </div>
+
+</div>
+</div>
+
+<p class="stagecap"><b>移动端「阅读首页改版」高保真需求原型</b> · 2026-11-07<br>
+视觉对齐设计稿（米白底 + 深绿点缀 + 衬线书名）；数据与文案取自仓库真实内容样例。<br>
+点右下角「标注」查看每个区块的现有功能 / 数据来源 / 策略 / 优先级与演示控制。</p>
+
+<script>
+'use strict';
+/* =====================================================
+   真实内容样例（immersive-translator-mobile/src）
+   · BOOKS  = core/curated.ts:153-157 CURATED_BOOKS
+   · DOCS   = core/curated.ts:31-80 CURATED_DOCS（句子逐字）
+   · FEEDS  = core/curated.ts:126-130 CURATED_FEEDS
+   · STARTER= core/demo.ts:56-69 DEMO_STARTER（种子文）
+   · WORDS  = core/demo.ts termMeta（4 个种子词条）
+   ===================================================== */
+const BOOKS=[
+  {id:'b1',kind:'book',title:'Classic Short Stories',author:'Oscar Wilde & Jack London',level:'进阶',chapters:6,tone:'navy'},
+  {id:'b2',kind:'book',title:'The Gift of the Magi & Other Stories',author:'O. Henry',level:'日常',chapters:2,tone:'amber'},
+  {id:'b3',kind:'book',title:'Sherlock Holmes: Selected Cases',author:'Arthur Conan Doyle',level:'进阶',chapters:2,tone:'rust'},
+];
+const DOCS=[
+  {id:'speed',kind:'doc',title:'The Speed of Reading',diff:'日常',sents:[
+    ['Researchers measured how fast volunteers could move through a text.','研究人员测量了志愿者阅读一段文本的速度。'],
+    ['They found that silent reading is almost twice as fast as reading aloud.','他们发现默读的速度几乎是朗读的两倍。'],
+    ['However, slowing down on unfamiliar phrases helps long-term memory.','然而，在陌生的词块上放慢速度有助于长期记忆。']]},
+  {id:'sleep',kind:'doc',title:'How Sleep Consolidates Second Language Words',diff:'日常',sents:[
+    ['Reviewing new vocabulary right before bed helps the brain replay and store word pairs.','睡前复习生词有助于大脑重放并巩固词汇配对。']]},
+  {id:'terminal',kind:'doc',title:'Fixing Common Shell Commands',diff:'职场',sents:[
+    ['Can you help me fix a command that keeps failing in the terminal?','你能帮我修好一条在终端里一直报错的命令吗？']]},
+  {id:'booking',kind:'doc',title:'I am wondering if others have experienced what I am seeing',diff:'日常',sents:[
+    ['When traveling abroad, map apps sometimes show two different pins for the same hotel.','出国旅行时，地图应用有时会为同一家酒店显示两个不同的定位针。'],
+    ['Locations on Booking.com and Ctrip are also similarly inconsistent with the street address.','Booking.com 和携程上的位置同样与街道地址对不上。'],
+    ['Always standardize your checklist by saving the local language address before departure.','出发前务必先保存当地语言地址，把核对流程标准化。']]},
+  {id:'trees',kind:'doc',title:'Why Cities Need Trees',diff:'日常',sents:[
+    ['Urban trees do far more than decorate a neighborhood sidewalk.','城市树木的作用远不止装点街区人行道。'],
+    ['A mature canopy can cool a street by several degrees in August.','成熟的树冠在八月能让街道降温好几度。'],
+    ['Volunteers across the city now help map and water young saplings.','全城的志愿者现在帮忙标记并浇灌幼苗。']]},
+  {id:'coffee',kind:'doc',title:'The Quiet Ritual of Morning Coffee',diff:'日常',sents:[
+    ['Before the inbox opens, ten quiet minutes with a warm mug can reset the whole morning.','在打开收件箱之前，捧着热杯子安静呆十分钟能重启整个早晨。']]},
+  {id:'museum',kind:'doc',title:'A Rainy Afternoon at the Museum',diff:'日常',sents:[
+    ['Stepping out of the rain into a quiet gallery immediately slows your breathing.','从雨中步入安静的展厅，呼吸立刻慢了下来。']]},
+];
+const FEEDS=[
+  {name:'Science Daily Brief',desc:'用短篇科研资讯练习日常阅读',freq:'精选 2 篇 · 本机练习短文'},
+  {name:'Tech & Terminal Weekly',desc:'开发、产品和工作中的真实表达',freq:'精选 2 篇 · 本机练习短文'},
+  {name:'Slow City Essays',desc:'城市生活与文化，适合慢慢读',freq:'精选 3 篇 · 本机练习短文'},
+];
+const STARTER={id:'starter',kind:'starter',title:'A Small Break',titleCn:'给自己一个小休息',tone:'sage',sents:[
+  {en:'Every afternoon, I take a break from work.',zh:'每天下午，我都会暂停工作，休息一会儿。',words:[{w:'take a break',ph:'/teɪk ə breɪk/',pos:'phr.',cn:'休息一会儿，暂停一下'}]},
+  {en:'I leave my phone on the desk and walk outside.',zh:'我把手机留在桌上，走到外面。',words:[]},
+  {en:'A quiet street helps me clear my head.',zh:'一条安静的街道能让我理清思绪。',words:[{w:'clear my head',ph:'/klɪə maɪ hed/',pos:'phr.',cn:'理清思绪，让头脑清醒'},{w:'quiet',ph:'/ˈkwaɪət/',pos:'adj.',cn:'安静的'}]},
+  {en:'After ten minutes, I come back with a fresh idea.',zh:'十分钟后，我带着一个新想法回来。',words:[{w:'come back',ph:'/kʌm bæk/',pos:'phr.',cn:'回来'}]},
+  {en:'Sometimes, doing less helps us do better.',zh:'有时候，少做一点，反而能做得更好。',words:[]},
+]};
+const WORDS=[
+  {w:'take a break',ph:'/teɪk ə breɪk/',pos:'phr.',cn:'休息一会儿，暂停一下',stage:'刚收集'},
+  {w:'clear my head',ph:'/klɪə maɪ hed/',pos:'phr.',cn:'理清思绪，让头脑清醒',stage:'刚收集'},
+  {w:'quiet',ph:'/ˈkwaɪət/',pos:'adj.',cn:'安静的',stage:'眼熟'},
+  {w:'come back',ph:'/kʌm bæk/',pos:'phr.',cn:'回来',stage:'刚收集'},
+];
+/* 换一批池：3 书 + 7 短文，书↔短文交替（mapping #6） */
+const POOL=['b1','speed','b2','trees','b3','coffee','sleep','museum','terminal','booking'];
+
+/* ================= 状态 ================= */
+const S={
+  tab:'today', offline:false, fresh:false, unlisted:false,
+  due:13, dueSeq:[13,0,120], dueIdx:0, readToday:23,
+  recIdx:0, shelfType:'all', shelfStatus:'all', vseg:'review',
+  items:{
+    starter:{...STARTER, byline:'入门短文 · 5 句', status:'unread', rs:null},
+    b1:{...BOOKS[0], byline:BOOKS[0].author, status:'reading', rs:{idx:2, frac:.7}},
+    b2:{...BOOKS[1], byline:BOOKS[1].author, status:'unread', rs:null},
+  },
+  current:'b1', history:['b1'], shelfIds:['starter','b1','b2'],
+  prevA:false, gold:false,
+};
+DOCS.forEach(d=>{S.items[d.id]={...d,byline:'精选短文',status:'unread',rs:null};});
+BOOKS.forEach(b=>{if(!S.items[b.id])S.items[b.id]={...b,byline:b.author,status:'unread',rs:null};}); /* 补齐 b3 等未入架精选书，书库页构建需要 */
+function item(id){return S.items[id];}
+/* 进度：原型按 (idx+frac)/章数 计算（样例 45%）；真实口径 services/sync.ts:66 Math.round((idx+1)*100/len) */
+function pctOf(it){
+  if(!it.rs) return 0;
+  if(it.kind==='book') return Math.min(100,Math.round((it.rs.idx+(it.rs.frac||0))/it.chapters*100));
+  return Math.min(100,Math.round((it.rs.idx||0)/it.sents.length*100));
+}
+function bylineOf(it){ /* author 空值回退 sourceOf 口径（mapping #7，与 ShelfCard byline 一致） */
+  return it.byline || (it.kind==='doc'?'精选短文':'');
+}
+
+/* ================= 小工具 ================= */
+const $=s=>document.querySelector(s);
+const RM=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+let toastTimer=null;
+function toast(msg){
+  const t=$('#toast'); t.textContent=msg; t.classList.add('on');
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('on'),2400);
+}
+const ICO={
+  back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
+  play:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>',
+  arrow:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>',
+  check:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
+  refresh:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>',
+  wifioff:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 8.5c5.5-5.5 14.5-5.5 20 0"/><path d="M5.5 12c3.5-3.5 9.5-3.5 13 0"/><path d="M9.5 15.5c1.5-1.5 3.5-1.5 5 0"/><path d="M3 3l18 18"/></svg>',
+};
+function covHTML(it,w,h,fs){
+  const tone=it.tone||'paper';
+  const label=it.kind==='book'||it.kind==='starter'?it.title:it.title;
+  return '<span class="cov '+tone+'" style="width:'+w+'px;height:'+h+'px">'+
+    (tone==='navy'?'<span class="stars"><i style="top:14%;left:20%"></i><i style="top:24%;left:64%"></i><i style="top:40%;left:38%"></i><i style="top:12%;left:82%"></i><i style="top:56%;left:74%"></i><i style="top:64%;left:16%"></i></span>':'')+
+    '<span class="cmeta">'+(it.kind==='doc'?'SHORT READ':(it.kind==='book'?'CLASSICS':'SEED'))+'</span>'+
+    '<span class="ct" style="font-size:'+fs+'px;width:100%">'+label+'</span></span>';
+}
+
+/* ================= 首页动态渲染 ================= */
+function renderBell(){
+  const b=$('#bellbadge');
+  b.textContent=String(S.due>99?'99+':S.due);
+  b.classList.toggle('zero',S.due===0);
+  const tb=$('#tabbadge');
+  tb.textContent=String(S.due>99?'99+':S.due);
+  tb.style.display=S.due===0?'none':'inline-flex';
+  tb.classList.toggle('big',S.due>99);
+  $('#todayN').textContent=String(S.readToday);
+}
+function renderRec(){
+  const id=POOL[S.recIdx], it=item(id);
+  const isBook=it.kind==='book';
+  const meta=isBook
+    ?'<span class="metapill">'+it.level+' · '+it.chapters+' 章</span>'
+    :'<span class="metapill">'+it.diff+'</span><span class="metapill">含逐句译文</span>';
+  $('#reccard').innerHTML=
+  '<div class="card reccard fadein">'+
+    covHTML(it,106,140,13)+
+    '<div class="recinfo">'+
+      '<h4>'+it.title+'</h4>'+
+      '<p class="by">'+(isBook?it.author:'精选短文')+'</p>'+
+      '<p class="intro">先试读，找到适合自己的篇章</p>'+
+      '<div class="meta">'+meta+'</div>'+
+    '</div>'+
+    '<button class="greencirc recarrow" data-act="rec-arrow" aria-label="打开">'+ICO.arrow+'</button>'+
+  '</div>';
+}
+function renderContinue(){
+  const wrap=$('#contwrap');
+  if(S.fresh||!S.current){wrap.style.display='none';return;}
+  wrap.style.display='';
+  const it=item(S.current);
+  const pct=pctOf(it);
+  const done=pct>=100||it.status==='done';
+  wrap.innerHTML=
+  '<div class="card contcard fadein">'+
+    '<button data-act="open" data-arg="'+it.id+'" style="flex:none">'+covHTML(it,100,116,11)+'</button>'+
+    '<div class="continfo">'+
+      '<button data-act="open" data-arg="'+it.id+'" style="text-align:left"><h4>'+it.title+(it.titleCn?'<br><span style="font-size:12px;color:var(--muted);font-family:-apple-system;'+ '">'+it.titleCn+'</span>':'')+'</h4></button>'+
+      '<p class="by">'+(bylineOf(it)||'')+'</p>'+
+      '<div class="prow">'+
+        '<span class="ptrack"><span class="pfill" style="width:'+pct+'%"></span></span>'+
+        '<span class="plabel">'+(done?'已读完':'已读 '+pct+'%')+'</span>'+
+      '</div>'+
+    '</div>'+
+    '<button class="greencirc playbtn" data-act="play" data-arg="'+it.id+'" aria-label="播放">'+
+      (done?'<span class="reread">再读</span>':ICO.play)+
+    '</button>'+
+  '</div>';
+}
+
+/* 方案 A 书架预览（区块 4a，openQuestions #1 拍板 A 时为 P0 新增区块；原型默认隐藏） */
+function renderShelfPreview(){
+  const host=$('#prevA'); if(!host) return;
+  if(S.fresh){
+    host.innerHTML='<div class="emptycard" style="margin:6px"><b>书架还是空的</b><br>从一篇 5 句的入门短文开始。<br><button class="emptbtn" data-act="open" data-arg="starter">开始这篇短文</button></div>';
+    return;
+  }
+  host.innerHTML=S.shelfIds.map(item).filter(Boolean).slice(0,3).map(it=>{
+    const pct=pctOf(it), st=statusOf(it);
+    return '<button class="row" data-act="open" data-arg="'+it.id+'" style="box-shadow:none;margin-bottom:2px">'+
+      covHTML(it,48,56,9)+
+      '<span class="rmain"><b>'+it.title+'</b><span class="rby">'+(bylineOf(it)||'')+(pct>0&&st!=='已读完'?' · '+pct+'%':'')+'</span></span>'+
+      '<span class="rstate '+(st==='在读'?'reading':(st==='已读完'?'done':''))+'">'+st+'</span>'+
+    '</button>';
+  }).join('');
+}
+
+/* ================= Hero 轮播 ================= */
+function initCarousel(){
+  const car=$('#car'), dots=[...document.querySelectorAll('.dot')];
+  function sync(){
+    const i=Math.round(car.scrollLeft/(car.clientWidth+12));
+    dots.forEach((d,k)=>{d.classList.toggle('on',k===i);
+      if(i===3){d.classList.add('dark');d.classList.toggle('on',k===i);}else{d.classList.remove('dark');}});
+  }
+  let raf=0;
+  car.addEventListener('scroll',()=>{if(raf)return;raf=requestAnimationFrame(()=>{raf=0;sync();});},{passive:true});
+  /* 桌面鼠标拖拽横滑（触屏走原生滚动） */
+  let down=null;
+  car.addEventListener('pointerdown',e=>{down={x:e.clientX,l:car.scrollLeft};});
+  car.addEventListener('pointermove',e=>{if(!down)return;car.scrollLeft=down.l-(e.clientX-down.x);});
+  ['pointerup','pointerleave'].forEach(ev=>car.addEventListener(ev,()=>{down=null;}));
+  window.goSlide=i=>{
+    const sl=car.children[i];
+    const target=sl?sl.offsetLeft-car.children[0].offsetLeft:i*car.clientWidth; /* 计入 12px 卡间距 */
+    car.scrollTo({left:target,behavior:RM?'auto':'smooth'});
+    /* 兜底：平滑滚动被（后台面板/系统设置）拦截时，稍候以瞬时滚动落位，保证圆点与卡片一致 */
+    if(!RM) setTimeout(()=>{
+      if(Math.abs(car.scrollLeft-target)>4){
+        car.style.scrollBehavior='auto';
+        car.scrollLeft=target;
+        car.style.scrollBehavior='';
+      }
+    },400);
+  };
+  window.syncDots=sync;
+}
+
+/* ================= Push 页栈 ================= */
+const layer=$('#pushlayer');
+function push(name,arg){
+  const build=PAGE[name];
+  if(!build) return;
+  const dim=document.createElement('div'); dim.className='dim on';
+  const pg=document.createElement('div'); pg.className='pushpage';
+  try{ pg.innerHTML=build(arg); }
+  catch(err){ dim.remove(); toast('原型渲染异常：'+err.message); console.error(err); return; }
+  layer.appendChild(dim); layer.appendChild(pg);
+  /* 强制回流后立即加 .in 触发滑入过渡：不依赖 setTimeout/rAF，后台节流时也不会卡在屏外 */
+  void pg.offsetWidth;
+  pg.classList.add('in');
+  S.stack=(S.stack||[]); S.stack.push(pg);
+  pg.querySelector('.pbody')&&(pg.querySelector('.pbody').scrollTop=0);
+}
+function pop(){
+  const st=S.stack||[]; const pg=st.pop();
+  if(!pg) return;
+  const dim=pg.previousElementSibling;
+  pg.classList.remove('in'); pg.classList.add('out');
+  if(dim) dim.classList.remove('on');
+  setTimeout(()=>{pg.remove();dim&&dim.remove();},RM?0:340);
+}
+function popAll(){
+  const st=S.stack||[];
+  while(st.length) pop();
+}
+
+/* ================= 页面构建器 ================= */
+const PAGE={
+  /* 书架页（mapping #4/#7：方案 A 落点；含筛选、空态卡、导入入口） */
+  shelf(){
+    const chips=(arr,cur,act)=>arr.map(v=>'<button class="chip '+(cur===v?'on':'')+'" data-act="'+act+'" data-arg="'+v+'">'+(v==='all'?'全部':v)+'</button>').join('');
+    return phead('书架','import','导入')+
+    '<div class="chips">'+chips(['all','书籍','短文'],S.shelfType,'ftype')+'</div>'+
+    '<div class="chips">'+chips(['all','未读','在读','已读完'],S.shelfStatus,'fstat')+'</div>'+
+    '<div id="shelflist">'+shelfListHTML()+'</div>';
+  },
+  /* 笔记库（四宫格「笔记」落点 nav.push("noteslib")） */
+  noteslib(){
+    return phead('笔记库')+
+    '<p class="listnote">词条笔记与句笔记 · 掌握三格：刚收集 / 眼熟 / 能说出口（VaultBody derive.STAGE_BUCKET_LABEL 口径）。首页新增入口 nav.push("noteslib")（路由已注册 nav.tsx:17 / App.tsx:328）。</p>'+
+    WORDS.map(w=>
+      '<button class="row" data-act="word" data-arg="'+w.w+'">'+
+        '<span class="cov paper" style="width:52px;height:52px;border-radius:10px;align-items:center;justify-content:center"><span class="ct" style="font-size:9px;width:auto">'+w.pos+'</span></span>'+
+        '<span class="rmain"><b>'+w.w+'</b><span class="rby">'+w.ph+' · '+w.cn+'</span></span>'+
+        '<span class="rstate '+(w.stage==='眼熟'?'reading':'')+'">'+w.stage+'</span>'+
+      '</button>').join('')+
+    '<p class="listnote">原型示意：词条详情走现有 learningWord 页。</p>';
+  },
+  /* 全局搜索（四宫格「阅读历史」本期落点：最近读过；页头搜索钮同页） */
+  search(){
+    return phead('搜索')+
+    '<div class="searchbox">'+
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>'+
+      '<input id="searchq" placeholder="搜索读过的内容与生词" autocomplete="off">'+
+    '</div>'+
+    '<div class="chips">'+
+      ['take a break','休息','quiet'].map(c=>'<button class="chip" data-act="searchchip" data-arg="'+c+'">'+c+'</button>').join('')+
+    '</div>'+
+    '<div id="searchsec">'+searchListHTML('')+'</div>';
+  },
+  /* 复习（页头铃铛 push("review")；本地能力无登录门槛） */
+  review(){
+    return phead('复习')+
+    '<div class="card" style="padding:16px;margin-bottom:14px">'+
+      '<p style="font-size:13px;color:var(--muted)">今日待复习</p>'+
+      '<p style="font-family:var(--serif);font-size:34px;font-weight:700;color:var(--green);margin-top:2px">'+S.due+' <span style="font-size:14px">条</span></p>'+
+      '<p style="font-size:12px;color:var(--muted);margin-top:4px">角标数据 dueReviewCount（store.ts:897-899）；复习为本地能力，未登录可用（ReviewScreen/QuickReview 无 ensureAccount）。</p>'+
+    '</div>'+
+    '<div id="revcard">'+revCardHTML(0)+'</div>'+
+    '<p class="listnote">「听写 / 开口」播放示范音走 speak() 现有登录引导（ensureAccount，store.ts:1424-1430）。</p>';
+  },
+  /* 精简书库（难度筛选 + 试读/加入书架） */
+  library(){
+    return phead('精选经典书库')+
+    '<div class="chips" id="libchips">'+
+      ['all','入门·中级','进阶'].map(v=>'<button class="chip '+(v==='all'?'on':'')+'" data-act="liblevel" data-arg="'+v+'">'+(v==='all'?'全部':v)+'</button>').join('')+
+    '</div><div id="liblist">'+libListHTML('all')+'</div>';
+  },
+  /* 短文与订阅 */
+  feeds(){
+    return phead('短文与订阅')+
+    '<div class="sechead" style="margin-top:4px"><i class="bar"></i><h3 style="font-size:16px">短文精选</h3><span class="sub">CURATED_DOCS · 7 篇</span></div>'+
+    DOCS.map(d=>
+      '<button class="row" data-act="open" data-arg="'+d.id+'">'+
+        '<span class="cov sage" style="width:52px;height:60px;border-radius:8px"><span class="ct" style="font-size:9px;width:100%">'+d.title.split(' ')[0]+'</span></span>'+
+        '<span class="rmain"><b>'+d.title+'</b><span class="rby">精选短文 · '+d.diff+' · 含逐句译文</span></span>'+
+        '<span class="rstate">试读</span>'+
+      '</button>').join('')+
+    '<div class="sechead"><i class="bar"></i><h3 style="font-size:16px">资讯订阅</h3><span class="sub">CURATED_FEEDS · 3 源</span></div>'+
+    FEEDS.map(f=>
+      '<div class="row" style="cursor:default"><span class="rmain"><b>'+f.name+'</b><span class="rby">'+f.desc+'</span><span class="rby" style="color:var(--green);font-weight:600;margin-top:5px;display:block">'+f.freq+'</span></span></div>').join('');
+  },
+  /* 导入（原首页「导入」按钮移入此处与书架空态卡） */
+  importpg(){
+    return phead('导入')+
+    '<p class="listnote">文章来源展示名口径 sourceOf（core/readingLibrary.ts:131-135）：精选短文 / 粘贴导入 / 电脑导入 / 电子书 / 我的导入。</p>'+
+    [['粘贴导入','复制一段英文，直接生成可逐句学的短文'],['电脑导入','与桌面端互传导入内容'],['电子书','导入 epub 等电子书文件'],['RSS 订阅源','订阅英文资讯，慢慢读']]
+      .map(x=>'<button class="row" data-act="mock" data-arg="原型示意：走现有导入链路（learningImport）"><span class="greencirc" style="width:40px;height:40px">'+ICO.arrow+'</span><span class="rmain"><b style="font-family:-apple-system;font-weight:600">'+x[0]+'</b><span class="rby">'+x[1]+'</span></span></button>').join('');
+  },
+  /* 阅读器（断点续读 / 试读；书=章节目录，文=真实句子） */
+  reader(id){
+    const it=item(id);
+    if(!it) return phead('阅读器')+'<p class="listnote">内容不存在</p>';
+    /* 打开即记录：继续阅读 current + 最近读过（同 LearningHome recent 口径） */
+    S.current=id; S.history=[id,...S.history.filter(x=>x!==id)].slice(0,6);
+    if(!it.rs) it.rs=(it.kind==='book')?{idx:0,frac:0}:{idx:0};
+    renderContinue();
+    let body='';
+    if(it.kind==='book'){
+      body='<p class="listnote">原型示意：书库正文以实际上架内容为准，此处以章节目录演示断点续读与进度推进。</p>'+
+      Array.from({length:it.chapters},(_,i)=>{
+        const cur=(it.rs.idx||0)===i;
+        return '<button class="chaprow '+(cur?'cur':'')+'" data-act="chapter" data-arg="'+it.id+':'+i+'">'+
+          '<span class="cn">第 '+(i+1)+' 章'+(cur?' · 续读位置':'')+'</span><span class="cgo">读到这章 ›</span></button>';
+      }).join('')+
+      '<button class="chaprow" data-act="finish" data-arg="'+it.id+'" style="outline:1.5px dashed var(--muted)">'+
+        '<span class="cn" style="color:var(--muted)">读完最后一章（演示完成态 →「再读」）</span></button>';
+    }else{
+      const sents=it.sents;
+      body='<p class="listnote">'+(it.kind==='starter'?'首启种子文（core/demo.ts:56-69）':'整篇短文以应用内为准；点句子高亮，点词块查词。')+'</p>'+
+      sents.map((s,i)=>{
+        const en=Array.isArray(s)?s[0]:s.en, zh=Array.isArray(s)?s[1]:s.zh; /* DOCS 为 [en,zh] 元组，starter 为对象 */
+        const ws=it.kind==='starter'?s.words:[];
+        return '<div class="rdsent" data-act="tapsent"><p class="en">'+en+'</p><p class="zh">'+zh+'</p>'+
+        (ws.length?'<div class="wchips">'+ws.map(w=>'<button class="wchip" data-act="word" data-arg="'+w.w+'">'+w.w+' '+w.ph+'</button>').join('')+'</div>':'')+
+        '<span style="display:none" data-senti="'+i+'"></span></div>';
+      }).join('');
+    }
+    return '<div class="phead"><button class="backb" data-act="back" aria-label="返回">'+ICO.back+'</button>'+
+    '<h2>'+it.title+'</h2></div>'+
+    '<div class="pbody" style="padding:0"><div class="rdbody">'+body+'</div></div>'+
+    '<div class="ttsbar"><button class="greencirc" data-act="tts">'+ICO.play+'</button>'+
+    '<p><b>'+(it.kind==='book'?'第 '+((it.rs.idx||0)+1)+'/'+it.chapters+' 章':'第 '+((it.rs.idx||0)+1)+'/'+it.sents.length+' 句')+' · 断点续读</b>登录后可在页内启动 TTS 听读（voice.ts 账号语音）</p></div>';
+  },
+};
+function phead(title,act,actLabel){
+  return '<div class="phead"><button class="backb" data-act="back" aria-label="返回">'+ICO.back+'</button>'+
+  '<h2>'+title+'</h2>'+
+  (act?'<button class="pact" data-act="push" data-arg="'+act+'">'+actLabel+'</button>':'')+
+  '</div><div class="pbody">';
+}
+function shelfListHTML(){
+  if(S.fresh) return '<div class="emptycard"><b>书架还是空的</b><br>从一篇 5 句的入门短文开始，或导入自己的内容。'+
+    '<br><button class="emptbtn" data-act="open" data-arg="starter">开始这篇短文</button>'+
+    '<br><button class="emptbtn" style="background:var(--green-soft);color:var(--green)" data-act="push" data-arg="importpg">导入内容</button></div>';
+  let list=S.shelfIds.map(item).filter(Boolean);
+  if(S.shelfType!=='all') list=list.filter(it=>(it.kind==='book')===('书籍'===S.shelfType));
+  if(S.shelfStatus!=='all') list=list.filter(it=>statusOf(it)===S.shelfStatus);
+  if(!list.length) return '<div class="emptycard"><b>书架还是空的</b><br>从一篇 5 句的入门短文开始，或导入自己的内容。'+
+    '<br><button class="emptbtn" data-act="open" data-arg="starter">开始这篇短文</button>'+
+    '<br><button class="emptbtn" style="background:var(--green-soft);color:var(--green)" data-act="push" data-arg="importpg">导入内容</button></div>';
+  return list.map(it=>{
+    const st=statusOf(it);
+    const pct=pctOf(it);
+    return '<button class="row" data-act="open" data-arg="'+it.id+'">'+
+      covHTML(it,56,64,10)+
+      '<span class="rmain"><b>'+it.title+'</b><span class="rby">'+(bylineOf(it)||'')+(pct>0&&st!=='已读完'?' · '+pct+'%':'')+'</span></span>'+
+      '<span class="rstate '+(st==='在读'?'reading':(st==='已读完'?'done':''))+'">'+st+'</span>'+
+    '</button>';
+  }).join('');
+}
+function statusOf(it){
+  if(it.status==='done'||pctOf(it)>=100) return '已读完';
+  if(it.rs&&(it.kind==='book'?it.rs.idx>0||it.rs.frac>0:it.rs.idx>0)) return '在读';
+  if(it.status==='reading') return '在读';
+  return '未读';
+}
+function searchListHTML(q){
+  const hist=S.history.map(id=>item(id)).filter(Boolean)
+    .filter(it=>!q||it.title.toLowerCase().includes(q));
+  let html='<div class="sechead" style="margin-top:2px"><i class="bar"></i><h3 style="font-size:16px">最近读过</h3><span class="sub">本期「阅读历史」落点</span></div>';
+  html+=hist.length?hist.map(it=>
+      '<button class="row" data-act="open" data-arg="'+it.id+'">'+covHTML(it,52,60,9)+
+      '<span class="rmain"><b>'+it.title+'</b><span class="rby">'+(bylineOf(it)||'')+'</span></span>'+
+      '<span class="rstate '+(statusOf(it)==='在读'?'reading':'')+'">'+statusOf(it)+'</span></button>').join('')
+    :'<div class="emptycard">'+(S.fresh?'还没有读过任何内容':'没有匹配的已读内容')+'</div>';
+  const hits=WORDS.filter(w=>!q||w.w.toLowerCase().includes(q)||w.cn.includes(q));
+  if(hits.length){
+    html+='<div class="sechead"><i class="bar"></i><h3 style="font-size:16px">生词</h3></div>';
+    html+=hits.map(w=>'<button class="row" data-act="word" data-arg="'+w.w+'">'+
+      '<span class="rmain"><b>'+w.w+'</b><span class="rby">'+w.ph+' · '+w.cn+'</span></span>'+
+      '<span class="rstate">'+w.stage+'</span></button>').join('');
+  }
+  html+='<div class="sechead"><i class="bar"></i><h3 style="font-size:16px">推荐开始</h3></div>';
+  html+=!q||'a small break'.includes(q)?
+    '<button class="row" data-act="open" data-arg="starter">'+covHTML(item('starter'),52,60,9)+
+    '<span class="rmain"><b>A Small Break</b><span class="rby">给自己一个小休息 · 5 句 · 2 分钟</span></span><span class="rstate reading">入门</span></button>':'';
+  return html;
+}
+let revIdx=0;
+function revCardHTML(i){
+  const w=WORDS[i%WORDS.length];
+  return '<div class="card" style="padding:18px">'+
+    '<div class="wcard"><p class="ww">'+w.w+'</p><p class="wp">'+w.ph+' · '+w.pos+'</p><p class="wg hide" id="revgloss">'+w.cn+'</p></div>'+
+    '<button class="flipb" data-act="revflip">显示释义</button>'+
+  '</div>'+
+  '<button class="primary" data-act="revnext" style="margin-top:12px">下一张</button>'+
+  '<div style="display:flex;gap:10px;margin-top:10px">'+
+    '<button class="chip" data-act="mock" data-arg="示范音播放需登录：走 speak() 现有登录引导（ensureAccount，store.ts:1424-1430）" style="flex:1;justify-content:center">听写</button>'+
+    '<button class="chip" data-act="mock" data-arg="示范音播放需登录：走 speak() 现有登录引导（ensureAccount，store.ts:1424-1430）" style="flex:1;justify-content:center">开口说</button>'+
+  '</div>';
+}
+function libListHTML(level){
+  let list=BOOKS.slice();
+  if(level==='进阶') list=list.filter(b=>b.level==='进阶');
+  if(level==='入门·中级') list=list.filter(b=>b.level==='日常');
+  return list.map(b=>
+    '<div class="row" style="cursor:default">'+covHTML(S.items[b.id],56,72,10)+
+    '<span class="rmain"><b>'+b.title+'</b><span class="rby">'+b.author+'</span>'+
+    '<span class="rby" style="margin-top:4px;display:flex;gap:6px"><span class="metapill" style="font-size:10px;padding:2px 8px">'+b.level+' · '+b.chapters+' 章</span></span></span>'+
+    '<span style="display:flex;flex-direction:column;gap:6px;flex:none">'+
+      '<button class="actbtn main" data-act="sample" data-arg="'+b.id+'">试读</button>'+
+      '<button class="actbtn sub" data-act="addshelf" data-arg="'+b.id+'">加入书架</button>'+
+    '</span></div>').join('')+
+    '<p class="listnote">难度口径同 LearningDiscover.tsx:108（全部 / 入门·中级 / 进阶）。</p>';
+}
+
+/* ================= Sheet ================= */
+function openSheet(html){
+  $('#sheetcard').innerHTML='<div class="grab"></div>'+html;
+  $('#sheetwrap').classList.add('on');
+}
+function closeSheet(){$('#sheetwrap').classList.remove('on');}
+/* 试读抽屉：模拟「按书名查服务端目录→previewBook→抽屉」链路（LearningDiscover.tsx:72-84,135） */
+function lookupBook(id,done){
+  const it=item(id);
+  if(S.offline){done({err:'net'});return;}
+  if(S.unlisted){done({err:'unlisted'});return;}
+  done({ok:it});
+}
+function sampleSheet(id){
+  openSheet('<p class="sub13" style="text-align:center" id="lkmsg">正在从书库获取试读…</p>');
+  setTimeout(()=>{
+    if(S.offline){
+      openSheet('<div class="errline on">'+ICO.wifioff+' 网络不可用，暂时拿不到这本书的试读。恢复网络后可重试；已保存的内容不受影响。</div>');
+      return;
+    }
+    if(S.unlisted){
+      openSheet('<div class="errline on">这本书的电子书还没有上架。</div><p class="sub13">（LearningDiscover.tsx:79 同款文案——如实提示，不造假内容）</p>');
+      return;
+    }
+    const it=item(id);
+    const chapters=Array.from({length:it.chapters},(_,i)=>'<div>第 '+(i+1)+' 章'+(i===0?'<span class="try">可试读</span>':'')+'</div>').join('');
+    openSheet(
+      '<div style="display:flex;gap:14px">'+covHTML(it,84,108,11)+
+      '<div><h3>'+it.title+'</h3><p class="sub13">'+it.author+'</p>'+
+      '<p style="margin-top:8px"><span class="metapill">'+it.level+' · '+it.chapters+' 章</span></p></div></div>'+
+      '<div class="chaplist">'+chapters+'</div>'+
+      '<p class="sub13">试读与章节以实际上架内容为准（原型示意）。</p>'+
+      '<button class="primary" id="addbtn" data-act="addshelf" data-arg="'+id+'">加入书架</button>'+
+      '<div class="errline" id="adderr">'+ICO.wifioff+' <span>网络不可用，加入书架失败。恢复网络后可重试。</span></div>'+
+      '<div class="okline" id="addok">'+ICO.check+' 已加入书架 · 可去「书架」查看</div>');
+  },RM?60:420);
+}
+function wordSheet(w){
+  const found=WORDS.find(x=>x.w===w)||STARTER.sents.flatMap(s=>s.words).find(x=>x.w===w);
+  if(!found){toast('原型示意：走现有查词卡（learningWord）');return;}
+  openSheet('<div class="wcard"><p class="ww">'+found.w+'</p><p class="wp">'+found.ph+' · '+found.pos+'</p><p class="wg">'+found.cn+'</p></div>'+
+  '<p class="sub13" style="text-align:center;margin-top:10px">音标与释义取自首启种子词条（core/demo.ts termMeta）。</p>'+
+  '<button class="primary" data-act="mock" data-arg="原型示意：加入生词本走现有词条链路">加入生词本</button>');
+}
+function acctSheet(){
+  openSheet('<div class="wcard"><span class="greencirc" style="width:56px;height:56px;margin:4px auto;display:flex">'+
+  '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.4-3.6 4.4-5.5 8-5.5s6.6 1.9 8 5.5"/></svg></span>'+
+  '<p class="ww" style="font-size:20px">未登录</p><p class="sub13" style="margin-top:8px">阅读与生词本数据保存在本机；登录后可同步到其他设备。</p></div>'+
+  '<button class="primary" data-act="mock" data-arg="原型示意：登录抽屉走现有 openAccountSheet（LearningHome.tsx:48,73）">登录同步</button>');
+}
+
+/* ================= 标注层（硬要求） ================= */
+const ANNO={
+ 1:{t:'状态栏',st:'drop',pr:'drop',
+    dg:'设计稿顶部：时间 12:35 / 静音 / 4G / 电量 60，浮于山水渐变之上。',
+    bk:['系统级 UI，非应用内容；Tauri iOS 由系统渲染状态栏','安全区留白已在用：libraryExperience.css:54 --safe-top'],
+    how:['本期不做。原型中的状态栏仅为视觉示意','顶部浅色渐变用显式色值 linear-gradient，不依赖 color-mix（iOS 16 兼容）'],oq:null},
+ 2:{t:'大标题区（阅读 + 副句 + 圆钮）',st:'adapt',pr:'P0',
+    dg:'超大衬线标题「阅读」+ 副句；右侧白色搜索圆钮 + 消息圆钮「1」。',
+    bk:['现有页头 LibraryHeading：LearningHome.tsx:66-82（大标题+账号章+搜索框形按钮+导入）','搜索链路 nav.push("learningSearch")：LearningHome.tsx:78；图标 search/bell：icons.tsx:23,62','铃铛角标数据 dueReviewCount：store.ts:897-899'],
+    how:['大标题改衬线重磅字（--library-serif，约 40pt）+ 副句「在阅读中，遇见更大的世界」（纯文案）','搜索改 44pt 白色圆形钮（跳转不变）','「消息圆钮」无消息中心数据（全仓 grep 无消息/inbox 功能）→ 降级为「待复习」铃铛钮 + 真实角标，点击 push("review")','原「导入」按钮移入书架页与空态卡；账号章保留为标题行第三个圆钮（openAccountSheet 链路不变）'],
+    oq:['消息钮降级是否接受？（openQuestions #3）','账号章放标题行第三个圆钮还是收进右上？（openQuestions #12）']},
+ 3:{t:'Hero 轮播卡',st:'new',pr:'P0',
+    dg:'山湖帆船摄影底图 + Read More, Live Better + 白胶囊「开始阅读」+ 右下 4 圆点。',
+    bk:['缺口：全仓无轮播组件；src/assets 与 public 目录不存在（无摄影图资产）','可用数据：继续阅读 current（LearningHome.tsx:127-128）、首启种子 starter（core/demo.ts:56-69，store.ts:252）、readTodayCount（store.ts:832-835）、书库/订阅入口（LearningHome.tsx:158）'],
+    how:['4 卡轮播：①主卡「开始阅读」（有进度续读 current，无进度打开 starter）②精选经典书库→learningLibrary ③短文与订阅→learningFeeds ④「今日已读 N 句」数据卡','第 4 卡默认中性配色（P0）：黄色异色仅为榜单方案②的对位演示（openQuestions #7 待拍板，P2），未拍板前实现应保持中性，可用演示控制「榜单黄卡对位」对照','N 实时变化演示：阅读器内点句/推进章/读完各 +1（跨日归零口径 store.ts:832-835，属实现层）','本期视觉 CSS 渐变+图标兜底（iOS 16 显式色值，参照 curated 三色渐变封面 LearningDiscover.tsx:116）','手动横滑 + 右下圆点指示器；摄影图资产列 P2'],
+    oq:['Hero 摄影图随包（方案 A）vs 渐变兜底（方案 B，推荐本期）？（openQuestions #6）']},
+ 4:{t:'四宫格快捷入口',st:'adapt',pr:'P0',
+    dg:'白卡四等分：书架 / 笔记 / 阅读历史 / 我的收藏，列间竖分隔线。',
+    bk:['书架=shelfItems：core/readingLibrary.ts:114-123','笔记=noteslib 路由已注册（nav.tsx:17、App.tsx:328），首页需新增一行 nav.push','阅读历史=progress+lastReadAt（搜索页「最近读过」同口径 LearningHome.tsx:427），无独立页','生词本=requestVaultSection("words")+setTab("vocab")：LearningHome.tsx:130,146','图标 bookopen/note/hist/star：icons.tsx:35-51'],
+    how:['整块白卡四等分+竖分隔线；书架→书架页（方案 A=learningShelf push 页，且首页需另增精简书架预览「最近 3 项+查看全部」，落 shelfItems 前 3 项；方案 B=首页无预览，整格跳独立书架页）','原型默认按方案 B 形态演示；拍板 A 的预览区块可用演示控制「方案A书架预览」开启对照（区块 4a）','笔记→nav.push("noteslib") 新入口；阅读历史→本期映射搜索页「最近读过」（P2 建轻量历史页）','第 4 格文案「我的收藏」→「生词本」（产品无收藏书概念，词条收藏才是真实能力）'],
+    oq:['书架去留方案 A/B（最大架构决策，openQuestions #1）','第 4 格文案拍板（#4，改字段涉及 sync.v2 投影，不建议本期）']},
+ 5:{t:'分类横滑区（找一些新内容）',st:'adapt',pr:'P0',
+    dg:'5 卡横滑：热门榜单（浅黄）/经典名著/畅销好书/短篇精选/新书上架，末卡右缘裁切。',
+    bk:['现有发现区两行入口：LearningHome.tsx:158','真实维度：CURATED_BOOKS 3（curated.ts:153-157）、CURATED_DOCS 7（31-80）、CURATED_FEEDS 3（126-130）、我的导入（sourceType 派生，readingLibrary.ts:131-135）','难度口径 全部/入门·中级/进阶：LearningDiscover.tsx:21-26'],
+    how:['横滑卡列（末卡右缘裁切暗示横滑），4 张实卡：精选经典 / 短文精选 / 资讯订阅 / 我的导入','「畅销好书」并入「精选经典」口径；「查看更多 ›」→learningLibrary','「热门榜单」无榜单数据→三选一（推荐②：黄色数据卡）。原型中 Hero 第 4 卡的黄色仅是该未拍板项的视觉演绎（P2），未拍板前实现应保持中性配色','「新书上架」无上新数据流（精选目录为静态 3 本，服务端仅按书名查找）→ 本期不渲染（drop）'],
+    oq:['榜单卡三选一（openQuestions #7，推荐②）','「新书上架」drop 确认（#8）']},
+ 6:{t:'精选推荐（大卡 + 换一批）',st:'adapt',pr:'P0',
+    dg:'大推荐卡：星空封面 + 衬线书名 + 作者 + 两行简介 +「📖 经典名著 | ☆ 9.2」+ 淡绿圆形箭头。',
+    bk:['数据池：CURATED_BOOKS 3（author/level/chapterCount/coverClass）+ CURATED_DOCS 7（逐句中文译文），core/curated.ts','加入书架真实链路：按书名查服务端目录→previewBook 下载+sha256→试读抽屉（LearningDiscover.tsx:72-84,135 BookSampleSheet）','精选书无图：coverOf 仅支持 data: 内联图与网络图，用 coverClass 渐变封面（LearningDiscover.tsx:116 同款）'],
+    how:['大卡轮换：衬线书名+作者（真实字段）+元信息「进阶 · 6 章」（level+chapterCount）','评分「☆ 9.2」无任何数据源→不做，不造假；简介行用现有口径「先试读，找到适合自己的篇章」（LearningDiscover.tsx:102）','圆形箭头钮→复用 openBook 真实链路（含未上架如实报错「这本书的电子书还没有上架」与试读抽屉）','「换一批」在 3 书+7 短文池内轮转（书↔短文交替），列 P2'],
+    oq:['换一批先做池内轮转还是等目录扩充？（openQuestions #11，推荐先做）']},
+ 7:{t:'继续阅读',st:'adapt',pr:'P0',
+    dg:'白卡：黄底皇冠封面 + 衬线书名 + 作者 + 4pt 进度条 45% +「已读 45%」+ 52pt 淡绿播放钮。',
+    bk:['recent 按 lastReadAt 取第一条：LearningHome.tsx:127-128；readingState 章节进度：59-65；完成态「再读」：140-143','封面 coverOf/coverTone 五色：core/readingLibrary.ts:124-130','百分比口径 Math.round((idx+1)*100/len)：services/sync.ts:66 同款','author 仅书库下载书携带（discovery.ts:90）；粘贴/RSS/精选短文无 author（curated.ts:88-107）'],
+    how:['升级为设计稿白卡：封面五色兜底+衬线书名+作者行（空值回退 sourceOf，与 ShelfCard byline 口径 LearningHome.tsx:100 一致）或整行隐藏','4pt 圆头进度条+灰字「已读 N%」（原型样例 45%）','点击封面/书名与播放钮→push reader 断点续读（TTS 需登录经服务器，在阅读器内启动——openQuestions #10 推荐方案）','完成态保留「再读」；「全部 ›」→书架页']},
+ 8:{t:'底部悬浮胶囊 Tab 栏',st:'adapt',pr:'P1',
+    dg:'白色全圆角胶囊（左右 16pt、高 64pt、轻投影）：阅读激活（绿+短横线）/ 口语 / 笔记与复习「13」。',
+    bk:['三 tab 定义与设计稿文案完全一致：GlassNav.tsx:7','vocab 徽标=dueReviewCount（GlassNav.tsx:14,174，>99 显示 99+）','样式基座：src/ui/base.css:448-464（毛玻璃+安全区）；切 tab 自动 popAll：App.tsx:264-271'],
+    how:['仅样式换肤：玻璃气泡→白色全圆角胶囊；激活项深绿图标+文字+短横线；徽标改淡绿胶囊底','深绿取 --library-accent 系（#246b59，libraryExperience.css:8）；暗色/sepia 沿用现有变量（20-36）','保留 GlassNav 弹簧手势与数据交互（setTab/popAll）不动；需回归口语与笔记页'],
+    oq:['主题归一方向与米白底作用域（openQuestions #2）：原型提供 亮/暗/纸 三档演示']},
+ 9:{t:'离线提示条',st:'adapt',pr:'P0',
+    dg:'设计稿未画出；为现有功能的保留项。',
+    bk:['!navigator.onLine 时显示「离线时也能阅读已保存的内容」：LearningHome.tsx:137，纯前端无数据依赖'],
+    how:['保留并纳入新视觉（置于 Hero 卡上方细条样式）','离线时 Hero「开始阅读」与推荐卡对未缓存内容降级提示（精选书下载依赖网络，链路已有错误提示）','已保存内容离线可读能力不变','原型用「演示控制 → 模拟离线」触发（真实应用为 navigator.onLine）']},
+ '4a':{t:'书架预览（方案 A 演示区块）',st:'adapt',pr:'P0',
+    dg:'仅方案 A（openQuestions #1 拍板 A）存在此区块：首页精简书架预览（最近 3 项 +「查看全部」），全部列表移入 learningShelf push 页。设计稿首页未画全量书架，原型默认按方案 B 形态演示。',
+    bk:['shelfItems 列表（预览取前 3 项）：core/readingLibrary.ts:114-123','learningShelf 需注册三处：ui/nav.tsx:10-27 PushName + App.tsx:54 PUSH_TITLES + App.tsx:306-353 view() 分支'],
+    how:['原型用「演示控制 → 方案A书架预览」开启本区块对照；拍板 A 后此预览为 P0 新增区块，「查看全部」与四宫格「书架」格均跳 learningShelf','拍板 B 则本区块不存在，「书架」格直接跳独立书架页'],
+    oq:['书架去留方案 A/B（openQuestions #1，P0 动工前置的最大架构决策）']},
+};
+const STLBL={reuse:'reuse 复用',adapt:'adapt 改造',new:'new 新建',drop:'drop 不做'};
+function showAnno(i){
+  const a=ANNO[String(i)]; if(!a) return;
+  const prCls=a.pr==='P0'?'p0':(a.pr==='P1'?'p1':'p2');
+  const stCls=a.st;
+  $('#apopcard').innerHTML=
+  '<button class="aclose" data-act="anno-close">✕</button>'+
+  '<div class="ahead"><span class="anum">'+i+'</span><h4>'+a.t+'</h4></div>'+
+  '<div class="aflags"><span class="flag '+stCls+'">'+STLBL[a.st]+'</span><span class="flag '+prCls+'">'+a.pr+'</span></div>'+
+  '<h5>设计稿意图</h5><p>'+a.dg+'</p>'+
+  '<h5>对应现有功能 / 数据来源</h5><ul>'+a.bk.map(x=>'<li>'+x+'</li>').join('')+'</ul>'+
+  '<h5>本期做法</h5><ul>'+a.how.map(x=>'<li>'+x+'</li>').join('')+'</ul>'+
+  (a.oq?'<h5>待拍板（openQuestions）</h5><ul class="oq">'+a.oq.map(x=>'<li>'+x+'</li>').join('')+'</ul>':'');
+  $('#annopop').classList.add('on');
+}
+function toggleAnno(){
+  const on=$('#screen').classList.toggle('annotating');
+  $('#fab').classList.toggle('on',on);
+  $('#toolbar').classList.toggle('on',on);
+}
+
+/* ================= 事件总线 ================= */
+document.addEventListener('click',e=>{
+  const el=e.target.closest('[data-act]');
+  if(!el) return;
+  const act=el.dataset.act, arg=el.dataset.arg;
+  switch(act){
+    case 'tab':{
+      closeSheet(); popAll();
+      S.tab=arg;
+      document.querySelectorAll('.rootview').forEach(v=>v.classList.remove('on'));
+      $('#rv-'+arg).classList.add('on');
+      document.querySelectorAll('.tabbar .tb').forEach(b=>b.classList.toggle('on',b.dataset.arg===arg));
+      if(arg==='vocab') renderVocab();
+      break;}
+    case 'vseg':{
+      S.vseg=arg;
+      document.querySelectorAll('#vseg button').forEach(b=>b.classList.toggle('on',b.dataset.arg===arg));
+      renderVocab(); break;}
+    case 'push': push(arg==='import'?'importpg':arg); break;
+    case 'back': pop(); break;
+    case 'bell': push('review'); break;
+    case 'acct': acctSheet(); break;
+    case 'close-sheet': closeSheet(); break;
+    case 'dot':{
+      window.goSlide(+arg);
+      const i=+arg;
+      document.querySelectorAll('.dot').forEach((d,k)=>{d.classList.toggle('on',k===i);d.classList.toggle('dark',i===3);});
+      break;}
+    case 'hero-start':{
+      const target=S.fresh||!S.current?'starter':S.current;
+      if(S.offline&&!['starter','b1'].includes(target)){toast('离线时先读已保存的内容');break;}
+      push('reader',target); break;}
+    case 'open': push('reader',arg); break;
+    case 'play':
+      push('reader',arg);
+      toast('已进入阅读器 · 登录后可在页内启动 TTS 听读');
+      break;
+    case 'rec-arrow':{
+      const id=POOL[S.recIdx], it=item(id);
+      if(it.kind==='doc'){push('reader',id);break;}
+      toast('正在按书名查询书库目录…');
+      lookupBook(id,r=>{
+        if(r.err==='net'){toast('网络不可用，暂时拿不到这本书的试读');return;}
+        if(r.err==='unlisted'){toast('这本书的电子书还没有上架');return;}
+        sampleSheet(id);
+      });
+      break;}
+    case 'rec-shuffle':{
+      const ic=$('#shufbtn svg');
+      ic.classList.remove('spin'); void ic.getBoundingClientRect(); ic.classList.add('spin');
+      S.recIdx=(S.recIdx+1)%POOL.length;
+      renderRec(); /* 同步换卡；旋转反馈纯 CSS，不依赖定时器 */
+      break;}
+    case 'sample': sampleSheet(arg); break;
+    case 'addshelf':{
+      const btn=$('#addbtn'), err=$('#adderr'), ok=$('#addok');
+      if(!S.shelfIds.includes(arg)){
+        if(S.offline){err&&err.classList.add('on');toast('网络不可用，加入书架失败');break;}
+        S.shelfIds.push(arg);
+        S.items[arg]={...S.items[arg],inShelf:true,status:'unread',rs:null};
+      }
+      if(btn){btn.disabled=true;btn.textContent='已加入 ✓';}
+      ok&&ok.classList.add('on');
+      renderShelfPreview();
+      toast('已加入书架'); break;}
+    case 'grid-vocab':
+      popAll();
+      document.querySelectorAll('.rootview').forEach(v=>v.classList.remove('on'));
+      $('#rv-vocab').classList.add('on'); S.tab='vocab';
+      document.querySelectorAll('.tabbar .tb').forEach(b=>b.classList.toggle('on',b.dataset.arg==='vocab'));
+      S.vseg='words';
+      document.querySelectorAll('#vseg button').forEach(b=>b.classList.toggle('on',b.dataset.arg==='words'));
+      renderVocab();
+      toast('已切到「生词本」· requestVaultSection("words") 同款链路');
+      break;
+    case 'ftype': S.shelfType=arg; refreshShelf(); break;
+    case 'fstat': S.shelfStatus=arg; refreshShelf(); break;
+    case 'searchchip':{
+      const q=arg.toLowerCase();
+      $('#searchsec').innerHTML=searchListHTML(q);
+      const inp=$('#searchq'); if(inp) inp.value=arg;
+      break;}
+    case 'revflip':{
+      const g=$('#revgloss');
+      if(g) g.classList.toggle('hide'); break;}
+    case 'revnext':{
+      revIdx=(revIdx+1)%WORDS.length;
+      const host=$('#revcard'); if(host) host.innerHTML=revCardHTML(revIdx); break;}
+    case 'liblevel':{
+      document.querySelectorAll('#libchips .chip').forEach(c=>c.classList.toggle('on',c.dataset.arg===arg));
+      $('#liblist').innerHTML=libListHTML(arg); break;}
+    case 'chapter':{
+      const [id,i]=arg.split(':');
+      const it=item(id); it.rs={idx:+i,frac:.15}; it.status='reading';
+      if(it.rs.idx>=it.chapters-1) it.rs.frac=.7;
+      renderContinue();
+      const pg=S.stack[S.stack.length-1];
+      if(pg){pg.innerHTML=PAGE.reader(id);}
+      S.readToday+=1; renderBell(); /* 今日已读 N 句实时递增演示 */
+      toast('进度已推进 · 真实口径见 services/sync.ts:66');
+      break;}
+    case 'finish':{
+      const it=item(arg); it.rs={idx:it.chapters,frac:0}; it.status='done';
+      renderContinue();
+      const pg=S.stack[S.stack.length-1];
+      if(pg){pg.innerHTML=PAGE.reader(arg);}
+      S.readToday+=1; renderBell();
+      toast('已读完 · 首页「继续阅读」变为「再读」态');
+      break;}
+    case 'tapsent':{
+      const sent=el.closest('.rdsent');
+      /* 单向已读高亮；首次点句 readToday+1（今日已读 N 句实时递增演示） */
+      if(sent&&!sent.classList.contains('tapped')){
+        sent.classList.add('tapped');
+        S.readToday+=1; renderBell();
+      }
+      break;}
+    case 'tts': toast('原型示意：登录用户在阅读器内启动 TTS 听读（voice.ts 账号语音）'); break;
+    case 'word': wordSheet(arg); break;
+    case 'mock': toast(arg); break;
+    case 'anno': toggleAnno(); break;
+    case 'abadge': showAnno(arg); break;
+    case 'anno-close': $('#annopop').classList.remove('on'); break;
+    case 'theme':{
+      $('#screen').dataset.theme=arg;
+      document.querySelectorAll('[data-act="theme"]').forEach(b=>b.classList.toggle('on',b.dataset.arg===arg));
+      break;}
+    case 'demo-off':{
+      S.offline=!S.offline; el.classList.toggle('on',S.offline);
+      $('#ab9').classList.toggle('on',S.offline);
+      toast(S.offline?'已模拟离线：显示离线条；已保存内容可读，加入书架/试读将如实报错':'已恢复在线');
+      break;}
+    case 'demo-fresh':{
+      S.fresh=!S.fresh; el.classList.toggle('on',S.fresh);
+      if(S.fresh){S.current=null;}else{S.current='b1';}
+      renderContinue(); renderShelfPreview();
+      toast(S.fresh?'新用户视角：隐藏「继续阅读」，书架空态卡引导 starter，「开始阅读」打开《A Small Break》':'已恢复老用户视角');
+      break;}
+    case 'demo-prevA':{
+      S.prevA=!S.prevA; el.classList.toggle('on',S.prevA);
+      $('#screen').classList.toggle('showprevA',S.prevA);
+      renderShelfPreview();
+      toast(S.prevA?'方案 A 预览开：首页新增「书架」精简预览（最近 3 项+查看全部，区块 4a）——拍板 openQuestions #1 后生效':'方案 A 预览关：回到方案 B 形态（首页无预览）');
+      break;}
+    case 'demo-gold':{
+      S.gold=!S.gold; el.classList.toggle('on',S.gold);
+      document.querySelector('.slide.dataslide').classList.toggle('gold',S.gold);
+      window.syncDots&&window.syncDots();
+      toast(S.gold?'黄色异色卡（榜单方案②对位，openQuestions #7 P2 待拍板）：此配色未经拍板不应落入 P0 实现':'已恢复第 4 卡默认中性配色（P0）');
+      break;}
+    case 'demo-unlist':{
+      S.unlisted=!S.unlisted; el.classList.toggle('on',S.unlisted);
+      toast(S.unlisted?'未上架演示开：点推荐卡箭头将如实提示「这本书的电子书还没有上架」':'未上架演示关');
+      break;}
+    case 'demo-due':{
+      S.dueIdx=(S.dueIdx+1)%S.dueSeq.length; S.due=S.dueSeq[S.dueIdx];
+      renderBell();
+      el.textContent='复习角标: '+(S.due>99?'99+':S.due);
+      el.classList.toggle('on',true);
+      toast('dueReviewCount 三态演示：'+S.due+'（>0 显示 / =0 消失 / >99 显示 99+）');
+      break;}
+  }
+});
+function refreshShelf(){
+  const host=$('#shelflist');
+  if(host) host.innerHTML=shelfListHTML();
+  const chips=(sel,val,act)=>document.querySelectorAll(sel).forEach(c=>c.classList.toggle('on',c.dataset.arg===val));
+  chips('[data-act="ftype"]',S.shelfType); chips('[data-act="fstat"]',S.shelfStatus);
+}
+function renderVocab(){
+  const host=$('#vcontent');
+  if(S.vseg==='review'){
+    host.innerHTML='<div class="notecard">今日复习 '+S.due+' 条 · 复习为本地能力，未登录可用。<br><button class="emptbtn" data-act="push" data-arg="review" style="margin-top:10px">进入复习 ›</button></div>';
+  }else if(S.vseg==='words'){
+    host.innerHTML='<p class="listnote" style="margin:0 16px 10px">掌握三格：刚收集 / 眼熟 / 能说出口（derive.STAGE_BUCKET_LABEL）。演示仅展示首启种子 4 词条。</p>'+
+    WORDS.map(w=>'<button class="row" data-act="word" data-arg="'+w.w+'" style="margin:0 16px 10px;width:calc(100% - 32px)">'+
+      '<span class="rmain"><b>'+w.w+'</b><span class="rby">'+w.ph+' · '+w.cn+'</span></span>'+
+      '<span class="rstate '+(w.stage==='眼熟'?'reading':'')+'">'+w.stage+'</span></button>').join('');
+  }else{
+    host.innerHTML='<div class="emptycard" style="margin:0 16px"><b>我的笔记</b><br>句笔记与段落笔记（原型示意，功能不在本期改版范围）</div>';
+  }
+}
+
+/* 搜索框输入过滤（事件委托，push 页内输入框同样生效） */
+document.addEventListener('input',e=>{
+  if(e.target&&e.target.id==='searchq'){
+    $('#searchsec').innerHTML=searchListHTML(e.target.value.trim().toLowerCase());
+  }
+});
+
+/* 根视图滚动 → 状态栏底色 */
+function syncScrolled(){
+  const v=document.querySelector('.rootview.on');
+  $('#screen').classList.toggle('scrolled',!!v&&v.scrollTop>8);
+}
+document.querySelectorAll('.rootview').forEach(v=>v.addEventListener('scroll',syncScrolled,{passive:true}));
+document.addEventListener('click',()=>setTimeout(syncScrolled,0));
+
+/* ================= 启动 ================= */
+renderBell(); renderRec(); renderContinue(); renderShelfPreview(); initCarousel(); renderVocab();
+</script>
+</body>
+</html>
