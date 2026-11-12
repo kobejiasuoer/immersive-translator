@@ -2,7 +2,7 @@
  * 阅读舞台（2026-10-26 阅读页重构，原型 prototypes/reader-room-redesign-2026-10-26.html）。
  *
  * 结构：白卡主栏（.reading-toolbar 控件收口：遮罩开关/已揭开计数/全部揭开遮住/
- * 目录 chip/阅读设置 chip 开浮层）+ .reading-scrollpane（左缘 .reading-rail 竖向
+ * 目录 chip/设置 chip 打开统一设置窗口）+ .reading-scrollpane（左缘 .reading-rail 竖向
  * 进度轨 + 居中 640px .reading-col：续读胶囊、32px 标题刊头、按段落分组的英文流）。
  *
  * 译文浮层 .translation-pop 绝对定位在当前句末行下方（getClientRects 直测，
@@ -12,7 +12,7 @@
  *
  * 词块/生词着色、跟读着色、遮罩（parallel 分支 cn-frost/cn-slot）、手改译文、
  * 单段重试、随读抽查挖空、滚动跟随（pairRefs/onViewportIdx）全部保留复用。
- * 键位切分线：本组件只监听 Esc（关自己的设置浮层）与 E（触发 onOpenXray，
+ * 键位切分线：本组件只监听 E（触发 onOpenXray，
  * 仅解析面板 idle 速览态，已解析句不重复发请求）；
  * Space/J/K/L/H 全在 ReaderApp，peekAll 为只读 prop（按住 H 时浮层临时全显）。
  */
@@ -30,8 +30,6 @@ import {
   IconVolume,
 } from "../ui/icons";
 import {
-  READER_FONT_SIZE_MAX,
-  READER_FONT_SIZE_MIN,
   type Article,
   type ReaderSettings,
   type SentenceChunk,
@@ -54,6 +52,9 @@ interface Props {
   chunking: { done: number; total: number } | null;
   /** 遮罩模式下按住 H 的临时全显（不改变已揭开状态）。 */
   peekAll: boolean;
+  /** 段落句卡由统一设置控制，仅在当前窗口生效。 */
+  sentCards: boolean;
+  onOpenSettings: () => void;
   searchMatchIdx: number | null;
   /** 生词本归一化 id 集（生词再现标记用）。 */
   knownIds: ReadonlySet<string>;
@@ -88,7 +89,7 @@ interface Props {
   /** 书章模式：章节栏数据（短文缺省不渲染）。 */
   book?: { title: string; chapterIdx: number; chapterCount: number } | null;
   onOpenToc?: () => void;
-  /** 控件收口后的持久设置通道（遮罩/排版/字号/短语虚线/专注/随读抽查）。 */
+  /** 工具栏译文遮罩的持久设置通道。 */
   onPatchSettings: (patch: Partial<ReaderSettings>) => void;
   /** 快捷键 E / 右侧面板 CTA：请求当前句的结构解析。 */
   onOpenXray: (idx: number) => void;
@@ -143,7 +144,7 @@ function IconBookmark({ size = 14 }: { size?: number }) {
 }
 
 export function ReadingView(props: Props) {
-  const { article, settings, activeIdx, translating, chunking, peekAll, searchMatchIdx } = props;
+  const { article, settings, activeIdx, translating, chunking, peekAll, sentCards, searchMatchIdx } = props;
   const stageRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const colRef = useRef<HTMLDivElement | null>(null);
@@ -152,10 +153,7 @@ export function ReadingView(props: Props) {
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState("");
   // ---- 控件收口后的本地 UI 态（不落盘）----
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [resumeHidden, setResumeHidden] = useState(false);
-  /** 段落态下的本地句卡开关（原型「逐句」，无持久字段）。 */
-  const [sentCards, setSentCards] = useState(false);
 
   const sentences = article?.sentences ?? [];
   const maskOn = settings.maskTranslation;
@@ -350,7 +348,6 @@ export function ReadingView(props: Props) {
     peekAll,
     resumeHidden,
     editingIdx,
-    settingsOpen,
     translating,
     chunking,
   ]);
@@ -376,7 +373,7 @@ export function ReadingView(props: Props) {
     };
   }, [spotlight]);
 
-  // ---- 键位切分线：本组件只加 Esc（关自己的设置浮层）与 E（onOpenXray）----
+  // ---- 键位切分线：本组件只加 E（onOpenXray）；设置窗口自行处理 Esc ----
   // Space/J/K/L/H 与 peekAll 的 H 全在 ReaderApp；输入框（挖空/译文编辑/检索）
   // 自接管按键，这里让路（e.target 过滤 + 挖空输入已 stopPropagation）。
   // E 仅在解析面板 idle（速览态）时触发，与原型 side[data-state=idle] 口径
@@ -393,9 +390,7 @@ export function ReadingView(props: Props) {
       if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
       if (isTyping(e.target)) return;
       const k = e.key.toLowerCase();
-      if (k === "escape") {
-        setSettingsOpen(false);
-      } else if (k === "e" && article && props.xrayIdle) {
+      if (k === "e" && article && props.xrayIdle) {
         props.onOpenXray(activeIdx);
       }
     }
@@ -403,18 +398,6 @@ export function ReadingView(props: Props) {
     return () => document.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [article, activeIdx, props.onOpenXray, props.xrayIdle]);
-
-  // 设置浮层：点浮层外关闭（浮层内与触发 chip 自身的点击不吃）。
-  useEffect(() => {
-    if (!settingsOpen) return;
-    function onDown(e: PointerEvent) {
-      const t = e.target as HTMLElement | null;
-      if (t?.closest(".reading-settings-pop, .reading-settings-chip")) return;
-      setSettingsOpen(false);
-    }
-    document.addEventListener("pointerdown", onDown);
-    return () => document.removeEventListener("pointerdown", onDown);
-  }, [settingsOpen]);
 
   function handleMouseUp(e: ReactMouseEvent<HTMLDivElement>) {
     // 挖空输入框内的选词不是划选查词，先让路。
@@ -484,12 +467,6 @@ export function ReadingView(props: Props) {
   const readMinutes = Math.max(1, Math.round(article.wordCount / 200));
   /** 左轨与 dock 同口径：光标句 / 总句数（跟随播放与滚动阅读）。 */
   const railPct = total > 0 ? Math.max(1, Math.round(((activeIdx + 1) / total) * 100)) : 0;
-  const themeLabel: Record<ReaderSettings["theme"], string> = {
-    light: "纸书",
-    dark: "深色",
-    sepia: "护眼",
-    oled: "纯黑",
-  };
 
   /** 随读抽查：提交判分（judgeCloze 本地判；用过提示的 perfect 降档为 close）。 */
   function commitCloze(slot: ClozeSlot, raw: string) {
@@ -901,121 +878,15 @@ export function ReadingView(props: Props) {
         )}
         <button
           type="button"
-          className={`chip reading-settings-chip${settingsOpen ? " on" : ""}`}
-          onClick={() => setSettingsOpen((v) => !v)}
-          aria-expanded={settingsOpen}
+          className="chip reading-settings-chip"
+          onClick={props.onOpenSettings}
           aria-haspopup="dialog"
-          title="排版 / 字号 / 专注 / 短语虚线 / 随读抽查都收在这里"
+          title="阅读、语音与应用设置"
         >
           <IconSettings size={14} />
-          阅读设置
+          设置
         </button>
       </div>
-
-      {/* ---- 阅读设置浮层（排版/句卡/字号/短语虚线/专注/随读抽查/主题只读）---- */}
-      {settingsOpen && (
-        <div className="reading-settings-pop" role="dialog" aria-label="阅读设置">
-          <div className="reading-settings-opt">
-            <span className="opt-label">排版</span>
-            <div className="seg">
-              <button
-                type="button"
-                className={spread === "prose" ? "active" : ""}
-                onClick={() => props.onPatchSettings({ spreadLayout: "prose" })}
-                title="段落 = 行内英文流 + 当前句译文浮层"
-              >
-                段落
-              </button>
-              <button
-                type="button"
-                className={spread === "parallel" ? "active" : ""}
-                onClick={() => props.onPatchSettings({ spreadLayout: "parallel" })}
-                title="双语对照 = 逐句双栏"
-              >
-                对照
-              </button>
-            </div>
-          </div>
-          <div className="reading-settings-opt" title="段落排版下把每句拆成独立句卡（只影响本窗口，不落盘）">
-            <span className="opt-label">句卡</span>
-            <button
-              type="button"
-              className="switch"
-              role="switch"
-              aria-checked={sentCards && spread === "prose"}
-              aria-label="句卡"
-              disabled={spread !== "prose"}
-              onClick={() => setSentCards((v) => !v)}
-            />
-          </div>
-          <div className="reading-settings-opt">
-            <span className="opt-label">字号</span>
-            <div className="drawer-stepper">
-              <button
-                type="button"
-                onClick={() =>
-                  props.onPatchSettings({ fontSize: Math.max(READER_FONT_SIZE_MIN, settings.fontSize - 1) })
-                }
-                disabled={settings.fontSize <= READER_FONT_SIZE_MIN}
-                aria-label="减小字号"
-              >
-                −
-              </button>
-              <span className="val">{settings.fontSize}</span>
-              <button
-                type="button"
-                onClick={() =>
-                  props.onPatchSettings({ fontSize: Math.min(READER_FONT_SIZE_MAX, settings.fontSize + 1) })
-                }
-                disabled={settings.fontSize >= READER_FONT_SIZE_MAX}
-                aria-label="增大字号"
-              >
-                +
-              </button>
-            </div>
-          </div>
-          <div className="reading-settings-opt" title="词块/生词在正文里用虚线标记，点击看释义并可收藏">
-            <span className="opt-label">短语虚线</span>
-            <button
-              type="button"
-              className="switch"
-              role="switch"
-              aria-checked={settings.chunkHighlight}
-              aria-label="短语虚线"
-              onClick={() => props.onPatchSettings({ chunkHighlight: !settings.chunkHighlight })}
-            />
-          </div>
-          <div className="reading-settings-opt" title="非当前句变淡 + 收起右侧解析面板，注意力聚焦当前句">
-            <span className="opt-label">专注模式</span>
-            <button
-              type="button"
-              className="switch"
-              role="switch"
-              aria-checked={spotlight}
-              aria-label="专注模式"
-              onClick={() => props.onPatchSettings({ spotlightMode: !spotlight })}
-            />
-          </div>
-          <div
-            className="reading-settings-opt"
-            title="已读句的词块/生词变行内填空：Enter 判分 · ? 首字母提示 · 按住 H 显影。只考读过的句子，本地判分不耗流量"
-          >
-            <span className="opt-label">随读抽查</span>
-            <button
-              type="button"
-              className="switch"
-              role="switch"
-              aria-checked={quizOn}
-              aria-label="随读抽查"
-              onClick={() => props.onPatchSettings({ spotQuizMode: !quizOn })}
-            />
-          </div>
-          <div className="reading-settings-opt">
-            <span className="opt-label">主题</span>
-            <span className="reading-settings-theme">{themeLabel[settings.theme]}</span>
-          </div>
-        </div>
-      )}
 
       {/* ---- 正文滚动区：左缘进度轨 + 居中 640px 列 ---- */}
       <div

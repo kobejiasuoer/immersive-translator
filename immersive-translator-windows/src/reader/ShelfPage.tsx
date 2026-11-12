@@ -13,6 +13,8 @@
  *   已读完在后）；同 sourceUrl 的重复内容合并展示、可撤销；
  *   统一行结构（进度环 / 英文标题 + 中文行 / 一行元信息 / more 菜单收删除）。
  *   失败项分组为 blueprint defer 项（导入失败态不落库，无数据源），不渲染。
+ * - 账号首访提示条（2026-11-12）：游客态且未永久关闭时显示在页头下
+ *   （acctTip prop，ReaderApp 计算；「不再提示」由 ReaderApp 写 localStorage）。
  */
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
@@ -53,6 +55,17 @@ interface Props {
   onDeleteBook: (id: string) => void;
   onOpenImport: (tab?: ShelfImportTab) => void;
   onGoReview: () => void;
+  /** 书架首访账号提示条（游客态 + 未关闭才有值；null 不渲染）。 */
+  acctTip?: { onLogin: () => void; onDismiss: () => void } | null;
+}
+
+/** 云图标（原型 sync-tip；icons.tsx 暂缺，照本文件本地图标先例内联）。 */
+function IconCloud({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.5 13 3 3 0 0 0 6 19z" />
+    </svg>
+  );
 }
 
 /** 原型 flame 图标（连续天数角标）。 */
@@ -189,6 +202,7 @@ export function ShelfPage({
   onDeleteBook,
   onOpenImport,
   onGoReview,
+  acctTip = null,
 }: Props) {
   const [tab, setTab] = useState<"books" | "articles">("books");
   /** 删除确认弹窗（应用内 ConfirmDialog，替代原生 window.confirm）。 */
@@ -413,6 +427,27 @@ export function ShelfPage({
             导入
           </button>
         </div>
+
+        {/* ---- 账号首访提示条（游客态 + 未永久关闭；原型 sync-tip） ---- */}
+        {acctTip && (
+          <div className="shelf-acct-tip" role="note">
+            <IconCloud size={18} />
+            <p>
+              <b>生词和阅读进度目前只保存在这台电脑上。</b>登录后自动同步，换台设备也能接着学。
+            </p>
+            <button className="btn btn-primary btn-sm" onClick={acctTip.onLogin}>
+              登录
+            </button>
+            <button
+              className="shelf-acct-tip-close"
+              onClick={acctTip.onDismiss}
+              aria-label="不再提示"
+              title="不再提示"
+            >
+              <IconClose size={14} />
+            </button>
+          </div>
+        )}
 
         {tab === "books" ? (
           <>

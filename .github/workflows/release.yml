@@ -280,10 +280,17 @@ jobs:
         run: |
           set -euo pipefail
 
+          # 官网使用新品牌下载名；保留旧 ZIP 与更新清单，兼容已安装客户端。
+          website_zip="ImmersiveSpeaking-${RELEASE_VERSION}-macOS.zip"
+          cp "release/$RELEASE_ZIP_NAME" "release/$website_zip"
+          (cd release && shasum -a 256 "$website_zip" > "$website_zip.sha256")
+
           assets=(
             "release/$RELEASE_ZIP_NAME"
             "release/$RELEASE_ZIP_NAME.sha256"
             "release/update-manifest.json"
+            "release/$website_zip"
+            "release/$website_zip.sha256"
           )
           title="$APP_NAME $RELEASE_VERSION"
 
@@ -434,6 +441,9 @@ jobs:
           # 应用内 productName 已更名「沉浸口语」，不受资产名影响。
           asset="ImmersiveTranslator_${RELEASE_VERSION}_x64-setup.exe"
           cp "$EXE_PATH" "$RUNNER_TEMP/$asset"
+          # 官网新品牌别名直接复制同一已签名安装包，旧名继续供自动更新使用。
+          website_asset="ImmersiveSpeaking_${RELEASE_VERSION}_x64-setup.exe"
+          cp "$EXE_PATH" "$RUNNER_TEMP/$website_asset"
           if [[ -f "$EXE_PATH.sig" ]]; then
             cp "$EXE_PATH.sig" "$RUNNER_TEMP/$asset.sig"
           fi
@@ -454,12 +464,12 @@ jobs:
               done
 
           if gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" "$RUNNER_TEMP/$asset" --clobber
+            gh release upload "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" "$RUNNER_TEMP/$asset" "$RUNNER_TEMP/$website_asset" --clobber
             if [[ -f "$RUNNER_TEMP/$asset.sig" ]]; then
               gh release upload "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" "$RUNNER_TEMP/$asset.sig" --clobber
             fi
           else
-            gh release create "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" "$RUNNER_TEMP/$asset" \
+            gh release create "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" "$RUNNER_TEMP/$asset" "$RUNNER_TEMP/$website_asset" \
               --title "$APP_NAME $RELEASE_VERSION" --target "$GITHUB_SHA"
           fi
 

@@ -161,4 +161,27 @@ describe("云语音设置真实测试和状态边界", () => {
     act(() => findButton(h.container, "测试识别").click());
     expect(transcribeBatch).not.toHaveBeenCalled();
   });
+
+  it("跟读评分行旁有阅读室联动只读投影（文案逐字，无第二写点控件）", async () => {
+    const h = await mount();
+    expect(h.container.textContent).toContain(
+      "跟读评测可在 设置 → 阅读与练习 中开启；两处都开启才会打分",
+    );
+    // 投影行不带任何开关/按钮（只读，不开第二写点）
+    const note = Array.from(h.container.querySelectorAll(".voice-feature-note")).find((p) =>
+      p.textContent?.includes("跟读评测可在 设置 → 阅读与练习 中开启"),
+    );
+    expect(note).toBeDefined();
+    expect(note!.querySelector("button, input, .switch")).toBeNull();
+  });
+
+  it("评分能力未开放（ise 行隐藏）时投影一并隐藏", async () => {
+    const noIse = { ...caps, iseEnabled: false };
+    const h = await mount({
+      caps: noIse,
+      view: reduceVoiceGatewayView({ loading: false, errorCode: null, caps: noIse, quotaEvents: [] }),
+      iseEnabled: false,
+    });
+    expect(h.container.textContent).not.toContain("两处都开启才会打分");
+  });
 });

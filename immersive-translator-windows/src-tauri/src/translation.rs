@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -53,6 +53,20 @@ impl Drop for CancelGuard<'_> {
     fn drop(&mut self) {
         self.0.end(&self.1);
     }
+}
+
+/// 共享 HTTP 客户端：连接池跨请求复用（keep-alive），翻译不再每次付 DNS+TCP+TLS
+/// 全量握手。默认超时 120s（流式翻译含整段读取）；test_connectivity / probe_https
+/// 用 RequestBuilder::timeout 按请求覆盖为更短超时。
+fn shared_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .tcp_nodelay(true)
+            .build()
+            .expect("共享 reqwest 客户端构建失败（TLS 后端不可用）")
+    })
 }
 
 #[derive(Deserialize)]
@@ -265,7 +279,7 @@ fn process_sse_buffer(
     }
 }
 
-fn build_body(req: &TranslateRequest, stream: bool) -> serde_json::Value {
+fn build_body(req: &TranslateRequest, stream: bool, is_platform: bool) -> serde_json::Value {
     let mut body = serde_json::json!({
         "model": req.model,
         "stream": stream,
@@ -277,20 +291,27 @@ fn build_body(req: &TranslateRequest, stream: bool) -> serde_json::Value {
 
     // 思考模式兼容：DeepSeek / 智谱 的推理模型会输出 <think> 噪声，
     // 在翻译场景下我们不需要思考过程，主动关闭。
-    apply_thinking_mode_compat(&mut body, &req.endpoint, &req.model);
+    apply_thinking_mode_compat(&mut body, &req.endpoint, &req.model, is_platform);
 
     body
 }
 
 /// 按服务商/模型关闭思考模式，避免译文里混入 <think>…</think> 噪声。
-/// 对齐 Mac 版 ProviderProfile 的处理。
-fn apply_thinking_mode_compat(body: &mut serde_json::Value, endpoint: &str, model: &str) {
+/// 对齐 Mac 版 ProviderProfile 的处理。走沉浸云网关（is_platform）时 endpoint
+/// 是自家域名、匹配不到任何服务商——跳过 endpoint 判定、纯按模型名套用同一组
+/// 规则（字段经网关 passthrough 透传到真实上游）。
+fn apply_thinking_mode_compat(
+    body: &mut serde_json::Value,
+    endpoint: &str,
+    model: &str,
+    is_platform: bool,
+) {
     let ep = endpoint.to_lowercase();
     let m = model.to_lowercase();
 
     // 智谱 GLM：glm-4.5 / glm-z1 / glm-4.6 等支持思考的模型。
     // 官方 OpenAI 兼容路径用 thinking.type=disabled。
-    if ep.contains("bigmodel") || ep.contains("zhipu") {
+    if is_platform || ep.contains("bigmodel") || ep.contains("zhipu") {
         if m.contains("glm-4.5")
             || m.contains("glm-4.6")
             || m.contains("glm-z1")
@@ -304,13 +325,15 @@ fn apply_thinking_mode_compat(body: &mut serde_json::Value, endpoint: &str, mode
     // DeepSeek：deepseek-reasoner 默认会思考。OpenAI 兼容路径下
     // 无法用标准字段关闭（reasoning 字段非标准），但 deepseek-chat 不思考，
     // 所以仅在 reasoner 模型上加提示性字段（部分网关识别）。
-    if ep.contains("deepseek") && m.contains("reasoner") {
-        body["enable_thinking"] = serde_json::Value::Bool(false);
-        return;
+    if is_platform || ep.contains("deepseek") {
+        if m.contains("reasoner") {
+            body["enable_thinking"] = serde_json::Value::Bool(false);
+            return;
+        }
     }
 
     // 通义千问 Qwen：qwen3 / qwq 系列在兼容模式下用 enable_thinking=false。
-    if ep.contains("dashscope") || ep.contains("tongyi") || ep.contains("qwen") {
+    if is_platform || ep.contains("dashscope") || ep.contains("tongyi") || ep.contains("qwen") {
         if m.contains("qwen3") || m.contains("qwq") {
             body["enable_thinking"] = serde_json::Value::Bool(false);
             return;
@@ -411,10 +434,7 @@ pub async fn translate_stream(
         },
     );
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = shared_client();
 
     let mut request_builder = client
         .post(&target)
@@ -428,7 +448,7 @@ pub async fn translate_stream(
             request_builder.header("Authorization", format!("Bearer {}", req.api_key));
     }
 
-    let body = build_body(&req, req.stream);
+    let body = build_body(&req, req.stream, is_platform);
     let response = request_builder.json(&body).send().await;
 
     let mut response = match response {
@@ -736,10 +756,7 @@ pub async fn test_connectivity(
         }
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = shared_client();
 
     let body = serde_json::json!({
         "model": model,
@@ -751,6 +768,7 @@ pub async fn test_connectivity(
     let mut req = client
         .post(&target)
         .header("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(30))
         .json(&body);
     if let Some(token) = &platform_token {
         req = req.header("Authorization", format!("Bearer {}", token));
@@ -804,6 +822,7 @@ pub async fn test_connectivity(
                 resp = match client
                     .post(&target)
                     .header("Content-Type", "application/json")
+                    .timeout(std::time::Duration::from_secs(30))
                     .header("Authorization", format!("Bearer {}", new_token))
                     .json(&body)
                     .send()
@@ -897,12 +916,14 @@ pub async fn probe_https(url: String) -> Result<ConnectivityResult, String> {
         });
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = shared_client();
 
-    let resp = match client.get(parsed).send().await {
+    let resp = match client
+        .get(parsed)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+    {
         Ok(r) => r,
         Err(e) if e.is_timeout() => {
             return Ok(ConnectivityResult {
@@ -1135,5 +1156,81 @@ mod tests {
             normalize_endpoint("https://open.bigmodel.cn/api/paas/v4"),
             "https://open.bigmodel.cn/api/paas/v4/chat/completions"
         );
+    }
+
+    #[test]
+    fn thinking_compat_platform_glm_disables_thinking() {
+        // 网关请求：endpoint 是自家域名，匹配不到服务商——按模型名注入
+        let mut body = serde_json::json!({ "model": "glm-4.6" });
+        apply_thinking_mode_compat(
+            &mut body,
+            "https://gw.example.com/v1/chat/completions",
+            "glm-4.6",
+            true,
+        );
+        assert_eq!(body["thinking"]["type"], "disabled");
+    }
+
+    #[test]
+    fn thinking_compat_platform_deepseek_reasoner_hint() {
+        let mut body = serde_json::json!({ "model": "deepseek-reasoner" });
+        apply_thinking_mode_compat(
+            &mut body,
+            "https://gw.example.com/v1/chat/completions",
+            "deepseek-reasoner",
+            true,
+        );
+        assert_eq!(body["enable_thinking"], serde_json::Value::Bool(false));
+    }
+
+    #[test]
+    fn thinking_compat_platform_non_thinking_model_untouched() {
+        let mut body = serde_json::json!({ "model": "deepseek-chat" });
+        apply_thinking_mode_compat(
+            &mut body,
+            "https://gw.example.com/v1/chat/completions",
+            "deepseek-chat",
+            true,
+        );
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("enable_thinking").is_none());
+    }
+
+    #[test]
+    fn thinking_compat_custom_endpoint_without_match_unchanged() {
+        // 非平台 + 非已知服务商 endpoint：行为不变（不误伤自定义网关）
+        let mut body = serde_json::json!({ "model": "glm-4.6" });
+        apply_thinking_mode_compat(
+            &mut body,
+            "https://my-gw.example.com/v1/chat/completions",
+            "glm-4.6",
+            false,
+        );
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("enable_thinking").is_none());
+    }
+
+    #[test]
+    fn thinking_compat_direct_provider_endpoint_still_applies() {
+        // 直连智谱：原有 endpoint 匹配路径不受影响
+        let mut body = serde_json::json!({ "model": "glm-4.5" });
+        apply_thinking_mode_compat(&mut body, "https://open.bigmodel.cn/api/paas/v4", "glm-4.5", false);
+        assert_eq!(body["thinking"]["type"], "disabled");
+    }
+
+    #[test]
+    fn build_body_platform_request_injects_thinking_disable() {
+        let req = TranslateRequest {
+            text: "hello".into(),
+            endpoint: "https://gw.example.com/v1/chat/completions".into(),
+            api_key: String::new(),
+            model: "glm-4.6".into(),
+            system_prompt: "translate".into(),
+            stream: true,
+            window_label: "panel".into(),
+            tag: String::new(),
+        };
+        let body = build_body(&req, true, true);
+        assert_eq!(body["thinking"]["type"], "disabled");
     }
 }

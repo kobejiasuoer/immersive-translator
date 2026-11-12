@@ -1,0 +1,30 @@
+/* This section is intentionally self-contained for the mobile team's handoff. */
+.mobile-section { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 56px; align-items: center; padding: 56px var(--margin); background: var(--surface); }
+.mobile-status { margin-top: 26px; font-size: var(--body); }
+.mobile-note { margin-top: 18px; max-width: 24em; font-size: var(--body); }
+.mobile-showcase { display: flex; align-items: start; gap: 24px; }
+.mobile-screen { width: 140px; flex-shrink: 0; }
+.mobile-screen img { width: 100%; height: auto; border-radius: var(--corner); }
+.mobile-speaking { margin-top: 24px; }
+@media (prefers-reduced-motion: no-preference) {
+  .mobile-reading.in-view { animation: mobile-page-arrive 900ms var(--ease) both; }
+  .mobile-speaking.in-view { animation: mobile-page-arrive 900ms var(--ease) 90ms both; }
+  @keyframes mobile-page-arrive { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
+}
+@media (max-width: 1100px) {
+  .mobile-section { gap: 36px; }
+  .mobile-showcase { gap: 18px; }
+}
+@media (max-width: 800px) {
+  .mobile-section { grid-template-columns: minmax(0, 1fr) auto; gap: 28px; }
+  .mobile-showcase { gap: 16px; }
+  .mobile-screen { width: 120px; }
+}
+@media (max-width: 540px) {
+  .mobile-section { grid-template-columns: 1fr; padding-block: 40px; gap: 24px; }
+  .mobile-status { margin-top: 22px; }
+  .mobile-note { margin-top: 14px; }
+  .mobile-showcase { gap: 18px; }
+  .mobile-screen { width: 100px; }
+  .mobile-speaking { margin-top: 18px; }
+}

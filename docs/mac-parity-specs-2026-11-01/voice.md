@@ -333,3 +333,11 @@
 11. **服务端仓库缺失**：本规格的端点契约来自契约文档与 Windows 客户端实现（`immersive-translator-server/` 未检出）。若服务端实际字段与两者有出入，以真实联调为准并回填本规格——非平台差异，为勘察边界如实声明。
 
 其余一切（路由优先级、文案、配额口径、重试/退避参数、存储字段、迁移谓词、测试行为向量）**一律不许差异**。
+
+---
+
+## 附录 A：跨窗口语音设置事件契约（2026-11-12 增补）
+
+Windows 端 2026-11 语音设置合并（设计 `docs/voice-settings-merge-plan-2026-11-11.md`）新增了跨窗口通知层：语音偏好（voiceProvider / voiceGatewayVoice / voiceGatewayIseEnabled）写盘后广播 `voice:prefs-changed`，另一窗口订阅后**重读存储**刷新界面——只补通知，不改本规格的任何写点、文案与行为（上面验收清单 20 的逐字文案不因此变动，新增的只有行内状态行）。诚实边界（契约 §3）：阅读室自己写 L1 全局键走 ReaderApp 既有「全局 + 文章覆盖」双写路径，**不经 hub、不发事件**（`readerVoice` scope 仅第三窗启用 `writeReaderVoice` 后才会出现，Windows 现未接线）；Mac 复刻时二选一——维持「L1 唯一写点不发事件」或把写路径统一收进 hub，**不允许出现「既直写又广播」的双路径**。
+
+**Mac 复刻语音页/阅读室联动时，事件契约按 `docs/voice-prefs-changed-contract-2026-11-12.md` 对齐**（跨端共同契约）：payload 只带 `{ scopes, from, rev }` 不带值；回执方一律重读存储；`from` 等于自身则忽略回声；`rev` 按发送方分桶单调防乱序；新增语音字段必须进 hub 写 API 并登记 scope；讯飞凭据继续走既有 `xfyun:creds-updated`，不并入本事件。实现参照 Windows `src/lib/voiceSettingsHub.ts`（写 API / 订阅 / 打分链与链路投影）。

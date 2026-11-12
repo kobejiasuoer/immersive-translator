@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>语音设置同源改造 · 交互原型（2026-11-11）</title>
+<style>
+  :root{
+    --green:#0f8a4e; --green-d:#0b6e3e; --green-dd:#085a32; --green-l:#e7f5ec; --green-ll:#f3faf5;
+    --ink:#1d2b23; --muted:#5f7268; --faint:#8ba296; --line:#dfe9e2; --line-d:#cbdcd2;
+    --bg:#f3f7f4; --card:#ffffff; --warn-bg:#fff7e6; --warn-tx:#9a6b0f; --warn-bd:#f0dfb6;
+    --red-tx:#b03a2e; --red-bg:#fdecea; --red-bd:#f2c8c2;
+    --radius:14px; --radius-s:9px;
+    --shadow:0 1px 2px rgba(15,64,38,.05), 0 10px 28px rgba(15,64,38,.07);
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html{scroll-behavior:smooth;}
+  body{
+    font-family:"Segoe UI", system-ui, -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif;
+    background:var(--bg); color:var(--ink); font-size:14px; line-height:1.55;
+    padding-bottom:120px;
+  }
+  code{font-family:Consolas,"Courier New",monospace; font-size:12px;}
+
+  /* ---------- 顶栏 ---------- */
+  .topbar{
+    position:sticky; top:0; z-index:50;
+    background:rgba(255,255,255,.92); backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--line);
+    padding:12px 20px; display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+  }
+  .brand{display:flex; align-items:center; gap:10px;}
+  .brand-mark{
+    width:34px; height:34px; border-radius:10px; background:linear-gradient(135deg,var(--green),var(--green-d));
+    color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:15px;
+    box-shadow:0 2px 6px rgba(15,138,78,.35);
+  }
+  .brand h1{font-size:16px; font-weight:700;}
+  .brand small{display:block; font-size:11.5px; color:var(--muted); font-weight:400;}
+  .spacer{flex:1;}
+  .view-toggle{display:flex; background:var(--green-ll); border:1px solid var(--line-d); border-radius:999px; padding:3px; gap:3px;}
+  .view-toggle button{
+    border:none; background:transparent; padding:7px 20px; border-radius:999px; cursor:pointer;
+    font-size:13.5px; color:var(--muted); font-family:inherit; transition:all .15s;
+  }
+  .view-toggle button.on{background:var(--green); color:#fff; font-weight:600; box-shadow:0 2px 6px rgba(15,138,78,.3);}
+  .view-toggle button:not(.on):hover{color:var(--green-d);}
+
+  /* ---------- 版心 ---------- */
+  .wrap{max-width:1400px; margin:0 auto; padding:18px 20px 40px;}
+  .two-col{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:20px; align-items:start;}
+  @media (max-width:1080px){ .two-col{grid-template-columns:1fr;} }
+
+  /* ---------- 横幅 ---------- */
+  .banner{
+    border-radius:var(--radius); padding:14px 18px; margin-bottom:18px; font-size:13.5px;
+    border:1px solid var(--line-d); background:var(--card); box-shadow:var(--shadow);
+    display:flex; gap:12px; align-items:flex-start;
+  }
+  .banner .b-ico{flex:none; width:26px; height:26px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; margin-top:1px;}
+  .banner.bad{border-color:var(--red-bd); background:linear-gradient(180deg,#fff, #fdf6f5);}
+  .banner.bad .b-ico{background:var(--red-bg); color:var(--red-tx);}
+  .banner.good{border-color:#bfe3cd; background:linear-gradient(180deg,#fff, var(--green-ll));}
+  .banner.good .b-ico{background:var(--green-l); color:var(--green-d);}
+  .banner b{font-size:14px;}
+  .banner p{color:var(--muted); margin-top:2px;}
+  .banner .pain-chips{display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;}
+  .pain-chip{font-size:12px; padding:3px 10px; border-radius:999px; background:var(--red-bg); color:var(--red-tx); border:1px solid var(--red-bd);}
+  .plan-chip{font-size:12px; padding:3px 10px; border-radius:999px; background:var(--green-l); color:var(--green-d); border:1px solid #bfe3cd;}
+
+  /* ---------- 场景速切 ---------- */
+  .preset-bar{
+    border-radius:var(--radius); background:var(--card); border:1px solid var(--line-d);
+    box-shadow:var(--shadow); padding:12px 16px; margin-bottom:18px;
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  }
+  .preset-bar .pb-label{font-size:12.5px; color:var(--muted); font-weight:600; flex:none;}
+  .preset-chip{
+    border:1px solid var(--line-d); background:var(--green-ll); color:var(--green-dd);
+    font-size:12.5px; padding:5px 13px; border-radius:999px; cursor:pointer; font-family:inherit; transition:all .15s;
+  }
+  .preset-chip:hover{background:var(--green); color:#fff; border-color:var(--green);}
+
+  /* ---------- 面板 ---------- */
+  .panel{
+    background:var(--card); border-radius:var(--radius); box-shadow:var(--shadow);
+    border:1px solid var(--line); overflow:hidden;
+  }
+  .panel-head{display:flex; align-items:flex-start; gap:12px; padding:16px 18px 12px; border-bottom:1px solid var(--line); flex-wrap:wrap;}
+  .p-badge{
+    flex:none; font-size:12px; font-weight:700; padding:4px 12px; border-radius:999px; margin-top:2px;
+  }
+  .p-a{background:var(--green-l); color:var(--green-d); border:1px solid #bfe3cd;}
+  .p-b{background:#eef4f8; color:#2b5d7d; border:1px solid #cadfeb;}
+  .p-title h2{font-size:15.5px; font-weight:700;}
+  .p-title p{font-size:12px; color:var(--muted); margin-top:1px;}
+  .win-chip{
+    margin-left:auto; flex:none; font-size:11px; color:var(--faint); border:1px dashed var(--line-d);
+    padding:3px 9px; border-radius:999px; margin-top:3px;
+  }
+  .why{
+    margin:12px 16px 0; padding:8px 12px; border-left:3px solid var(--green); border-radius:8px;
+    background:var(--green-ll); color:var(--muted); font-size:12.3px;
+  }
+  .why b{color:var(--green-dd);}
+  .stale-bar{
+    margin:12px 16px 0; padding:8px 12px; border-left:3px solid #d9534f; border-radius:8px;
+    background:#fdf6f5; color:var(--muted); font-size:12.3px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  }
+  .stale-bar b{color:var(--red-tx);}
+
+  /* ---------- 分组与行 ---------- */
+  .group{padding:12px 16px 4px;}
+  .group h3{font-size:13px; color:var(--green-dd); font-weight:700; padding:6px 0 4px; display:flex; align-items:center; gap:8px;}
+  .group h3::after{content:""; flex:1; height:1px; background:var(--line);}
+  .group-note{font-size:11.8px; color:var(--faint); padding:0 0 6px;}
+  .row{
+    display:grid; grid-template-columns:96px minmax(0,1fr) auto; gap:10px; align-items:center;
+    padding:8px 2px; border-bottom:1px dashed var(--line);
+  }
+  .row:last-child{border-bottom:none;}
+  .row-label{font-size:13px; color:var(--ink); font-weight:500;}
+  .row-ctl{display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0;}
+  .row-foot{font-size:11.8px; color:var(--faint); margin-top:3px; width:100%;}
+  .row-ctl .full{flex:1 1 100%;}
+  @media (max-width:560px){ .row{grid-template-columns:84px minmax(0,1fr);} .row .tag{grid-column:1 / -1; justify-self:start;} }
+
+  /* 控件 */
+  input[type="text"], input[type="password"], select{
+    font-family:inherit; font-size:13px; color:var(--ink);
+    border:1px solid var(--line-d); border-radius:var(--radius-s); padding:6px 10px;
+    background:#fff; min-width:0; flex:1; outline:none; transition:border .15s, box-shadow .15s;
+  }
+  input:focus, select:focus{border-color:var(--green); box-shadow:0 0 0 3px rgba(15,138,78,.12);}
+  input[type="range"]{flex:1; accent-color:var(--green); min-width:120px;}
+  .range-val{font-size:12.5px; color:var(--green-d); font-weight:600; min-width:64px; text-align:right; font-variant-numeric:tabular-nums;}
+
+  .btn{
+    font-family:inherit; font-size:12.5px; border-radius:var(--radius-s); cursor:pointer;
+    border:1px solid var(--green); background:var(--green); color:#fff; padding:6px 14px; font-weight:600; transition:all .15s;
+  }
+  .btn:hover{background:var(--green-d); border-color:var(--green-d);}
+  .btn.ghost{background:#fff; color:var(--green-d); border:1px solid var(--line-d); font-weight:500;}
+  .btn.ghost:hover{border-color:var(--green); background:var(--green-ll);}
+  .btn.sm{padding:4px 11px; font-size:12px;}
+  .mini-btn{
+    font-family:inherit; font-size:12px; border:1px solid var(--line-d); background:#fff; color:var(--green-d);
+    border-radius:999px; padding:2px 10px; cursor:pointer;
+  }
+  .mini-btn:hover{border-color:var(--green); background:var(--green-ll);}
+
+  /* 分段控件 */
+  .seg{display:inline-flex; background:var(--green-ll); border:1px solid var(--line-d); border-radius:999px; padding:3px; gap:2px; flex-wrap:wrap;}
+  .seg button{
+    border:none; background:transparent; font-family:inherit; font-size:12.5px; color:var(--muted);
+    padding:5px 14px; border-radius:999px; cursor:pointer; transition:all .15s; white-space:nowrap;
+  }
+  .seg button.on{background:var(--green); color:#fff; font-weight:600; box-shadow:0 1px 4px rgba(15,138,78,.3);}
+  .seg button:not(.on):hover{color:var(--green-d);}
+
+  /* 开关 */
+  .sw{
+    width:42px; height:23px; border-radius:999px; border:none; cursor:pointer; position:relative;
+    background:#cfd9d2; transition:background .18s; flex:none; padding:0;
+  }
+  .sw .knob{
+    position:absolute; top:2.5px; left:3px; width:18px; height:18px; border-radius:50%;
+    background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.25); transition:left .18s;
+  }
+  .sw.on{background:var(--green);}
+  .sw.on .knob{left:21px;}
+  .sw.dis{opacity:.42; cursor:not-allowed;}
+
+  /* 徽标 / 灯 */
+  .cred-state{font-size:12.5px; padding:3px 11px; border-radius:999px; background:#eef1ef; color:var(--muted); border:1px solid var(--line); white-space:nowrap;}
+  .cred-state.ok{background:var(--green-l); color:var(--green-d); border-color:#bfe3cd;}
+  .cred-state.bad{background:var(--red-bg); color:var(--red-tx); border-color:var(--red-bd);}
+  .light{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted);}
+  .light i{width:9px; height:9px; border-radius:50%; background:#c3ccc6; display:inline-block;}
+  .light.ok i{background:var(--green); box-shadow:0 0 0 3px rgba(15,138,78,.15);}
+  .light.testing i{background:#e6b800; box-shadow:0 0 0 3px rgba(230,184,0,.15); animation:blink 1s infinite;}
+  @keyframes blink{50%{opacity:.35;}}
+
+  /* 标签（重叠/独有标记） */
+  .tag{font-size:11px; padding:2px 9px; border-radius:999px; white-space:nowrap; justify-self:end; max-width:100%; overflow:hidden; text-overflow:ellipsis;}
+  .tag.red{background:var(--red-bg); color:var(--red-tx); border:1px solid var(--red-bd);}
+  .tag.amber{background:var(--warn-bg); color:var(--warn-tx); border:1px solid var(--warn-bd);}
+  .tag.gray{background:#eef1ef; color:var(--muted); border:1px solid var(--line);}
+  .tag.green{background:var(--green-l); color:var(--green-d); border:1px solid #bfe3cd;}
+
+  /* 链路行 */
+  .row.chain{background:var(--green-ll); border-radius:var(--radius-s); border-bottom:none; padding:9px 10px; margin-bottom:4px; border:1px solid #cfe6d8;}
+  .chain-pill{font-size:12.8px; font-weight:600; padding:4px 13px; border-radius:999px; white-space:nowrap;}
+  .chain-pill.ok{background:var(--green-l); color:var(--green-dd); border:1px solid #bfe3cd;}
+  .chain-pill.warn{background:var(--warn-bg); color:var(--warn-tx); border:1px solid var(--warn-bd);}
+  .chain-pill.loading{background:#eef1ef; color:var(--faint); border:1px solid var(--line);}
+
+  /* 提示行（评测被打断） */
+  .hint-line{
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    background:var(--warn-bg); border:1px solid var(--warn-bd); color:var(--warn-tx);
+    border-radius:var(--radius-s); padding:7px 12px; font-size:12.5px; margin:6px 0 2px;
+  }
+
+  /* AND 链 */
+  .and-strip{display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding:8px 2px 4px; font-size:12px;}
+  .and-chip{padding:3px 10px; border-radius:999px; border:1px solid var(--line); background:#eef1ef; color:var(--muted); white-space:nowrap;}
+  .and-chip.ok{background:var(--green-l); color:var(--green-d); border-color:#bfe3cd;}
+  .and-chip.bad{background:var(--red-bg); color:var(--red-tx); border-color:var(--red-bd);}
+  .and-arrow{color:var(--faint);}
+
+  /* 折叠 */
+  details.fold{margin:10px 16px 0; border:1px dashed var(--line-d); border-radius:var(--radius-s); background:#fbfdfb;}
+  details.fold summary{cursor:pointer; padding:8px 12px; font-size:12.5px; color:var(--muted); user-select:none;}
+  details.fold summary:hover{color:var(--green-d);}
+  details.fold .fold-body{padding:2px 14px 10px; font-size:12.3px; color:var(--muted);}
+
+  /* 服务商卡片 */
+  .svc-cards{display:flex; gap:10px; flex-wrap:wrap;}
+  .svc-card{
+    flex:1; min-width:180px; border:1.5px solid var(--line-d); border-radius:var(--radius-s);
+    padding:10px 13px; cursor:pointer; transition:all .15s; background:#fff;
+  }
+  .svc-card:hover{border-color:var(--green);}
+  .svc-card.selected{border-color:var(--green); background:var(--green-ll); box-shadow:0 1px 6px rgba(15,138,78,.15);}
+  .svc-card .svc-head{display:flex; align-items:center; gap:8px;}
+  .svc-mark{width:24px; height:24px; border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#fff; background:var(--green); flex:none;}
+  .svc-card.xf .svc-mark{background:#2b5d7d;}
+  .svc-card strong{font-size:13px;}
+  .svc-status{font-size:11.5px; margin-top:2px;}
+  .svc-status.ok{color:var(--green-d);}
+  .svc-status.warn{color:var(--warn-tx);}
+  .radio-dot{margin-left:auto; width:16px; height:16px; border-radius:50%; border:1.5px solid var(--line-d); flex:none; position:relative;}
+  .svc-card.selected .radio-dot{border-color:var(--green);}
+  .svc-card.selected .radio-dot::after{content:""; position:absolute; inset:3px; border-radius:50%; background:var(--green);}
+
+  /* tab 条 */
+  .tabbar{display:flex; gap:4px; padding:10px 16px 0; border-bottom:1px solid var(--line); flex-wrap:wrap;}
+  .tabbar span{font-size:12.5px; padding:6px 14px; border-radius:8px 8px 0 0; color:var(--faint); cursor:default;}
+  .tabbar span.on{color:var(--green-d); font-weight:700; background:var(--green-ll); border:1px solid var(--line); border-bottom-color:var(--green-ll); margin-bottom:-1px;}
+
+  .panel-foot{padding:10px 16px 14px; font-size:11.8px; color:var(--faint); border-top:1px solid var(--line); margin-top:6px;}
+  .footnote{padding:10px 16px; font-size:12px; color:var(--muted); border-top:1px dashed var(--line);}
+
+  .flash{outline:2.5px solid var(--green); outline-offset:3px; animation:flashfade 1.6s forwards;}
+  @keyframes flashfade{0%,55%{outline-color:var(--green);}100%{outline-color:transparent;}}
+
+  /* ---------- 底部卡片 ---------- */
+  .bottom-cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:16px; margin-top:20px;}
+  .info-card{background:var(--card); border-radius:var(--radius); border:1px solid var(--line); box-shadow:var(--shadow); padding:16px 18px;}
+  .info-card h4{font-size:13.5px; color:var(--green-dd); margin-bottom:8px; display:flex; align-items:center; gap:8px;}
+  .info-card h4 .n{width:20px; height:20px; border-radius:6px; background:var(--green-l); color:var(--green-d); display:inline-flex; align-items:center; justify-content:center; font-size:11.5px; flex:none;}
+  .info-card ol, .info-card ul{padding-left:18px; font-size:12.6px; color:var(--muted);}
+  .info-card li{margin:4px 0;}
+  .info-card li b{color:var(--ink);}
+  .info-card .codo{font-size:11.5px; color:var(--faint); margin-top:8px; border-top:1px dashed var(--line); padding-top:6px;}
+
+  /* ---------- 事件流 ---------- */
+  #evlog{
+    position:fixed; right:16px; bottom:16px; width:430px; max-width:calc(100vw - 32px); z-index:80;
+    background:#10241a; color:#d7e8de; border-radius:var(--radius); box-shadow:0 12px 40px rgba(8,40,24,.45);
+    border:1px solid #234434; overflow:hidden;
+  }
+  #evlog .ev-head{display:flex; align-items:center; gap:10px; padding:10px 14px; background:#0c1c14; cursor:pointer; user-select:none;}
+  #evlog .ev-head b{font-size:12.8px; color:#9fd8b7;}
+  #evlog .ev-head .proto-note{font-size:10.5px; color:#5f8a72;}
+  #evlog .rev-badge{margin-left:auto; font-size:11px; background:#1d3d2c; color:#9fd8b7; padding:2px 9px; border-radius:999px; font-variant-numeric:tabular-nums;}
+  #evlog .ev-toggle{font-size:11px; color:#5f8a72;}
+  body.log-closed #evlog .ev-list, body.log-closed #evlog .ev-foot{display:none;}
+  .ev-list{max-height:38vh; overflow:auto; padding:8px 12px; display:flex; flex-direction:column; gap:8px;}
+  .ev{border:1px solid #234434; border-radius:9px; padding:7px 10px; background:#132b1f;}
+  .ev .ev-top{display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+  .ev .ev-t{font-size:10.5px; color:#5f8a72; font-variant-numeric:tabular-nums;}
+  .ev .ev-rev{font-size:10.5px; color:#9fd8b7; background:#1d3d2c; padding:1px 7px; border-radius:999px;}
+  .ev .ev-name{font-size:12px; font-weight:700; color:#cdeeda; font-family:Consolas,monospace;}
+  .ev.tone-warn .ev-name{color:#f3cf7e;}
+  .ev.tone-note .ev-name{color:#9cc0d8;}
+  .ev .ev-payload{display:block; margin-top:3px; color:#8fb8a0; word-break:break-all;}
+  .ev .ev-note{font-size:11.3px; color:#7fa48d; margin-top:3px;}
+  .ev .ev-note b{color:#b9dcc6;}
+  #evlog .ev-foot{padding:7px 14px 10px; font-size:10.8px; color:#5f8a72; border-top:1px solid #1d3d2c;}
+  #evlog .ev-foot button{background:none; border:none; color:#9fd8b7; font-size:10.8px; cursor:pointer; text-decoration:underline; padding:0; font-family:inherit;}
+
+  .legend{display:flex; gap:8px; flex-wrap:wrap; align-items:center; font-size:12px; color:var(--muted); margin:0 0 14px;}
+  .legend .tag{font-size:11px;}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">语</div>
+    <div>
+      <h1>沉浸口语 · 语音设置同源改造（voiceSource Hub）</h1>
+      <small>交互原型 · 2026-11-11 · 双面板形态不变，数据层三步归一</small>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <div class="view-toggle" role="tablist" aria-label="视图切换">
+    <button id="tg-now" type="button" onclick="switchView('now')">① 现状</button>
+    <button id="tg-merged" type="button" onclick="switchView('merged')">② 合并后</button>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ======================== 现状视图 ======================== -->
+  <section id="view-now">
+    <div class="banner bad">
+      <div class="b-ico">!</div>
+      <div>
+        <b>现状：同一批「语音」语义散在两个窗口、五份存储里，改一处另一处不吭声。</b>
+        <p>入口A＝阅读室右侧「阅读设置」抽屉（入口B＝右击托盘 →「沉浸口语设置」→「语音」页）。两套入口的写控件几乎零重复，但语义互相咬合——红色/橙色标签标出咬合处，一眼看到「重复」到底在哪。</p>
+        <div class="pain-chips">
+          <span class="pain-chip">① 抽屉音色来源＝挂载快照，B 改了 A 不感知</span>
+          <span class="pain-chip">② 跟读评测 AND 链两处开关，无互相提示</span>
+          <span class="pain-chip">③ 凭据徽标不监听保存事件，重挂载才刷</span>
+          <span class="pain-chip">④ Rust 覆盖结构缺 3 字段，文章级设置静默丢</span>
+        </div>
+      </div>
+    </div>
+    <div class="legend">
+      标签图例：
+      <span class="tag red">语义重叠 · 会打架</span>
+      <span class="tag amber">同一份数据 · 快照陈旧</span>
+      <span class="tag gray">仅单侧有</span>
+      <span style="color:var(--faint)">（合并后视图里这些位置全部变成绿色 ✓ 标签）</span>
+    </div>
+    <div class="two-col">
+      <div id="panelA-now"></div>
+      <div id="panelB-now"></div>
+    </div>
+    <div class="bottom-cards">
+      <div class="info-card">
+        <h4><span class="n">①</span>挂载快照问题</h4>
+        <ul>
+          <li><b>位置：</b>抽屉「音色来源」整组状态在挂载时一次性查询（<code>SettingsDrawer.tsx:131</code>），全 effect 只挂了登录态监听（:99-155）。</li>
+          <li><b>表现：</b>在右侧改服务商/评分开关，左侧抽屉纹丝不动；播放不受影响（每次 speak 现读 localStorage，<code>voiceRoute.ts:206</code>），但界面停在旧值。</li>
+          <li><b>试一试：</b>在右侧切「讯飞直连」→ 左侧「音色来源」不变 → 点「重开抽屉」才变。</li>
+        </ul>
+      </div>
+      <div class="info-card">
+        <h4><span class="n">②</span>评测 AND 链两处打架</h4>
+        <ul>
+          <li><b>链路：</b>要打分须同时过 4 环：抽屉·跟读模式 → 抽屉·跟读评测（<code>ReaderApp.tsx:602</code>）→ 设置中心·评分开关（<code>voiceRoute.ts:227</code>）→ 登录/凭据+服务端能力（<code>voiceRoute.ts:92-150</code>）。</li>
+          <li><b>表现：</b>关掉右侧「评分」开关后，左侧评测开关仍显示开着，无任何提示；用户「为什么不打分」要两处排查。</li>
+        </ul>
+      </div>
+      <div class="info-card">
+        <h4><span class="n">③</span>凭据徽标不监听事件</h4>
+        <ul>
+          <li><b>位置：</b>抽屉两处凭据徽标（合成 <code>SettingsDrawer.tsx:593-607</code>、评测 :762-778）挂载时查一次；<code>xfyun:creds-updated</code> 只有 ReaderApp 引擎缓存（:1456-1463）和设置页徽标（<code>VoiceSettingsTab.tsx:104</code>)在听，抽屉没听。</li>
+          <li><b>试一试：</b>右侧保存讯飞凭据 → 左侧徽标仍「未配置」（若当时可见）。</li>
+        </ul>
+      </div>
+      <div class="info-card">
+        <h4><span class="n">④</span>界面上看不见的数据丢失</h4>
+        <ul>
+          <li>Rust <code>ReaderSettingsOverride</code>（<code>reader_store.rs:105-161</code>，恰 25 字段）缺 <code>edge_voice_zh / edge_voice_en / spot_quiz_mode</code>；全文件 <code>deny_unknown_fields</code> 零命中（本次已 grep 核实）。</li>
+          <li>文章级 Edge 音色/随读抽查覆盖经 <code>reader_save_article</code> serde 往返被静默剥离；TS 侧合并逻辑在消费这三项（<code>readerTypes.ts:401-402</code>），:431-433 注释自证此坑。</li>
+          <li>这个问题在任何 UI 上都看不见——正是要靠方案配套修复堵上的类型。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================== 合并后视图 ======================== -->
+  <section id="view-merged" style="display:none">
+    <div class="banner good">
+      <div class="b-ico">✓</div>
+      <div>
+        <b>合并后：双面板形态不变，同一份数据。任一侧改动，另一侧行内状态即时刷新。</b>
+        <p>五个物理存储原样保留，新增 <code>voiceSettingsHub</code> 统一「单写点规则 + voice:prefs-changed 变更广播 + 生效值归约」。唯一语义重叠（用谁家的语音）维持「B 写 A 读」单写多读并把它固化；「为什么不打分」从查两处变成看一处链路。改任何控件试试——左面板（reader 窗）与右面板（settings 窗）是同一份 JS 状态对象的两个投影。</p>
+        <div class="pain-chips">
+          <span class="plan-chip">新增① 抽屉「当前链路」行</span>
+          <span class="plan-chip">新增② 评测被打断提示 + 去开启</span>
+          <span class="plan-chip">新增③ 凭据徽标三触发重查</span>
+          <span class="plan-chip">新增④ 设置中心评分开关旁只读投影</span>
+          <span class="plan-chip">配套修复 Rust 三字段 + 往返测试</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="preset-bar">
+      <span class="pb-label">状态矩阵速切（验证重点在状态切换，不在排版）：</span>
+      <button class="preset-chip" type="button" onclick="applyPreset('allOn')">全链开 · 沉浸云已登录</button>
+      <button class="preset-chip" type="button" onclick="applyPreset('iseOff')">中心关评分 → 抽屉出提示</button>
+      <button class="preset-chip" type="button" onclick="applyPreset('shadowOff')">抽屉关跟读</button>
+      <button class="preset-chip" type="button" onclick="applyPreset('notLogin')">沉浸云未登录</button>
+      <button class="preset-chip" type="button" onclick="applyPreset('xfyunNoIse')">讯飞 · 缺评测凭据</button>
+      <button class="preset-chip" type="button" onclick="applyPreset('xfyunNoTts')">讯飞 · 缺合成凭据</button>
+      <button class="preset-chip" type="button" onclick="applyPreset('edge')">Edge 直连</button>
+      <button class="preset-chip" type="button" onclick="applyPreset('local')">系统语音离线</button>
+    </div>
+
+    <div class="two-col">
+      <div id="panelA-merged"></div>
+      <div id="panelB-merged"></div>
+    </div>
+
+    <div class="bottom-cards">
+      <div class="info-card">
+        <h4><span class="n">修</span>配套修复（必做，独立 PR 纯正确性）</h4>
+        <ul>
+          <li><b>Rust 补三字段：</b><code>ReaderSettingsOverride</code>（reader_store.rs:105-161）补 <code>edge_voice_zh / edge_voice_en / spot_quiz_mode</code> 三个 Option 字段，照 <code>spotlight_mode</code> 先例（:154-160）。</li>
+          <li><b>补往返测试：</b>照 <code>settings_spotlight_fields_roundtrip_camel_case</code> 先例（:1771-1805），走真实落盘/读盘 serde 管线。</li>
+          <li><b>诚实边界：</b>只防增量——已落盘文章里被剥掉的历史值找不回来。</li>
+        </ul>
+        <div class="codo">本次核对命令：<code>grep -rn "deny_unknown_fields" src-tauri/src</code> → 0 命中；<code>grep -n "edge_voice|edgeVoice|spot_quiz" reader_store.rs</code> → 0 命中。</div>
+      </div>
+      <div class="info-card">
+        <h4><span class="n">约</span>跨窗口事件契约（写入 docs 决策文档并回链 Mac 规格）</h4>
+        <ul>
+          <li><b>事件名：</b><code>voice:prefs-changed</code>；凭据继续走既有 <code>xfyun:creds-updated</code>，hub 不另造轮子（mustFix-7）。</li>
+          <li><b>payload 只带</b> <code>{ scopes, from, rev }</code> 不带值——回执方一律重读存储，防事件与存储竞态。</li>
+          <li><b>回声抑制：</b><code>from === 当前窗口 label</code> 则忽略；<code>rev</code> 单调计数防乱序。</li>
+          <li><b>扩展纪律：</b>以后新增语音字段必须进 hub 写 API + 登记 scope，漏了就复现不同步（代价①）。</li>
+        </ul>
+      </div>
+      <div class="info-card">
+        <h4><span class="n">验</span>验收清单（落地时执行；本原型为静态模拟，以下均未运行）</h4>
+        <ul>
+          <li>hub 归约 / 回声抑制单测（vitest）→ 全量 <code>npx vitest run</code> + <code>npx tsc --noEmit</code>。</li>
+          <li><code>cargo test reader_store</code>（含新往返测试）。</li>
+          <li>真机双窗手测：B 改服务商 → A 链路行即时变；B 存凭据 → A 徽标即时变；B 关评分 → A 提示行出现且评测入口文案正确。</li>
+          <li>跨窗时序顺路用 <code>xfyun:creds-updated</code> 活链路实测（mustFix-3），不等新事件；监听器生命周期照 <code>SettingsDrawer.tsx:99-155</code> 的 active+unlisten 模式（mustFix-5）。</li>
+        </ul>
+      </div>
+      <div class="info-card">
+        <h4><span class="n">言</span>文案总原则（两侧 UI 都已照做）</h4>
+        <ul>
+          <li>指路只用用户能点到的名词：「设置 → 语音」「阅读室 → 阅读设置」；禁用「同步 / hub / 设置中心」等内部词。</li>
+          <li>AND 链归因措辞与 <code>voiceRoute.ts:132</code> 既有提示同一语气族（「跟读打分已在设置里关闭」）；两侧提示说清「哪一环关了、去哪开」，不抄成同一句以免误导。</li>
+          <li>gateway 分支文案维持规范逐字不动（voice.md:125 已钉死）：「音色在语音页选择，此处不重复配置」。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- 建议列表（datalist 全页单实例，供两个视图共用） -->
+<datalist id="dl-edge-zh">
+  <option value="zh-CN-XiaoxiaoNeural">晓晓（默认）</option>
+  <option value="zh-CN-YunxiNeural">云希</option>
+  <option value="zh-CN-YunyangNeural">云扬</option>
+</datalist>
+<datalist id="dl-edge-en">
+  <option value="en-US-AvaNeural">Ava（默认）</option>
+  <option value="en-US-AndrewNeural">Andrew</option>
+  <option value="en-US-AriaNeural">Aria</option>
+</datalist>
+<datalist id="dl-vcn">
+  <option value="xiaoyan">xiaoyan · 小燕</option>
+</datalist>
+
+<!-- ======================== 跨窗口事件流（审查层） ======================== -->
+<aside id="evlog">
+  <div class="ev-head" onclick="toggleLog()">
+    <b>跨窗口事件流</b><span class="proto-note">原型审查层 · 非应用 UI</span>
+    <span class="rev-badge" id="rev-badge">rev 0</span>
+    <span class="ev-toggle" id="ev-toggle">收起 ▾</span>
+  </div>
+  <div class="ev-list" id="ev-list"></div>
+  <div class="ev-foot">
+    事件契约：voice:prefs-changed 只带 {scopes, from, rev} 不带值；回执方一律重读存储；from==本窗 label 抑制回声；rev 单调。
+    <button type="button" onclick="clearLog(event)">清空</button>
+  </div>
+</aside>
+
+<script>
+(function(){
+"use strict";
+
+/* ============ 模拟的五份存储（合并为单一份 JS 状态对象演示「数据同源」） ============ */
+/* L0 immersive-translator-settings（唯一写点：入口B） */
+/* L1 immersive-translator-reader-settings（唯一写点：入口A） */
+/* 其余（mic 独立键 / DPAPI 凭据 / 文章覆盖）以字段/开关示意 */
+var state = {
+  // L0
+  voiceProvider: "gateway",            // gateway | xfyun
+  voiceGatewayVoice: "xiaoyan",        // 服务端 caps 下发（示例）
+  voiceGatewayIseEnabled: true,        // 跟读评分本地开关
+  gatewayLoggedIn: true,
+  xfyunCreds: { ise: true, tts: true, asr: false },   // DPAPI 九槽（示意三组有无）
+  xfyunDraft: { appId: "", apiKey: "", apiSecret: "" },
+  // L1
+  ttsProvider: "cloud",                // edge | cloud | local | xfyun(旧值)
+  edgeVoiceZh: "zh-CN-XiaoxiaoNeural",
+  edgeVoiceEn: "en-US-AvaNeural",
+  cloudVoice: "xiaoyan",
+  cloudVoiceEn: "catherine",
+  localVoice: "Microsoft Huihui Desktop",
+  rate: 1.0,
+  sentencePauseMs: 300,
+  shadowingMode: true,
+  shadowingAssess: true,
+  shadowingPassScore: 4.2,
+  shadowingAutoMic: true,
+  shadowingSilenceMs: 1200,
+  micDevice: "default"
+};
+
+var mode = "now";            // now | merged
+var snapshot = null;         // 现状视图下抽屉的挂载快照
+var rev = 0;
+var chainLoading = false;
+var mergedInited = false;
+var lights = { tts: "idle", asr: "idle", ise: "idle" };   // 入口B能力探测灯
+var xfyunConn = "";
+var entries = [];
+
+/* ============ 工具 ============ */
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
+function now(){ var d = new Date(); function p(n){ return (n<10?"0":"")+n; } return p(d.getHours())+":"+p(d.getMinutes())+":"+p(d.getSeconds()); }
+function copy(o){ return JSON.parse(JSON.stringify(o)); }
+
+/* ============ 归约投影（合并后：UI 只显示归约结果） ============ */
+function chainLine(){
+  if (chainLoading) return { text: "读取中…", tone: "loading" };
+  var t = state.ttsProvider;
+  if (t === "edge")   return { text: "Edge 在线 · 免费直连", tone: "ok" };
+  if (t === "local")  return { text: "系统语音 · 离线可用", tone: "ok" };
+  if (t === "xfyun")  return { text: "讯飞直连（旧档位）· 满足条件时自动迁移为云音色", tone: "warn" };
+  /* cloud：L1「云音色」档 → 现读 L0 voiceProvider 归约（resolveVoiceRoute 单点） */
+  if (state.voiceProvider === "gateway"){
+    if (state.gatewayLoggedIn === null) return { text: "读取中…", tone: "loading" };
+    return state.gatewayLoggedIn
+      ? { text: "云音色 · 沉浸云 · 已登录", tone: "ok" }
+      : { text: "云音色 · 沉浸云 · 未登录 · 播放临时回落 Edge", tone: "warn" };
+  }
+  return state.xfyunCreds.tts
+    ? { text: "云音色 · 讯飞 · 合成凭据已配置 ✓", tone: "ok" }
+    : { text: "云音色 · 讯飞 · 合成凭据未配置 · 播放回落系统语音", tone: "warn" };
+}
+
+function assessLinks(){
+  var viaGateway = state.voiceProvider === "gateway";
+  return [
+    { label: "跟读模式（抽屉）",       on: state.shadowingMode, na: false },
+    { label: "跟读评测（抽屉）",       on: state.shadowingMode && state.shadowingAssess, na: false },
+    { label: "评分开关（设置中心）",   on: viaGateway ? state.voiceGatewayIseEnabled : true, na: !viaGateway },
+    { label: viaGateway ? "沉浸云登录+服务端能力" : "讯飞评测凭据",
+      on: viaGateway ? (state.gatewayLoggedIn === true && state.voiceGatewayIseEnabled !== false ? true : state.gatewayLoggedIn === true)
+                     : state.xfyunCreds.ise, na: false }
+  ];
+}
+function assessHintVisible(){
+  return state.shadowingMode && state.shadowingAssess
+      && state.voiceProvider === "gateway" && state.voiceGatewayIseEnabled === false;
+}
+
+/* ============ 事件流（审查层） ============ */
+function logEvent(e){
+  entries.unshift({ t: now(), rev: e.rev, name: e.name, payload: e.payload, note: e.note || "", tone: e.tone || "ok" });
+  if (entries.length > 60) entries.length = 60;
+  renderLog();
+}
+function logNowStale(action){
+  logEvent({ tone: "warn", name: "（现状）" + action,
+    payload: null,
+    note: "写盘完成，<b>无任何变更事件</b> → reader 窗不感知。播放路由因每次现读 localStorage 而即时生效（voiceRoute.ts:206），但抽屉 UI 冻结在挂载快照（SettingsDrawer.tsx:131）。" });
+}
+function renderLog(){
+  var h = "";
+  if (!entries.length){
+    h = '<div class="ev"><div class="ev-note">' + (mode === "now"
+      ? "现状：语音三字段（服务商/云音色/评分开关）<b>没有任何变更广播</b>；唯一跨窗事件是凭据的 xfyun:creds-updated，且抽屉徽标未订阅。"
+      : "合并后：入口A/B 任一写操作都会在这里出现一条 voice:prefs-changed，收下面板的行内状态随之刷新。试试点任一控件。") + '</div></div>';
+  }
+  for (var i = 0; i < entries.length; i++){
+    var e = entries[i];
+    h += '<div class="ev tone-' + e.tone + '"><div class="ev-top"><span class="ev-t">' + e.t + '</span>'
+      + (e.rev != null ? '<span class="ev-rev">#' + e.rev + '</span>' : '')
+      + '<span class="ev-name">' + esc(e.name) + '</span></div>'
+      + (e.payload ? '<code class="ev-payload">' + esc(JSON.stringify(e.payload)) + '</code>' : '')
+      + (e.note ? '<div class="ev-note">' + e.note + '</div>' : '')
+      + '</div>';
+  }
+  $("ev-list").innerHTML = h;
+  $("rev-badge").textContent = "rev " + rev;
+}
+function toggleLog(){
+  document.body.classList.toggle("log-closed");
+  $("ev-toggle").textContent = document.body.classList.contains("log-closed") ? "展开 ▸" : "收起 ▾";
+}
+function clearLog(ev){
+  if (ev && ev.stopPropagation) ev.stopPropagation();
+  entries = []; renderLog();
+}
+
+/* ============ 写 API（模拟 hub：单写点 + 广播 + 重渲染） ============ */
+function bumpRev(scopes, from){
+  rev++;
+  logEvent({ name: "voice:prefs-changed", tone: "ok", rev: rev,
+    payload: { scopes: scopes, from: from, rev: rev },
+    note: from === "settings"
+      ? "<b>reader 窗收到</b> → 重跑 loadGlobalReaderSettings + setGlobalSettings（mustFix-2 全局层热重载），再重投影链路行；回声抑制 from=settings≠reader ✓"
+      : "<b>settings / quickreview 窗收到</b>（B→A 为主方向，QuickReviewApp.tsx:22,60 等第三消费者预留）；本窗回声 from=reader==reader → 忽略"
+  });
+}
+/* 入口B写：点选即写盘 + 广播 */
+function writeVoice(patch, silentNote){
+  var keys = Object.keys(patch);
+  var k; for (k in patch) state[k] = patch[k];
+  resetLights();
+  if (mode === "merged"){
+    bumpRev(keys, "settings");
+    render();
+  } else {
+    logNowStale("设置中心写盘：" + keys.join("/"));
+    renderBOnly();
+  }
+}
+/* 入口A写：全局层写 + 文章覆盖 + 广播 */
+function writeReader(patch){
+  var keys = Object.keys(patch);
+  var k; for (k in patch) state[k] = patch[k];
+  if (mode === "merged"){
+    bumpRev(keys, "reader");
+    render();
+  } else {
+    /* A 自身写入即时生效（ReaderApp.tsx:852-864 onPatch→setGlobalSettings）：
+       同步进快照的 A 侧字段；仅「音色来源/登录态/凭据徽标」等 B 写 A 读的展示字段保持挂载快照陈旧。 */
+    if (snapshot){ for (var k2 in patch) snapshot[k2] = patch[k2]; }
+    logEvent({ tone: "warn", name: "（现状）阅读室写盘：" + keys.join("/"),
+      payload: null,
+      note: "全局 reader-settings + 当前文章覆盖双写（ReaderApp.tsx:852-864）。A 自己的控件即时生效；陈旧的只有 B 写 A 读的状态展示（音色来源/登录态/凭据徽标）——两套入口各管各的写点，互不知情。" });
+    renderAOnly();
+  }
+}
+/* 凭据保存（既有事件，hub 不另造） */
+function saveCreds(){
+  var d = state.xfyunDraft;
+  var fbId = "xfyun-fb-" + (mode === "merged" ? "m" : "n");
+  if (!d.appId || !d.apiKey || !d.apiSecret){
+    var fb0 = $(fbId);
+    if (fb0){ fb0.textContent = "三段都填完才能保存（示例校验）"; fb0.style.color = "#b03a2e"; }
+    return;
+  }
+  state.xfyunCreds = { ise: true, tts: true, asr: true };
+  state.xfyunDraft = { appId: "", apiKey: "", apiSecret: "" };
+  resetLights(); xfyunConn = "";
+  if (mode === "merged"){
+    logEvent({ name: "xfyun:creds-updated", tone: "ok", payload: { kind: "main" },
+      note: "复用既有事件（mustFix-7）：抽屉两处徽标改「挂载+creds-updated+prefs-changed」三触发重查；ReaderApp 引擎凭据缓存本就在听（ReaderApp.tsx:1456-1463）" });
+    render();
+  } else {
+    logNowStale("讯飞凭据写入 DPAPI 九槽并 emit xfyun:creds-updated");
+    renderBOnly();
+  }
+}
+
+function resetLights(){ lights = { tts: "idle", asr: "idle", ise: "idle" }; xfyunConn = ""; }
+
+/* ============ 控件处理器（挂 window） ============ */
+window.switchView = function(m){
+  mode = m;
+  $("tg-now").classList.toggle("on", m === "now");
+  $("tg-merged").classList.toggle("on", m === "merged");
+  $("view-now").style.display = m === "now" ? "" : "none";
+  $("view-merged").style.display = m === "merged" ? "" : "none";
+  if (m === "now"){
+    snapshot = copy(state);
+    render();
+    logEvent({ tone: "note", name: "视图 → 现状", payload: null,
+      note: "已为抽屉建立挂载快照。右侧任意改动都不会刷新左侧，点抽屉头部「重开抽屉」才刷新。" });
+  } else {
+    render();
+    if (!mergedInited){
+      mergedInited = true;
+      chainLoading = true; render();
+      logEvent({ tone: "note", name: "视图 → 合并后", payload: null,
+        note: "reader/settings 两窗各自 <b>subscribe</b> voice:prefs-changed 与 xfyun:creds-updated（active + unlisten 模式，照抄 SettingsDrawer.tsx:99-155，mustFix-5）" });
+      setTimeout(function(){
+        chainLoading = false;
+        render();
+        logEvent({ tone: "note", name: "resolveInitialVoiceProvider 解析完成", payload: null,
+          note: "「读取中…」口径与现状一致（SettingsDrawer.tsx:515）；区别是合并后每次变更都会重投影，快照永远新鲜。" });
+      }, 700);
+    }
+  }
+};
+window.remountDrawer = function(){
+  snapshot = copy(state);
+  renderAOnly();
+  logEvent({ tone: "warn", name: "（现状）抽屉重挂载", payload: null,
+    note: "resolveInitialVoiceProvider(loadSettings().voiceProvider) 重新取快照（SettingsDrawer.tsx:131）——这就是「B 改完 A 要重开才刷新」的根源。" });
+};
+window.wrProvider = function(p){ writeVoice({ voiceProvider: p }); };
+window.wrGatewayVoice = function(v){ writeVoice({ voiceGatewayVoice: v }); };
+window.wrIse = function(){ writeVoice({ voiceGatewayIseEnabled: !state.voiceGatewayIseEnabled }); };
+window.wrTts = function(v){ writeReader({ ttsProvider: v }); };
+window.wrField = function(k, v, num){
+  var patch = {}; patch[k] = num ? parseFloat(v) : v;
+  writeReader(patch);
+};
+window.silentField = function(k, v, num){   /* 文本/滑杆输入中：静默更新，失焦才写盘广播 */
+  state[k] = num ? parseFloat(v) : v;
+};
+window.silentRange = function(k, v, lblId, fmt, num){
+  state[k] = num ? parseFloat(v) : v;
+  var el = $(lblId); if (el) el.textContent = fmt;
+};
+window.wrToggle = function(k){ var p = {}; p[k] = !state[k]; writeReader(p); };
+window.wrDraft = function(k, v){ state.xfyunDraft[k] = v; };
+window.probe = function(key){
+  lights[key] = "testing"; renderBOnly();
+  setTimeout(function(){ lights[key] = "ok"; renderBOnly(); }, 750);
+};
+window.checkXfyunConn = function(){
+  xfyunConn = "checking"; renderBOnly();
+  setTimeout(function(){ xfyunConn = state.xfyunCreds.ise ? "ok" : "bad"; renderBOnly(); }, 750);
+};
+window.gotoVoiceTab = function(target){
+  logEvent({ tone: "note", name: 'settingsOpenTab("voice")', payload: { tab: "voice" },
+    note: "后端双路径（lib.rs:713-722）：settings 窗存在 → emit_to(settings, settings:navigate-tab)；不存在 → 写 pending 再开窗。" });
+  var sfx = mode === "merged" ? "m" : "n";
+  var id = target === "ise" ? "b-ise-row-" + sfx : target === "creds" ? "b-creds-card-" + sfx : (mode === "merged" ? "panelB-merged" : "panelB-now");
+  var el = $(id);
+  if (el){ el.scrollIntoView({ behavior: "smooth", block: "center" }); flash(el); }
+};
+window.saveCreds = saveCreds;
+window.applyPreset = function(name){
+  var P = PRESETS[name]; if (!P) return;
+  var k; for (k in P.patch) state[k] = P.patch[k];
+  if (P.creds) state.xfyunCreds = copy(P.creds);
+  resetLights();
+  rev++; render();
+  logEvent({ tone: "note", name: "场景切换：" + P.label, rev: rev, payload: null, note: P.why });
+};
+window.toggleLog = toggleLog;
+window.clearLog = clearLog;
+
+function flash(el){
+  el.classList.remove("flash");
+  void el.offsetWidth;
+  el.classList.add("flash");
+  setTimeout(function(){ el.classList.remove("flash"); }, 1700);
+}
+
+/* ============ 场景预设（状态矩阵） ============ */
+var PRESETS = {
+  allOn:   { label: "全链开 · 沉浸云已登录", patch: { ttsProvider:"cloud", voiceProvider:"gateway", gatewayLoggedIn:true, voiceGatewayIseEnabled:true, shadowingMode:true, shadowingAssess:true }, creds:{ise:true,tts:true,asr:true}, why:"链路行＝「云音色 · 沉浸云 · 已登录」；评测四环全绿。" },
+  iseOff:  { label: "中心关评分", patch: { voiceGatewayIseEnabled:false, ttsProvider:"cloud", voiceProvider:"gateway", gatewayLoggedIn:true, shadowingMode:true, shadowingAssess:true }, creds:{ise:true,tts:true,asr:true}, why:"抽屉评测开关仍开着，但出现提示行「跟读打分已在 设置 → 语音 关闭」+去开启；AND 链在设置中心那环变红——为什么不打分，看一处就知道。" },
+  shadowOff:{ label: "抽屉关跟读", patch: { shadowingMode:false, ttsProvider:"cloud", voiceProvider:"gateway", gatewayLoggedIn:true, voiceGatewayIseEnabled:true, shadowingAssess:false }, creds:{ise:true,tts:true,asr:true}, why:"评测开关置灰（disabled 现状口径）；设置中心投影行显示「抽屉当前：关」。" },
+  notLogin:{ label: "沉浸云未登录", patch: { gatewayLoggedIn:false, ttsProvider:"cloud", voiceProvider:"gateway", voiceGatewayIseEnabled:true, shadowingMode:true, shadowingAssess:true }, creds:{ise:true,tts:true,asr:true}, why:"链路行变琥珀「未登录 · 播放临时回落 Edge」；抽屉服务说明行出现「去语音页登录」。" },
+  xfyunNoIse:{ label: "讯飞 · 缺评测凭据", patch: { voiceProvider:"xfyun", ttsProvider:"cloud", shadowingMode:true, shadowingAssess:true, voiceGatewayIseEnabled:true }, creds:{ise:false,tts:true,asr:false}, why:"链路行＝「云音色 · 讯飞 · 合成凭据已配置 ✓」；抽屉评测凭据徽标「未配置」——AND 链最后一环断。" },
+  xfyunNoTts:{ label: "讯飞 · 缺合成凭据", patch: { voiceProvider:"xfyun", ttsProvider:"cloud", shadowingMode:true, shadowingAssess:true, voiceGatewayIseEnabled:true }, creds:{ise:true,tts:false,asr:false}, why:"链路行＝「云音色 · 讯飞 · 合成凭据未配置 · 播放回落系统语音」——讯飞缺 TTS 凭据回落本地 SAPI 而非 Edge（readerSpeechRoute.ts:38-41/:46）；gateway 守卫 off（未登录/额度尽等）时才临时回落 Edge（:46-48，voice.md:35）。合成凭据徽标「未配置」。" },
+  edge:    { label: "Edge 直连", patch: { ttsProvider:"edge" }, creds:null, why:"链路行＝「Edge 在线 · 免费直连」；L0 服务商与评分开关与本次朗读无关，链路行不受影响。" },
+  local:   { label: "系统语音离线", patch: { ttsProvider:"local" }, creds:null, why:"链路行＝「系统语音 · 离线可用」；本地音色下拉仅此档可用。" }
+};
+
+/* ============ 渲染：入口A ============ */
+function tagHtml(cls, txt){ return '<span class="tag ' + cls + '">' + txt + '</span>'; }
+
+function htmlA(isMerged, S){
+  var h = "";
+  var sfx = isMerged ? "m" : "n";   /* 两视图同存于 DOM，动态 id 必须按视图加后缀防重 */
+  h += '<section class="panel" id="' + (isMerged ? "panelA-merged" : "panelA-now") + '">';
+  h += '<div class="panel-head"><span class="p-badge p-a">入口 A</span>'
+    + '<div class="p-title"><h2>沉浸阅读室 · 阅读设置抽屉</h2><p>主窗口右侧「阅读设置」面板的语音设置组</p></div>'
+    + '<span class="win-chip">窗口 label：reader</span></div>';
+
+  if (!isMerged){
+    h += '<div class="stale-bar"><b>挂载快照</b><span>右侧的任何改动都不会反映到这里</span>'
+      + '<button type="button" class="mini-btn" onclick="remountDrawer()">重开抽屉（重新挂载）</button>'
+      + tagHtml("amber", "SettingsDrawer.tsx:131 快照 · :99-155 仅 auth 监听") + '</div>';
+    h += '<div class="why">为什么这样放：现状抽屉承担全部阅读侧语音控件；<b>灰标签＝仅 A 有</b>，红/橙标签＝与入口B的语义重叠或数据陈旧点。</div>';
+  } else {
+    h += '<div class="why">为什么这样放：抽屉仍是<b>阅读默认层（L1）的唯一写点</b>——引擎档位、各发音人、语速、停顿、跟读参数、麦克风全部原样保留；新增只有三处行内状态（链路行 / 评测提示 / 徽标三触发），<b>不新增段落、不改布局</b>（评委 prototypeNotes）。</div>';
+  }
+
+  h += '<details class="fold"><summary>非语音组：提醒 / 免打扰 / 每日目标 · 复习模式（本次不动）</summary>'
+    + '<div class="fold-body">提醒组走 Rust 侧 <code>review_reminder.json</code>（review_reminder.rs:173-179），是抽屉里唯一不走 localStorage 的组；复习模式只写全局层不写文章覆盖（ReaderApp.tsx:2437-2445）。本方案不搬迁这两组。</div></details>';
+
+  /* ---- 朗读组 ---- */
+  h += '<div class="group"><h3>朗读</h3>';
+
+  if (isMerged){
+    var c = chainLine();
+    h += '<div class="row chain" title="新增①：当前链路生效态摘要，由 hub 订阅实时刷新，替代挂载快照（评委 prototypeNotes 文案逐字）。gateway 音色消费点在播放链路（ReaderApp.tsx:500-501 渲染时重读 ref），改订阅触及播放链路＝硬契约8，落地须全量回归（mustFix-4）。">'
+      + '<span class="row-label">当前链路</span>'
+      + '<div class="row-ctl"><span class="chain-pill ' + c.tone + '">' + esc(c.text) + '</span></div>'
+      + tagHtml("green", "新增① hub 订阅实时") + '</div>';
+  }
+
+  var t = S.ttsProvider;
+  var effCloud = (t === "cloud" || t === "xfyun");
+  var segBtn = function(v, label){
+    var on = (v === t) || (v === "cloud" && t === "xfyun");
+    return '<button type="button" class="' + (on ? "on" : "") + '" onclick="wrTts(\'' + v + '\')">' + label + '</button>';
+  };
+  h += '<div class="row" title="朗读引擎档位写 reader-settings 的 ttsProvider（全局+文章覆盖双写）。它与入口B的 voiceProvider 是两个独立字段、语义强耦合——ttsProvider=云音色 时才由 resolveVoiceRoute 现读服务商归约（合并后在同一处归约，避免两个「引擎选择」）。">'
+    + '<span class="row-label">朗读引擎</span>'
+    + '<div class="row-ctl"><span class="seg">' + segBtn("edge", "Edge 在线") + segBtn("cloud", "云音色") + segBtn("local", "系统语音") + '</span>'
+    + (t === "xfyun" ? '<span class="row-foot">旧值 xfyun 将按迁移条件自动升级为云音色</span>' : '') + '</div>'
+    + (isMerged ? tagHtml("green", "L1 档位 · 云音色档经 resolveVoiceRoute 单点归约 ✓")
+                : tagHtml("red", "语义重叠：与入口B服务商＝两个「引擎选择」"))
+    + '</div>';
+
+  if (t === "edge"){
+    h += '<div class="row" title="Edge 中文音色，默认 zh-CN-XiaoxiaoNeural。文章级覆盖当前会被 Rust 剥离（ReaderSettingsOverride 缺字段）——合并配套修复补齐。">'
+      + '<span class="row-label">Edge·中文</span><div class="row-ctl"><input type="text" value="' + esc(S.edgeVoiceZh) + '" list="dl-edge-zh" oninput="silentField(\'edgeVoiceZh\', this.value)" onchange="wrField(\'edgeVoiceZh\', this.value)"></div>'
+      + (isMerged ? tagHtml("green", "仅 A ✓ 配套修复补 Rust 三字段")
+                  : tagHtml("red", "仅 A · 文章覆盖被 Rust 静默剥离（缺字段④）")) + '</div>';
+    h += '<div class="row" title="Edge 英文音色，默认 en-US-AvaNeural。同上，覆盖会被剥离。">'
+      + '<span class="row-label">Edge·英文</span><div class="row-ctl"><input type="text" value="' + esc(S.edgeVoiceEn) + '" list="dl-edge-en" oninput="silentField(\'edgeVoiceEn\', this.value)" onchange="wrField(\'edgeVoiceEn\', this.value)"></div>'
+      + tagHtml("gray", "仅 A") + '</div>';
+  } else if (t === "local"){
+    h += '<div class="row" title="本机 SAPI 枚举（示例列表），仅系统语音档可用；引擎本地细节，维持 A 独管。">'
+      + '<span class="row-label">本地音色</span><div class="row-ctl"><select onchange="wrField(\'localVoice\', this.value)">'
+      + '<option' + (S.localVoice === "Microsoft Huihui Desktop" ? " selected" : "") + '>Microsoft Huihui Desktop</option>'
+      + '<option' + (S.localVoice === "Microsoft Kangkang Desktop" ? " selected" : "") + '>Microsoft Kangkang Desktop</option>'
+      + '<option' + (S.localVoice === "Microsoft Yaoyao Desktop" ? " selected" : "") + '>Microsoft Yaoyao Desktop</option>'
+      + '</select><span class="row-foot">示例枚举，实际以本机 SAPI 为准</span></div>'
+      + tagHtml("gray", "仅 A（引擎本地细节）") + '</div>';
+  } else {
+    /* cloud / 旧值 xfyun：先归约服务商 */
+    var viaGateway = S.voiceProvider === "gateway";
+    h += '<div class="row" title="音色来源：同一份 voiceProvider，入口B唯一写点、此处只读展示。现状＝挂载快照（改动不感知）；合并后＝hub 订阅实时。">'
+      + '<span class="row-label">音色来源</span><div class="row-ctl">'
+      + (viaGateway
+        ? '<span class="cred-state ' + (S.gatewayLoggedIn ? "ok" : "bad") + '">' + (S.gatewayLoggedIn ? "沉浸云语音 · 已登录" : "沉浸云语音 · 未登录") + '</span>'
+        : '<span class="cred-state">讯飞直连（自带凭据）</span>') + '</div>'
+      + (isMerged ? tagHtml("green", "单写多读 ✓ hub 实时刷新")
+                  : tagHtml("amber", "同一份数据 · 但此快照挂载即冻结①")) + '</div>';
+    if (viaGateway){
+      h += '<div class="row" title="规范逐字文案（voice.md:125 钉死），合并后维持不动：音色在语音页选择，此处不重复配置。">'
+        + '<span class="row-label">服务说明</span><div class="row-ctl"><span class="row-foot" style="margin:0; font-size:12.8px; color:var(--muted)">'
+        + (S.gatewayLoggedIn ? "音色在语音页选择，此处不重复配置" : "当前未登录，播放会临时使用 Edge 朗读") + '</span>'
+        + '<button type="button" class="btn ghost sm" onclick="gotoVoiceTab(\'panel\')">' + (S.gatewayLoggedIn ? "去语音页配置" : "去语音页登录") + '</button></div>'
+        + tagHtml("gray", "跳转 · 不开第二写点") + '</div>';
+    } else {
+      h += '<div class="row" title="讯飞中文发音人（vcn）：与入口B的沉浸云音色是两个字段、两个键，互不同步、切换服务商不迁移——这是「音色各存一份」的唯一实质重叠，合并时维持 L1 独管、语义桥归约。">'
+        + '<span class="row-label">云音色·中文</span><div class="row-ctl"><input type="text" value="' + esc(S.cloudVoice) + '" list="dl-vcn" oninput="silentField(\'cloudVoice\', this.value)" onchange="wrField(\'cloudVoice\', this.value)">'
+        + '<span class="row-foot">建议列表含 xiaoyan · 小燕；完整列表见讯飞控制台</span></div>'
+        + (isMerged ? tagHtml("green", "L1 独管 ✓ 语义桥归约")
+                    : tagHtml("amber", "音色各存一份 · 与B沉浸云音色不同键")) + '</div>';
+      h += '<div class="row" title="讯飞英文发音人，默认 catherine；仅 A 有，B 无对应字段。">'
+        + '<span class="row-label">云音色·英文</span><div class="row-ctl"><input type="text" value="' + esc(S.cloudVoiceEn) + '" oninput="silentField(\'cloudVoiceEn\', this.value)" onchange="wrField(\'cloudVoiceEn\', this.value)"></div>'
+        + tagHtml("gray", "仅 A") + '</div>';
+      h += '<div class="row" title="' + (isMerged
+          ? '新增③：徽标改「挂载 + xfyun:creds-updated + voice:prefs-changed」三触发重查（mustFix-7 复用既有凭据事件，hub 不另造轮子）。'
+          : '现状：挂载时查一次，不监听 xfyun:creds-updated——右侧保存凭据后这里不变，重挂载才刷新（问题③）。')
+        + '"><span class="row-label">合成凭据</span><div class="row-ctl">'
+        + '<span class="cred-state ' + (S.xfyunCreds.tts ? "ok" : "") + '">' + (S.xfyunCreds.tts ? "已配置 ✓" : "未配置") + '</span>'
+        + '<button type="button" class="btn ghost sm" onclick="gotoVoiceTab(\'creds\')">设置</button></div>'
+        + (isMerged ? tagHtml("green", "新增③ 三触发重查 ✓") : tagHtml("amber", "不监听保存事件③")) + '</div>';
+    }
+  }
+
+  h += '<div class="row" title="语速 0.5–2.0×，步进 0.05；仅 A 有。">'
+    + '<span class="row-label">语速</span><div class="row-ctl">'
+    + '<input type="range" min="0.5" max="2" step="0.05" value="' + S.rate + '" oninput="silentRange(\'rate\', this.value, \'lbl-rate-' + sfx + '\', this.value + \'×\', true)" onchange="wrField(\'rate\', this.value, true)">'
+    + '<span class="range-val" id="lbl-rate-' + sfx + '">' + S.rate + '×</span></div>'
+    + tagHtml("gray", "仅 A") + '</div>';
+  h += '<div class="row" title="每句停顿 0–2000ms 步进 100；仅 A 有。">'
+    + '<span class="row-label">每句停顿</span><div class="row-ctl">'
+    + '<input type="range" min="0" max="2000" step="100" value="' + S.sentencePauseMs + '" oninput="silentRange(\'sentencePauseMs\', this.value, \'lbl-pause-' + sfx + '\', this.value + \' ms\', true)" onchange="wrField(\'sentencePauseMs\', this.value, true)">'
+    + '<span class="range-val" id="lbl-pause-' + sfx + '">' + S.sentencePauseMs + ' ms</span></div>'
+    + tagHtml("gray", "仅 A") + '</div>';
+  h += '</div>';
+
+  /* ---- 跟读组 ---- */
+  h += '<div class="group"><h3>跟读</h3>';
+  h += '<div class="row" title="跟读模式总开关；仅 A 有。">'
+    + '<span class="row-label">跟读模式</span><div class="row-ctl">' + swHtml(S.shadowingMode, false, "wrToggle('shadowingMode')", "跟读模式") + '</div>'
+    + tagHtml("gray", "仅 A") + '</div>';
+  h += '<div class="row" title="跟读评测开关，disabled={!跟读模式}（现状口径）。它只是 AND 链的一环——评测生效还需设置中心评分开关与服务端能力。">'
+    + '<span class="row-label">跟读评测</span><div class="row-ctl">'
+    + swHtml(S.shadowingAssess, !S.shadowingMode, "wrToggle('shadowingAssess')", "跟读评测")
+    + '<span class="row-foot">达标自动放行；需评测凭据与服务端能力</span></div>'
+    + (isMerged ? tagHtml("green", "AND 链 · 双向提示 ✓")
+                : tagHtml("red", "AND 链另一环在入口B（两处无提示②）")) + '</div>';
+
+  if (isMerged && assessHintVisible()){
+    h += '<div class="hint-line" title="新增②：仅当 抽屉评测开 × 中心评分关 时出现；文案与 voiceRoute.ts:132 同一语气族，指路只用用户点到的名词。">'
+      + '跟读打分已在 <b>设置 → 语音</b> 关闭，这里开着也不会打分'
+      + '<button type="button" class="btn sm" onclick="gotoVoiceTab(\'ise\')">去开启</button>'
+      + tagHtml("green", "新增② 条件提示行") + '</div>';
+  }
+  if (isMerged){
+    var links = assessLinks();
+    h += '<div class="and-strip" title="「为什么不打分」从查两处变看一处：四个环任一断即不打分（ReaderApp.tsx:602 × voiceRoute.ts:227 × :92-150）。">'
+      + '<span style="color:var(--faint)">打分链：</span>';
+    for (var i = 0; i < links.length; i++){
+      var L = links[i];
+      h += '<span class="and-chip ' + (L.na ? "" : (L.on ? "ok" : "bad")) + '">' + L.label + ' ' + (L.na ? "—" : (L.on ? "✓" : "✗")) + '</span>';
+      if (i < links.length - 1) h += '<span class="and-arrow">→</span>';
+    }
+    h += '</div>';
+  }
+  h += '<div class="row" title="句分达到阈值才放行（满分 5 分，默认 4.2；真实范围 3–5，跟读评测关时置灰，SettingsDrawer.tsx:697/:701）。">'
+    + '<span class="row-label">过关阈值</span><div class="row-ctl">'
+    + '<input type="range" min="3" max="5" step="0.1" value="' + S.shadowingPassScore + '"' + (S.shadowingAssess ? "" : " disabled") + ' oninput="silentRange(\'shadowingPassScore\', this.value, \'lbl-pass-' + sfx + '\', this.value + \' 分\', true)" onchange="wrField(\'shadowingPassScore\', this.value, true)">'
+    + '<span class="range-val" id="lbl-pass-' + sfx + '">' + S.shadowingPassScore + ' 分</span></div>'
+    + tagHtml("gray", "仅 A") + '</div>';
+  h += '<div class="row" title="读完一句自动开麦听跟读；达标自动过，不达标可「领读」。跟读评测关时置灰（SettingsDrawer.tsx:715）。">'
+    + '<span class="row-label">读完自动开麦</span><div class="row-ctl">' + swHtml(S.shadowingAutoMic, !S.shadowingAssess, "wrToggle('shadowingAutoMic')", "读完自动开麦") + '</div>'
+    + tagHtml("gray", "仅 A") + '</div>';
+  h += '<div class="row" title="说话停顿超过该时长即视为读完；真实范围 800–3000ms，默认 1500，跟读评测关时置灰（SettingsDrawer.tsx:729/:733）。">'
+    + '<span class="row-label">静音断句</span><div class="row-ctl">'
+    + '<input type="range" min="800" max="3000" step="100" value="' + S.shadowingSilenceMs + '"' + (S.shadowingAssess ? "" : " disabled") + ' oninput="silentRange(\'shadowingSilenceMs\', this.value, \'lbl-sil-' + sfx + '\', this.value + \' ms\', true)" onchange="wrField(\'shadowingSilenceMs\', this.value, true)">'
+    + '<span class="range-val" id="lbl-sil-' + sfx + '">' + S.shadowingSilenceMs + ' ms</span></div>'
+    + tagHtml("gray", "仅 A") + '</div>';
+  if (S.shadowingMode){
+    h += '<div class="row" title="' + (isMerged
+        ? '新增③ 同款三触发（此徽标仅跟读模式开启时显示，现状口径一致）。'
+        : '现状：不监听 xfyun:creds-updated，重挂载才刷新（问题③）。')
+      + '"><span class="row-label">评测凭据</span><div class="row-ctl">'
+      + '<span class="cred-state ' + (S.xfyunCreds.ise ? "ok" : "") + '">' + (S.xfyunCreds.ise ? "已配置 ✓" : "未配置") + '</span>'
+      + '<button type="button" class="btn ghost sm" onclick="gotoVoiceTab(\'creds\')">设置</button></div>'
+      + (isMerged ? tagHtml("green", "三触发重查 ✓") : tagHtml("amber", "不监听保存事件③")) + '</div>';
+  }
+  h += '</div>';
+
+  /* ---- 设备组 ---- */
+  h += '<div class="group"><h3>设备</h3>';
+  h += '<div class="row" title="麦克风设备偏好：存独立 localStorage 键（readerSettingsStore.ts:65），刻意不入 schema、不随文章——合并 UI 时也不并进可同步设置（评委 mergeNote）。">'
+    + '<span class="row-label">麦克风</span><div class="row-ctl"><select onchange="wrField(\'micDevice\', this.value)">'
+    + '<option value="default"' + (S.micDevice === "default" ? " selected" : "") + '>系统默认</option>'
+    + '<option value="mic1"' + (S.micDevice === "mic1" ? " selected" : "") + '>麦克风阵列 (Realtek Audio)</option>'
+    + '<option value="mic2"' + (S.micDevice === "mic2" ? " selected" : "") + '>USB 麦克风</option>'
+    + '</select><span class="row-foot">机器本地偏好 · 独立键 · 不随文章不同步</span></div>'
+    + tagHtml("gray", "仅 A（独立键）") + '</div>';
+  h += '</div>';
+
+  h += '<div class="panel-foot">生效值 = mergeReaderSettings(全局层, 文章覆盖)，文章覆盖优先（readerTypes.ts:368-438）；在文章里改动会写进该文章的覆盖，切到别的文章看到的是它自己的覆盖——「设置没保存」的错觉是设计内行为。</div>';
+  h += '</section>';
+  return h;
+}
+
+function swHtml(on, disabled, onclickJs, aria){
+  return '<button type="button" class="sw' + (on ? " on" : "") + (disabled ? " dis" : "") + '" role="switch" aria-checked="' + (!!on) + '" aria-label="' + esc(aria) + '"'
+    + (disabled ? " disabled" : "") + ' onclick="' + onclickJs + '"><span class="knob"></span></button>';
+}
+
+/* ============ 渲染：入口B ============ */
+function htmlB(isMerged){
+  var h = "";
+  var sfx = isMerged ? "m" : "n";   /* 同上：动态 id 按视图加后缀防重 */
+  h += '<section class="panel" id="' + (isMerged ? "panelB-merged" : "panelB-now") + '">';
+  h += '<div class="panel-head"><span class="p-badge p-b">入口 B</span>'
+    + '<div class="p-title"><h2>沉浸口语 · 设置中心 →「语音」</h2><p>右击托盘图标 → 设置（窗口 720×660，hide 不销毁）</p></div>'
+    + '<span class="win-chip">窗口 label：settings</span></div>';
+
+  h += '<div class="why">' + (isMerged
+    ? '为什么这样放：「语音」页是<b>服务能力层（L0）的唯一写点</b>（服务商 / 沉浸云音色 / 评分开关 / 讯飞凭据 / 连接与额度），点选即写盘、不走保存条、不进云同步；本次仅新增两处只读投影，<b>不开第二写点</b>。'
+    : '现状：全部语音写控件集中于本页；<b>点选即写盘、无任何变更广播</b>——右侧写完，左边的阅读室抽屉不会知道。') + '</div>';
+
+  h += '<div class="tabbar"><span>通用</span><span class="on">语音</span><span>账号</span><span>热键</span><span>关于</span></div>';
+
+  /* 服务商 */
+  var gwSel = state.voiceProvider === "gateway";
+  h += '<div class="group"><h3>语音服务商</h3>';
+  h += '<div class="svc-cards">';
+  h += '<div class="svc-card' + (gwSel ? " selected" : "") + '" role="radio" aria-checked="' + gwSel + '" onclick="wrProvider(\'gateway\')" title="voiceProvider 唯一写点：点卡即写盘（Settings.tsx:256-264 → settingsStore.ts:341-347），不经保存条、不进云同步。">'
+    + '<div class="svc-head"><span class="svc-mark">云</span><div><strong>沉浸云语音</strong>'
+    + '<div class="svc-status ' + (state.gatewayLoggedIn ? "ok" : "warn") + '">' + (state.gatewayLoggedIn ? "已登录 · 云音色可用" : "未登录 · 播放临时回落 Edge") + '</div></div>'
+    + '<span class="radio-dot"></span></div></div>';
+  h += '<div class="svc-card xf' + (!gwSel ? " selected" : "") + '" role="radio" aria-checked="' + !gwSel + '" onclick="wrProvider(\'xfyun\')" title="切换不迁移音色：沉浸云音色（immersive-translator-settings）与讯飞发音人（reader-settings）是两个键，互不同步。">'
+    + '<div class="svc-head"><span class="svc-mark">讯</span><div><strong>讯飞直连（自带凭据）</strong>'
+    + '<div class="svc-status ' + (state.xfyunCreds.tts ? "ok" : "warn") + '">' + (state.xfyunCreds.tts ? "凭据已配置" : "未配置凭据") + '</div></div>'
+    + '<span class="radio-dot"></span></div></div>';
+  h += '</div>';
+  h += '<div class="row" style="border:none; padding-top:8px"><span class="row-label"></span><div class="row-ctl"><span class="row-foot" style="margin:0">'
+    + (isMerged ? '改这里 → 左侧抽屉「当前链路」「音色来源」即时跟随（同窗回声抑制，对窗广播）。' : '改这里 → 播放路由即时生效（每次现读），但左侧抽屉界面不会变。')
+    + '</span></div>' + (isMerged ? tagHtml("green", "唯一写点 ✓ 维持") : tagHtml("amber", "唯一写点 · 但无广播")) + '</div>';
+  h += '</div>';
+
+  if (gwSel){
+    /* 沉浸云卡 */
+    h += '<div class="group"><h3>沉浸云</h3>';
+    h += '<div class="row" title="朗读音色下拉：选项来自服务端 caps.ttsVoices 下发（示例列表）；唯一写点，A 侧播放时直读（ReaderApp.tsx:501）。">'
+      + '<span class="row-label">朗读</span><div class="row-ctl"><select onchange="wrGatewayVoice(this.value)">'
+      + '<option value="xiaoyan"' + (state.voiceGatewayVoice === "xiaoyan" ? " selected" : "") + '>xiaoyan · 小燕</option>'
+      + '<option value="aisxiaoqi"' + (state.voiceGatewayVoice === "aisxiaoqi" ? " selected" : "") + '>aisxiaoqi · 小琪</option>'
+      + '<option value="aisjiuxu"' + (state.voiceGatewayVoice === "aisjiuxu" ? " selected" : "") + '>aisjiuxu · 九铨</option>'
+      + '</select><span class="row-foot">选项来自服务端 caps.ttsVoices · 此处为示例</span></div>'
+      + tagHtml("gray", "唯一写点 · A 播放直读") + '</div>';
+
+    h += '<div class="group-note" style="padding-top:4px">服务能力（真实探测 · 运行时 state 不落盘，换账号/换音色时重置）</div>';
+    h += '<div class="row" title="三行能力探测均为真实请求（FEATURE_COPY），测试灯不落盘；合并时纯运行时 UI 可随面板自由移动，无需迁移数据。">'
+      + '<span class="row-label">语音合成</span><div class="row-ctl">' + lightHtml("tts") + '<button type="button" class="btn ghost sm" onclick="probe(\'tts\')">试听</button></div>'
+      + tagHtml("gray", "仅 B · 不落盘") + '</div>';
+    h += '<div class="row">'
+      + '<span class="row-label">语音识别</span><div class="row-ctl">' + lightHtml("asr") + '<button type="button" class="btn ghost sm" onclick="probe(\'asr\')">测试识别</button></div>'
+      + tagHtml("gray", "仅 B · 不落盘") + '</div>';
+    h += '<div class="row" id="b-ise-row-' + sfx + '" title="voiceGatewayIseEnabled 唯一写点：管「沉浸云评分能力本地开关」，与抽屉的跟读评测开关是 AND 链两环。">'
+      + '<span class="row-label">跟读评分</span><div class="row-ctl">'
+      + '<span class="light ' + (lights.ise === "ok" ? "ok" : lights.ise === "testing" ? "testing" : "") + '"><i></i>' + (lights.ise === "ok" ? "正常" : lights.ise === "testing" ? "测试中…" : "未测") + '</span>'
+      + '<span style="font-size:12.5px">' + (state.voiceGatewayIseEnabled ? "评分已开启" : "评分已关闭") + '</span>'
+      + swHtml(state.voiceGatewayIseEnabled, false, "wrIse()", "跟读评分")
+      + '<button type="button" class="btn ghost sm" onclick="probe(\'ise\')">测试评分</button></div>'
+      + (isMerged ? tagHtml("green", "唯一写点 ✓ + 只读投影") : tagHtml("red", "AND 链另一环（无提示②）")) + '</div>';
+    if (isMerged){
+      var readerOn = state.shadowingMode && state.shadowingAssess;
+      h += '<div class="row" style="background:var(--green-ll); border-radius:9px; border-bottom:none; border:1px solid #cfe6d8" title="新增④：只读投影，不开第二写点（评委 prototypeNotes 唯一新增之一）。">'
+        + '<span class="row-label">阅读室联动</span><div class="row-ctl"><span class="row-foot" style="margin:0; font-size:12.6px; color:var(--muted)">'
+        + '阅读室跟读评测的开关在 <b>阅读室 → 阅读设置</b> 抽屉；两处都开启才会打分</span>'
+        + '<span class="cred-state ' + (readerOn ? "ok" : "") + '" id="b-projection-' + sfx + '">抽屉当前：' + (readerOn ? "跟读评测 开" : "跟读评测 关") + '</span></div>'
+        + tagHtml("green", "新增④ 只读投影") + '</div>';
+    }
+    h += '<details class="fold" style="margin:8px 0 4px"><summary>本月剩余额度（示例）</summary><div class="fold-body">语音合成 1,240 句 · 语音识别 58 分钟 · 跟读评分 860 次　<button type="button" class="mini-btn" onclick="gotoVoiceTab(\'panel\')">兑换更多额度</button><br>额度 details 与连接测试同属运行时 UI，不落盘。</div></details>';
+    h += '</div>';
+  } else {
+    /* 讯飞卡 */
+    h += '<div class="group"><h3>讯飞凭据</h3>';
+    h += '<div id="b-creds-card-' + sfx + '" class="row" title="讯飞凭据唯一写点：DPAPI 命名 secret 九槽（iseCredentials.ts:20-36）；保存成功 emit xfyun:creds-updated。">'
+      + '<span class="row-label">主凭据</span><div class="row-ctl" style="flex-direction:column; align-items:stretch">'
+      + '<input type="password" placeholder="App ID" value="' + esc(state.xfyunDraft.appId) + '" oninput="wrDraft(\'appId\', this.value)">'
+      + '<input type="password" placeholder="API Key" value="' + esc(state.xfyunDraft.apiKey) + '" oninput="wrDraft(\'apiKey\', this.value)">'
+      + '<input type="password" placeholder="API Secret" value="' + esc(state.xfyunDraft.apiSecret) + '" oninput="wrDraft(\'apiSecret\', this.value)">'
+      + '<div style="display:flex; gap:8px; align-items:center"><button type="button" class="btn sm" onclick="saveCreds()">保存</button>'
+      + '<span class="row-foot" id="xfyun-fb-' + sfx + '" style="margin:0">' + (state.xfyunCreds.ise ? "已保存过凭据；重复保存将覆盖" : "保存后抽屉徽标（左侧）即时变化") + '</span></div>'
+      + '</div>'
+      + (isMerged ? tagHtml("green", "唯一写点 · DPAPI 九槽") : tagHtml("amber", "唯一写点 · 徽标不联动③")) + '</div>';
+    h += '<details class="fold"><summary>高级：TTS / ASR 独立凭据覆盖（与主凭据同结构，示例）</summary><div class="fold-body">九槽中的 tts / asr 六槽；此处独立覆盖合成与识别凭据，结构与主凭据一致。</div></details>';
+    h += '<div class="row" title="连接检查 probe_https，运行时 state 不落盘。">'
+      + '<span class="row-label">检查连接</span><div class="row-ctl">'
+      + '<button type="button" class="btn ghost sm" onclick="checkXfyunConn()">检查连接</button>'
+      + '<span class="light ' + (xfyunConn === "ok" ? "ok" : xfyunConn === "checking" ? "testing" : "") + '"><i></i>'
+      + (xfyunConn === "ok" ? "连接正常" : xfyunConn === "checking" ? "检查中…" : xfyunConn === "bad" ? "凭据未配置或失效" : "未检查") + '</span></div>'
+      + tagHtml("gray", "仅 B · 不落盘") + '</div>';
+    h += '</div>';
+  }
+
+  h += '<div class="footnote">已保存的讯飞凭据可继续使用，切换服务无需重复填写。朗读方式也可在阅读室中调整。<span style="color:var(--faint)">（VoiceSettingsTab.tsx:275 页脚文案，维持不动）</span></div>';
+  h += '</section>';
+  return h;
+}
+
+function lightHtml(key){
+  var st = lights[key];
+  var txt = st === "ok" ? "正常" : st === "testing" ? "测试中…" : "未测";
+  return '<span class="light ' + (st === "ok" ? "ok" : st === "testing" ? "testing" : "") + '"><i></i>' + txt + '</span>';
+}
+
+/* ============ 渲染调度 ============ */
+function render(){
+  if (mode === "now"){
+    $("panelA-now").innerHTML = htmlA(false, snapshot || state);
+    $("panelB-now").innerHTML = htmlB(false);
+  } else {
+    $("panelA-merged").innerHTML = htmlA(true, state);
+    $("panelB-merged").innerHTML = htmlB(true);
+  }
+  $("rev-badge").textContent = "rev " + rev;
+}
+function renderAOnly(){
+  if (mode === "now") $("panelA-now").innerHTML = htmlA(false, snapshot || state);
+  else $("panelA-merged").innerHTML = htmlA(true, state);
+}
+function renderBOnly(){
+  if (mode === "now") $("panelB-now").innerHTML = htmlB(false);
+  else $("panelB-merged").innerHTML = htmlB(true);
+}
+
+/* ============ 启动 ============ */
+renderLog();
+switchView("now");
+})();
+</script>
+</body>
+</html>

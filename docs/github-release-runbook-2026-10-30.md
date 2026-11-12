@@ -25,6 +25,7 @@
    - `ImmersiveTranslator_X.Y.Z_x64-setup.exe.sig`（更新器签名，缺了走第 4 步）
    - `ImmersiveTranslator_X.Y.Z_x64.msix`（商店提交用；此步骤 continue-on-error，缺了本地 `pwsh ./scripts/pack-msix.ps1` 补打后 `gh release upload` 手传）
    - `latest.json`（更新清单，缺了走第 4 步）
+   - `ImmersiveSpeaking_X.Y.Z_x64-setup.exe`、`ImmersiveSpeaking-X.Y.Z-macOS.zip` 与对应 ZIP `.sha256`（2026-11-05 新增的官网下载副本；与原包字节一致。原 `ImmersiveTranslator_*` 资产仍须保留，供既有更新清单使用；见 [下载命名修复记录](./website-download-naming-2026-11-05.md)）
 4. **补签（两段式发版的第二段）**：若 CI 日志有「未配置 TAURI_SIGNING_PRIVATE_KEY」警告（minisign 私钥只在本地 `~/.tauri/`，仓库 secret 长期为空）：
    - 本地跑 `release-updater/sign.sh`（对 CI 的安装包产出 `.sig` + `latest.json`，私钥签名、pubkey 在 tauri.conf.json 里与之配对）；
    - 把两个文件放进 `release-updater/vX.Y.Z/`，**随 main 推送**；
@@ -47,5 +48,6 @@
 
 - [ ] Release 页四件套齐：`setup.exe` / `.sig` / `latest.json` / `.msix`
 - [ ] `latest.json` 内容指向新版本且 signature 非空
+- [ ] 官网新名 EXE／macOS ZIP 副本可下载，SHA256 与原包一致，旧资产仍在
 - [ ] 老版本点「检查更新」能收到新版（真实验证，别跳过）
 - [ ] （如发商店）MSIX 已按商店 Runbook 提交认证

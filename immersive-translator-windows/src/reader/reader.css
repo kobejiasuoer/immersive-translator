@@ -1006,7 +1006,82 @@ button.reader-appname:hover {
   z-index: 50;
 }
 
-/* ---------- 设置抽屉 380px ---------- */
+/* ---------- 统一设置：原生 dialog 负责焦点与背景隔离 ---------- */
+.reader-settings-dialog {
+  width: min(1060px, calc(100vw - 48px));
+  height: min(820px, calc(100dvh - 48px));
+  max-width: none;
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--bg);
+  color: var(--text-1);
+  box-shadow: var(--shadow-pop);
+  font-family: var(--font-ui);
+}
+.reader-settings-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.32);
+}
+.reader-settings-dialog .set-shell {
+  height: 100%;
+}
+.reader-settings-dialog .set-side {
+  width: 174px;
+}
+.reader-settings-dialog .set-close {
+  margin-left: auto;
+}
+.reader-settings-dialog .reader-settings-content {
+  max-width: 720px;
+}
+.reader-settings-dialog .drawer-group-title {
+  padding-top: 18px;
+  margin: 18px 0 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.reader-settings-dialog .drawer-group-title:first-child {
+  padding-top: 0;
+  margin-top: 0;
+  border-top: 0;
+}
+.reader-settings-dialog .drawer-row {
+  min-height: 40px;
+  gap: 24px;
+}
+.reader-settings-dialog .drawer-row .label {
+  width: 132px;
+}
+.reader-settings-dialog .drawer-row .control {
+  flex-wrap: wrap;
+}
+.reader-settings-dialog .drawer-row select.reader-select {
+  max-width: min(300px, 100%);
+}
+.reader-settings-dialog .drawer-slider {
+  max-width: 230px;
+}
+.reader-settings-reset {
+  padding-top: 24px;
+  margin-top: 20px;
+  border-top: 1px solid var(--border);
+}
+@media (max-width: 700px) {
+  .reader-settings-dialog {
+    width: calc(100vw - 16px);
+    height: calc(100dvh - 16px);
+  }
+  .reader-settings-dialog .set-side { width: 136px; }
+  .reader-settings-dialog .drawer-row { gap: 12px; }
+  .reader-settings-dialog .drawer-row .label { width: 86px; }
+}
+
+/* ---------- 兼容阅读设置抽屉 ---------- */
 .reader-drawer-overlay {
   position: fixed;
   inset: 0;
@@ -1172,6 +1247,10 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
   transition: background 0.15s ease;
   flex: none;
   padding: 0;
+}
+.reader-switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .reader-switch::after {
   content: "";
@@ -3298,6 +3377,104 @@ input[type="range"].drawer-slider::-webkit-slider-thumb {
   font-size: 12.5px;
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
+}
+
+/* ===== 抽屉语音链路行 / 打分链投影（voiceSettingsHub 三触发刷新的行内状态） ===== */
+
+/* 「当前链路」生效态摘要 pill（ok=正常放行档 / warn=回落降级档） */
+.drawer-chain-pill {
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: var(--ok);
+  background: var(--ok-soft);
+  white-space: nowrap;
+}
+.drawer-chain-pill.warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+  white-space: normal;
+  text-align: right;
+}
+/* 守卫回落说明（已临时使用 Edge 朗读：…）；长文案折行显示 */
+.drawer-chain-note {
+  flex-basis: 100%;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+/* 跟读打分条件提示行（评分开关在设置中心被关时出现） */
+.drawer-assess-hint {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 2px 0 4px;
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.drawer-assess-hint .reader-tb-btn {
+  height: 26px;
+  min-width: 0;
+  padding: 0 8px;
+  color: var(--warn);
+  font-weight: 600;
+}
+
+/* 抽屉底部总设置入口（2026-11-12）：常驻中性提示行，文本左、按钮右（原型
+   drawer-foot 的 p flex:1 口径）。与 .drawer-assess-hint 布局同构但语义独立——
+   不占用其 warn 警示语义，两者样式改动互不牵连 */
+.drawer-settings-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 4px;
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.drawer-settings-hint span { flex: 1; }
+.drawer-settings-hint .reader-tb-btn {
+  height: 26px;
+  min-width: 0;
+  padding: 0 8px;
+}
+
+/* 打分链 chips：断环显红 ✗，— 表示不适用或未评估 */
+.drawer-assess-chipwrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.drawer-assess-arrow {
+  color: var(--text-4);
+  font-size: 11px;
+}
+.drawer-assess-chip {
+  font-size: 11.5px;
+  line-height: 1.4;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.drawer-assess-chip.ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+.drawer-assess-chip.bad {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 45%, transparent);
 }
 
 /* ===== 跟读评测（shadowing assess）：播放条评测条 + 正文词着色 + 设置凭据块 ===== */
@@ -9418,6 +9595,230 @@ button.notes-word:hover { color: var(--accent); }
   background: var(--glass-elevated);
 }
 
+/* ---------- 账号入口（2026-11-12，原型 reader-account-entry-2026-11-11） ----------
+   shell-tools 末段：分隔线 + 三态触发器（游客「登录」pill / 失效「重新登录」警示 /
+   成员圆头像）+ 账号菜单。菜单几何 1:1 照 .reader-theme-menu（top calc(100%+10px)、
+   12px 圆角、border-strong、--shadow-float），宽 292（原型 .menu L114）。
+   取色一律令牌名（9316 约定）；is-guest / is-expired / is-member 三态类。 */
+.reader-root .shell-tools .tools-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: var(--border-strong);
+  flex: none;
+}
+.reader-root .acct {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+.reader-root .acct-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--ink-1);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 150ms, box-shadow 150ms;
+}
+.reader-root .acct-trigger svg { flex: none; }
+.reader-root .acct-trigger.is-guest {
+  padding: 0 8px 0 9px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.reader-root .acct-trigger.is-guest:hover,
+.reader-root .acct-trigger.is-guest[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+}
+.reader-root .acct-trigger.is-guest .acct-trigger-label ~ svg { opacity: 0.7; }
+.reader-root .acct-trigger.is-expired {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.reader-root .acct-trigger.is-expired:hover,
+.reader-root .acct-trigger.is-expired[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--warn) 20%, var(--surface));
+}
+/* 读取中（authStatus 未返回）：中性置灰，不冒充游客「登录」accent 态 */
+.reader-root .acct-trigger.is-loading {
+  padding: 0 8px 0 9px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+.reader-root .acct-trigger.is-member {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 50%;
+}
+.reader-root .acct-trigger.is-member:hover,
+.reader-root .acct-trigger.is-member[aria-expanded='true'] {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.reader-root .acct-avatar {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-size: 12.5px;
+  font-weight: 600;
+  flex: none;
+}
+.reader-root .acct-avatar-lg {
+  width: 38px;
+  height: 38px;
+  font-size: 16px;
+}
+/* 账号菜单（几何照 .reader-theme-menu）。展开时压过检索透镜，仍低于书架等浮层
+   （与 .reader-theme-menu 的 :has 提升同一策略，见 9392 注）。 */
+.reader-root .floating-top-stage:has(.acct-menu) { z-index: 31; }
+.reader-root .acct-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: -6px;
+  z-index: 1;
+  width: 292px;
+  max-width: calc(100vw - 32px);
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-float);
+}
+.reader-root .acct-head { padding: 10px 10px 12px; }
+.reader-root .acct-head h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-1);
+}
+.reader-root .acct-head p {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+.reader-root .acct-head small {
+  display: block;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  text-align: center;
+}
+.reader-root .acct-head.is-expired-head h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warn);
+}
+.reader-root .acct-head.is-expired-head h3 svg { flex: none; }
+.reader-root .acct-id {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 11px;
+  align-items: center;
+}
+.reader-root .acct-id-text { min-width: 0; }
+.reader-root .acct-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink-1);
+  min-width: 0;
+}
+.reader-root .acct-plan {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  flex: none;
+}
+.reader-root .acct-mail {
+  font-size: 12px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reader-root .acct-block { width: 100%; margin-top: 12px; }
+.reader-root .acct-sep {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--border);
+}
+.reader-root .acct-mi {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-1);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 150ms;
+}
+.reader-root .acct-mi:hover { background: var(--surface-2); }
+.reader-root .acct-mi svg { color: var(--ink-3); }
+.reader-root .acct-mi-hint { font-size: 11.5px; color: var(--ink-3); }
+.reader-root .acct-mi kbd {
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--ink-3);
+  font-family: inherit;
+  font-size: 11px;
+}
+.reader-root .acct-mi-due {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.reader-root .acct-mi.is-quiet { color: var(--ink-2); }
+/* 退出登录确认面板（菜单内换装，原型 .confirm L357-364） */
+.reader-root .acct-note { padding: 12px 10px 8px; }
+.reader-root .acct-note p {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--ink-2);
+}
+.reader-root .acct-note-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+/* 窄窗（阅读室最小 960×620）：收起触发器文字保图标，防挤压主题触发器。 */
+@media (max-width: 1199px) {
+  .reader-root .acct-trigger .acct-trigger-label { display: none; }
+}
+
 /* ---------- 公共顶栏：四视图统一品牌选中态 ---------- */
 .reader-root .shell-brand .monogram-seal {
   background: var(--accent);
@@ -10389,6 +10790,48 @@ button.notes-word:hover { color: var(--accent); }
 .reader-root[data-skin='folio'] .shelf-import-btn {
   margin-left: auto;
 }
+/* 账号首访提示条（原型 .sync-tip L148：accent-line 描边 + accent-softer 底） */
+.reader-root[data-skin='folio'] .shelf-acct-tip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 10px 10px 10px 14px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-md);
+  background: var(--accent-softer);
+}
+.reader-root[data-skin='folio'] .shelf-acct-tip > svg {
+  color: var(--accent);
+  flex: none;
+}
+.reader-root[data-skin='folio'] .shelf-acct-tip p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.reader-root[data-skin='folio'] .shelf-acct-tip p b {
+  color: var(--text-1);
+  font-weight: 600;
+}
+.reader-root[data-skin='folio'] .shelf-acct-tip-close {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.reader-root[data-skin='folio'] .shelf-acct-tip-close:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
 /* 分段（原型 .segw）：容器胶囊 + 选中段 text-1 深底反白 */
 .reader-root[data-skin='folio'] .shelf-segment {
   display: inline-flex;
@@ -11257,44 +11700,6 @@ button.notes-word:hover { color: var(--accent); }
   outline-offset: 2px;
 }
 .reader-root[data-skin='folio'] .reading-translation-toggle:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-/* ---------- 阅读设置浮层（排版/句卡/字号/短语虚线/专注/随读抽查/主题只读） ---------- */
-.reader-root[data-skin='folio'] .reading-settings-pop {
-  position: absolute;
-  top: 48px;
-  right: 14px;
-  width: 264px;
-  z-index: 8;
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-md, 12px);
-  box-shadow: var(--shadow-pop);
-  padding: 6px 14px 10px;
-}
-.reader-root[data-skin='folio'] .reading-settings-opt {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 8px 0;
-  font-size: 13px;
-  color: var(--ink-1);
-}
-.reader-root[data-skin='folio'] .reading-settings-opt + .reading-settings-opt {
-  border-top: 1px solid var(--border);
-}
-.reader-root[data-skin='folio'] .reading-settings-opt .opt-label {
-  color: var(--ink-2);
-}
-.reader-root[data-skin='folio'] .reading-settings-theme {
-  color: var(--ink-3);
-  font-size: 12.5px;
-}
-/* 句卡开关在「对照」排版下不可用（本地态仅段落有意义） */
-.reader-root[data-skin='folio'] .switch:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }

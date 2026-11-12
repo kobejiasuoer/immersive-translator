@@ -129,6 +129,13 @@ pub struct ReaderSettingsOverride {
     pub cloud_voice: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_voice_en: Option<String>,
+    /// Edge 中文句音色（ShortName）：rename_all=camelCase 下序列化为 edgeVoiceZh，
+    /// 与 TS ReaderSettings/mergeReaderSettings 键逐字一致，改名会被 serde 静默剥离。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_voice_zh: Option<String>,
+    /// Edge 英文句音色（ShortName）：序列化为 edgeVoiceEn。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_voice_en: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -158,6 +165,10 @@ pub struct ReaderSettingsOverride {
     /// 画报排版（v0.8）：prose=段落英文流 / parallel=双语对照。序列化为 spreadLayout。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spread_layout: Option<String>,
+    /// 随读抽查（v0.8）：rename_all=camelCase 下序列化为 spotQuizMode，
+    /// 与 TS/schema 字段名逐字一致，改名会被 serde 静默剥离。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spot_quiz_mode: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1812,9 +1823,69 @@ mod tests {
         assert_eq!(settings.mask_translation, Some(true));
         assert_eq!(settings.spotlight_mode, None);
         assert_eq!(settings.spread_layout, None);
+        assert_eq!(settings.edge_voice_zh, None);
+        assert_eq!(settings.edge_voice_en, None);
+        assert_eq!(settings.spot_quiz_mode, None);
         let out = serde_json::to_string(&settings).unwrap();
         assert!(!out.contains("spotlightMode"), "{out}");
         assert!(!out.contains("spreadLayout"), "{out}");
+        assert!(!out.contains("edgeVoiceZh"), "{out}");
+        assert!(!out.contains("edgeVoiceEn"), "{out}");
+        assert!(!out.contains("spotQuizMode"), "{out}");
+    }
+
+    #[test]
+    fn settings_edge_voice_and_spot_quiz_fields_roundtrip_camel_case() {
+        // ReaderSettingsOverride 补齐 edgeVoiceZh/edgeVoiceEn/spotQuizMode：前端写
+        // camelCase 键，Rust 读进 Option 字段、写回时键名逐字一致且字段不丢。
+        // 此前三字段缺失，文章保存经 reader_save_article 的 serde 往返被静默剥离。
+        let article: Article = serde_json::from_str(
+            r#"{
+                "id": "a1", "title": "T", "titleCnState": "done", "sourceType": "paste",
+                "wordCount": 1, "createdAt": 0, "lastReadAt": 0,
+                "progress": { "sentenceIdx": 0, "percent": 0, "secondsListened": 0 },
+                "sentences": [],
+                "settings": {
+                    "edgeVoiceZh": "zh-CN-XiaoxiaoNeural",
+                    "edgeVoiceEn": "en-US-AvaNeural",
+                    "spotQuizMode": true
+                }
+            }"#,
+        )
+        .expect("camelCase 新设置可读");
+        let settings = article.settings.as_ref().unwrap();
+        assert_eq!(
+            settings.edge_voice_zh.as_deref(),
+            Some("zh-CN-XiaoxiaoNeural")
+        );
+        assert_eq!(
+            settings.edge_voice_en.as_deref(),
+            Some("en-US-AvaNeural")
+        );
+        assert_eq!(settings.spot_quiz_mode, Some(true));
+
+        // 序列化键名必须是 camelCase（TS mergeReaderSettings 按同名合并）。
+        let out = serde_json::to_value(&article).unwrap();
+        assert_eq!(out["settings"]["edgeVoiceZh"], "zh-CN-XiaoxiaoNeural");
+        assert_eq!(out["settings"]["edgeVoiceEn"], "en-US-AvaNeural");
+        assert_eq!(out["settings"]["spotQuizMode"], true);
+
+        // 走真实落盘/读盘路径（与 reader_save_article 同一 serde 管线）。
+        let file = ArticlesFile {
+            schema_version: READER_SCHEMA_VERSION,
+            articles: vec![article],
+        };
+        let path = temporary_path("settings-voice-roundtrip.json");
+        std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
+        let loaded = load_articles_from_path(&path).unwrap();
+        let s = loaded.articles[0].settings.as_ref().unwrap();
+        assert_eq!(
+            s.edge_voice_zh.as_deref(),
+            Some("zh-CN-XiaoxiaoNeural")
+        );
+        assert_eq!(s.edge_voice_en.as_deref(), Some("en-US-AvaNeural"));
+        assert_eq!(s.spot_quiz_mode, Some(true));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

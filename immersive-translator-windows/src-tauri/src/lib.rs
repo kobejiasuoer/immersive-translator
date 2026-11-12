@@ -160,9 +160,9 @@ struct PendingReaderImport(Mutex<Option<ReaderImportPayload>>);
 #[derive(Default)]
 struct PendingOpenBook(Mutex<Option<String>>);
 
-/// 托盘「账号登录」等入口要求设置页定位「账号」tab：窗口已存在时走
-/// settings:navigate-tab 事件即时切换；不存在时先记 tab id，等窗口挂载后
-/// 取走（同 PendingOpenBook 模式，lib.rs 窗口存在时不写 pending，避免陈旧请求）。
+/// 统一设置在阅读室内展示。所有入口先记录最新 tab，再通知 reader；
+/// 前端先注册 settings:navigate-tab 监听，再取 pending，事件也只触发取走。
+/// 窗口预建但 React 尚未挂载时不会丢导航；take 清空，避免下次重开重复定位。
 #[derive(Default)]
 struct PendingSettingsTab(Mutex<Option<String>>);
 
@@ -251,11 +251,10 @@ fn clear_pending_panel_payload(state: tauri::State<'_, PendingPanelPayload>) {
     *state.0.lock().unwrap() = None;
 }
 
-/// 打开设置窗口（前端可调用）。对齐托盘「设置」菜单的行为；
-/// 窗口缺失（被销毁后）时同样走现场重建。
+/// 打开阅读室内的统一设置（前端可调用），与托盘「设置」共用入口。
 #[tauri::command]
 fn open_settings(app: tauri::AppHandle) {
-    show_window(&app, "settings");
+    settings_open_tab(app, "reading".to_string());
 }
 
 /// 打开历史记录窗口（前端可调用）。
@@ -287,6 +286,13 @@ async fn open_history(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn open_reader(app: tauri::AppHandle) {
     show_reader_window(&app);
+}
+
+/// 打开「录音直译」窗口（前端可调用）。与托盘 "live" 菜单（on_menu_event "live"）
+/// 同一入口 show_live_caption_window；窗口在 tauri.conf.json 预建（隐藏）。
+#[tauri::command]
+fn open_live_caption(app: tauri::AppHandle) {
+    show_live_caption_window(&app);
 }
 
 /// 进入截图 OCR 模式：显示全屏框选覆盖层。对齐 Mac 的 begin()。
@@ -708,20 +714,17 @@ fn open_login_window(app: tauri::AppHandle) {
     show_window(&app, "login");
 }
 
-/// 设置页定位 tab（§7-10，双路径）：settings 窗已存在 → emit_to 即时切换；
-/// 不存在 → 写 pending 再开窗（照 open_reader_book 先例）。
+/// 设置页定位 tab：先写 pending，再打开阅读室并通知前端消费。
+/// 即使 reader 已存在也必须写 pending：WebView 存在不等于监听已经注册。
+/// 事件 payload 保留原签名；消费者只把事件作为通知，通过 take 取得最新 tab。
 #[tauri::command]
 fn settings_open_tab(app: tauri::AppHandle, tab: String) {
-    if app.get_webview_window("settings").is_some() {
-        show_window(&app, "settings");
-        let _ = app.emit_to("settings", "settings:navigate-tab", tab);
-    } else {
-        *app.state::<PendingSettingsTab>().0.lock().unwrap() = Some(tab);
-        show_window(&app, "settings");
-    }
+    *app.state::<PendingSettingsTab>().0.lock().unwrap() = Some(tab.clone());
+    show_reader_window(&app);
+    let _ = app.emit_to("reader", "settings:navigate-tab", tab);
 }
 
-/// Settings 挂载时取走 pending tab（§7-11，恰好一次；取走即清空防陈旧）。
+/// 阅读室注册设置导航监听后、或收到通知时取走 pending tab，取走即清空。
 #[tauri::command]
 fn settings_take_pending_tab(state: tauri::State<'_, PendingSettingsTab>) -> Option<String> {
     state.0.lock().unwrap().take()
@@ -1533,6 +1536,7 @@ pub fn run() {
             open_history,
             open_ocr_overlay,
             open_reader,
+            open_live_caption,
             show_ocr_result,
             reregister_hotkeys,
             get_active_hotkeys,
@@ -1655,7 +1659,7 @@ pub fn run() {
                 })
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => app.exit(0),
-                    "settings" => show_window(app, "settings"),
+                    "settings" => open_settings(app.clone()),
                     "history" => show_window(app, "history"),
                     "reader" => show_reader_window(app),
                     "quick" => review_reminder::open_quick_review_window(app),
