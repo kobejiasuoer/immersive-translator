@@ -56,6 +56,8 @@ function baseProps(overrides: Record<string, unknown> = {}) {
     translating: null,
     chunking: null,
     peekAll: false,
+    sentCards: false,
+    onOpenSettings: vi.fn(),
     searchMatchIdx: null,
     knownIds: new Set(["slumbered"]),
     assessMarks: null,

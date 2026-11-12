@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useEscapeClose } from "./useEscapeClose";
 import {
   DEFAULT_READER_SETTINGS,
@@ -48,12 +49,20 @@ import {
   reminderSetConfig,
   type ReminderConfig,
 } from "../lib/reminder";
+import {
+  currentVoiceChain,
+  effectiveShadowAssess,
+  listenVoicePrefsChanged,
+  type ShadowAssessProjection,
+  type VoiceChainProjection,
+} from "../lib/voiceSettingsHub";
 
-interface Props {
+export interface ReaderSettingsContentProps {
   settings: ReaderSettings;
   onPatch: (patch: Partial<ReaderSettings>) => void;
-  onReset: () => void;
-  onClose: () => void;
+  /** 段落句卡仅在当前窗口生效，不写入阅读配置。 */
+  sentCards?: boolean;
+  onToggleSentCards?: () => void;
   /** 当前文章的词块标注状态；无打开文章时不显示「重新标注」。 */
   chunkState?: ArticleChunkState;
   /** 重新标注当前文章（清空词块后重跑 LLM 标注）。 */
@@ -63,8 +72,15 @@ interface Props {
   /** 跟读评测麦克风设备 id（机器本地偏好，空串 = 系统默认）。 */
   micDeviceId: string;
   onMicDevice: (deviceId: string) => void;
-  /** 讯飞合成凭据保存成功后回调（ReaderApp 重查就绪状态）。 */
-  onXfyunTtsCredsSaved?: () => void;
+  /** 嵌入统一设置时在同一界面切换分类；独立抽屉保留原窗口跳转。 */
+  onOpenSettingsTab?: (tab: "voice" | "provider") => void;
+  /** 同一窗口的语音偏好变更，不依赖会抑制发送窗回声的跨窗口事件。 */
+  voicePrefsRevision?: number;
+}
+
+interface Props extends ReaderSettingsContentProps {
+  onReset: () => void;
+  onClose: () => void;
 }
 
 const CONTRAST_OPTIONS: { value: ContrastMode; label: string }[] = [
@@ -85,7 +101,19 @@ const THEMES: { value: ReaderTheme; label: string; swatch: string }[] = [
   { value: "oled", label: "纯黑", swatch: "#0a0a0b" },
 ];
 
-export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState, onReannotate, onPatchReview, micDeviceId, onMicDevice }: Props) {
+export function ReaderSettingsContent({
+  settings,
+  onPatch,
+  sentCards = false,
+  onToggleSentCards,
+  chunkState,
+  onReannotate,
+  onPatchReview,
+  micDeviceId,
+  onMicDevice,
+  onOpenSettingsTab,
+  voicePrefsRevision = 0,
+}: ReaderSettingsContentProps) {
   const [voices, setVoices] = useState<TtsVoiceInfo[]>([]);
   const [rem, setRem] = useState<ReminderConfig | null>(null);
   const [micDevices, setMicDevices] = useState<{ deviceId: string; label: string }[]>([]);
@@ -95,6 +123,13 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
   const [voiceProvider, setVoiceProvider] = useState<VoiceProvider | null>(null);
   /** 沉浸云真实登录态；来源是 gateway 不代表已登录。 */
   const [gatewayLoggedIn, setGatewayLoggedIn] = useState<boolean | null>(null);
+  /** 当前链路生效态摘要（§5.2 A-1）；null = 读取中（沿用「读取中…」口径）。 */
+  const [chain, setChain] = useState<VoiceChainProjection | null>(null);
+  /** 打分链投影（§5.2 A-3）；null = 读取中。 */
+  const [assess, setAssess] = useState<ShadowAssessProjection | null>(null);
+  /** 三触发刷新信号：挂载 + voice:prefs-changed + xfyun:creds-updated（登录态变化也并入）。
+   *  链路行 / 两处凭据徽标 / 音色来源 / 打分链投影都按它重查重投影。 */
+  const [voiceRevTick, setVoiceRevTick] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -114,6 +149,60 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
         if (active) setMicDevices(list);
       })
       .catch(() => undefined);
+    authGetStatus()
+      .then((status) => {
+        if (active) setGatewayLoggedIn(status.loggedIn);
+      })
+      .catch(() => {
+        if (active) setGatewayLoggedIn(false);
+      });
+    void listenAuthStateChanged((status) => {
+      if (!active) return;
+      setGatewayLoggedIn(status.loggedIn);
+      // 登录态影响链路行与打分链的服务端环：并入刷新信号重投影。
+      setVoiceRevTick((t) => t + 1);
+    }).then((unlisten) => {
+      if (active) unlistenAuth = unlisten;
+      else unlisten();
+    });
+    return () => {
+      active = false;
+      unlistenAuth?.();
+    };
+  }, []);
+
+  // hub 订阅（§5.2 A-1/A-2/A-3）：voice:prefs-changed（B→A 主方向，payload 不带值，
+  // 收到即重查存储）+ 既有 xfyun:creds-updated（凭据同步不另造轮子，mustFix-7）。
+  useEffect(() => {
+    let active = true;
+    let unlistenPrefs: (() => void) | null = null;
+    let unlistenCreds: (() => void) | null = null;
+    void listenVoicePrefsChanged(() => {
+      if (active) setVoiceRevTick((t) => t + 1);
+    })
+      .then((fn) => {
+        if (active) unlistenPrefs = fn;
+        else fn();
+      })
+      .catch(() => undefined);
+    void listen("xfyun:creds-updated", () => {
+      if (active) setVoiceRevTick((t) => t + 1);
+    })
+      .then((fn) => {
+        if (active) unlistenCreds = fn;
+        else fn();
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      unlistenPrefs?.();
+      unlistenCreds?.();
+    };
+  }, []);
+
+  // 两处凭据徽标 + 音色来源（A-2 三触发重查）：不再只挂载查一次。
+  useEffect(() => {
+    let active = true;
     iseCredsConfigured()
       .then((ok) => {
         if (active) setCredConfigured(ok);
@@ -135,24 +224,45 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
       .catch(() => {
         if (active) setVoiceProvider("xfyun");
       });
-    authGetStatus()
-      .then((status) => {
-        if (active) setGatewayLoggedIn(status.loggedIn);
-      })
-      .catch(() => {
-        if (active) setGatewayLoggedIn(false);
-      });
-    void listenAuthStateChanged((status) => {
-      if (active) setGatewayLoggedIn(status.loggedIn);
-    }).then((unlisten) => {
-      if (active) unlistenAuth = unlisten;
-      else unlisten();
-    });
     return () => {
       active = false;
-      unlistenAuth?.();
     };
-  }, []);
+  }, [voiceRevTick, voicePrefsRevision]);
+
+  // A-1 当前链路行：引擎档位变化或刷新信号到达时重投影（currentVoiceChain 与播放侧
+  // readerSpeechRoute 同源归约；读取中沿用「读取中…」口径）。
+  useEffect(() => {
+    let active = true;
+    void currentVoiceChain({ ttsProvider: settings.ttsProvider })
+      .then((projection) => {
+        if (active) setChain(projection);
+      })
+      .catch(() => {
+        if (active) setChain(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [settings.ttsProvider, voiceRevTick, voicePrefsRevision]);
+
+  // A-3 打分链投影：抽屉两开关或刷新信号变化时重投影（effectiveShadowAssess 与
+  // useShadowAssess 的判定同源：shadowingMode && shadowingAssess × 守卫归约）。
+  useEffect(() => {
+    let active = true;
+    void effectiveShadowAssess({
+      shadowingMode: settings.shadowingMode,
+      shadowingAssess: settings.shadowingAssess,
+    })
+      .then((projection) => {
+        if (active) setAssess(projection);
+      })
+      .catch(() => {
+        if (active) setAssess(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [settings.shadowingMode, settings.shadowingAssess, voiceRevTick, voicePrefsRevision]);
 
   function patchReminder(patch: Partial<ReminderConfig>) {
     setRem((cur) => {
@@ -171,7 +281,807 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
   }
 
-  // 键盘用户可Esc 直接退出，不必 Tab 到关闭按钮。
+  // A-3 打分链 chips：投影 links 逐环渲染（true=✓ / false=✗ / null=—）。讯飞直连的
+  // 第四环在 hub 归约里不适用（settings/server 双 null），这里用已三触发重查的评测
+  // 凭据徽标补上——与原型「讯飞评测凭据」环一致。
+  const spread = settings.spreadLayout ?? "prose";
+  const sentCardsOn = sentCards && spread === "prose";
+  const viaGateway = voiceProvider === "gateway";
+  const assessChips: { label: string; title: string; state: boolean | null }[] = [
+    { label: "跟读模式", title: "阅读中的跟读模式开关", state: assess?.links.mode ?? null },
+    {
+      label: "跟读评测",
+      title: "阅读中的跟读评测开关；跟读模式关闭时置灰",
+      state: assess?.links.assess ?? null,
+    },
+    {
+      label: "评分开关",
+      title: "设置 → 语音 里的「评分已开启/关闭」本地开关",
+      state: assess?.links.settings ?? null,
+    },
+    viaGateway
+      ? {
+          label: "登录+服务端",
+          title: "沉浸云登录态与服务端评测能力",
+          state: assess?.links.server ?? null,
+        }
+      : {
+          label: "讯飞评测凭据",
+          title: "讯飞评测主凭据（设置 → 语音 配置）",
+          state: assess === null ? null : (credConfigured ?? null),
+        },
+  ];
+
+  return (
+    <div className="reader-settings-content">
+      <div className="drawer-group-title">版式</div>
+      <div className="drawer-row">
+        <span className="label">排版</span>
+        <div className="control">
+          <div className="seg" role="group" aria-label="排版">
+            <button
+              type="button"
+              className={spread === "prose" ? "active" : ""}
+              aria-pressed={spread === "prose"}
+              onClick={() => onPatch({ spreadLayout: "prose" })}
+              title="段落排版，当前句译文显示在浮层中"
+            >
+              段落
+            </button>
+            <button
+              type="button"
+              className={spread === "parallel" ? "active" : ""}
+              aria-pressed={spread === "parallel"}
+              onClick={() => onPatch({ spreadLayout: "parallel" })}
+              title="逐句双栏对照"
+            >
+              对照
+            </button>
+          </div>
+        </div>
+      </div>
+      {onToggleSentCards && (
+        <div className="drawer-row" title="段落排版下把每句拆成独立句卡，仅在本窗口生效">
+          <span className="label">句卡</span>
+          <div className="control">
+            <button
+              type="button"
+              className={`reader-switch${sentCardsOn ? " on" : ""}`}
+              role="switch"
+              aria-checked={sentCardsOn}
+              aria-label="句卡"
+              disabled={spread !== "prose"}
+              onClick={onToggleSentCards}
+            />
+          </div>
+        </div>
+      )}
+      <div className="drawer-row" title="淡化其他句子并收起右侧解析面板，聚焦当前句">
+        <span className="label">专注模式</span>
+        <div className="control">
+          <button
+            type="button"
+            className={`reader-switch${settings.spotlightMode ? " on" : ""}`}
+            role="switch"
+            aria-checked={settings.spotlightMode ?? false}
+            aria-label="专注模式"
+            onClick={() => onPatch({ spotlightMode: !settings.spotlightMode })}
+          />
+        </div>
+      </div>
+      <div className="drawer-row" title="把已读句中的词组和生词变为填空：Enter 判分，? 提示，按住 H 显示答案">
+        <span className="label">随读抽查</span>
+        <div className="control">
+          <button
+            type="button"
+            className={`reader-switch${settings.spotQuizMode ? " on" : ""}`}
+            role="switch"
+            aria-checked={settings.spotQuizMode ?? false}
+            aria-label="随读抽查"
+            onClick={() => onPatch({ spotQuizMode: !settings.spotQuizMode })}
+          />
+        </div>
+      </div>
+      <div className="drawer-row">
+        <span className="label">对照模式</span>
+        <div className="control">
+          <div className="seg">
+            {CONTRAST_OPTIONS.map((o) => (
+              <button
+                key={o.value}
+                className={settings.contrastMode === o.value ? "active" : ""}
+                onClick={() => onPatch({ contrastMode: o.value })}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="drawer-row" title="盖住译文自测：点单句揭开，再点遮住；按住 H 临时全显。开关也出现在播放条的「视图」菜单里">
+        <span className="label">译文遮罩</span>
+        <div className="control">
+          <button
+            className={`reader-switch${settings.maskTranslation ? " on" : ""}`}
+            onClick={() => onPatch({ maskTranslation: !settings.maskTranslation })}
+            role="switch"
+            aria-checked={settings.maskTranslation}
+            aria-label="译文遮罩"
+          />
+      </div>
+      </div>
+      <div className="drawer-row">
+        <span className="label">遮罩样式</span>
+        <div className="control">
+          <div className="seg" title="译文遮罩的隐藏样式；未开启遮罩时选样式会同时把遮罩打开">
+            <button
+              className={settings.maskStyle === "blank" ? "active" : ""}
+              onClick={() => onPatch({ maskStyle: "blank", ...(settings.maskTranslation ? {} : { maskTranslation: true }) })}
+            >
+              留白显影
+            </button>
+            <button
+              className={settings.maskStyle === "frost" ? "active" : ""}
+              onClick={() => onPatch({ maskStyle: "frost", ...(settings.maskTranslation ? {} : { maskTranslation: true }) })}
+            >
+              毛玻璃
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="drawer-row">
+        <span className="label">正文字号</span>
+        <div className="control">
+          <div className="drawer-stepper">
+            <button
+              onClick={() => onPatch({ fontSize: Math.max(READER_FONT_SIZE_MIN, settings.fontSize - 1) })}
+              disabled={settings.fontSize <= READER_FONT_SIZE_MIN}
+              aria-label="减小字号"
+            >
+              −
+            </button>
+            <span className="val">{settings.fontSize}</span>
+            <button
+              onClick={() => onPatch({ fontSize: Math.min(READER_FONT_SIZE_MAX, settings.fontSize + 1) })}
+              disabled={settings.fontSize >= READER_FONT_SIZE_MAX}
+              aria-label="增大字号"
+            >
+              +
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="drawer-row">
+        <span className="label">行距</span>
+        <div className="control" style={{ flex: 1 }}>
+          <input
+            type="range"
+            className="drawer-slider"
+            min={1}
+            max={2}
+            step={0.05}
+            value={settings.lineHeight}
+            onChange={(e) => onPatch({ lineHeight: Number(e.target.value) })}
+            aria-label="行距"
+          />
+          <span className="drawer-slider-val">{settings.lineHeight.toFixed(2)}×</span>
+        </div>
+      </div>
+      <div className="drawer-row">
+        <span className="label">正文字体</span>
+        <div className="control">
+          <select
+            className="reader-select"
+            value={settings.fontPair}
+            onChange={(e) => onPatch({ fontPair: e.target.value as ReaderFontPair })}
+            aria-label="正文字体"
+          >
+            {FONT_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="drawer-group-title">词块</div>
+      <div
+        className="drawer-row"
+        title="新文章翻译完成后自动标注值得学的词组（会额外消耗接口 token），正文里以蓝色虚线下划线显示，点击看释义并可收藏"
+      >
+        <span className="label">自动标注词组</span>
+        <div className="control">
+          <button
+            className={`reader-switch${settings.chunkHighlight ? " on" : ""}`}
+            onClick={() => onPatch({ chunkHighlight: !settings.chunkHighlight })}
+            role="switch"
+            aria-checked={settings.chunkHighlight}
+            aria-label="自动标注词组"
+          />
+        </div>
+      </div>
+      <div className="drawer-row" title="已收藏的词/词块在正文再次出现时用绿色点线标记，点击可查看">
+        <span className="label">生词再现标记</span>
+        <div className="control">
+          <button
+            className={`reader-switch${settings.showVocabMarks ? " on" : ""}`}
+            onClick={() => onPatch({ showVocabMarks: !settings.showVocabMarks })}
+            role="switch"
+            aria-checked={settings.showVocabMarks}
+            aria-label="生词再现标记"
+          />
+        </div>
+      </div>
+      {chunkState && onReannotate && (
+        <div className="drawer-row" title="清空本篇已有标注，重新跑一遍词组标注">
+          <span className="label">重新标注本篇</span>
+          <div className="control">
+            <button className="btn btn-secondary btn-sm" onClick={onReannotate}>
+              重新标注
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="drawer-group-title">复习</div>
+      <div
+        className="drawer-row"
+        title="产出式复习：智能混合按卡自动选择（词块→完形 · 熟词→听写 · 新词→识别）；完形=原句挖空打字，听写=听整句写整句"
+      >
+        <span className="label">复习模式</span>
+        <div className="control">
+          <div className="seg">
+            {(Object.keys(REVIEW_MODE_LABELS) as ReviewModeSetting[]).map((m) => (
+              <button
+                key={m}
+                className={settings.reviewMode === m ? "active" : ""}
+                onClick={() => (onPatchReview ?? onPatch)({ reviewMode: m })}
+              >
+                {REVIEW_MODE_LABELS[m]}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="drawer-group-title">提醒</div>
+      <div
+        className="drawer-row"
+        title="到点弹系统级提醒卡（每天最多一次）；到期数同时显示在托盘图标角标上"
+      >
+        <span className="label">每日复习提醒</span>
+        <div className="control">
+          <button
+            className={`reader-switch${(rem?.enabled ?? true) ? " on" : ""}`}
+            onClick={() => patchReminder({ enabled: !(rem?.enabled ?? true) })}
+            role="switch"
+            aria-checked={rem?.enabled ?? true}
+            aria-label="每日复习提醒"
+          />
+        </div>
+      </div>
+      <div className="drawer-row">
+        <span className="label">提醒时间</span>
+        <div className="control">
+          <div className="drawer-stepper">
+            <button
+              onClick={() => rem && patchReminder({ minuteOfDay: Math.max(6 * 60, rem.minuteOfDay - 30) })}
+              disabled={!rem || rem.minuteOfDay <= 6 * 60}
+              aria-label="提早半小时"
+            >
+              −
+            </button>
+            <span className="val">{rem ? fmtMinute(rem.minuteOfDay) : "--:--"}</span>
+            <button
+              onClick={() => rem && patchReminder({ minuteOfDay: Math.min(23 * 60 + 30, rem.minuteOfDay + 30) })}
+              disabled={!rem || rem.minuteOfDay >= 23 * 60 + 30}
+              aria-label="推后半半小时"
+            >
+              +
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="drawer-row" title="此时间段内不弹提醒，只保留托盘角标">
+        <span className="label">免打扰</span>
+        <div className="control">
+          <button
+            className={`reader-switch${(rem?.dndEnabled ?? true) ? " on" : ""}`}
+            onClick={() => patchReminder({ dndEnabled: !(rem?.dndEnabled ?? true) })}
+            role="switch"
+            aria-checked={rem?.dndEnabled ?? true}
+            aria-label="免打扰"
+          />
+        </div>
+      </div>
+      <div className="drawer-row">
+        <span className="label">免打扰时段</span>
+        <div className="control drawer-static">23:00 – 08:00</div>
+      </div>
+      <div className="drawer-row" title="每日阅读目标（复习目标 = 清空到期，随词量自动变）">
+        <span className="label">每日目标 · 阅读</span>
+        <div className="control">
+          <div className="drawer-stepper">
+            <button
+              onClick={() => rem && patchReminder({ readGoalMin: Math.max(5, rem.readGoalMin - 5) })}
+              disabled={!rem || rem.readGoalMin <= 5}
+              aria-label="减少 5 分钟"
+            >
+              −
+            </button>
+            <span className="val">{rem ? `${rem.readGoalMin} 分钟` : "--"}</span>
+            <button
+              onClick={() => rem && patchReminder({ readGoalMin: Math.min(60, rem.readGoalMin + 5) })}
+              disabled={!rem || rem.readGoalMin >= 60}
+              aria-label="增加 5 分钟"
+            >
+              +
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="drawer-group-title">朗读</div>
+      <div
+        className="drawer-row"
+        title="当前生效的朗读链路；设置 → 语音 的服务商/音色/评分开关与讯飞凭据变更后即时刷新"
+      >
+        <span className="label">当前链路</span>
+        <div
+          className="control"
+          style={{ flex: 1, justifyContent: "flex-end", gap: 6, flexWrap: "wrap", rowGap: 4 }}
+        >
+          {chain === null ? (
+            <span className="drawer-static">读取中…</span>
+          ) : (
+            <>
+              <span className={`drawer-chain-pill${chain.tone === "warn" ? " warn" : ""}`}>
+                {chain.label}
+              </span>
+              {chain.fallbackNotice !== null && (
+                <span className="drawer-chain-note" title={chain.fallbackNotice}>
+                  {chain.fallbackNotice}
+                </span>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+      <div className="drawer-row" title="Edge 在线 = 微软神经音色（免费、无需凭据，默认）；云音色 = 跟随语音页所选服务商（沉浸云或讯飞）；本地 = Windows 系统 SAPI（离线可用）">
+        <span className="label">朗读引擎</span>
+        <div className="control">
+          <div className="seg">
+            <button
+              className={settings.ttsProvider === "edge" ? "active" : ""}
+              onClick={() => onPatch({ ttsProvider: "edge" })}
+            >
+              Edge 在线
+            </button>
+            <button
+              className={settings.ttsProvider === "cloud" || settings.ttsProvider === "xfyun" ? "active" : ""}
+              onClick={() => onPatch({ ttsProvider: "cloud" })}
+            >
+              云音色
+            </button>
+            <button
+              className={settings.ttsProvider === "local" ? "active" : ""}
+              onClick={() => onPatch({ ttsProvider: "local" })}
+            >
+              系统语音
+            </button>
+          </div>
+        </div>
+      </div>
+      {settings.ttsProvider === "edge" && (
+        <>
+          <div className="drawer-row" title="Edge 中文句音色（微软神经音色 ShortName）；留空 = 晓晓。已播句子进缓存（内存+磁盘），重听不再请求网络">
+            <span className="label">Edge音色·中文</span>
+            <div className="control" style={{ flex: 1 }}>
+              <input
+                className="reader-cred-input"
+                style={{ flex: 1, width: "auto" }}
+                list="edge-voice-list"
+                placeholder={DEFAULT_EDGE_VOICE}
+                value={settings.edgeVoiceZh}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => onPatch({ edgeVoiceZh: e.target.value.trim() })}
+                aria-label="Edge 云音色（中文）"
+              />
+            </div>
+          </div>
+          <div className="drawer-row" title="Edge 英文句音色；留空 = Ava（女声，自然）。男声推荐 AndrewNeural">
+            <span className="label">Edge音色·英文</span>
+            <div className="control" style={{ flex: 1 }}>
+              <input
+                className="reader-cred-input"
+                style={{ flex: 1, width: "auto" }}
+                list="edge-voice-list"
+                placeholder={DEFAULT_EDGE_VOICE_EN}
+                value={settings.edgeVoiceEn}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => onPatch({ edgeVoiceEn: e.target.value.trim() })}
+                aria-label="Edge 云音色（英文）"
+              />
+              <datalist id="edge-voice-list">
+                {EDGE_TTS_VOICE_SUGGESTIONS.map((v) => (
+                  <option key={v.voice} value={v.voice}>
+                    {v.label}
+                  </option>
+                ))}
+              </datalist>
+            </div>
+          </div>
+          <div className="drawer-row" title="Edge 在线合成为微软「大声朗读」同源服务，免费且无需账号；属非官方接口，偶发不可用时切回本地系统或讯飞">
+            <span className="label">服务说明</span>
+            <div className="control drawer-static" style={{ flex: 1, justifyContent: "flex-end" }}>
+              免费 · 无需凭据 · 需联网
+            </div>
+          </div>
+        </>
+      )}
+      {(settings.ttsProvider === "cloud" || settings.ttsProvider === "xfyun") && (
+        <>
+          {voiceProvider === null ? (
+            <div className="drawer-row" title="正在读取语音页服务商">
+              <span className="label">音色来源</span>
+              <div className="control drawer-static" style={{ flex: 1, justifyContent: "flex-end" }}>
+                读取中…
+              </div>
+            </div>
+          ) : voiceProvider === "gateway" ? (
+            <>
+              <div className="drawer-row" title="云音色来源跟随语音页所选服务商；这里不重复配置音色">
+                <span className="label">音色来源</span>
+                <div className="control drawer-static" style={{ flex: 1, justifyContent: "flex-end", gap: 8 }}>
+                  <span className={`cred-state${gatewayLoggedIn ? " ok" : ""}`}>
+                    {gatewayLoggedIn === null
+                      ? "沉浸云语音 · 正在读取登录状态…"
+                      : gatewayLoggedIn
+                        ? "沉浸云语音 · 已登录"
+                        : "沉浸云语音 · 未登录"}
+                  </span>
+                </div>
+              </div>
+              <div className="drawer-row" title="沉浸云按句流式合成，首个分片到达即开始播放；音色在语音页选择后即时生效">
+                <span className="label">服务说明</span>
+                <div className="control" style={{ flex: 1, justifyContent: "flex-end", gap: 8 }}>
+                  <span className="drawer-static">
+                    {gatewayLoggedIn === null
+                      ? "正在读取登录状态…"
+                      : gatewayLoggedIn
+                        ? "音色在语音页选择，此处不重复配置"
+                        : "当前未登录，播放会临时使用 Edge 朗读"}
+                  </span>
+                  <button
+                    className="reader-tb-btn"
+                    onClick={() => onOpenSettingsTab
+                      ? onOpenSettingsTab("voice")
+                      : void settingsOpenTab("voice").catch(() => undefined)}
+                    title={gatewayLoggedIn === false ? "打开设置 → 语音页登录沉浸云" : "打开设置 → 语音页配置音色"}
+                  >
+                    {gatewayLoggedIn === false ? "去语音页登录" : "去语音页配置"}
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="drawer-row" title="讯飞中文发音人（vcn）：中文句用它读；完整列表在讯飞控制台「语音合成」可试听，未授权音色会提示 11200。已播句子进缓存（内存+磁盘），重听不耗每日次数">
+                <span className="label">云音色·中文</span>
+                <div className="control" style={{ flex: 1 }}>
+                  <input
+                    className="reader-cred-input"
+                    style={{ flex: 1, width: "auto" }}
+                    list="xfyun-vcn-list"
+                    placeholder={DEFAULT_TTS_VCN}
+                    value={settings.cloudVoice}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(e) => onPatch({ cloudVoice: e.target.value.trim() })}
+                    aria-label="讯飞云音色（中文）"
+                  />
+                </div>
+              </div>
+              <div className="drawer-row" title="讯飞英文发音人（vcn）：英文句用它读，跟读示范不再由中文音色代劳；留空沿用中文音色">
+                <span className="label">云音色·英文</span>
+                <div className="control" style={{ flex: 1 }}>
+                  <input
+                    className="reader-cred-input"
+                    style={{ flex: 1, width: "auto" }}
+                    list="xfyun-vcn-list"
+                    placeholder={DEFAULT_TTS_VCN_EN}
+                    value={settings.cloudVoiceEn}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(e) => onPatch({ cloudVoiceEn: e.target.value.trim() })}
+                    aria-label="讯飞云音色（英文）"
+                  />
+                  <datalist id="xfyun-vcn-list">
+                    {XFUYUN_TTS_VOICE_SUGGESTIONS.map((v) => (
+                      <option key={v.vcn} value={v.vcn}>
+                        {v.label}
+                      </option>
+                    ))}
+                  </datalist>
+                </div>
+              </div>
+              <div className="drawer-row" title="讯飞凭据（评测/合成/听写）在 设置 → 语音 里集中配置">
+                <span className="label">合成凭据</span>
+                <div className="control" style={{ flex: 1, justifyContent: "flex-end", gap: 8 }}>
+                  <span className={`cred-state${ttsConfigured ? " ok" : ""}`}>
+                    {ttsConfigured === null ? "" : ttsConfigured ? "已配置 ✓" : "未配置"}
+                  </span>
+                  <button
+                    className="reader-tb-btn"
+                    onClick={() => onOpenSettingsTab
+                      ? onOpenSettingsTab("voice")
+                      : void openSettings().catch(() => undefined)}
+                    title="设置 → 语音"
+                  >
+                    {onOpenSettingsTab ? "配置凭据" : "设置"}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </>
+      )}
+      <div className="drawer-row">
+        <span className="label">本地音色</span>
+        <div className="control">
+          <select
+            className="reader-select"
+            value={settings.voice}
+            disabled={settings.ttsProvider !== "local"}
+            onChange={(e) => onPatch({ voice: e.target.value })}
+            aria-label="本地朗读音色"
+          >
+            <option value="">系统默认</option>
+            {voices.map((v) => (
+              <option key={v.name} value={v.name}>
+                {v.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <div className="drawer-row">
+        <span className="label">语速</span>
+        <div className="control" style={{ flex: 1 }}>
+          <input
+            type="range"
+            className="drawer-slider"
+            min={READER_RATE_MIN}
+            max={READER_RATE_MAX}
+            step={0.05}
+            value={settings.rate}
+            onChange={(e) => onPatch({ rate: Number(e.target.value) })}
+            aria-label="语速"
+          />
+          <span className="drawer-slider-val">{settings.rate.toFixed(2)}×</span>
+        </div>
+      </div>
+      <div className="drawer-row">
+        <span className="label">每句停顿</span>
+        <div className="control" style={{ flex: 1 }}>
+          <input
+            type="range"
+            className="drawer-slider"
+            min={0}
+            max={2000}
+            step={100}
+            value={settings.sentencePauseMs}
+            onChange={(e) => onPatch({ sentencePauseMs: Number(e.target.value) })}
+            aria-label="每句停顿"
+          />
+          <span className="drawer-slider-val">{(settings.sentencePauseMs / 1000).toFixed(1)}s</span>
+        </div>
+      </div>
+      <div className="drawer-row">
+        <span className="label">跟读模式</span>
+        <div className="control">
+          <button
+            className={`reader-switch${settings.shadowingMode ? " on" : ""}`}
+            onClick={() => onPatch({ shadowingMode: !settings.shadowingMode })}
+            role="switch"
+            aria-checked={settings.shadowingMode}
+            aria-label="跟读模式"
+          />
+        </div>
+      </div>
+      <div
+        className="drawer-row"
+        title="读完一句后自动开麦听你跟读，送讯飞语音评测打分：达标自动过，不达标卡住可「领读」示范。需要先在 设置 → 语音 里填评测凭据"
+      >
+        <span className="label">跟读评测</span>
+        <div className="control">
+          <button
+            className={`reader-switch${settings.shadowingAssess ? " on" : ""}`}
+            disabled={!settings.shadowingMode}
+            onClick={() => onPatch({ shadowingAssess: !settings.shadowingAssess })}
+            role="switch"
+            aria-checked={settings.shadowingAssess}
+            aria-label="跟读评测"
+          />
+        </div>
+      </div>
+      {assess?.broken === "settings" && (
+        <div
+          className="drawer-assess-hint"
+          title="评分本地开关在 设置 → 语音；两处都开启才会打分（仅沉浸云链路显示，讯飞直连与该开关无关）"
+        >
+          <span>
+            跟读打分已在 <b>设置 → 语音</b> 关闭，这里开着也不会打分
+          </span>
+          <button
+            className="reader-tb-btn"
+            onClick={() => onOpenSettingsTab
+              ? onOpenSettingsTab("voice")
+              : void settingsOpenTab("voice").catch(() => undefined)}
+            title="打开设置 → 语音页开启跟读打分"
+          >
+            去开启
+          </button>
+        </div>
+      )}
+      <div
+        className="drawer-row"
+        title="打分链生效投影：任一环断开都不会打分。断环显 ✗，— 表示该环不适用或未评估"
+      >
+        <span className="label">打分链</span>
+        <div className="control" style={{ flex: 1, justifyContent: "flex-end", gap: 3 }}>
+          {assessChips.map((chip, i) => (
+            <span key={chip.label} className="drawer-assess-chipwrap">
+              {i > 0 && (
+                <span className="drawer-assess-arrow" aria-hidden>
+                  →
+                </span>
+              )}
+              <span
+                className={`drawer-assess-chip${chip.state === true ? " ok" : chip.state === false ? " bad" : ""}`}
+                title={chip.title}
+              >
+                {chip.label} {chip.state === true ? "✓" : chip.state === false ? "✗" : "—"}
+              </span>
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="drawer-row" title="句分达到阈值才放行（满分 5 分）">
+        <span className="label">过关阈值</span>
+        <div className="control" style={{ flex: 1 }}>
+          <input
+            type="range"
+            className="drawer-slider"
+            min={3}
+            max={5}
+            step={0.1}
+            value={settings.shadowingPassScore}
+            disabled={!settings.shadowingAssess}
+            onChange={(e) => onPatch({ shadowingPassScore: Number(e.target.value) })}
+            aria-label="跟读过关阈值"
+          />
+          <span className="drawer-slider-val">
+            {Math.round(settings.shadowingPassScore * 20)} 分（{settings.shadowingPassScore.toFixed(1)}/5）
+          </span>
+        </div>
+      </div>
+      <div className="drawer-row" title="开 = 本句读完自动开麦录音；关 = 出「开口跟读」按钮，点了才录">
+        <span className="label">读完自动开麦</span>
+        <div className="control">
+          <button
+            className={`reader-switch${settings.shadowingAutoMic ? " on" : ""}`}
+            disabled={!settings.shadowingAssess}
+            onClick={() => onPatch({ shadowingAutoMic: !settings.shadowingAutoMic })}
+            role="switch"
+            aria-checked={settings.shadowingAutoMic}
+            aria-label="读完自动开麦"
+          />
+        </div>
+      </div>
+      <div className="drawer-row" title="说话停顿超过该时长即视为读完，自动送评测">
+        <span className="label">静音断句</span>
+        <div className="control" style={{ flex: 1 }}>
+          <input
+            type="range"
+            className="drawer-slider"
+            min={READER_ASSESS_SILENCE_MIN / 1000}
+            max={READER_ASSESS_SILENCE_MAX / 1000}
+            step={0.1}
+            value={settings.shadowingSilenceMs / 1000}
+            disabled={!settings.shadowingAssess}
+            onChange={(e) =>
+              onPatch({ shadowingSilenceMs: Math.round(Number(e.target.value) * 1000) })
+            }
+            aria-label="静音断句时长"
+          />
+          <span className="drawer-slider-val">
+            {(settings.shadowingSilenceMs / 1000).toFixed(1)}s
+          </span>
+        </div>
+      </div>
+      <div className="drawer-row" title="跟读录音用的麦克风；录不出声音时优先换一个（默认可能选到虚拟声卡）">
+        <span className="label">麦克风</span>
+        <div className="control">
+          <select
+            className="reader-select"
+            value={micDeviceId}
+            onChange={(e) => onMicDevice(e.target.value)}
+            aria-label="跟读麦克风"
+          >
+            <option value="">系统默认</option>
+            {micDevices.map((d) => (
+              <option key={d.deviceId} value={d.deviceId}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {settings.shadowingMode && (
+        <div className="drawer-row" title="讯飞评测凭据在 设置 → 语音 里集中配置；过关判定与跟读打分都用它">
+          <span className="label">评测凭据</span>
+          <div className="control" style={{ flex: 1, justifyContent: "flex-end", gap: 8 }}>
+            <span className={`cred-state${credConfigured ? " ok" : ""}`}>
+              {credConfigured === null ? "" : credConfigured ? "已配置 ✓" : "未配置"}
+            </span>
+            <button
+              className="reader-tb-btn"
+              onClick={() => onOpenSettingsTab
+                ? onOpenSettingsTab("voice")
+                : void openSettings().catch(() => undefined)}
+              title="设置 → 语音"
+            >
+              {onOpenSettingsTab ? "配置凭据" : "设置"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="drawer-group-title">主题</div>
+      <div className="theme-grid">
+        {THEMES.map((t) => (
+          <button
+            key={t.value}
+            type="button"
+            className={`theme-swatch${settings.theme === t.value ? " active" : ""}`}
+            onClick={() => onPatch({ theme: t.value })}
+            aria-label={`主题：${t.label}`}
+            aria-pressed={settings.theme === t.value}
+          >
+            <i style={{ background: t.swatch }} aria-hidden />
+            <span>{t.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* 嵌入统一设置时切换分类；独立抽屉兼容原总设置入口。 */}
+      <div
+        className="drawer-settings-hint"
+        title={onOpenSettingsTab ? "切换到模型服务" : "打开总设置窗口调整模型服务、语音、快捷键和账号"}
+      >
+        <span>{onOpenSettingsTab
+          ? "模型服务、语音、快捷键和账号可在左侧分类中调整。"
+          : "模型服务、语音、快捷键和账号在「设置」里调整。"}</span>
+        <button
+          className="reader-tb-btn"
+          onClick={() => onOpenSettingsTab
+            ? onOpenSettingsTab("provider")
+            : void openSettings().catch(() => undefined)}
+          title={onOpenSettingsTab ? "切换到模型服务" : "打开总设置窗口"}
+        >
+          {onOpenSettingsTab ? "模型服务" : "打开设置"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** 独立抽屉兼容包装；统一设置只嵌入 ReaderSettingsContent。 */
+export function SettingsDrawer({ onReset, onClose, ...contentProps }: Props) {
   useEscapeClose(onClose);
 
   return (
@@ -190,609 +1100,7 @@ export function SettingsDrawer({ settings, onPatch, onReset, onClose, chunkState
           </button>
         </div>
         <div className="reader-drawer-body">
-          <div className="drawer-group-title">版式</div>
-          <div className="drawer-row">
-            <span className="label">对照模式</span>
-            <div className="control">
-              <div className="seg">
-                {CONTRAST_OPTIONS.map((o) => (
-                  <button
-                    key={o.value}
-                    className={settings.contrastMode === o.value ? "active" : ""}
-                    onClick={() => onPatch({ contrastMode: o.value })}
-                  >
-                    {o.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-          <div className="drawer-row" title="盖住译文自测：点单句揭开，再点遮住；按住 H 临时全显。开关也出现在播放条的「视图」菜单里">
-            <span className="label">译文遮罩</span>
-            <div className="control">
-              <button
-                className={`reader-switch${settings.maskTranslation ? " on" : ""}`}
-                onClick={() => onPatch({ maskTranslation: !settings.maskTranslation })}
-                role="switch"
-                aria-checked={settings.maskTranslation}
-                aria-label="译文遮罩"
-              />
-          </div>
-          </div>
-          <div className="drawer-row">
-            <span className="label">遮罩样式</span>
-            <div className="control">
-              <div className="seg" title="译文遮罩的隐藏样式；未开启遮罩时选样式会同时把遮罩打开">
-                <button
-                  className={settings.maskStyle === "blank" ? "active" : ""}
-                  onClick={() => onPatch({ maskStyle: "blank", ...(settings.maskTranslation ? {} : { maskTranslation: true }) })}
-                >
-                  留白显影
-                </button>
-                <button
-                  className={settings.maskStyle === "frost" ? "active" : ""}
-                  onClick={() => onPatch({ maskStyle: "frost", ...(settings.maskTranslation ? {} : { maskTranslation: true }) })}
-                >
-                  毛玻璃
-                </button>
-              </div>
-            </div>
-          </div>
-          <div className="drawer-row">
-            <span className="label">正文字号</span>
-            <div className="control">
-              <div className="drawer-stepper">
-                <button
-                  onClick={() => onPatch({ fontSize: Math.max(READER_FONT_SIZE_MIN, settings.fontSize - 1) })}
-                  disabled={settings.fontSize <= READER_FONT_SIZE_MIN}
-                  aria-label="减小字号"
-                >
-                  −
-                </button>
-                <span className="val">{settings.fontSize}</span>
-                <button
-                  onClick={() => onPatch({ fontSize: Math.min(READER_FONT_SIZE_MAX, settings.fontSize + 1) })}
-                  disabled={settings.fontSize >= READER_FONT_SIZE_MAX}
-                  aria-label="增大字号"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
-          <div className="drawer-row">
-            <span className="label">行距</span>
-            <div className="control" style={{ flex: 1 }}>
-              <input
-                type="range"
-                className="drawer-slider"
-                min={1}
-                max={2}
-                step={0.05}
-                value={settings.lineHeight}
-                onChange={(e) => onPatch({ lineHeight: Number(e.target.value) })}
-                aria-label="行距"
-              />
-              <span className="drawer-slider-val">{settings.lineHeight.toFixed(2)}×</span>
-            </div>
-          </div>
-          <div className="drawer-row">
-            <span className="label">正文字体</span>
-            <div className="control">
-              <select
-                className="reader-select"
-                value={settings.fontPair}
-                onChange={(e) => onPatch({ fontPair: e.target.value as ReaderFontPair })}
-                aria-label="正文字体"
-              >
-                {FONT_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="drawer-group-title">词块</div>
-          <div
-            className="drawer-row"
-            title="新文章翻译完成后自动标注值得学的词组（会额外消耗接口 token），正文里以蓝色虚线下划线显示，点击看释义并可收藏"
-          >
-            <span className="label">自动标注词组</span>
-            <div className="control">
-              <button
-                className={`reader-switch${settings.chunkHighlight ? " on" : ""}`}
-                onClick={() => onPatch({ chunkHighlight: !settings.chunkHighlight })}
-                role="switch"
-                aria-checked={settings.chunkHighlight}
-                aria-label="自动标注词组"
-              />
-            </div>
-          </div>
-          <div className="drawer-row" title="已收藏的词/词块在正文再次出现时用绿色点线标记，点击可查看">
-            <span className="label">生词再现标记</span>
-            <div className="control">
-              <button
-                className={`reader-switch${settings.showVocabMarks ? " on" : ""}`}
-                onClick={() => onPatch({ showVocabMarks: !settings.showVocabMarks })}
-                role="switch"
-                aria-checked={settings.showVocabMarks}
-                aria-label="生词再现标记"
-              />
-            </div>
-          </div>
-          {chunkState && onReannotate && (
-            <div className="drawer-row" title="清空本篇已有标注，重新跑一遍词组标注">
-              <span className="label">重新标注本篇</span>
-              <div className="control">
-                <button className="btn btn-secondary btn-sm" onClick={onReannotate}>
-                  重新标注
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="drawer-group-title">复习</div>
-          <div
-            className="drawer-row"
-            title="产出式复习：智能混合按卡自动选择（词块→完形 · 熟词→听写 · 新词→识别）；完形=原句挖空打字，听写=听整句写整句"
-          >
-            <span className="label">复习模式</span>
-            <div className="control">
-              <div className="seg">
-                {(Object.keys(REVIEW_MODE_LABELS) as ReviewModeSetting[]).map((m) => (
-                  <button
-                    key={m}
-                    className={settings.reviewMode === m ? "active" : ""}
-                    onClick={() => (onPatchReview ?? onPatch)({ reviewMode: m })}
-                  >
-                    {REVIEW_MODE_LABELS[m]}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="drawer-group-title">提醒</div>
-          <div
-            className="drawer-row"
-            title="到点弹系统级提醒卡（每天最多一次）；到期数同时显示在托盘图标角标上"
-          >
-            <span className="label">每日复习提醒</span>
-            <div className="control">
-              <button
-                className={`reader-switch${(rem?.enabled ?? true) ? " on" : ""}`}
-                onClick={() => patchReminder({ enabled: !(rem?.enabled ?? true) })}
-                role="switch"
-                aria-checked={rem?.enabled ?? true}
-                aria-label="每日复习提醒"
-              />
-            </div>
-          </div>
-          <div className="drawer-row">
-            <span className="label">提醒时间</span>
-            <div className="control">
-              <div className="drawer-stepper">
-                <button
-                  onClick={() => rem && patchReminder({ minuteOfDay: Math.max(6 * 60, rem.minuteOfDay - 30) })}
-                  disabled={!rem || rem.minuteOfDay <= 6 * 60}
-                  aria-label="提早半小时"
-                >
-                  −
-                </button>
-                <span className="val">{rem ? fmtMinute(rem.minuteOfDay) : "--:--"}</span>
-                <button
-                  onClick={() => rem && patchReminder({ minuteOfDay: Math.min(23 * 60 + 30, rem.minuteOfDay + 30) })}
-                  disabled={!rem || rem.minuteOfDay >= 23 * 60 + 30}
-                  aria-label="推后半半小时"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
-          <div className="drawer-row" title="此时间段内不弹提醒，只保留托盘角标">
-            <span className="label">免打扰</span>
-            <div className="control">
-              <button
-                className={`reader-switch${(rem?.dndEnabled ?? true) ? " on" : ""}`}
-                onClick={() => patchReminder({ dndEnabled: !(rem?.dndEnabled ?? true) })}
-                role="switch"
-                aria-checked={rem?.dndEnabled ?? true}
-                aria-label="免打扰"
-              />
-            </div>
-          </div>
-          <div className="drawer-row">
-            <span className="label">免打扰时段</span>
-            <div className="control drawer-static">23:00 – 08:00</div>
-          </div>
-          <div className="drawer-row" title="每日阅读目标（复习目标 = 清空到期，随词量自动变）">
-            <span className="label">每日目标 · 阅读</span>
-            <div className="control">
-              <div className="drawer-stepper">
-                <button
-                  onClick={() => rem && patchReminder({ readGoalMin: Math.max(5, rem.readGoalMin - 5) })}
-                  disabled={!rem || rem.readGoalMin <= 5}
-                  aria-label="减少 5 分钟"
-                >
-                  −
-                </button>
-                <span className="val">{rem ? `${rem.readGoalMin} 分钟` : "--"}</span>
-                <button
-                  onClick={() => rem && patchReminder({ readGoalMin: Math.min(60, rem.readGoalMin + 5) })}
-                  disabled={!rem || rem.readGoalMin >= 60}
-                  aria-label="增加 5 分钟"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="drawer-group-title">朗读</div>
-          <div className="drawer-row" title="Edge 在线 = 微软神经音色（免费、无需凭据，默认）；云音色 = 跟随语音页所选服务商（沉浸云或讯飞）；本地 = Windows 系统 SAPI（离线可用）">
-            <span className="label">朗读引擎</span>
-            <div className="control">
-              <div className="seg">
-                <button
-                  className={settings.ttsProvider === "edge" ? "active" : ""}
-                  onClick={() => onPatch({ ttsProvider: "edge" })}
-                >
-                  Edge 在线
-                </button>
-                <button
-                  className={settings.ttsProvider === "cloud" || settings.ttsProvider === "xfyun" ? "active" : ""}
-                  onClick={() => onPatch({ ttsProvider: "cloud" })}
-                >
-                  云音色
-                </button>
-                <button
-                  className={settings.ttsProvider === "local" ? "active" : ""}
-                  onClick={() => onPatch({ ttsProvider: "local" })}
-                >
-                  系统语音
-                </button>
-              </div>
-            </div>
-          </div>
-          {settings.ttsProvider === "edge" && (
-            <>
-              <div className="drawer-row" title="Edge 中文句音色（微软神经音色 ShortName）；留空 = 晓晓。已播句子进缓存（内存+磁盘），重听不再请求网络">
-                <span className="label">Edge音色·中文</span>
-                <div className="control" style={{ flex: 1 }}>
-                  <input
-                    className="reader-cred-input"
-                    style={{ flex: 1, width: "auto" }}
-                    list="edge-voice-list"
-                    placeholder={DEFAULT_EDGE_VOICE}
-                    value={settings.edgeVoiceZh}
-                    autoComplete="off"
-                    spellCheck={false}
-                    onChange={(e) => onPatch({ edgeVoiceZh: e.target.value.trim() })}
-                    aria-label="Edge 云音色（中文）"
-                  />
-                </div>
-              </div>
-              <div className="drawer-row" title="Edge 英文句音色；留空 = Ava（女声，自然）。男声推荐 AndrewNeural">
-                <span className="label">Edge音色·英文</span>
-                <div className="control" style={{ flex: 1 }}>
-                  <input
-                    className="reader-cred-input"
-                    style={{ flex: 1, width: "auto" }}
-                    list="edge-voice-list"
-                    placeholder={DEFAULT_EDGE_VOICE_EN}
-                    value={settings.edgeVoiceEn}
-                    autoComplete="off"
-                    spellCheck={false}
-                    onChange={(e) => onPatch({ edgeVoiceEn: e.target.value.trim() })}
-                    aria-label="Edge 云音色（英文）"
-                  />
-                  <datalist id="edge-voice-list">
-                    {EDGE_TTS_VOICE_SUGGESTIONS.map((v) => (
-                      <option key={v.voice} value={v.voice}>
-                        {v.label}
-                      </option>
-                    ))}
-                  </datalist>
-                </div>
-              </div>
-              <div className="drawer-row" title="Edge 在线合成为微软「大声朗读」同源服务，免费且无需账号；属非官方接口，偶发不可用时切回本地系统或讯飞">
-                <span className="label">服务说明</span>
-                <div className="control drawer-static" style={{ flex: 1, justifyContent: "flex-end" }}>
-                  免费 · 无需凭据 · 需联网
-                </div>
-              </div>
-            </>
-          )}
-          {(settings.ttsProvider === "cloud" || settings.ttsProvider === "xfyun") && (
-            <>
-              {voiceProvider === null ? (
-                <div className="drawer-row" title="正在读取语音页服务商">
-                  <span className="label">音色来源</span>
-                  <div className="control drawer-static" style={{ flex: 1, justifyContent: "flex-end" }}>
-                    读取中…
-                  </div>
-                </div>
-              ) : voiceProvider === "gateway" ? (
-                <>
-                  <div className="drawer-row" title="云音色来源跟随语音页所选服务商；这里不重复配置音色">
-                    <span className="label">音色来源</span>
-                    <div className="control drawer-static" style={{ flex: 1, justifyContent: "flex-end", gap: 8 }}>
-                      <span className={`cred-state${gatewayLoggedIn ? " ok" : ""}`}>
-                        {gatewayLoggedIn === null
-                          ? "沉浸云语音 · 正在读取登录状态…"
-                          : gatewayLoggedIn
-                            ? "沉浸云语音 · 已登录"
-                            : "沉浸云语音 · 未登录"}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="drawer-row" title="沉浸云按句流式合成，首个分片到达即开始播放；音色在语音页选择后即时生效">
-                    <span className="label">服务说明</span>
-                    <div className="control" style={{ flex: 1, justifyContent: "flex-end", gap: 8 }}>
-                      <span className="drawer-static">
-                        {gatewayLoggedIn === null
-                          ? "正在读取登录状态…"
-                          : gatewayLoggedIn
-                            ? "音色在语音页选择，此处不重复配置"
-                            : "当前未登录，播放会临时使用 Edge 朗读"}
-                      </span>
-                      <button
-                        className="reader-tb-btn"
-                        onClick={() => void settingsOpenTab("voice").catch(() => undefined)}
-                        title={gatewayLoggedIn === false ? "打开设置 → 语音页登录沉浸云" : "打开设置 → 语音页配置音色"}
-                      >
-                        {gatewayLoggedIn === false ? "去语音页登录" : "去语音页配置"}
-                      </button>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="drawer-row" title="讯飞中文发音人（vcn）：中文句用它读；完整列表在讯飞控制台「语音合成」可试听，未授权音色会提示 11200。已播句子进缓存（内存+磁盘），重听不耗每日次数">
-                    <span className="label">云音色·中文</span>
-                    <div className="control" style={{ flex: 1 }}>
-                      <input
-                        className="reader-cred-input"
-                        style={{ flex: 1, width: "auto" }}
-                        list="xfyun-vcn-list"
-                        placeholder={DEFAULT_TTS_VCN}
-                        value={settings.cloudVoice}
-                        autoComplete="off"
-                        spellCheck={false}
-                        onChange={(e) => onPatch({ cloudVoice: e.target.value.trim() })}
-                        aria-label="讯飞云音色（中文）"
-                      />
-                    </div>
-                  </div>
-                  <div className="drawer-row" title="讯飞英文发音人（vcn）：英文句用它读，跟读示范不再由中文音色代劳；留空沿用中文音色">
-                    <span className="label">云音色·英文</span>
-                    <div className="control" style={{ flex: 1 }}>
-                      <input
-                        className="reader-cred-input"
-                        style={{ flex: 1, width: "auto" }}
-                        list="xfyun-vcn-list"
-                        placeholder={DEFAULT_TTS_VCN_EN}
-                        value={settings.cloudVoiceEn}
-                        autoComplete="off"
-                        spellCheck={false}
-                        onChange={(e) => onPatch({ cloudVoiceEn: e.target.value.trim() })}
-                        aria-label="讯飞云音色（英文）"
-                      />
-                      <datalist id="xfyun-vcn-list">
-                        {XFUYUN_TTS_VOICE_SUGGESTIONS.map((v) => (
-                          <option key={v.vcn} value={v.vcn}>
-                            {v.label}
-                          </option>
-                        ))}
-                      </datalist>
-                    </div>
-                  </div>
-                  <div className="drawer-row" title="讯飞凭据（评测/合成/听写）在主窗口 设置 → 语音 里集中配置">
-                    <span className="label">合成凭据</span>
-                    <div className="control" style={{ flex: 1, justifyContent: "flex-end", gap: 8 }}>
-                      <span className={`cred-state${ttsConfigured ? " ok" : ""}`}>
-                        {ttsConfigured === null ? "" : ttsConfigured ? "已配置 ✓" : "未配置"}
-                      </span>
-                      <button
-                        className="reader-tb-btn"
-                        onClick={() => void openSettings().catch(() => undefined)}
-                        title="打开总设置 → 语音"
-                      >
-                        设置
-                      </button>
-                    </div>
-                  </div>
-                </>
-              )}
-            </>
-          )}
-          <div className="drawer-row">
-            <span className="label">本地音色</span>
-            <div className="control">
-              <select
-                className="reader-select"
-                value={settings.voice}
-                disabled={settings.ttsProvider !== "local"}
-                onChange={(e) => onPatch({ voice: e.target.value })}
-                aria-label="本地朗读音色"
-              >
-                <option value="">系统默认</option>
-                {voices.map((v) => (
-                  <option key={v.name} value={v.name}>
-                    {v.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div className="drawer-row">
-            <span className="label">语速</span>
-            <div className="control" style={{ flex: 1 }}>
-              <input
-                type="range"
-                className="drawer-slider"
-                min={READER_RATE_MIN}
-                max={READER_RATE_MAX}
-                step={0.05}
-                value={settings.rate}
-                onChange={(e) => onPatch({ rate: Number(e.target.value) })}
-                aria-label="语速"
-              />
-              <span className="drawer-slider-val">{settings.rate.toFixed(2)}×</span>
-            </div>
-          </div>
-          <div className="drawer-row">
-            <span className="label">每句停顿</span>
-            <div className="control" style={{ flex: 1 }}>
-              <input
-                type="range"
-                className="drawer-slider"
-                min={0}
-                max={2000}
-                step={100}
-                value={settings.sentencePauseMs}
-                onChange={(e) => onPatch({ sentencePauseMs: Number(e.target.value) })}
-                aria-label="每句停顿"
-              />
-              <span className="drawer-slider-val">{(settings.sentencePauseMs / 1000).toFixed(1)}s</span>
-            </div>
-          </div>
-          <div className="drawer-row">
-            <span className="label">跟读模式</span>
-            <div className="control">
-              <button
-                className={`reader-switch${settings.shadowingMode ? " on" : ""}`}
-                onClick={() => onPatch({ shadowingMode: !settings.shadowingMode })}
-                role="switch"
-                aria-checked={settings.shadowingMode}
-                aria-label="跟读模式"
-              />
-            </div>
-          </div>
-          <div
-            className="drawer-row"
-            title="读完一句后自动开麦听你跟读，送讯飞语音评测打分：达标自动过，不达标卡住可「领读」示范。需要先在 设置 → 语音 里填评测凭据"
-          >
-            <span className="label">跟读评测</span>
-            <div className="control">
-              <button
-                className={`reader-switch${settings.shadowingAssess ? " on" : ""}`}
-                disabled={!settings.shadowingMode}
-                onClick={() => onPatch({ shadowingAssess: !settings.shadowingAssess })}
-                role="switch"
-                aria-checked={settings.shadowingAssess}
-                aria-label="跟读评测"
-              />
-            </div>
-          </div>
-          <div className="drawer-row" title="句分达到阈值才放行（满分 5 分）">
-            <span className="label">过关阈值</span>
-            <div className="control" style={{ flex: 1 }}>
-              <input
-                type="range"
-                className="drawer-slider"
-                min={3}
-                max={5}
-                step={0.1}
-                value={settings.shadowingPassScore}
-                disabled={!settings.shadowingAssess}
-                onChange={(e) => onPatch({ shadowingPassScore: Number(e.target.value) })}
-                aria-label="跟读过关阈值"
-              />
-              <span className="drawer-slider-val">
-                {Math.round(settings.shadowingPassScore * 20)} 分（{settings.shadowingPassScore.toFixed(1)}/5）
-              </span>
-            </div>
-          </div>
-          <div className="drawer-row" title="开 = 本句读完自动开麦录音；关 = 出「开口跟读」按钮，点了才录">
-            <span className="label">读完自动开麦</span>
-            <div className="control">
-              <button
-                className={`reader-switch${settings.shadowingAutoMic ? " on" : ""}`}
-                disabled={!settings.shadowingAssess}
-                onClick={() => onPatch({ shadowingAutoMic: !settings.shadowingAutoMic })}
-                role="switch"
-                aria-checked={settings.shadowingAutoMic}
-                aria-label="读完自动开麦"
-              />
-            </div>
-          </div>
-          <div className="drawer-row" title="说话停顿超过该时长即视为读完，自动送评测">
-            <span className="label">静音断句</span>
-            <div className="control" style={{ flex: 1 }}>
-              <input
-                type="range"
-                className="drawer-slider"
-                min={READER_ASSESS_SILENCE_MIN / 1000}
-                max={READER_ASSESS_SILENCE_MAX / 1000}
-                step={0.1}
-                value={settings.shadowingSilenceMs / 1000}
-                disabled={!settings.shadowingAssess}
-                onChange={(e) =>
-                  onPatch({ shadowingSilenceMs: Math.round(Number(e.target.value) * 1000) })
-                }
-                aria-label="静音断句时长"
-              />
-              <span className="drawer-slider-val">
-                {(settings.shadowingSilenceMs / 1000).toFixed(1)}s
-              </span>
-            </div>
-          </div>
-          <div className="drawer-row" title="跟读录音用的麦克风；录不出声音时优先换一个（默认可能选到虚拟声卡）">
-            <span className="label">麦克风</span>
-            <div className="control">
-              <select
-                className="reader-select"
-                value={micDeviceId}
-                onChange={(e) => onMicDevice(e.target.value)}
-                aria-label="跟读麦克风"
-              >
-                <option value="">系统默认</option>
-                {micDevices.map((d) => (
-                  <option key={d.deviceId} value={d.deviceId}>
-                    {d.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          {settings.shadowingMode && (
-            <div className="drawer-row" title="讯飞评测凭据在主窗口 设置 → 语音 里集中配置；过关判定与跟读打分都用它">
-              <span className="label">评测凭据</span>
-              <div className="control" style={{ flex: 1, justifyContent: "flex-end", gap: 8 }}>
-                <span className={`cred-state${credConfigured ? " ok" : ""}`}>
-                  {credConfigured === null ? "" : credConfigured ? "已配置 ✓" : "未配置"}
-                </span>
-                <button
-                  className="reader-tb-btn"
-                  onClick={() => void openSettings().catch(() => undefined)}
-                  title="打开总设置 → 语音"
-                >
-                  设置
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="drawer-group-title">主题</div>
-          <div className="theme-grid">
-            {THEMES.map((t) => (
-              <button
-                key={t.value}
-                type="button"
-                className={`theme-swatch${settings.theme === t.value ? " active" : ""}`}
-                onClick={() => onPatch({ theme: t.value })}
-                aria-label={`主题：${t.label}`}
-                aria-pressed={settings.theme === t.value}
-              >
-                <i style={{ background: t.swatch }} aria-hidden />
-                <span>{t.label}</span>
-              </button>
-            ))}
-          </div>
+          <ReaderSettingsContent {...contentProps} />
         </div>
         <div className="reader-drawer-footer">
           <button className="btn btn-ghost" onClick={onReset}>

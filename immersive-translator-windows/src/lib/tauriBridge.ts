@@ -67,6 +67,11 @@ export async function openOcrOverlay(): Promise<void> {
   await invoke("open_ocr_overlay");
 }
 
+/** 打开「录音直译」窗口（托盘 "live" 菜单 / 阅读室账号菜单共用同一入口）。 */
+export async function openLiveCaption(): Promise<void> {
+  await invoke("open_live_caption");
+}
+
 /** 显示 OCR 结果浮窗并触发翻译。 */
 export async function showOcrResult(text: string): Promise<void> {
   await invoke("show_ocr_result", { text });
@@ -704,7 +709,7 @@ export function settingsOpenTab(tab: string): Promise<void> {
   return invoke("settings_open_tab", { tab });
 }
 
-/** Settings 挂载时取走 pending tab（恰好一次，取走即清空）。 */
+/** 阅读室先注册设置导航监听，再取走 pending tab；事件回调也经此消费，取走即清空。 */
 export function settingsTakePendingTab(): Promise<string | null> {
   return invoke("settings_take_pending_tab");
 }
@@ -716,7 +721,7 @@ export function listenAuthStateChanged(
   return listen<AuthStatus>("auth-state-changed", (event) => handler(event.payload));
 }
 
-/** settings 窗运行中的 tab 定位事件（settings_open_tab 在窗口已存在时）。 */
+/** 统一设置导航通知（发往 reader）；接收后调用 settingsTakePendingTab 消费最新请求。 */
 export function listenSettingsNavigateTab(
   handler: (tab: string) => void,
 ): Promise<UnlistenFn> {

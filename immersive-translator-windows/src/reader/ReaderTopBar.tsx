@@ -3,7 +3,8 @@
  * 左 .shell-brand（monogram「I」→ onHome + 书架抽屉触发器：书架 · 当前书名）
  * 中 .shell-tabs（阅读 / 口语 / 笔记与复习 三档，vault 档角标 = 待复习词数；
  *   未整理数单独在入口提示中说明，避免把重叠的词条重复计数）
- * 右 .shell-tools（全文检索 · 主题选择 · 阅读设置抽屉）
+ * 右 .shell-tools（全文检索 · 主题选择 · 统一设置 · 分隔线 + 账号入口
+ *   AccountMenu：authStatus 传入才挂载，游客「登录」/失效「重新登录」/成员圆头像）
  * 布局与皮肤规则见 reader.css「外壳重构 2026-10-26」横幅（.shell-* 全局骨架，
  * 四视图共用平面胶囊）；根类 .floating-top-stage 保留（矮窗规则续命）。
  * 视图菜单（§7）仍由本文件导出——ReaderApp 在 viewMenuAnchor 处挂载，
@@ -22,6 +23,8 @@ import {
   IconSettings,
 } from "../ui/icons";
 import type { ContrastMode, ReaderSettings, ReaderTheme } from "../core/readerTypes";
+import { AccountMenu } from "./AccountMenu";
+import type { AuthStatus } from "../lib/tauriBridge";
 
 /** 导航岛三档（阅读视图内部路由 shelf/review/notes 由 ReaderApp 归并映射）。 */
 export type IslandSurface = "reading" | "speak" | "vault";
@@ -47,6 +50,10 @@ interface Props {
   focusMode?: boolean;
   /** 主窗口检查到新版本时显示；空值不占据顶栏空间。 */
   updateNotice?: ReactNode;
+  /** 登录态（ReaderApp 单一数据源）：未传（undefined）不挂账号入口，null=读取中。 */
+  authStatus?: AuthStatus | null;
+  /** 账号菜单动作反馈（ReaderApp showToast）。 */
+  onToast?: (message: string) => void;
 }
 
 const THEME_OPTIONS: { value: ReaderTheme; label: string; description: string; surface: string; ink: string }[] = [
@@ -202,6 +209,8 @@ export function ReaderTopBar({
   onToggleFolio,
   focusMode = false,
   updateNotice,
+  authStatus,
+  onToast,
 }: Props) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -313,11 +322,17 @@ export function ReaderTopBar({
           type="button"
           className="pill-Ghost-btn"
           onClick={onOpenDrawer}
-          title="阅读设置"
-          aria-label="阅读设置"
+          title="阅读、语音与应用设置"
+          aria-label="设置"
         >
           <IconSettings size={14} />
         </button>
+        {authStatus !== undefined && (
+          <>
+            <span className="tools-sep" aria-hidden />
+            <AccountMenu authStatus={authStatus} dueNow={dueNow} onToast={onToast ?? (() => undefined)} />
+          </>
+        )}
       </div>
     </header>
   );

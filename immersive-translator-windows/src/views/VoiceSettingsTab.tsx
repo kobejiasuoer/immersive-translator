@@ -272,7 +272,7 @@ export function VoiceSettingsTab({
           <XfyunVoiceSection />
         )}
       </section>
-      <p className="voice-footnote">已保存的讯飞凭据可继续使用，切换服务无需重复填写。朗读方式也可在阅读室中调整。</p>
+      <p className="voice-footnote">已保存的讯飞凭据可继续使用，切换服务无需重复填写。朗读方式可在「阅读与练习」中调整。</p>
     </div>
   );
 }

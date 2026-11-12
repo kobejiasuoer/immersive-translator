@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f7f9f6" />
+  <title>沉浸口语 — 把读过的，变成会说的</title>
+  <meta name="description" content="用喜欢的书和文章练口语。阅读、场景对话、跟读与复习，在沉浸口语里接着学。Windows 学习客户端免费开源，云服务按额度使用。" />
+  <meta name="robots" content="noindex" />
+  <link rel="icon" type="image/png" href="assets/brand-icon.png" />
+  <link rel="stylesheet" href="upgrade.css" />
+  <link rel="stylesheet" href="mobile.css" />
+  <script src="upgrade.js" defer></script>
+  <script src="reading-demo.js" defer></script>
+  <script src="downloads.js" defer></script>
+  <script type="module" src="pretext-layout.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到正文</a>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="沉浸口语首页"><img src="assets/brand-icon.png" width="32" height="32" alt="" /><span>沉浸口语</span></a>
+    <nav class="desktop-nav" aria-label="主导航">
+      <a href="#experience">学习空间</a><a href="#content">自己的材料</a><a href="#mobile">移动端</a>
+      <a href="https://github.com/kobejiasuoer/immersive-translator" target="_blank" rel="noopener noreferrer">GitHub</a>
+    </nav>
+    <a class="nav-download" href="#download">下载客户端</a>
+    <details class="mobile-menu"><summary>菜单</summary><nav aria-label="手机导航"><a href="#experience">学习空间</a><a href="#content">自己的材料</a><a href="#mobile">移动端</a><a href="#download">下载客户端</a><a href="https://github.com/kobejiasuoer/immersive-translator" target="_blank" rel="noopener noreferrer">GitHub</a></nav></details>
+  </header>
+  <main id="main">
+    <section class="hero chapter" id="top" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <h1 id="hero-title"><span class="headline-line"><span>读过的句子</span></span><span class="headline-line"><span>现在说出来</span></span></h1>
+        <p class="hero-lead enter" data-pretext contenteditable="false">导入书和文章，读懂原句，再围绕内容练口语。</p>
+        <div class="platform-actions enter">
+          <a class="button" data-download="windows" href="https://github.com/kobejiasuoer/immersive-translator/releases/download/v0.15.2/ImmersiveSpeaking_0.15.2_x64-setup.exe"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M1 2h8v7H1zm10 0h8v7h-8zM1 11h8v7H1zm10 0h8v7h-8z"/></svg>Windows 下载</a>
+          <a class="text-action" data-download="macos" href="https://github.com/kobejiasuoer/immersive-translator/releases/download/v0.15.2/ImmersiveSpeaking-0.15.2-macOS.zip">macOS 下载</a>
+        </div>
+        <div class="hero-notes enter"><p>Windows 学习客户端。macOS 为<a href="https://github.com/kobejiasuoer/immersive-translator/blob/main/immersive-translator-mac/README.md" target="_blank" rel="noopener noreferrer">独立菜单栏翻译版本</a>。</p></div>
+      </div>
+      <div class="reading-demo enter" data-ui aria-label="书摘阅读与开口练习示例">
+        <div class="demo-book"><span class="book-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="19" height="19"><path d="M3 5c4-1 7 0 9 2 2-2 5-3 9-2v14c-4-1-7 0-9 2-2-2-5-3-9-2zM12 7v14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></span><span>夜莺与玫瑰</span></div>
+        <div class="demo-page"><figure class="hero-book"><img src="assets/product-night-cover-2026-11-05.webp" width="248" height="352" alt="书架中的《夜莺与玫瑰》封面" /></figure>
+          <p class="demo-quote" lang="en">She said that she would dance with me if I brought her red <button id="demo-word" data-demo-control type="button" aria-expanded="false" aria-controls="demo-word-meaning" hidden>roses</button><noscript>roses</noscript>.</p>
+          <p id="demo-word-meaning" class="demo-meaning" hidden><strong>rose</strong> 玫瑰 <span>把词留在这一句里。</span></p>
+          <p id="demo-translation-text" class="demo-translation">她说，只要我给她带来红玫瑰，她就愿意和我跳舞。</p>
+          <div class="demo-actions">
+            <button id="demo-translation" data-demo-control type="button" aria-pressed="true" aria-controls="demo-translation-text" hidden>译文已展开</button>
+            <button id="demo-practice" data-demo-control type="button" aria-expanded="false" aria-controls="demo-practice-panel" hidden><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-6 8v1a6 6 0 0 0 12 0v-1M12 18v3m-3 0h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>用这句开口</button>
+          </div>
+          <div id="demo-practice-panel" class="demo-practice" hidden><p lang="en">What would you do for someone you love?</p><p>试着说说：<span lang="en">I would … because …</span></p><a href="#experience">看看客户端里的口语练习</a></div>
+        </div>
+        
+      </div>
+    </section>
+    <section class="experience-section chapter" id="experience" aria-labelledby="experience-title">
+      <div class="section-intro"><h2 class="enter" id="experience-title">阅读、口语与复习</h2><p class="enter" data-pretext contenteditable="false">从书里的句子切换到对话，收藏的表达进入复习。</p></div>
+      <div class="experience">
+        <div class="experience-copy">
+          <div class="scene-controls enter" role="group" aria-label="切换学习界面" hidden>
+            <button type="button" data-scene="reading" aria-pressed="true" aria-controls="scene-reading"><span>阅读</span><small>原文查词，看懂再往下读</small></button>
+            <button type="button" data-scene="speaking" aria-pressed="false" aria-controls="scene-speaking"><span>口语</span><small>带着读过的内容，开始对话</small></button>
+            <button type="button" data-scene="review" aria-pressed="false" aria-controls="scene-review"><span>复习</span><small>生词留着原句，到期再练</small></button>
+          </div>
+          <p id="scene-description" class="scene-description" aria-live="polite">原文查词，带着这一句开口。</p>
+
+        </div>
+        <div class="scene-stage enter">
+          <figure id="scene-reading" class="scene-panel" data-ui><a class="zoom" href="assets/product-reading-clean-desktop-2026-11-05.webp" data-full-width="1280" aria-label="放大阅读室界面演示"><picture><source media="(max-width: 540px)" srcset="assets/product-reading-clean-phone-2026-11-05.webp" /><img src="assets/product-reading-clean-desktop-2026-11-05.webp" width="1280" height="1046" loading="lazy" decoding="async" alt="阅读室：英文原文、句子译文与语境生词" /></picture></a></figure>
+          <figure id="scene-speaking" class="scene-panel" data-ui hidden><a class="zoom" href="assets/product-speaking-clean-desktop-2026-11-05.webp" data-full-width="1788" aria-label="放大口语练习界面演示"><picture><source media="(max-width: 540px)" srcset="assets/product-speaking-clean-phone-2026-11-05.webp" /><img src="assets/product-speaking-clean-desktop-2026-11-05.webp" width="1788" height="694" loading="lazy" decoding="async" alt="口语练习：场景对话与表达反馈" /></picture></a></figure>
+          <figure id="scene-review" class="scene-panel" data-ui hidden><a class="zoom" href="assets/product-review-clean-desktop-2026-11-05.webp" data-full-width="1360" aria-label="放大复习界面演示"><picture><source media="(max-width: 540px)" srcset="assets/product-review-clean-phone-2026-11-05.webp" /><img src="assets/product-review-clean-desktop-2026-11-05.webp" width="1360" height="1094" loading="lazy" decoding="async" alt="笔记与复习：原句生词、到期任务和学习记录" /></picture></a></figure>
+
+        </div>
+      </div>
+    </section>
+    <section class="voice-section chapter" id="voice" data-tone="dark" aria-labelledby="voice-title">
+      <div class="voice-report enter"><figure data-ui><a class="zoom" href="assets/product-shadow-2026-11.webp" aria-label="放大跟读反馈演示"><img src="assets/product-shadow-2026-11.webp" width="483" height="409" loading="lazy" decoding="async" alt="跟读反馈：准确度、流畅度和需要再练的词" /></a></figure></div>
+      <div class="voice-copy"><h2 class="enter" id="voice-title">跟读与发音反馈</h2><p class="voice-lead enter" data-pretext contenteditable="false">听原句、录下自己的声音，回看需要再练的词。</p><div class="voice-points"><div class="enter"><h3>整句跟读</h3><p>先听原句，再试着完整说一遍。</p></div><div class="enter"><h3>薄弱词重练</h3><p>回到没说顺的那个词，接着练。</p></div><div class="enter"><h3>回听自己的原声</h3><p>把反馈和自己的声音一起听。</p></div></div></div>
+    </section>
+    <section class="content-section chapter" id="content" aria-labelledby="content-title">
+      <div class="section-intro"><h2 class="enter" id="content-title">导入自己的材料</h2><p class="enter" data-pretext contenteditable="false">书籍、文档和网页保存在自己的书架里，接着上次的位置阅读。</p></div>
+      <div class="content-board"><figure class="shelf-image enter" data-ui><a class="zoom" href="assets/product-library-clean-desktop-2026-11-05.webp" data-full-width="2080" aria-label="放大书架界面演示"><picture><source media="(max-width: 540px)" srcset="assets/product-library-phone-focus-2026-11-05.webp" /><img src="assets/product-library-clean-desktop-2026-11-05.webp" width="2080" height="1230" loading="lazy" decoding="async" alt="个人书架：继续阅读、公版书和导入材料" /></picture></a></figure><div class="materials enter"><h3>支持这些内容</h3><ul class="formats" aria-label="支持的内容"><li>EPUB</li><li>PDF</li><li>DOCX</li><li>TXT</li><li>网页</li><li>RSS</li></ul><p>导入文件、粘贴文章，或添加网页与 RSS。</p></div></div>
+    </section>
+    <!-- mobile-section:start — 独立模块；交接说明见 docs/website-mobile-handoff-2026-11-04.md -->
+    <section class="mobile-section chapter" id="mobile" aria-labelledby="mobile-title">
+      <div class="mobile-copy"><h2 class="enter" id="mobile-title">移动端开发中</h2><p class="mobile-note enter" data-pretext contenteditable="false">阅读与口语练习的原型预览。</p></div>
+      <div class="mobile-showcase"><figure class="mobile-screen mobile-reading enter" data-ui><img src="assets/mobile-reader-clean-2026-11.webp" width="780" height="1688" loading="lazy" decoding="async" alt="开发中的移动端阅读原型" /></figure><figure class="mobile-screen mobile-speaking enter" data-ui><img src="assets/mobile-practice-clean-2026-11.webp" width="780" height="1688" loading="lazy" decoding="async" alt="开发中的移动端口语原型" /></figure></div>
+    </section>
+    <!-- mobile-section:end -->
+    <section class="download-section chapter" id="download" data-tone="dark" aria-labelledby="download-title">
+      <div class="download-intro"><h2 class="enter" id="download-title">下载沉浸口语</h2><p class="enter" data-pretext contenteditable="false">免费开源客户端，云服务按额度使用。</p>
+        <div class="download-choices enter"><div><a class="button" data-download="windows" href="https://github.com/kobejiasuoer/immersive-translator/releases/download/v0.15.2/ImmersiveSpeaking_0.15.2_x64-setup.exe">Windows 下载</a><p class="caption">Windows x64 学习客户端</p></div><div><a class="text-action" data-download="macos" href="https://github.com/kobejiasuoer/immersive-translator/releases/download/v0.15.2/ImmersiveSpeaking-0.15.2-macOS.zip">macOS 下载</a><p class="caption">独立菜单栏翻译版本</p></div></div>
+        <a class="release-link" href="https://github.com/kobejiasuoer/immersive-translator/releases" target="_blank" rel="noopener noreferrer">版本说明与安装指引</a>
+      </div>
+    </section>
+    <section class="practical-section chapter" aria-labelledby="practical-title"><h2 id="practical-title">常见问题</h2>
+      <div class="faq-list" aria-label="常见问题">
+        <details><summary>客户端是否免费？</summary><p>客户端免费开源。云翻译、AI 对话与部分语音服务可登录沉浸云使用，也可以配置自己的 API Key；费用与可用能力取决于账号额度或服务商。macOS 是独立菜单栏翻译版本，功能以其版本说明为准。</p></details>
+        <details><summary>可以导入哪些材料？</summary><p>支持 EPUB、TXT、DOCX、带文本层的 PDF、网页、粘贴文本与 RSS，也可发现公版书。扫描版 PDF 请先识别文字，旧 DOC 请先转为 DOCX。</p></details>
+        <details><summary>学习资料和录音保存在哪里？</summary><p>学习资料默认保存在本地；使用云翻译、对话、识别、评测或开启同步时，会发送必要内容。原声留在录制设备，不作为跨端同步资料。详见<a href="https://github.com/kobejiasuoer/immersive-translator/blob/main/docs/privacy-policy.md" target="_blank" rel="noopener noreferrer">隐私政策</a>。</p></details>
+      </div>
+    </section>
+  </main>
+  <footer class="site-footer"><p class="source-note">界面、练习内容与分数为演示；手机画面为开发中的原型。</p><a class="brand" href="#top"><img src="assets/brand-icon.png" width="28" height="28" alt="" /><span>沉浸口语</span></a><span class="footer-copyright">© 2026 Immersive Speaking</span><nav aria-label="页脚导航"><a href="https://github.com/kobejiasuoer/immersive-translator" target="_blank" rel="noopener noreferrer">源码</a><a href="https://github.com/kobejiasuoer/immersive-translator/issues" target="_blank" rel="noopener noreferrer">反馈</a><a href="https://github.com/kobejiasuoer/immersive-translator/blob/main/docs/privacy-policy.md" target="_blank" rel="noopener noreferrer">隐私政策</a><a href="https://github.com/kobejiasuoer/immersive-translator/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">AGPL-3.0</a></nav></footer>
+  <dialog class="image-viewer" aria-label="产品界面大图"><div class="viewer-bar"><p>界面演示 · 可滚动查看细节</p><button class="viewer-close" type="button" autofocus>关闭</button></div><div class="viewer-scroll" tabindex="0" aria-label="滚动查看界面"><img alt="" /></div></dialog>
+</body>
+</html>
+
+
+

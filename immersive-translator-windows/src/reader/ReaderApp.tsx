@@ -14,11 +14,15 @@ import {
   onTranslationDone,
   onTranslationError,
   settingsOpenTab,
+  settingsTakePendingTab,
+  listenSettingsNavigateTab,
   takePendingOpenBook,
   takePendingReaderImport,
   translateStream,
   listenAuthStateChanged,
   authGetStatus,
+  openLoginWindow,
+  type AuthStatus,
 } from "../lib/tauriBridge";
 import { syncLearningRecordsSilently } from "../lib/learningRelay";
 import { useProactiveUpdate } from "../lib/useProactiveUpdate";
@@ -61,6 +65,7 @@ import type { NoteMeta, NoteReplay } from "../core/readerTypes";
 import { bookChapterIndexOf } from "../core/readerTypes";
 import { discoverImportProps, type BookImportDraft } from "../core/bookImport";
 import { loadGlobalReaderSettings, loadMicDeviceId, saveGlobalReaderSettings, saveMicDeviceId, resolveLegacyTtsMigrationAllowed } from "./readerSettingsStore";
+import { listenVoicePrefsChanged } from "../lib/voiceSettingsHub";
 import { trayRefreshBadge } from "../lib/reminder";
 import { buildArticleFromText, normalizeWordKey } from "../core/articleBuilder";
 import { looksMostlyChinese, resolveTargetLanguage } from "../core/languageDetect";
@@ -113,7 +118,8 @@ import "./reader.css";
 import { ReaderTopBar, ViewMenu, type IslandSurface } from "./ReaderTopBar";
 import { FolioSheet } from "./ReaderShelf";
 import { ReadingView } from "./ReadingView";
-import { SettingsDrawer } from "./SettingsDrawer";
+import { ReaderSettingsDialog } from "./ReaderSettingsDialog";
+import type { SettingsTab } from "../views/Settings";
 import { DictColumn, type DictPanelState, type LensMode, type LensXrayState } from "./DictColumn";
 import { NotesView } from "./NotesView";
 import { VaultPage, type VaultPlayMode } from "./VaultPage";
@@ -284,7 +290,68 @@ export function ReaderApp() {
   /** 标题失败原因（瞬态，不持久化——重启后仅显「标题翻译失败」，与现状一致）。 */
   const [titleCnError, setTitleCnError] = useState<string | null>(null);
   const [chunking, setChunking] = useState<{ done: number; total: number } | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsMounted, setSettingsMounted] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("reading");
+  const settingsOpenerRef = useRef<HTMLElement | null>(null);
+  const [peekAll, setPeekAll] = useState(false);
+  /** 段落排版下的逐句卡片；只影响当前阅读窗口，不落盘。 */
+  const [sentCards, setSentCards] = useState(false);
+  const [voicePrefsRevision, setVoicePrefsRevision] = useState(0);
+  const openUnifiedSettings = useCallback((tab: SettingsTab = "reading", captureOpener = true) => {
+    if (captureOpener) {
+      const activeElement = document.activeElement;
+      settingsOpenerRef.current =
+        activeElement instanceof HTMLElement && activeElement !== document.body && activeElement.isConnected
+          ? activeElement
+          : null;
+    } else {
+      settingsOpenerRef.current = null;
+    }
+    setPeekAll(false);
+    setSettingsTab(tab);
+    setSettingsMounted(true);
+    setSettingsOpen(true);
+  }, []);
+  const restoreSettingsFocus = useCallback(() => {
+    const opener = settingsOpenerRef.current;
+    settingsOpenerRef.current = null;
+    if (opener?.isConnected && !("disabled" in opener && opener.disabled)) {
+      opener.focus({ preventScroll: true });
+    }
+  }, []);
+
+  // 先注册监听再取 pending，覆盖 reader 已预建但 React 尚未就绪的启动窗口。
+  // 事件仅作通知，所有路径 take 同一份请求，消费后不会在下次打开时重复导航。
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    async function takeRequest() {
+      const tab = await settingsTakePendingTab();
+      if (!active || !tab) return;
+      const knownTabs: readonly string[] = ["reading", "provider", "translation", "voice", "glossary", "hotkeys", "account", "about"];
+      openUnifiedSettings(knownTabs.includes(tab) ? tab as SettingsTab : "reading", false);
+    }
+    void listenSettingsNavigateTab(() => {
+      void takeRequest().catch((error) => console.error("[reader] open settings failed", error));
+    }).then((stop) => {
+      if (!active) { stop(); return; }
+      unlisten = stop;
+      return takeRequest();
+    }).catch((error) => console.error("[reader] settings navigation failed", error));
+    return () => { active = false; unlisten?.(); };
+  }, [openUnifiedSettings]);
+  /** 登录态（auth_get_status 初始化 + auth-state-changed 跟随，单一数据源）：
+      顶栏账号入口与书架首访提示条共用；null=读取中（不臆造登录态）。 */
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  /** 书架首访账号提示条：点「不再提示」写 localStorage 永久关闭（不随登出复活）。 */
+  const [acctTipDismissed, setAcctTipDismissed] = useState(() => {
+    try {
+      return localStorage.getItem("reader-acct-tip-dismissed") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [importOpen, setImportOpen] = useState(false);
   /** 导入弹窗初始 tab（书架「发现/订阅/文库」入口直达；缺省文库）。ImportDialog
       条件挂载，每次重开都以该值作 useState 初值生效（外壳 2026-10-26 契约）。 */
@@ -300,7 +367,6 @@ export function ReaderApp() {
   const [hoveredClause, setHoveredClause] = useState<string | null>(null);
   /** 带入口语的语境（见 PendingSpeak；Phase 3 在口语侧消费）。 */
   const [pendingSpeak, setPendingSpeak] = useState<PendingSpeak>(null);
-  const [peekAll, setPeekAll] = useState(false);
   const [searchMatchIdx, setSearchMatchIdx] = useState<number | null>(null);
   const [sourceCache, setSourceCache] = useState<Map<string, Article>>(new Map());
   // ---- 整本书阅读室（书级载体） ----
@@ -498,11 +564,23 @@ export function ReaderApp() {
   );
 
   const gatewayCfgRef = useRef<GatewayEngineConfig>({ rate: 1 });
-  gatewayCfgRef.current = { voice: loadSettings().voiceGatewayVoice, rate: effectiveSettings.rate };
+  /** 沉浸云音色（mustFix-4）：从「渲染时现读」改为挂载 + hub 订阅刷新。等价性：
+   *  voiceGatewayVoice 唯一写点是设置中心 applyVoicePrefs，落盘后即广播
+   *  voice:prefs-changed（voicePrefs scope），收到即重读——跨窗变更无漏。
+   *  rate 仍随渲染刷新（effectiveSettings 是 React 态）。 */
+  const gatewayVoiceRef = useRef<string | undefined>(undefined);
+  gatewayCfgRef.current = { voice: gatewayVoiceRef.current, rate: effectiveSettings.rate };
   /** 首片播放后的异步失败（启动失败仍走 speak reject）。 */
   const gatewayAsyncErrorRef = useRef<(error: unknown) => void>(() => {});
   /** 配额失败短暂回落，30秒后重新查能力；兑换额度后无需重启阅读室。 */
   const gatewayQuotaErrorRef = useRef<{ error: unknown; expiresAt: number } | null>(null);
+  const refreshVoicePrefs = useCallback(() => {
+    const voice = loadSettings().voiceGatewayVoice;
+    gatewayVoiceRef.current = voice;
+    gatewayCfgRef.current = { ...gatewayCfgRef.current, voice };
+    gatewayQuotaErrorRef.current = null;
+    setVoicePrefsRevision((revision) => revision + 1);
+  }, []);
   useEffect(() => {
     const settingsChanged = (event: StorageEvent) => {
       if (event.key === "immersive-translator-settings") gatewayQuotaErrorRef.current = null;
@@ -1462,6 +1540,26 @@ export function ReaderApp() {
       else u();
     });
 
+    // 语音设置跨窗同步（voiceSettingsHub，payload 不带值 → 一律重读存储）：
+    // voicePrefs（设置中心语音页唯一写点落盘后的广播）→ 热刷沉浸云音色缓存
+    // （mustFix-4，与原「渲染时现读」语义等价）；readerVoice（第三窗对全局
+    // reader-settings 的写入，预留）→ 重跑 loadGlobalReaderSettings 热重载全局层
+    // （mustFix-2），否则 effectiveSettings 与抽屉仍陈旧。
+    // 挂载先同步一次音色缓存，此后经订阅热刷新（见 gatewayVoiceRef 注释）。
+    refreshVoicePrefs();
+    let unlistenVoicePrefs: (() => void) | undefined;
+    listenVoicePrefsChanged((payload) => {
+      if (payload.scopes.includes("voicePrefs")) {
+        refreshVoicePrefs();
+      }
+      if (payload.scopes.includes("readerVoice")) {
+        setGlobalSettings(loadGlobalReaderSettings());
+      }
+    }).then((u) => {
+      if (active) unlistenVoicePrefs = u;
+      else u();
+    });
+
     // 提醒卡「继续阅读」（窗口已存在时）：事件路径直达书级断点。
     let unlistenOpenBook: (() => void) | undefined;
     listen<string>("reader:open-book", (event) => {
@@ -1477,6 +1575,7 @@ export function ReaderApp() {
       unlistenImport?.();
       unlistenVocab?.();
       unlistenCreds?.();
+      unlistenVoicePrefs?.();
       unlistenOpenBook?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2007,9 +2106,10 @@ export function ReaderApp() {
     };
     const completed=()=>{void refresh();};window.addEventListener("learning-sync-complete",completed);
     let account:string|undefined;let authEventReceived=false;
-    void authGetStatus().then(status=>{if(!authEventReceived)account=status.user?.id??"guest";});
+    void authGetStatus().then(status=>{setAuthStatus(status);if(!authEventReceived)account=status.user?.id??"guest";});
     const unlisten = listenAuthStateChanged((status) => {
       authEventReceived = true;
+      setAuthStatus(status);
       const next = status.user?.id ?? "guest";
       if (next === account) return;
       gatewayQuotaErrorRef.current = null;
@@ -2256,6 +2356,7 @@ export function ReaderApp() {
       );
     }
     function onKeyDown(e: KeyboardEvent) {
+      if (settingsOpen) return;
       if (isTyping(e.target)) return;
       if (view !== "reading") return;
       if (e.key === " ") {
@@ -2275,12 +2376,13 @@ export function ReaderApp() {
       if (e.key === "h" || e.key === "H") setPeekAll(false);
     }
     window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
+    // 捕获阶段先于设置壳截断 keyup，确保按住 H 打开设置后松开仍会复位。
+    window.addEventListener("keyup", onKeyUp, true);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("keyup", onKeyUp, true);
     };
-  }, [view, playback, effectiveSettings.maskTranslation, effectiveSettings.spotQuizMode]);
+  }, [view, playback, effectiveSettings.maskTranslation, effectiveSettings.spotQuizMode, settingsOpen]);
 
   // ---- 渲染 ----
   /** 光标已停在末句（自然播完/跳读/滚动到底都会到这）且还没确认读完。 */
@@ -2502,7 +2604,7 @@ export function ReaderApp() {
         onHome={goShelf}
         settings={effectiveSettings}
         onPatchSettings={patchSettings}
-        onOpenDrawer={() => setDrawerOpen(true)}
+        onOpenDrawer={() => openUnifiedSettings()}
         onSearch={(q) => {
           if (!article) return;
           const lower = q.toLowerCase();
@@ -2521,6 +2623,8 @@ export function ReaderApp() {
         onNavigate={navigateSurface}
         onToggleFolio={() => setFolioOpen((v) => !v)}
         focusMode={view === "vault" && vaultMode === "focus"}
+        authStatus={authStatus}
+        onToast={showToast}
       />
 
       {folioOpen && (
@@ -2591,6 +2695,21 @@ export function ReaderApp() {
             onDeleteBook={deleteBook}
             onOpenImport={openImport}
             onGoReview={goReview}
+            acctTip={
+              authStatus?.loggedIn === false && !authStatus.notice && !acctTipDismissed
+                ? {
+                    onLogin: () => void openLoginWindow().catch(() => undefined),
+                    onDismiss: () => {
+                      try {
+                        localStorage.setItem("reader-acct-tip-dismissed", "1");
+                      } catch {
+                        /* ignore */
+                      }
+                      setAcctTipDismissed(true);
+                    },
+                  }
+                : null
+            }
           />
         )}
 
@@ -2604,6 +2723,8 @@ export function ReaderApp() {
               translating={translating}
               chunking={chunking}
               peekAll={peekAll}
+              sentCards={sentCards}
+              onOpenSettings={() => openUnifiedSettings("reading")}
               searchMatchIdx={searchMatchIdx}
               knownIds={knownIds}
               assessMarks={assessMarks}
@@ -2718,7 +2839,7 @@ export function ReaderApp() {
             dueVocabWords={speakDueWords}
             pendingSpeak={pendingSpeak}
             onGradeVocab={gradeSpokenVocab}
-            onOpenReaderSettings={() => setDrawerOpen(true)}
+            onOpenReaderSettings={() => openUnifiedSettings()}
           />
         ) : view === "vault" ? (
           <VaultPage
@@ -2805,7 +2926,7 @@ export function ReaderApp() {
           settings={effectiveSettings}
           onPatchSettings={patchSettings}
           onOpenViewMenu={(anchor) => setViewMenuAnchor(anchor)}
-          onOpenDrawer={() => setDrawerOpen(true)}
+          onOpenDrawer={() => openUnifiedSettings()}
           assess={assessEnabled ? assess : null}
         />
       )}
@@ -2832,13 +2953,23 @@ export function ReaderApp() {
         </div>
       )}
 
-      {drawerOpen && (
-        <SettingsDrawer
+      {settingsMounted && (
+        <ReaderSettingsDialog
+          open={settingsOpen}
+          readingReady={shelfLoadState.settings === "ready"}
+          initialTab={settingsTab}
+          onTabChange={setSettingsTab}
+          articleTitle={article?.titleCn || article?.title}
+          voicePrefsRevision={voicePrefsRevision}
+          onVoicePrefsChanged={refreshVoicePrefs}
           settings={effectiveSettings}
           onPatch={patchSettings}
           onPatchReview={patchReviewMode}
           onReset={resetSettings}
-          onClose={() => setDrawerOpen(false)}
+          onClose={() => setSettingsOpen(false)}
+          onClosed={restoreSettingsFocus}
+          sentCards={sentCards}
+          onToggleSentCards={() => setSentCards((value) => !value)}
           micDeviceId={micDeviceId}
           onMicDevice={(id) => {
             setMicDeviceId(id);

@@ -32,7 +32,7 @@ import {
   type VoiceRouteDecision,
 } from "../lib/voice";
 import { createTranslateClient } from "../lib/translateClient";
-import { openSettings, saveTextFile } from "../lib/tauriBridge";
+import { settingsOpenTab, saveTextFile } from "../lib/tauriBridge";
 
 /** 界面上保留的最大段数（保存仍用全量）。 */
 const MAX_VISIBLE_SEGMENTS = 200;
@@ -374,7 +374,7 @@ export function LiveCaptionApp() {
         </div>
         <div className="lc-hint">
           静音约 1 秒自动断句；语音引擎在 设置 → 语音 里选择（沉浸云登录即用，或自带讯飞凭据）
-          <button className="lc-creds-toggle" onClick={() => void openSettings().catch(() => undefined)}>
+          <button className="lc-creds-toggle" onClick={() => void settingsOpenTab("voice").catch(() => undefined)}>
             打开设置
           </button>
         </div>

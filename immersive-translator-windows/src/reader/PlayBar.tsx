@@ -305,7 +305,7 @@ export function PlayBar({ article, playback, settings, onPatchSettings, onOpenVi
               const next = RATE_PRESETS[(i + 1) % RATE_PRESETS.length];
               onPatchSettings({ rate: next });
             }}
-            title="播放语速（更多档位在阅读设置）"
+            title="播放语速（更多档位在设置）"
           >
             {settings.rate.toFixed(2).replace(/0$/, "")}×
           </button>
@@ -320,7 +320,7 @@ export function PlayBar({ article, playback, settings, onPatchSettings, onOpenVi
         >
           视图
         </button>
-        <button className="reader-tb-btn" onClick={onOpenDrawer} title="阅读设置">
+        <button className="reader-tb-btn" onClick={onOpenDrawer} title="设置">
           <IconSettings size={15} />
         </button>
       </div>

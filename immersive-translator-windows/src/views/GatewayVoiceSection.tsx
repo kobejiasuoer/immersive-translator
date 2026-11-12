@@ -260,6 +260,11 @@ export function GatewayVoiceSection({
                   <span className={`voice-feature-status ${loading || unavailable || (key === "ise" && !iseEnabled) ? "muted" : noQuota ? "warn" : light.state === "bad" ? "bad" : "ok"}`}>{statusText}</span>
                 </div>
                 <p>{copy.description}</p>
+                {key === "ise" && !unavailable && (
+                  <p className="voice-feature-note">
+                    跟读评测可在 设置 → 阅读与练习 中开启；两处都开启才会打分
+                  </p>
+                )}
                 {key === "tts" && !loading && unavailable && <p className="voice-feature-note">阅读室可继续选择免费朗读。</p>}
                 {key === "asr" && !unavailable && (
                   <p className="voice-feature-note">支持{languages.map(asrLanguageLabel).join("、")}{!languages.includes("en_us") ? "；当前没有英语识别，无法运行英文样本测试。" : ""}</p>

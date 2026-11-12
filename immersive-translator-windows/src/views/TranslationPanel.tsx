@@ -10,6 +10,7 @@ import {
   translateStream,
   cancelTranslation,
   openSettings,
+  settingsOpenTab,
   openHistory,
   onTranslationDelta,
   onTranslationStatus,
@@ -1197,7 +1198,7 @@ export function TranslationPanel() {
             <div className="sub">
               在设置中选择服务商并填入 API Key，之后选中文本按热键即可翻译。
             </div>
-            <button className="btn btn-primary" style={{ marginTop: 10 }} onClick={() => openSettings()}>
+            <button className="btn btn-primary" style={{ marginTop: 10 }} onClick={() => settingsOpenTab("provider")}>
               <IconSettings size={14} />
               打开设置
             </button>
@@ -1518,7 +1519,7 @@ export function TranslationPanel() {
                   重试
                 </button>
               )}
-              <button className="btn btn-secondary btn-sm" onClick={() => openSettings()}>
+              <button className="btn btn-secondary btn-sm" onClick={() => settingsOpenTab("provider")}>
                 <IconSettings size={13} />
                 去设置检查
               </button>

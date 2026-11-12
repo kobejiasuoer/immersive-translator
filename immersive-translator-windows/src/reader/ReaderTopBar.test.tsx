@@ -100,6 +100,49 @@ describe("ReaderTopBar 更新提示插槽", () => {
   });
 });
 
+describe("ReaderTopBar 账号入口插槽", () => {
+  const MEMBER_AUTH = {
+    loggedIn: true,
+    user: { id: "u1", email: "yang@example.com", nickname: null, plan: "FREE", createdAt: "1" },
+    notice: null,
+  } as const;
+
+  it("未传 authStatus 时不挂账号入口，工具区保持原有三键", () => {
+    render();
+    const tools = container.querySelector(".shell-tools")!;
+    expect(tools.querySelectorAll("button")).toHaveLength(3);
+    expect(tools.querySelector(".acct")).toBeNull();
+    expect(tools.querySelector(".tools-sep")).toBeNull();
+  });
+
+  it("传入 authStatus 时在统一设置之后挂分隔线与账号触发器", () => {
+    render({ authStatus: MEMBER_AUTH });
+    const tools = container.querySelector(".shell-tools")!;
+    expect(tools.querySelectorAll("button")).toHaveLength(4);
+    const gear = tools.querySelector<HTMLButtonElement>('button[aria-label="设置"]')!;
+    const sep = gear.nextElementSibling!;
+    expect(sep.classList.contains("tools-sep")).toBe(true);
+    const acctTrigger = sep.nextElementSibling!.querySelector(".acct-trigger")!;
+    expect(acctTrigger).not.toBeNull();
+    expect(acctTrigger.getAttribute("aria-haspopup")).toBe("menu");
+    expect(acctTrigger.getAttribute("aria-expanded")).toBe("false");
+    expect(acctTrigger.classList.contains("is-member")).toBe(true);
+  });
+
+  it("齿轮打开统一设置，账号菜单不再重复展示设置入口", () => {
+    const props = render({ authStatus: MEMBER_AUTH });
+    const gear = container.querySelector<HTMLButtonElement>('button[aria-label="设置"]')!;
+    expect(gear.title).toBe("阅读、语音与应用设置");
+    click(gear);
+    expect(props.onOpenDrawer).toHaveBeenCalledTimes(1);
+
+    click(container.querySelector<HTMLButtonElement>(".acct-trigger")!);
+    const accountItems = Array.from(container.querySelectorAll('[role="menuitem"]'));
+    expect(accountItems.some((item) => item.textContent?.includes("设置"))).toBe(false);
+    expect(container.querySelectorAll('button[aria-label="设置"]')).toHaveLength(1);
+  });
+});
+
 describe("ReaderTopBar 主题选择", () => {
   it.each<{ initial: ReaderTheme; selected: ReaderTheme; label: string }>([
     { initial: "dark", selected: "light", label: "纸书" },
@@ -159,7 +202,7 @@ describe("ReaderTopBar 主题选择", () => {
   it("Tab 保留默认焦点移动，离开菜单后关闭且不抢回焦点", () => {
     render();
     click(trigger());
-    const next = container.querySelector<HTMLButtonElement>('button[aria-label="阅读设置"]')!;
+    const next = container.querySelector<HTMLButtonElement>('button[aria-label="设置"]')!;
     const triggerFocus = vi.spyOn(trigger(), "focus");
 
     expect(key(option("light"), "Tab").defaultPrevented).toBe(false);

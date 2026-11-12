@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import {
   loadSettingsFullAsync,
   saveSettingsFullAsync,
   savePersistedHotkeys,
-  saveVoicePrefs,
   stripVoicePrefs,
   DEFAULT_SETTINGS,
   hasValidSettings,
@@ -16,6 +15,7 @@ import {
   type KeyVault,
   type VoiceProvider,
 } from "../lib/settingsStore";
+import { writeVoicePrefs } from "../lib/voiceSettingsHub";
 import type { TranslationMode } from "../core/languageDetect";
 import {
   PROVIDER_PRESETS,
@@ -76,9 +76,24 @@ import { VoiceSettingsTab } from "./VoiceSettingsTab";
 import { AccountSection, useAccountStatus } from "./AccountSection";
 import { PrivacyPolicyCard } from "./PrivacyPolicyCard";
 
-type SettingsTab = "provider" | "translation" | "voice" | "glossary" | "hotkeys" | "account" | "about";
+export type SettingsTab = "reading" | "provider" | "translation" | "voice" | "glossary" | "hotkeys" | "account" | "about";
+
+interface SettingsProps {
+  /** 阅读室传入生效设置与原有保存回调，设置壳不另建阅读配置写点。 */
+  renderReading?: (navigate: (tab: SettingsTab) => void) => ReactNode;
+  initialTab?: SettingsTab;
+  /** 嵌入时只关闭设置面板，不隐藏阅读室窗口；保持挂载以保留未保存的表单。 */
+  onClose?: () => void;
+  visible?: boolean;
+  /** 语音偏好落盘后刷新同窗消费者；跨窗仍走 voiceSettingsHub 广播。 */
+  onVoicePrefsChanged?: () => void;
+  onTabChange?: (tab: SettingsTab) => void;
+  /** 嵌入原生 dialog 时供外壳处理焦点落在 dialog 空白处的 Escape。 */
+  onEscapeRef?: (handler: (() => void) | null) => void;
+}
 
 const TABS: { id: SettingsTab; label: string; icon: ComponentType<{ size?: number }> }[] = [
+  { id: "reading", label: "阅读与练习", icon: IconBookOpen },
   { id: "provider", label: "模型服务", icon: IconSparkles },
   { id: "translation", label: "翻译", icon: IconTranslate },
   { id: "voice", label: "语音", icon: IconVolume },
@@ -89,22 +104,38 @@ const TABS: { id: SettingsTab; label: string; icon: ComponentType<{ size?: numbe
 ];
 
 /**
- * 设置窗口。点托盘「设置」菜单打开。
- * 左侧导航 + 右侧内容的双栏壳；七个分区：模型服务 / 翻译 / 语音 / 术语表 / 快捷键 / 账号 / 关于。
+ * 统一设置壳：阅读室内嵌阅读与练习、模型、语音和应用设置。
+ * 阅读配置由 ReaderApp 保持现有全局与文章覆盖写入语义。
  * apiKey 按服务商分桶经 DPAPI 加密存储，其余字段存 localStorage。
  * 账号 tab（AccountSection）状态由 Rust 侧 auth-state-changed 事件驱动；
  * 托盘「账号登录」在已登录时经 settings_open_tab 双路径定位到账号 tab（挂载 take + 运行中 listen）。
  */
-export function Settings() {
+export function Settings({ renderReading, initialTab, onClose, visible = true, onVoicePrefsChanged, onTabChange, onEscapeRef }: SettingsProps = {}) {
+  const hasReading = renderReading !== undefined;
+  const embedded = onClose !== undefined;
   const [settings, setSettings] = useState<AppSettings>(() => ({
     ...DEFAULT_SETTINGS,
   }));
   /** 进入页面时已保存的快照：用于判断是否有未保存的更改。 */
   const [savedSnapshot, setSavedSnapshot] = useState<AppSettings | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   /** 按服务商分桶的密钥库（内存副本），切换服务商时 Key 跟着切换。 */
   const [vault, setVault] = useState<KeyVault>({});
-  const [activeTab, setActiveTab] = useState<SettingsTab>("provider");
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() =>
+    initialTab && (initialTab !== "reading" || hasReading) ? initialTab : hasReading ? "reading" : "provider",
+  );
   const contentRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (initialTab && (initialTab !== "reading" || hasReading)) setActiveTab(initialTab);
+  }, [initialTab, hasReading]);
+
+  function navigateTab(tab: SettingsTab) {
+    if (tab === "reading" && !hasReading) return;
+    setActiveTab(tab);
+    onTabChange?.(tab);
+  }
 
   useEffect(() => {
     if (contentRef.current) contentRef.current.scrollTop = 0;
@@ -120,19 +151,27 @@ export function Settings() {
   // 首次加载后：加载设置与密钥库；若未关闭引导且接口未配好，显示引导卡
   useEffect(() => {
     let active = true;
-    loadSettingsFullAsync().then(({ settings: s, vault: v }) => {
-      if (!active) return;
-      setSettings(s);
-      setSavedSnapshot(s);
-      setVault(v);
-      if (!isOnboardingDismissed() && !hasValidSettings(s)) {
-        setShowWelcome(true);
-      }
-    });
-    void getVersion().then(setAppVersion).catch(() => setAppVersion(""));
+    setLoadError(null);
+    void loadSettingsFullAsync()
+      .then(({ settings: s, vault: v }) => {
+        if (!active) return;
+        setSettings(s);
+        setSavedSnapshot(s);
+        setVault(v);
+        if (!isOnboardingDismissed() && !hasValidSettings(s)) {
+          setShowWelcome(true);
+        }
+      })
+      .catch(() => {
+        if (active) setLoadError("设置读取失败，请重试。");
+      });
     return () => {
       active = false;
     };
+  }, [loadAttempt]);
+
+  useEffect(() => {
+    void getVersion().then(setAppVersion).catch(() => setAppVersion(""));
   }, []);
 
   // ---- 开机自启（tauri-plugin-autostart，Windows 写 HKCU Run 键）----
@@ -194,29 +233,31 @@ export function Settings() {
   // 账号 tab 双入口定位（docs §7 命令 10/11）：挂载时取走 pending tab（恰好一次，
   // settings 窗 hide 不销毁、挂载一生一次，pending 只覆盖启动早期的窗口窄缝）。
   useEffect(() => {
+    if (embedded) return;
     let active = true;
     void settingsTakePendingTab()
       .then((tab) => {
         if (!active || !tab) return;
-        const known = TABS.find((t) => t.id === tab);
+        const known = TABS.find((t) => t.id === tab && (t.id !== "reading" || hasReading));
         if (known) setActiveTab(known.id);
       })
       .catch((e) => console.error("[settings] take pending tab failed", e));
     return () => {
       active = false;
     };
-  }, []);
+  }, [embedded, hasReading]);
 
   // 窗口已存在时的即时导航：settings_open_tab 走 emit_to("settings")。
   useEffect(() => {
+    if (embedded) return;
     const unlistenP = listenSettingsNavigateTab((tab) => {
-      const known = TABS.find((t) => t.id === tab);
+      const known = TABS.find((t) => t.id === tab && (t.id !== "reading" || hasReading));
       if (known) setActiveTab(known.id);
     });
     return () => {
       void unlistenP.then((u) => u());
     };
-  }, []);
+  }, [embedded, hasReading]);
 
   function toggleAutostart() {
     const next = !(autoStart ?? false);
@@ -252,7 +293,9 @@ export function Settings() {
     setSaved(false);
   }
 
-  /** 语音偏好点选即写盘：更新表单态 + 同步快照（dirty 恒静）+ 立即合并落 localStorage。 */
+  /** 语音偏好点选即写盘：更新表单态 + 同步快照（dirty 恒静）+ 立即合并落 localStorage。
+   *  写盘后经 voiceSettingsHub 广播 voice:prefs-changed（payload 只带 scopes/from/rev），
+   *  阅读室等其他窗口订阅后重读存储，替代此前的挂载快照陈旧态（§5.2 B-1）。 */
   function applyVoicePrefs(patch: {
     voiceProvider?: VoiceProvider;
     voiceGatewayVoice?: string;
@@ -260,12 +303,13 @@ export function Settings() {
   }) {
     setSettings((prev) => ({ ...prev, ...patch }));
     setSavedSnapshot((prev) => (prev === null ? prev : { ...prev, ...patch }));
-    saveVoicePrefs(patch);
+    writeVoicePrefs(patch);
+    onVoicePrefsChanged?.();
   }
 
   /** 语音页「兑换更多额度」：切账号 tab 后滚动/聚焦兑换码卡（契约 §三.10）。 */
   function openAccountRedeem() {
-    setActiveTab("account");
+    navigateTab("account");
     window.setTimeout(() => {
       const card = document.getElementById("account-redeem");
       card?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -470,14 +514,14 @@ export function Settings() {
   const hotkeyValues = [settings.hotkey, settings.ocrHotkey, settings.readerHotkey];
 
   useEffect(() => {
-    if (activeTab !== "hotkeys") {
+    if (!visible || activeTab !== "hotkeys") {
       setRecordingHotkey(null);
       return;
     }
     const cancelRecording = () => setRecordingHotkey(null);
     window.addEventListener("blur", cancelRecording);
     return () => window.removeEventListener("blur", cancelRecording);
-  }, [activeTab]);
+  }, [activeTab, visible]);
 
   // ---- 热键自愈回显 ----
   // 历史版本「立即生效」只写 Rust 侧不写 localStorage，设置页显示值可能与真实
@@ -508,7 +552,7 @@ export function Settings() {
           };
   });
   useEffect(() => {
-    if (activeTab !== "hotkeys") return;
+    if (!visible || activeTab !== "hotkeys") return;
     let active = true;
     getActiveHotkeys()
       .then(([t, o, r]) => {
@@ -530,7 +574,7 @@ export function Settings() {
     return () => {
       active = false;
     };
-  }, [activeTab]);
+  }, [activeTab, visible]);
 
   function updateHotkey(key: "hotkey" | "ocrHotkey" | "readerHotkey", value: string) {
     update(key, value);
@@ -583,6 +627,7 @@ export function Settings() {
   }
 
   async function handleSave() {
+    if (savedSnapshot === null) return;
     // 与「进入页面时的快照」比较，判断热键是否真的被改过；
     // 只有改过才整组重注册，避免「改回默认值后未重注册」的遗留 bug。
     const changed =
@@ -591,6 +636,7 @@ export function Settings() {
         settings.ocrHotkey !== savedSnapshot.ocrHotkey ||
         settings.readerHotkey !== savedSnapshot.readerHotkey);
     await saveSettingsFullAsync(settings, vault);
+    onVoicePrefsChanged?.();
     setSavedSnapshot(settings);
     if (changed) {
       await registerAllHotkeys();
@@ -604,28 +650,66 @@ export function Settings() {
   }
 
   async function handleClose() {
+    setRecordingHotkey(null);
+    if (onClose) {
+      onClose();
+      return;
+    }
     await getCurrentWindow().hide();
   }
 
+  const handleEmbeddedEscape = useCallback(() => {
+    if (!embedded || !visible || recordingHotkey !== null) return;
+    if (confirmReset) setConfirmReset(false);
+    else onClose?.();
+  }, [confirmReset, embedded, onClose, recordingHotkey, visible]);
+
+  useEffect(() => {
+    onEscapeRef?.(handleEmbeddedEscape);
+    return () => onEscapeRef?.(null);
+  }, [handleEmbeddedEscape, onEscapeRef]);
+
+  useEffect(() => {
+    if (!embedded || !visible) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>(
+        '.reader-settings-dialog .set-nav-item[aria-current="page"]',
+      )?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeTab, embedded, visible]);
+
+  // 原生 dialog 只隔离焦点，按键仍会冒泡到背景页面的 document/window 监听器。
+  // 在设置内部处理 Esc 并截断冒泡；热键录制的 window capture 监听优先执行。
+  function handleEmbeddedKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!embedded || !visible) return;
+    event.stopPropagation();
+    if (event.key !== "Escape" || event.defaultPrevented || recordingHotkey !== null) return;
+    event.preventDefault();
+    handleEmbeddedEscape();
+  }
+
   function handleResetDefaults() {
+    if (savedSnapshot === null) return;
     setConfirmReset(true);
   }
 
   function doResetDefaults() {
+    if (savedSnapshot === null) return;
     setConfirmReset(false);
     setRecordingHotkey(null);
     setHotkeysApplied(false);
     setHotkeyErrMsg(null);
     const reset = { ...DEFAULT_SETTINGS };
     const resetVault: KeyVault = { [reset.providerId!]: "" };
-    void saveSettingsFullAsync(reset, resetVault);
+    void saveSettingsFullAsync(reset, resetVault).then(() => onVoicePrefsChanged?.());
     setSettings(reset);
     setVault(resetVault);
     setSavedSnapshot(reset);
     // 恢复默认也重注册：只重置 UI 不动后端会留下「显示默认键、实际生效旧键」
     // 的脱节（注册失败时错误提示渲染在快捷键页，跳过去让它可见）。
     void registerAllHotkeys(reset).then((ok) => {
-      if (!ok) setActiveTab("hotkeys");
+      if (!ok) navigateTab("hotkeys");
     });
     setSaved(false);
   }
@@ -640,7 +724,8 @@ export function Settings() {
       <button
         key={t.id}
         className={`set-nav-item${activeTab === t.id ? " active" : ""}`}
-        onClick={() => setActiveTab(t.id)}
+        onClick={() => navigateTab(t.id)}
+        aria-current={activeTab === t.id ? "page" : undefined}
       >
         <Icon size={16} />
         <span>{t.label}</span>
@@ -649,7 +734,11 @@ export function Settings() {
   }
 
   return (
-    <div className="set-shell">
+    <div
+      className="set-shell"
+      onKeyDown={handleEmbeddedKeyDown}
+      onKeyUp={(event) => { if (embedded && visible) event.stopPropagation(); }}
+    >
       {/* 左侧导航 */}
       <aside className="set-side">
         <div className="set-brand">
@@ -658,19 +747,19 @@ export function Settings() {
           </span>
           <span className="set-brand-copy">
             <strong>沉浸口语</strong>
-            <small>设置中心</small>
+            <small>设置</small>
           </span>
         </div>
         <nav className="set-nav" aria-label="设置分类">
-          <span className="set-nav-caption">翻译与工具</span>
-          {TABS.slice(0, 5).map(renderTab)}
+          <span className="set-nav-caption">学习与工具</span>
+          {TABS.filter((tab) => tab.id !== "account" && tab.id !== "about" && (tab.id !== "reading" || hasReading)).map(renderTab)}
           <span className="set-nav-caption set-nav-caption-account">账号与应用</span>
-          {TABS.slice(5).map(renderTab)}
+          {TABS.filter((tab) => tab.id === "account" || tab.id === "about").map(renderTab)}
         </nav>
         <div className="set-side-foot">
           <span className={`conn-chip ${configured ? "ok" : "off"}`}>
             <i aria-hidden />
-            {configured ? "接口已配置" : "未配置接口"}
+            {savedSnapshot === null ? (loadError ? "设置读取失败" : "正在读取设置") : configured ? "接口已配置" : "未配置接口"}
           </span>
           <span className={`conn-chip ${accountStatus?.loggedIn ? "ok" : "off"}`}>
             <i aria-hidden />
@@ -686,8 +775,25 @@ export function Settings() {
           <span>应用设置</span>
           <span className="set-topbar-divider" aria-hidden>／</span>
           <strong>{currentTabLabel}</strong>
+          {embedded && (
+            <button type="button" className="btn btn-icon set-close" onClick={handleClose} aria-label="关闭设置" title="关闭设置">
+              <IconClose size={16} />
+            </button>
+          )}
         </div>
-        <div className="set-content" ref={contentRef}>
+        <div className="set-content" ref={contentRef} aria-busy={savedSnapshot === null && !loadError}>
+        {savedSnapshot === null ? (
+          loadError ? (
+            <div className="group-card">
+              <p className="msg-bar err" role="alert">{loadError}</p>
+              <button className="btn btn-secondary" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>重新读取</button>
+            </div>
+          ) : (
+            <p className="field-hint" role="status">正在读取设置…</p>
+          )
+        ) : (
+        <>
+        {activeTab === "reading" && renderReading?.(navigateTab)}
         {activeTab === "provider" && (
           <>
             <header className="set-pagehead">
@@ -832,7 +938,7 @@ export function Settings() {
                         <div className="provider-actions" style={{ margin: 0 }}>
                           <button
                             className="btn btn-secondary"
-                            onClick={() => setActiveTab("account")}
+                            onClick={() => navigateTab("account")}
                           >
                             <IconUser size={14} />
                             管理账号
@@ -1133,7 +1239,7 @@ export function Settings() {
             onSelectVoice={(v) => applyVoicePrefs({ voiceGatewayVoice: v })}
             onToggleIse={(on) => applyVoicePrefs({ voiceGatewayIseEnabled: on })}
             onOpenRedeem={openAccountRedeem}
-            onOpenAccount={() => setActiveTab("account")}
+            onOpenAccount={() => navigateTab("account")}
           />
         )}
 
@@ -1272,7 +1378,7 @@ export function Settings() {
                 value={settings.hotkey}
                 onChange={(v) => updateHotkey("hotkey", v)}
                 otherHotkeys={[settings.ocrHotkey, settings.readerHotkey]}
-                recording={recordingHotkey === "hotkey-translate"}
+                recording={visible && recordingHotkey === "hotkey-translate"}
                 onRecordingChange={(active) => setRecordingHotkey(active ? "hotkey-translate" : null)}
                 disabled={hotkeysApplying}
               />
@@ -1283,7 +1389,7 @@ export function Settings() {
                 value={settings.ocrHotkey}
                 onChange={(v) => updateHotkey("ocrHotkey", v)}
                 otherHotkeys={[settings.hotkey, settings.readerHotkey]}
-                recording={recordingHotkey === "hotkey-ocr"}
+                recording={visible && recordingHotkey === "hotkey-ocr"}
                 onRecordingChange={(active) => setRecordingHotkey(active ? "hotkey-ocr" : null)}
                 disabled={hotkeysApplying}
               />
@@ -1294,7 +1400,7 @@ export function Settings() {
                 value={settings.readerHotkey}
                 onChange={(v) => updateHotkey("readerHotkey", v)}
                 otherHotkeys={[settings.hotkey, settings.ocrHotkey]}
-                recording={recordingHotkey === "hotkey-reader"}
+                recording={visible && recordingHotkey === "hotkey-reader"}
                 onRecordingChange={(active) => setRecordingHotkey(active ? "hotkey-reader" : null)}
                 disabled={hotkeysApplying}
               />
@@ -1472,6 +1578,8 @@ export function Settings() {
             </section>
           </>
         )}
+        </>
+        )}
         </div>
 
         {/* 底部操作条 */}
@@ -1481,6 +1589,8 @@ export function Settings() {
               <i aria-hidden />
               有未保存的更改
             </span>
+          ) : activeTab === "reading" && savedSnapshot !== null ? (
+            <span className="hint-ok">阅读设置即时保存</span>
           ) : saved ? (
             <span className="hint-ok" style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
               <IconCheck size={13} />
@@ -1494,15 +1604,17 @@ export function Settings() {
             <IconClose size={14} />
             关闭
           </button>
-          <button className="btn btn-primary" onClick={handleSave} disabled={hotkeysApplying || recordingHotkey !== null}>
-            <IconCheck size={14} />
-            保存设置
-          </button>
+          {(activeTab !== "reading" || dirty) && (
+            <button className="btn btn-primary" onClick={handleSave} disabled={savedSnapshot === null || hotkeysApplying || recordingHotkey !== null}>
+              <IconCheck size={14} />
+              保存设置
+            </button>
+          )}
         </div>
       </main>
 
       <ConfirmDialog
-        open={confirmReset}
+        open={visible && confirmReset}
         title="恢复默认设置"
         message="将清空已保存的接口配置（endpoint / API Key / 模型等），并恢复全部默认值。确定继续？"
         confirmText="恢复默认"
@@ -1650,8 +1762,8 @@ function HotkeyField({
 
   // 录制：监听下一次按键组合
   useEffect(() => {
+    if (!recording) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (!recording) return;
       e.preventDefault();
       e.stopPropagation();
       if (e.key === "Escape") {
