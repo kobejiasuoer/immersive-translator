@@ -93,20 +93,26 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: immersive-translator-windows/src-tauri
+          cache-directories: ~/AppData/Local/ort.pyke.io
+
       - name: Run Rust tests
         shell: bash
         run: |
-          set -uo pipefail
-          cargo test --locked 2>&1 | tee cargo-test.log
-          exit ${PIPESTATUS[0]}
+          cargo test --locked > cargo-test.log 2>&1
+          exit $?
 
-      # 失败时把日志尾部整段打进一条 annotation（换行折叠为 |），免登录可见
+      # 失败时把日志直接从文件 dump 成 annotation（换行折叠为 |），免登录可见
       - name: Report test failure detail
         if: failure()
         shell: bash
         run: |
-          if [[ -f cargo-test.log ]]; then
-            echo "::error::TAIL|$(tail -c 20000 cargo-test.log | tr -d '\r' | awk 1 ORS='|')"
-          else
+          if [[ ! -f cargo-test.log ]]; then
             echo "::error::cargo-test.log-missing"
+            exit 0
           fi
+          echo "::error::ERRLINES|$(grep -n -iE 'error|panic|fatal|failed' cargo-test.log | tail -40 | tr -d '\r' | awk 1 ORS='|')"
+          echo "::error::TAIL|$(tail -c 15000 cargo-test.log | tr -d '\r' | awk 1 ORS='|')"
