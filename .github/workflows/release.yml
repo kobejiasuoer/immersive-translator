@@ -388,7 +388,13 @@ jobs:
           fi
           # 完整输出落盘，失败时由下方步骤上传 artifact 供离线排查
           "${build_cmd[@]}" 2>&1 | tee ../nsis-build.log
-          exit "${PIPESTATUS[0]}"
+          rc="${PIPESTATUS[0]}"
+          if [[ $rc -ne 0 ]]; then
+            grep -E "^error(\[|:)|panicked at|failed to" ../nsis-build.log | head -12 | while IFS= read -r line; do
+              echo "::error::${line:0:600}"
+            done
+          fi
+          exit "$rc"
 
       - name: Upload build log (on failure)
         if: failure()

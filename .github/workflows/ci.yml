@@ -94,4 +94,15 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Rust tests
-        run: cargo test --locked
+        shell: bash
+        run: |
+          set -uo pipefail
+          cargo test --locked 2>&1 | tee cargo-test.log
+          rc=${PIPESTATUS[0]}
+          if [[ $rc -ne 0 ]]; then
+            # 把编译/测试错误行转成 annotation，无需登录即可经 API 读到失败原因
+            grep -E "^error(\[|:)|panicked at|FAILED" cargo-test.log | head -12 | while IFS= read -r line; do
+              echo "::error::${line:0:600}"
+            done
+          fi
+          exit $rc
