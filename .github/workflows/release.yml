@@ -379,13 +379,24 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
-            npm run tauri build
+            build_cmd=(npm run tauri build)
           else
             echo "::warning::仓库未配置 TAURI_SIGNING_PRIVATE_KEY secret，先构建不带 updater 签名的安装包；latest.json / .sig 由 release-updater 流程补传。"
-            npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
+            build_cmd=(npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}')
           fi
+          # 完整输出落盘，失败时由下方步骤上传 artifact 供离线排查
+          "${build_cmd[@]}" 2>&1 | tee ../nsis-build.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: Upload build log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nsis-build-log
+          path: nsis-build.log
+          retention-days: 7
 
       - name: Collect bundle artifacts
         shell: bash
