@@ -1214,7 +1214,12 @@ mod tests {
     fn thinking_compat_direct_provider_endpoint_still_applies() {
         // 直连智谱：原有 endpoint 匹配路径不受影响
         let mut body = serde_json::json!({ "model": "glm-4.5" });
-        apply_thinking_mode_compat(&mut body, "https://open.bigmodel.cn/api/paas/v4", "glm-4.5", false);
+        apply_thinking_mode_compat(
+            &mut body,
+            "https://open.bigmodel.cn/api/paas/v4",
+            "glm-4.5",
+            false,
+        );
         assert_eq!(body["thinking"]["type"], "disabled");
     }
 

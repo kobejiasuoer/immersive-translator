@@ -1858,10 +1858,7 @@ mod tests {
             settings.edge_voice_zh.as_deref(),
             Some("zh-CN-XiaoxiaoNeural")
         );
-        assert_eq!(
-            settings.edge_voice_en.as_deref(),
-            Some("en-US-AvaNeural")
-        );
+        assert_eq!(settings.edge_voice_en.as_deref(), Some("en-US-AvaNeural"));
         assert_eq!(settings.spot_quiz_mode, Some(true));
 
         // 序列化键名必须是 camelCase（TS mergeReaderSettings 按同名合并）。
@@ -1879,10 +1876,7 @@ mod tests {
         std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
         let loaded = load_articles_from_path(&path).unwrap();
         let s = loaded.articles[0].settings.as_ref().unwrap();
-        assert_eq!(
-            s.edge_voice_zh.as_deref(),
-            Some("zh-CN-XiaoxiaoNeural")
-        );
+        assert_eq!(s.edge_voice_zh.as_deref(), Some("zh-CN-XiaoxiaoNeural"));
         assert_eq!(s.edge_voice_en.as_deref(), Some("en-US-AvaNeural"));
         assert_eq!(s.spot_quiz_mode, Some(true));
         let _ = std::fs::remove_file(&path);
