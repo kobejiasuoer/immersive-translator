@@ -354,6 +354,14 @@ jobs:
           # 缓存命中后免下载）；ort-sys 缓存在 %LOCALAPPDATA%/ort.pyke.io
           cache-directories: ~/AppData/Local/ort.pyke.io
 
+      # 同 ci.yml：runner 安全软件拦截 cargo 子进程向 target 树写 DLL（ort-sys
+      # build.rs:126 fs::copy panic，os error 5）。Defender 排除 + 预置副本双保险。
+      - name: Work around blocked DLL writes from cargo build scripts
+        shell: pwsh
+        run: |
+          try { Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE -ErrorAction Stop; Write-Host "Defender 排除已添加" } catch { Write-Host "Defender 排除未生效（忽略）: $_" }
+          ./scripts/restore-directml.ps1
+
       - name: Resolve release metadata
         shell: bash
         run: |
