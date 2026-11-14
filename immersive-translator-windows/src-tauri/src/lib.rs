@@ -1616,6 +1616,31 @@ pub fn run() {
         ])
         .setup(|app| {
             learning_store::init(app.handle());
+
+            // 账号认证（windows-auth §4.4）：令牌管理器需 AppHandle（DPAPI 路径
+            // 与 base_url 覆盖文件都在 app_data_dir）。spawn 启动静默续登录：
+            // 预填内存态 → 广播已登录 → 后台刷新校验存活，不阻塞窗口显示。
+            //
+            // 注入时机（首启竞态修复 2026-11-13）：预建窗口的 WebView 在 build()
+            // 阶段就加载页面，首个 invoke 可能早于 setup 其余步骤到达——本块
+            // 因此放在 setup 最前，且 auth_*/sync_* 命令改经 auth::current_manager()
+            // 等待注入（见 auth.rs「命令层就绪屏障」），不再依赖 State 提取。
+            // app.manage 保留：托盘「账号登录」菜单等 Manager 侧调用方仍走 try_state。
+            match auth::build_token_manager(app.handle()) {
+                Ok(manager) => {
+                    let bootstrap_manager = std::sync::Arc::clone(&manager);
+                    auth::install_token_manager(bootstrap_manager.clone());
+                    app.manage(manager);
+                    tauri::async_runtime::spawn(auth::auth_bootstrap(
+                        app.handle().clone(),
+                        bootstrap_manager,
+                    ));
+                }
+                Err(e) => {
+                    eprintln!("[auth] 令牌管理器初始化失败（登录功能不可用）: {e}");
+                }
+            }
+
             // 首次启动把安装包里的 OCR 模型释放到 app_data_dir/models/，
             // 用户无需联网下载（企业内网/代理环境下下载常常失败）。
             if let Err(e) = ocr::ensure_models_from_bundle(app.handle()) {
@@ -1711,24 +1736,6 @@ pub fn run() {
                 .unwrap_or(false);
             if onboarding_done {
                 show_reader_window(app.handle());
-            }
-
-            // 账号认证（windows-auth §4.4）：令牌管理器需 AppHandle（DPAPI 路径
-            // 与 base_url 覆盖文件都在 app_data_dir），故在 setup 注入；setup 完成
-            // 先于任何 WebView 命令调用，State 提取始终可用。随后 spawn 启动静默
-            // 续登录：预填内存态 → 广播已登录 → 后台刷新校验存活，不阻塞窗口显示。
-            match auth::build_token_manager(app.handle()) {
-                Ok(manager) => {
-                    let bootstrap_manager = std::sync::Arc::clone(&manager);
-                    app.manage(manager);
-                    tauri::async_runtime::spawn(auth::auth_bootstrap(
-                        app.handle().clone(),
-                        bootstrap_manager,
-                    ));
-                }
-                Err(e) => {
-                    eprintln!("[auth] 令牌管理器初始化失败（登录功能不可用）: {e}");
-                }
             }
 
             // 注册默认全局热键（启动占位；用户改键后由 reregister_hotkeys 覆盖）：

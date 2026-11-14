@@ -1,0 +1,33 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div><script type="module">
+import { mockIPC, mockWindows } from '/node_modules/@tauri-apps/api/mocks.js';
+let pending = null;
+window.qaCommands = [];
+window.qaErrors = [];
+window.addEventListener('error', e => window.qaErrors.push(e.message));
+window.addEventListener('unhandledrejection', e => window.qaErrors.push(String(e.reason)));
+mockWindows('reader');
+mockIPC(async (cmd, args) => {
+  window.qaCommands.push(cmd);
+  switch(cmd) {
+    case 'auth_get_status': return { loggedIn:false, user:null, notice:null };
+    case 'reader_list_books': case 'reader_list_articles': case 'note_list': case 'speak_list_sessions': case 'tts_voices': return [];
+    case 'reader_get_vocab': return { words:[],reviewLog:{ schemaVersion:1,days:[] } };
+    case 'reader_read_seconds_today': return 0;
+    case 'reminder_get_config': return { enabled:true,minuteOfDay:1200,dndEnabled:true,dndStartMin:1320,dndEndMin:480,readGoalMin:10 };
+    case 'secret_get': return '';
+    case 'settings_take_pending_tab': { const tab=pending; pending=null; return tab; }
+    case 'settings_open_tab': case 'open_settings': {
+      pending=args?.tab || 'reading';
+      const {emit}=await import('/node_modules/@tauri-apps/api/event.js');
+      await emit('settings:navigate-tab',pending); return;
+    }
+    case 'plugin:app|version': return '0.16.0';
+    case 'plugin:autostart|is_enabled': return false;
+    case 'ocr_models_ready': return true;
+    case 'is_store_packaged': return true;
+    case 'get_active_hotkeys': return {hotkey:'Ctrl+Shift+Q',ocrHotkey:'Ctrl+Shift+E',readerHotkey:'Ctrl+Shift+R'};
+    default: return null;
+  }
+},{shouldMockEvents:true});
+await import('/src/main.tsx');
+</script></body></html>

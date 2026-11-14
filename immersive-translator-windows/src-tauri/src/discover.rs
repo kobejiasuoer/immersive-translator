@@ -189,7 +189,6 @@ async fn with_optional_bearer(
 #[tauri::command]
 pub async fn books_list(
     app: AppHandle,
-    manager: tauri::State<'_, std::sync::Arc<TokenManager>>,
     q: Option<String>,
     language: Option<String>,
     category: Option<String>,
@@ -198,15 +197,9 @@ pub async fn books_list(
     page: Option<i64>,
     per_page: Option<i64>,
 ) -> Result<SyncHttpText, AuthError> {
+    let manager = crate::auth::current_manager().await?;
     match fetch_books_page(
-        manager.inner(),
-        &q,
-        &language,
-        &category,
-        &source,
-        &grade,
-        page,
-        per_page,
+        &manager, &q, &language, &category, &source, &grade, page, per_page,
     )
     .await
     {
@@ -267,10 +260,10 @@ async fn fetch_books_page(
 #[tauri::command]
 pub async fn books_download(
     app: AppHandle,
-    manager: tauri::State<'_, std::sync::Arc<TokenManager>>,
     book_id: String,
 ) -> Result<BooksDownloadResult, AuthError> {
-    match download_book(&app, manager.inner(), &book_id).await {
+    let manager = crate::auth::current_manager().await?;
+    match download_book(&app, &manager, &book_id).await {
         Ok(v) => Ok(v),
         // reject 仅 network/platform/unknown 三码均非致命、实为 no-op（同上）
         Err(e) => {

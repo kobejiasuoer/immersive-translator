@@ -367,6 +367,30 @@ describe("ReaderApp 书架阅读导航", () => {
     expect(h.container.querySelector(".shelf-bookcard h3")?.textContent).toBe(BOOK.title);
   });
 
+  it("auth_get_status 启动失败时账号入口保持读取中并自动重试，不冒充未登录", async () => {
+    const defaultInvoke = mocks.invoke.getMockImplementation()!;
+    let authReads = 0;
+    mocks.invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "auth_get_status" && ++authReads <= 2) {
+        // 复现首启竞态：命令早于 Rust 侧状态注入到达时的硬失败。
+        return Promise.reject(new Error("state not managed for field `manager` on command `auth_get_status`"));
+      }
+      return defaultInvoke(command, args);
+    });
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const h = await mount();
+    // 首读失败：书架进入可见错误态；账号入口保持「正在读取登录状态…」（不冒充未登录）。
+    expect(h.container.querySelector('.shelf-page [role="alert"]')).not.toBeNull();
+    expect(h.container.querySelector('button[aria-label="正在读取登录状态…"]')).not.toBeNull();
+
+    // 退避重试（500ms）后读取成功：账号入口自动恢复为游客「登录」态。
+    await actAsync(() => { vi.advanceTimersByTime(500); });
+    expect(h.container.querySelector('button[aria-label="正在读取登录状态…"]')).toBeNull();
+    expect(h.container.querySelector(".acct-trigger.is-guest")).not.toBeNull();
+    // 书架错误卡不自动消失：仍由「重新读取」显式驱动（既有契约）。
+    expect(h.container.querySelector('.shelf-page [role="alert"]')).not.toBeNull();
+  });
+
   it("真实书卡继续读打开断点章，并在真实阅读页定位到第三句", async () => {
     const h = await mount();
     await continueReading(h);

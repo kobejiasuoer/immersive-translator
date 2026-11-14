@@ -2106,7 +2106,20 @@ export function ReaderApp() {
     };
     const completed=()=>{void refresh();};window.addEventListener("learning-sync-complete",completed);
     let account:string|undefined;let authEventReceived=false;
-    void authGetStatus().then(status=>{setAuthStatus(status);if(!authEventReceived)account=status.user?.id??"guest";});
+    // 登录态读取带退避重试：auth_get_status 在启动竞态/IPC 异常下可能失败，
+    // 失败后保持读取中态并重试（约 500ms→1s→2s→2s…共 8 次），绝不把读取失败
+    // 冒充成未登录；重试耗尽才停留「正在读取登录状态…」，由其它入口（如书架
+    // 重新读取）或下次 auth 事件再驱动刷新。
+    const readAuthStatus = (attempt: number) => {
+      void authGetStatus().then(status => {
+        setAuthStatus(status);
+        if (!authEventReceived) account = status.user?.id ?? "guest";
+      }).catch(error => {
+        console.error("[reader] auth status read failed", error);
+        if (attempt < 7) setTimeout(() => { if (!disposed) readAuthStatus(attempt + 1); }, 500 * Math.pow(2, Math.min(attempt, 2)));
+      });
+    };
+    readAuthStatus(0);
     const unlisten = listenAuthStateChanged((status) => {
       authEventReceived = true;
       setAuthStatus(status);
