@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
-use crate::auth::{emit_fatal_if_needed, AuthError, TokenManager};
+use crate::auth::{emit_fatal_if_needed, AuthError};
 
 pub const SYNC_STORE_SCHEMA_VERSION: u32 = 1;
 
@@ -108,12 +108,12 @@ fn local_collection_error(collection: &str) -> AuthError {
 #[tauri::command]
 pub async fn sync_pull(
     app: AppHandle,
-    manager: tauri::State<'_, std::sync::Arc<TokenManager>>,
     collection: String,
     since: i64,
     limit: i64,
     expected_namespace: Option<String>,
 ) -> Result<SyncHttpText, AuthError> {
+    let manager = crate::auth::current_manager().await?;
     if validate_collection(&collection).is_err() {
         return Err(local_collection_error(&collection));
     }
@@ -146,11 +146,11 @@ pub async fn sync_pull(
 #[tauri::command]
 pub async fn sync_push(
     app: AppHandle,
-    manager: tauri::State<'_, std::sync::Arc<TokenManager>>,
     collection: String,
     entities_json: String,
     expected_namespace: Option<String>,
 ) -> Result<SyncHttpText, AuthError> {
+    let manager = crate::auth::current_manager().await?;
     if validate_collection(&collection).is_err() {
         return Err(local_collection_error(&collection));
     }

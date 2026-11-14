@@ -18,7 +18,7 @@
 use futures_util::future::{BoxFuture, FutureExt, Shared};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -925,6 +925,39 @@ pub(crate) fn build_token_manager(app: &AppHandle) -> Result<Arc<TokenManager>, 
     )))
 }
 
+// ---------------------------------------------------------------------------
+// 命令层就绪屏障（首启竞态修复 2026-11-13）
+//
+// tauri.conf.json 的预建窗口（visible:false）在 Builder::build() 阶段就创建
+// WebView 并开始加载页面；页面挂载后的首个 invoke 可能早于 setup() 里
+// app.manage(manager) 到达。过去 auth_*/sync_* 命令经 State 提取直接失败
+// （「state not managed」），前端书架报读取失败、账号入口永久停留在
+// 「正在读取登录状态…」。改为命令经 current_manager() 等待全局注入，
+// 不再依赖 State 提取的成功与否。
+// ---------------------------------------------------------------------------
+
+static TOKEN_MANAGER: OnceLock<Arc<TokenManager>> = OnceLock::new();
+
+/// setup 里尽早注入（务必在易耗时的初始化步骤之前调用）。
+pub(crate) fn install_token_manager(manager: Arc<TokenManager>) {
+    let _ = TOKEN_MANAGER.set(manager);
+}
+
+/// 命令层取管理器：等待 setup 注入，上限 10s。正常情况下 setup 在
+/// 启动最初几毫秒内注入，这里的等待实际为一次表查询。
+pub(crate) async fn current_manager() -> Result<Arc<TokenManager>, AuthError> {
+    for _ in 0..200 {
+        if let Some(manager) = TOKEN_MANAGER.get() {
+            return Ok(Arc::clone(manager));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    Err(AuthError::local(
+        "unknown",
+        "账号模块初始化超时，请重启应用",
+    ))
+}
+
 fn emit_auth_state(app: &AppHandle, status: &AuthStatus) {
     publish_auth_state(status, crate::learning_store::set_account, |status| {
         app.emit("auth-state-changed", status)
@@ -1005,42 +1038,38 @@ async fn fetch_server_config_and_persist(
 }
 
 #[tauri::command]
-pub async fn auth_send_otp(
-    manager: tauri::State<'_, Arc<TokenManager>>,
-    email: String,
-) -> Result<(), AuthError> {
+pub async fn auth_send_otp(email: String) -> Result<(), AuthError> {
+    let manager = current_manager().await?;
     manager.send_otp(email.trim()).await
 }
 
 #[tauri::command]
 pub async fn auth_verify_otp(
     app: AppHandle,
-    manager: tauri::State<'_, Arc<TokenManager>>,
     email: String,
     code: String,
 ) -> Result<AuthSession, AuthError> {
+    let manager = current_manager().await?;
     let session = manager.verify_otp(email.trim(), code.trim()).await?;
-    after_login_success(&app, manager.inner(), &session.user);
+    after_login_success(&app, &manager, &session.user);
     Ok(session)
 }
 
 #[tauri::command]
 pub async fn auth_login_password(
     app: AppHandle,
-    manager: tauri::State<'_, Arc<TokenManager>>,
     email: String,
     password: String,
 ) -> Result<AuthSession, AuthError> {
+    let manager = current_manager().await?;
     let session = manager.login_password(email.trim(), &password).await?;
-    after_login_success(&app, manager.inner(), &session.user);
+    after_login_success(&app, &manager, &session.user);
     Ok(session)
 }
 
 #[tauri::command]
-pub async fn auth_logout(
-    app: AppHandle,
-    manager: tauri::State<'_, Arc<TokenManager>>,
-) -> Result<LogoutOutcome, AuthError> {
+pub async fn auth_logout(app: AppHandle) -> Result<LogoutOutcome, AuthError> {
+    let manager = current_manager().await?;
     let outcome = manager.logout().await?;
     // 走到这里 clear 必已成功（§5.3：失败路径直接 Err，不广播）。
     emit_auth_state(
@@ -1057,19 +1086,16 @@ pub async fn auth_logout(
 /// 契约：不会 Err（返回 Result 仅为满足 Tauri 对带引用入参的 async 命令
 /// 的要求；Err 分支不可达）。
 #[tauri::command]
-pub async fn auth_get_status(
-    manager: tauri::State<'_, Arc<TokenManager>>,
-) -> Result<AuthStatus, AuthError> {
+pub async fn auth_get_status() -> Result<AuthStatus, AuthError> {
+    let manager = current_manager().await?;
     let status = manager.get_status().await;
     crate::learning_store::set_account(status.user.as_ref().map(|u| u.id.as_str()));
     Ok(status)
 }
 
 #[tauri::command]
-pub async fn auth_refresh_now(
-    app: AppHandle,
-    manager: tauri::State<'_, Arc<TokenManager>>,
-) -> Result<AuthSession, AuthError> {
+pub async fn auth_refresh_now(app: AppHandle) -> Result<AuthSession, AuthError> {
+    let manager = current_manager().await?;
     match manager.refresh().await {
         Ok(stored) => {
             emit_auth_state(
@@ -1093,10 +1119,8 @@ pub async fn auth_refresh_now(
 }
 
 #[tauri::command]
-pub async fn auth_fetch_me(
-    app: AppHandle,
-    manager: tauri::State<'_, Arc<TokenManager>>,
-) -> Result<AuthUser, AuthError> {
+pub async fn auth_fetch_me(app: AppHandle) -> Result<AuthUser, AuthError> {
+    let manager = current_manager().await?;
     match manager.fetch_me().await {
         Ok(user) => Ok(user),
         Err(e) => {
@@ -1107,11 +1131,9 @@ pub async fn auth_fetch_me(
 }
 
 #[tauri::command]
-pub async fn auth_fetch_server_config(
-    app: AppHandle,
-    manager: tauri::State<'_, Arc<TokenManager>>,
-) -> Result<serde_json::Value, AuthError> {
-    match fetch_server_config_and_persist(&app, manager.inner()).await {
+pub async fn auth_fetch_server_config(app: AppHandle) -> Result<serde_json::Value, AuthError> {
+    let manager = current_manager().await?;
+    match fetch_server_config_and_persist(&app, &manager).await {
         Ok(value) => Ok(value),
         Err(e) => {
             emit_fatal_if_needed(&app, &e);
@@ -1126,10 +1148,10 @@ pub async fn auth_fetch_server_config(
 #[tauri::command]
 pub async fn auth_track_event(
     app: AppHandle,
-    manager: tauri::State<'_, Arc<TokenManager>>,
     event: String,
     properties: serde_json::Value,
 ) -> Result<(), AuthError> {
+    let manager = current_manager().await?;
     match manager.track_event(&event, properties).await {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -1939,6 +1961,28 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, "unauthorized");
         assert_eq!(transport.count("/v1/events"), 0);
+    }
+
+    /// 首启竞态（2026-11-13）：命令先于 setup 注入到达时，current_manager 等
+    /// 待而非失败；注入后等待者立刻拿到同一实例。OnceLock 是进程级单次注入，
+    /// 本测试必须独占 install_token_manager（当前仅此用例使用）。
+    #[tokio::test]
+    async fn current_manager_waits_until_installed() {
+        let waiter = tokio::spawn(async { current_manager().await });
+        // 留出若干 50ms 轮询周期，确认未注入时不会误返回。
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        assert!(!waiter.is_finished(), "未注入时不得提前返回");
+
+        let transport = FakeTransport::new(Arc::new(AtomicU64::new(0)), |_| {
+            Err(AuthError::local("network_error", "unused"))
+        });
+        install_token_manager(make_manager(
+            transport,
+            FakeTokenStore::new(Arc::new(AtomicU64::new(0))),
+        ));
+
+        let got = waiter.await.expect("等待任务不应 panic");
+        assert!(got.is_ok(), "注入后等待者应成功拿到管理器");
     }
 }
 
