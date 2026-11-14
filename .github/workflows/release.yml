@@ -350,6 +350,9 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: immersive-translator-windows/src-tauri
+          # ort-sys 的 onnxruntime 预编译包下载缓存（cdn.pyke.io 对 runner 偶发不稳，
+          # 缓存命中后免下载）；ort-sys 缓存在 %LOCALAPPDATA%/ort.pyke.io
+          cache-directories: ~/AppData/Local/ort.pyke.io
 
       - name: Resolve release metadata
         shell: bash
@@ -390,9 +393,7 @@ jobs:
           "${build_cmd[@]}" 2>&1 | tee ../nsis-build.log
           rc="${PIPESTATUS[0]}"
           if [[ $rc -ne 0 ]]; then
-            grep -E "^error(\[|:)|panicked at|failed to" ../nsis-build.log | head -12 | while IFS= read -r line; do
-              echo "::error::${line:0:600}"
-            done
+            grep -E "^error(\[|:)|panicked at|failed to" ../nsis-build.log | head -12 | sed 's/^/::error::/' || true
           fi
           exit "$rc"
 
