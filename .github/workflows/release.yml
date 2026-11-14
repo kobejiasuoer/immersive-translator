@@ -404,6 +404,14 @@ jobs:
           path: nsis-build.log
           retention-days: 7
 
+      # Release 资产匿名可下载：失败时把完整构建日志挂上去，免登录排查
+      - name: Publish build log to release (on failure)
+        if: failure()
+        shell: bash
+        working-directory: immersive-translator-windows
+        run: |
+          gh release upload "$RELEASE_TAG" ../nsis-build.log --clobber || echo "日志上传失败（Release 可能尚未创建）"
+
       - name: Collect bundle artifacts
         shell: bash
         run: |
