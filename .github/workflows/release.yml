@@ -520,3 +520,8 @@ jobs:
           if [[ -f "$notes" ]]; then
             gh release edit "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --notes-file "$notes"
           fi
+
+          # 四件套已齐后正式发布（历史 tag 重推会产生 draft 遗留，这里兜底转正；
+          # 置 latest 保证 updater 端点指向本版本）
+          gh release edit "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --draft=false --latest
+          echo "Release $RELEASE_TAG 已发布并置为 latest。"
