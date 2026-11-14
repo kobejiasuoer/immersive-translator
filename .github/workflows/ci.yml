@@ -98,9 +98,15 @@ jobs:
         run: |
           set -uo pipefail
           cargo test --locked 2>&1 | tee cargo-test.log
-          rc=${PIPESTATUS[0]}
-          if [[ $rc -ne 0 ]]; then
-            # 错误行转 annotation（sed 保证 ::error:: 在行首，缩进会失效）
-            grep -E "^error(\[|:)|panicked at|FAILED|failed to compile" cargo-test.log | head -12 | sed 's/^/::error::/' || true
+          exit ${PIPESTATUS[0]}
+
+      # 失败时把日志尾部整段打进一条 annotation（换行折叠为 |），免登录可见
+      - name: Report test failure detail
+        if: failure()
+        shell: bash
+        run: |
+          if [[ -f cargo-test.log ]]; then
+            echo "::error::TAIL|$(tail -c 20000 cargo-test.log | tr -d '\r' | awk 1 ORS='|')"
+          else
+            echo "::error::cargo-test.log-missing"
           fi
-          exit $rc
