@@ -99,6 +99,16 @@ jobs:
           workspaces: immersive-translator-windows/src-tauri
           cache-directories: ~/AppData/Local/ort.pyke.io
 
+      # ort-sys build.rs 的 copy_libraries 用 fs::copy 往 target 树落盘 DirectML.dll，
+      # 2026-11 起 runner 镜像上被安全软件拦截（os error 5，build.rs:126 panic）。
+      # 双保险：把工作区加入 Defender 排除；并由非 cargo 进程预置副本，
+      # ort-sys 的 exists() 命中即跳过拷贝（与本机 restore-directml.ps1 同一绕行）。
+      - name: Work around blocked DLL writes from cargo build scripts
+        shell: pwsh
+        run: |
+          try { Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE -ErrorAction Stop; Write-Host "Defender 排除已添加" } catch { Write-Host "Defender 排除未生效（忽略）: $_" }
+          ../scripts/restore-directml.ps1
+
       - name: Run Rust tests
         shell: bash
         run: |
