@@ -413,6 +413,19 @@ jobs:
           path: nsis-build.log
           retention-days: 7
 
+      # 免登录可见的兜底诊断：日志尾部整段进 annotation（换行折叠为 |）
+      - name: Report NSIS failure detail
+        if: failure()
+        shell: bash
+        working-directory: immersive-translator-windows
+        run: |
+          if [[ -f ../nsis-build.log ]]; then
+            echo "::error::ERRLINES|$(grep -n -iE 'error|panic|fatal|failed' ../nsis-build.log | tail -40 | tr -d '\r' | awk 1 ORS='|')"
+            echo "::error::TAIL|$(tail -c 15000 ../nsis-build.log | tr -d '\r' | awk 1 ORS='|')"
+          else
+            echo "::error::nsis-build.log-missing"
+          fi
+
       # Release 资产匿名可下载：失败时把完整构建日志挂上去，免登录排查
       - name: Publish build log to release (on failure)
         if: failure()
