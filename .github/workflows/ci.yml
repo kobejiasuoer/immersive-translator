@@ -126,3 +126,4 @@ jobs:
           fi
           echo "::error::ERRLINES|$(grep -n -iE 'error|panic|fatal|failed' cargo-test.log | tail -40 | tr -d '\r' | awk 1 ORS='|')"
           echo "::error::TAIL|$(tail -c 15000 cargo-test.log | tr -d '\r' | awk 1 ORS='|')"
+          echo "::error::LS|$(ls -la ../target/*/DirectML.dll ../target/*/*/DirectML.dll 2>&1 | tr -d '\r' | awk 1 ORS='|')"

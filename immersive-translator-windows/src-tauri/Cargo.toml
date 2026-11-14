@@ -60,8 +60,12 @@ regex = "1"
 
 # OCR（PaddleOCR via ONNX Runtime）。
 # ort 用 download-binaries 预下载编译好的 onnxruntime，避免 bindgen/libclang 依赖。
-ort = { version = "2.0.0-rc.10", default-features = false, features = ["download-binaries"] }
-paddle-ocr-rs = "0.6"
+# copy-dylibs 必须关：ort-sys build.rs 的 copy_libraries 用 fs::copy 往 target 树
+# 落盘 DirectML.dll，2026-11 起 GitHub runner（及本机杀软环境）上被拦截 os error 5
+# （build.rs:126 panic；DirectML.dll 改由 scripts/restore-directml.ps1 预置 +
+# bundle.resources 随包分发，不依赖该拷贝）。
+ort = { version = "2.0.0-rc.10", default-features = false, features = ["download-binaries", "std", "ndarray", "tracing"] }
+paddle-ocr-rs = { version = "0.6", default-features = false, features = ["download-binaries"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp"] }
 
 [dev-dependencies]
