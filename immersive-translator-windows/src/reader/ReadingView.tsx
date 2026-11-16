@@ -48,7 +48,9 @@ interface Props {
   /** 播放引擎是否正在朗读（句旁按钮据此切换「朗读这一句 / 停止朗读」）。 */
   playing: boolean;
   translating: { done: number; total: number } | null;
-  /** 词块标注进度（翻译完成后跑，与 translating 互斥显示）。 */
+  /** 翻译 chip 的阶段尾巴（连接接口 Ns / 等待模型响应 Ns / 译文生成中 / 限流提示）。 */
+  translatingDetail?: string | null;
+  /** 词块标注进度（与翻译重叠并发跑，两个 chip 可同时显示）。 */
   chunking: { done: number; total: number } | null;
   /** 遮罩模式下按住 H 的临时全显（不改变已揭开状态）。 */
   peekAll: boolean;
@@ -144,7 +146,7 @@ function IconBookmark({ size = 14 }: { size?: number }) {
 }
 
 export function ReadingView(props: Props) {
-  const { article, settings, activeIdx, translating, chunking, peekAll, sentCards, searchMatchIdx } = props;
+  const { article, settings, activeIdx, translating, translatingDetail, chunking, peekAll, sentCards, searchMatchIdx } = props;
   const stageRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const colRef = useRef<HTMLDivElement | null>(null);
@@ -812,9 +814,10 @@ export function ReadingView(props: Props) {
           {translating && (
             <span className="reading-status-chip">
               翻译中 {translating.done}/{translating.total} 段
+              {translatingDetail ? ` · ${translatingDetail}` : ""}
             </span>
           )}
-          {!translating && chunking && (
+          {chunking && (
             <span className="reading-status-chip">
               词块标注中 {chunking.done}/{chunking.total} 批
             </span>

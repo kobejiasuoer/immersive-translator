@@ -13,6 +13,8 @@ import {
   onTranslationDelta,
   onTranslationDone,
   onTranslationError,
+  onTranslationStatus,
+  type TranslationPhase,
   settingsOpenTab,
   settingsTakePendingTab,
   listenSettingsNavigateTab,
@@ -94,6 +96,7 @@ import {
   parseParagraphResponse,
   parsePartialNumbered,
   planTranslateRetry,
+  TRANSLATE_PARALLEL_GROUPS,
 } from "../core/paragraphTranslate";
 import { readerParagraphErrorText } from "../core/errorMessageFormatter";
 import { dueVocab, isDue, recordReview, reviewStats, type ReviewGrade } from "../core/readerSrs";
@@ -111,6 +114,7 @@ import {
   buildChunkAnnotateSystemPrompt,
   buildChunkBatchInput,
   chunkBatches,
+  CHUNK_PARALLEL_BATCHES,
   chunkToVocab,
   parseChunkResponse,
 } from "../core/chunkAnnotate";
@@ -287,6 +291,14 @@ export function ReaderApp() {
   /** 加练队列：非空时复习只排这批词（笔记复盘区「开始复习/只测仍错的词」入口）。 */
   const [focusIds, setFocusIds] = useState<string[] | null>(null);
   const [translating, setTranslating] = useState<{ done: number; total: number } | null>(null);
+  /** 翻译 chip 的阶段尾巴（连接接口/等待模型响应/译文生成中）——Rust 侧每个请求
+   * 都会发 translation:status，阅读室此前没消费，慢与挂用户分不清。 */
+  const [translatePhase, setTranslatePhase] = useState<{ phase: TranslationPhase; since: number } | null>(null);
+  /** 秒表 tick：等待阶段显示已等待秒数，1s 一跳。 */
+  const [, setPhaseTick] = useState(0);
+  /** 429 退避中的路数（>0 时 chip 显示限流提示；并发下多段可能同时退避）。 */
+  const [backoffCount, setBackoffCount] = useState(0);
+  const translatingRef = useRef<{ done: number; total: number } | null>(null);
   /** 标题失败原因（瞬态，不持久化——重启后仅显「标题翻译失败」，与现状一致）。 */
   const [titleCnError, setTitleCnError] = useState<string | null>(null);
   const [chunking, setChunking] = useState<{ done: number; total: number } | null>(null);
@@ -725,10 +737,40 @@ export function ReaderApp() {
         p.onCancelled(e.partial);
       }
     }).then((u) => uns.push(u));
+    // 阶段事件（connecting/waitingFirstToken/streaming）：只喂翻译管线的 chip——
+    // 词块标注（rc）有自己的 chip，句子解析（rx）在透镜卡内自展示。
+    onTranslationStatus((e) => {
+      if (!translatingRef.current) return;
+      if (!e.tag.startsWith("rp") && !e.tag.startsWith("rt")) return;
+      setTranslatePhase({ phase: e.phase, since: Date.now() });
+    }).then((u) => uns.push(u));
     return () => {
       uns.forEach((u) => u());
     };
   }, []);
+
+  // translating 镜像到 ref（status 监听里读取，避免重挂监听）；chip 消失时清阶段尾巴。
+  useEffect(() => {
+    translatingRef.current = translating;
+    if (!translating) setTranslatePhase(null);
+  }, [translating]);
+  // 秒表：翻译期间 1s 一跳重渲染，等待阶段才能显示「已等 Ns」。
+  const translatingActive = translating !== null;
+  useEffect(() => {
+    if (!translatingActive) return;
+    const timer = window.setInterval(() => setPhaseTick((t) => t + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [translatingActive]);
+  /** 翻译 chip 的阶段尾巴：限流提示 > 阶段+秒数 > 生成中。慢与挂，一眼可辨。 */
+  const translatingDetail = (() => {
+    if (backoffCount > 0) return "触发限流，20s 后自动重试";
+    if (!translating || !translatePhase) return null;
+    if (translatePhase.phase === "streaming") return "译文生成中";
+    if (translatePhase.phase === "done") return null;
+    const secs = Math.round((Date.now() - translatePhase.since) / 1000);
+    const label = translatePhase.phase === "connecting" ? "连接接口" : "等待模型响应";
+    return `${label} ${secs}s`;
+  })();
 
   /** 发一次翻译请求并等待其完成（tag 路由，超时保护）。httpStatus 供 429 自动退避与失败文案分桶。 */
   const requestTranslate = useCallback(
@@ -858,7 +900,7 @@ export function ReaderApp() {
     }, 1200);
   }, []);
 
-  // ---- 词块标注（文章翻译完成后按批跑；切走文章即停） ----
+  // ---- 词块标注（与段级翻译重叠跑 2 路并发；切走文章即停） ----
   const ensureAnnotated = useCallback(async () => {
     const a = articleRef.current;
     if (!a || annotatingRef.current) return;
@@ -881,28 +923,39 @@ export function ReaderApp() {
       let marked = 0;
       let anyError = false;
       let done = 0;
-      for (const batch of batches) {
-        if (articleRef.current?.id !== a.id) return; // 切走文章，整批终止
-        const tag = `rc${++translateSeqRef.current}`;
-        const res = await requestTranslate(buildChunkBatchInput(batch), system, tag);
-        if (res.status === "done") {
-          const byIdx = parseChunkResponse(res.text, batch);
-          if (byIdx.size > 0) {
-            marked += [...byIdx.values()].reduce((n, list) => n + list.length, 0);
-            patchArticle((cur) => ({
-              ...cur,
-              sentences: cur.sentences.map((st) => {
-                const chunks = byIdx.get(st.idx);
-                return chunks ? { ...st, chunks } : st;
-              }),
-            }));
+      const queue = [...batches];
+      const worker = async () => {
+        for (;;) {
+          if (articleRef.current?.id !== a.id) return; // 切走文章，整批终止
+          const batch = queue.shift();
+          if (!batch) return;
+          const tag = `rc${++translateSeqRef.current}`;
+          const res = await requestTranslate(buildChunkBatchInput(batch), system, tag);
+          if (articleRef.current?.id !== a.id) continue; // 在途时切走：丢弃本批结果
+          if (res.status === "done") {
+            const byIdx = parseChunkResponse(res.text, batch);
+            if (byIdx.size > 0) {
+              marked += [...byIdx.values()].reduce((n, list) => n + list.length, 0);
+              patchArticle((cur) => ({
+                ...cur,
+                sentences: cur.sentences.map((st) => {
+                  const chunks = byIdx.get(st.idx);
+                  return chunks ? { ...st, chunks } : st;
+                }),
+              }));
+            }
+          } else {
+            anyError = true;
           }
-        } else {
-          anyError = true;
+          done += 1;
+          setChunking(done < batches.length ? { done, total: batches.length } : null);
         }
-        done += 1;
-        setChunking(done < batches.length ? { done, total: batches.length } : null);
-      }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(CHUNK_PARALLEL_BATCHES, batches.length) }, () => worker()),
+      );
+      // 切走文章后不得把 chunkState 写进新文章（串行版靠循环内提前 return 掩盖）。
+      if (articleRef.current?.id !== a.id) return;
       patchArticle((cur) => ({ ...cur, chunkState: anyError && marked === 0 ? "failed" : "done" }));
       if (anyError && marked === 0) showToast("词块标注失败，可在设置里重试");
     } finally {
@@ -949,6 +1002,8 @@ export function ReaderApp() {
   }, [patchArticle, showToast]);
 
   // ---- 翻译管线（P0-1：段级流式渲染 + 单段重试 + 手改译文） ----
+  // v0.18 并发化：段级 3 路并行 + 标题不阻塞正文 + 词块标注重叠执行。
+  // 串行 8 次往返压到 ~2 次，整章墙钟时间约 1/3（上游单请求速度不变）。
   const ensureTranslated = useCallback(
     async (input: Article) => {
       const s = await loadSettingsAsync().catch(() => null);
@@ -976,34 +1031,41 @@ export function ReaderApp() {
 
       setTranslating({ done: 0, total: pendingGroups.length });
 
+      // 并发期间所有补丁按文章 id 校验：请求在途时切走文章，迟到的事件不得写进新文章。
+      const patchInput = (updater: (a: Article) => Article) => {
+        if (articleRef.current?.id === input.id) patchArticle(updater);
+      };
+
+      // 标题请求与正文并行（单行请求秒级返回，串行等它纯属浪费首屏时间）。
       if (titlePending) {
-        const tag = `rt${++translateSeqRef.current}`;
-        const res = await requestTranslate(input.title, buildTitleTranslateSystemPrompt(target), tag);
-        if (res.status === "done") {
-          setTitleCnError(null);
-          const cn = res.text.trim().split(/\r?\n/)[0]?.trim();
-          patchArticle((a) => ({
-            ...a,
-            ...(cn
-              ? { titleCn: cn, titleCnState: "done" as const }
-              : { titleCnState: "failed" as const }),
-          }));
-        } else if (res.status === "error") {
-          setTitleCnError(readerParagraphErrorText(res.httpStatus));
-          patchArticle((a) => ({ ...a, titleCnState: "failed" }));
-        }
+        void (async () => {
+          const tag = `rt${++translateSeqRef.current}`;
+          const res = await requestTranslate(input.title, buildTitleTranslateSystemPrompt(target), tag);
+          if (res.status === "done") {
+            setTitleCnError(null);
+            const cn = res.text.trim().split(/\r?\n/)[0]?.trim();
+            patchInput((a) => ({
+              ...a,
+              ...(cn
+                ? { titleCn: cn, titleCnState: "done" as const }
+                : { titleCnState: "failed" as const }),
+            }));
+          } else if (res.status === "error") {
+            setTitleCnError(readerParagraphErrorText(res.httpStatus));
+            patchInput((a) => ({ ...a, titleCnState: "failed" }));
+          }
+        })();
       }
+
+      // 词块标注重叠启动：标注只读英文句、只写 chunks 字段，与译文补丁互不冲突
+      // （patchArticle 是同步读改写，单线程下无交错）。收尾处再兜底补跑一次。
+      void ensureAnnotated();
 
       let done = 0;
       // 整篇自动退避计数（429 等待次数，跨段共享；手动重试发起的新 run 从 0 重新起算）。
       let runBackoffs = 0;
-      for (const [, sentences] of pendingGroups) {
-        // B1 修复：中途切到别的文章时旧 run 必须先清掉「翻译中 N/M 段」chip 再退出——
-        // ensureAnnotated 有 try/finally 兜底，本函数没有，裸 return 会让 chip 永久卡死。
-        if (articleRef.current?.id !== input.id) {
-          setTranslating(null);
-          return;
-        }
+      const queue = [...pendingGroups];
+      const translateGroup = async (sentences: SentencePair[]) => {
         const paraInput = buildParagraphRequestInput(sentences.map((x) => x.en));
         const expected = sentences.length;
         const systemPrompt = buildParagraphTranslateSystemPrompt({
@@ -1016,7 +1078,7 @@ export function ReaderApp() {
           partial.forEach((text, i) => {
             if (text === null) return;
             const idx = sentences[i].idx;
-            patchArticle((a) => ({
+            patchInput((a) => ({
               ...a,
               sentences: a.sentences.map((st) =>
                 st.idx === idx && st.zhState === "pending" ? { ...st, zh: text } : st,
@@ -1039,10 +1101,11 @@ export function ReaderApp() {
         ) {
           groupRetries += 1;
           runBackoffs += 1;
+          setBackoffCount((n) => n + 1);
           await new Promise<void>((r) => window.setTimeout(r, wait));
+          setBackoffCount((n) => Math.max(0, n - 1));
           if (articleRef.current?.id !== input.id) {
-            // 退避期间切走文章：同款先清 chip 再退出（B1 修复）。
-            setTranslating(null);
+            // 退避期间切走文章：不再浪费重试请求，chip 由 worker 循环顶部清理。
             return;
           }
           // 重试用新 tag，避免事件路由按旧 tag 误路由；systemPrompt/onDelta 与首次尝试相同。
@@ -1052,7 +1115,7 @@ export function ReaderApp() {
         if (res.status === "done") {
           const parsed = parseParagraphResponse(res.text, expected);
           if (parsed) {
-            patchArticle((a) => ({
+            patchInput((a) => ({
               ...a,
               sentences: a.sentences.map((st) => {
                 const i = sentences.findIndex((x) => x.idx === st.idx);
@@ -1067,7 +1130,7 @@ export function ReaderApp() {
           // 取消：流式已完成的句子按部分解析收尾（能救几句是几句）；
           // 没译出来的标 failed——留着永远 pending 会是空白且没有重试入口。
           const partial = parsePartialNumbered(res.text, expected);
-          patchArticle((a) => ({
+          patchInput((a) => ({
             ...a,
             sentences: a.sentences.map((st) => {
               const i = sentences.findIndex((x) => x.idx === st.idx);
@@ -1081,15 +1144,33 @@ export function ReaderApp() {
         } else {
           markParagraphFailed(sentences, readerParagraphErrorText(res.httpStatus));
         }
-        done += 1;
-        setTranslating(done < pendingGroups.length ? { done, total: pendingGroups.length } : null);
-      }
+      };
+      const worker = async () => {
+        for (;;) {
+          // B1 修复（并发版）：切到别的文章时清掉「翻译中 N/M 段」chip 再退出；
+          // 其余 lane 在各自检查点退出，不会重设 chip。
+          if (articleRef.current?.id !== input.id) {
+            setTranslating(null);
+            return;
+          }
+          const next = queue.shift();
+          if (!next) return;
+          await translateGroup(next[1]);
+          if (articleRef.current?.id !== input.id) continue;
+          done += 1;
+          setTranslating(done < pendingGroups.length ? { done, total: pendingGroups.length } : null);
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(TRANSLATE_PARALLEL_GROUPS, queue.length) }, () => worker()),
+      );
       setTranslating(null);
-      // 翻译完成后紧接词块标注（同一请求路由顺序执行，不与翻译并发）。
+      setBackoffCount(0);
+      // 兜底：标注早于翻译完成时这里通常空跑（chunkState 已 done）；早退避失败则重试一轮。
       void ensureAnnotated();
 
       function markParagraphFailed(group: SentencePair[], errorText?: string) {
-        patchArticle((a) => ({
+        patchInput((a) => ({
           ...a,
           sentences: a.sentences.map((st) =>
             group.some((x) => x.idx === st.idx)
@@ -2734,6 +2815,7 @@ export function ReaderApp() {
               activeIdx={playback.activeIdx}
               playing={playback.playing}
               translating={translating}
+              translatingDetail={translatingDetail}
               chunking={chunking}
               peekAll={peekAll}
               sentCards={sentCards}

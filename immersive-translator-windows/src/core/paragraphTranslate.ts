@@ -103,7 +103,14 @@ export function buildTitleTranslateSystemPrompt(target: string): string {
   ].join("\n");
 }
 
-// ---- 429 自动退避（阅读室段级管线专用） ----
+// ---- 并发与 429 自动退避（阅读室段级管线专用） ----
+
+/**
+ * 段级并发路数。整章翻译从串行排队改为 3 路并行，墙钟时间约 1/3；
+ * 网关限流 60/min：3 路 × 段均 ~5s ≈ 36 请求/min，仍有余量，
+ * 429 退避（planTranslateRetry）作为限流兜底。
+ */
+export const TRANSLATE_PARALLEL_GROUPS = 3;
 
 /** 单次退避等待时长：固定 20s（服务端 Retry-After 本轮不接线，见蓝图）。 */
 export const TRANSLATE_BACKOFF_WAIT_MS = 20_000;

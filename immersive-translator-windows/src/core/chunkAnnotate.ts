@@ -17,8 +17,11 @@ import { normalizeWordKey } from "./articleBuilder";
 import { initialSrs } from "./readerSrs";
 import { extractJsonObject } from "./readerDict";
 
-/** 每批送标注的句子数（顺序执行，控制请求粒度与失败半径）。 */
+/** 每批送标注的句子数（控制请求粒度与失败半径）。 */
 export const CHUNK_BATCH_SIZE = 10;
+
+/** 标注批次并发路数（与段级翻译重叠执行，合计在途请求 ≤ 3+2 路）。 */
+export const CHUNK_PARALLEL_BATCHES = 2;
 
 /** 每句最多保留的词块数。 */
 export const CHUNKS_PER_SENTENCE = 3;
