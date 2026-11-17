@@ -30,6 +30,7 @@
 
 ## 仓库约定
 
+- **凭据红线（2026-11-17 讯飞密钥泄露教训）**：密钥/密码/凭据永不入仓库——不进代码、不进文档、不进 spike 文件。本地凭据文件**先加 .gitignore 再落盘**（顺序不能反，gitignore 管不住已跟踪文件）；commit 前扫一眼 staged 列表，见 `credentials|secret|.env` 字样先 `git restore --staged`。pre-commit 钩子和 CI 的 secret-scan 是兜底，别依赖。真泄露了：**先轮换密钥，再清 git 历史**，顺序不能反。
 - 提交信息用中文 conventional commits：`feat(reader): xxx` / `fix(app): xxx`。
 - 过程文档放 `docs/`，文件名带日期后缀（如 `xxx-2026-10-30.md`）。
 - 测试与类型检查：`npx vitest run <file>`、`npx tsc --noEmit`（在 `immersive-translator-windows/` 下执行）。

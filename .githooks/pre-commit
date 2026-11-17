@@ -1,0 +1,13 @@
+#!/bin/sh
+# 凭据红线：密钥/密码不入仓库。命中即拒绝提交。
+# 确认是误报（假值/占位符）才可 git commit --no-verify。
+PAT="(api_secret|api_key|apikey|apisecret)[[:space:]]*[:=][[:space:]]*[\"']?[A-Za-z0-9+/=]{20,}|BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9]{30,}|gho_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|(password|passwd|密码)[[:space:]]*[:=：][[:space:]]*[\"']?[^\"'{$<[:space:]]{6,}"
+HIT=$(git diff --cached --diff-filter=ACM -U0 | grep -E '^\+' | grep -Ev '^\+\+\+' | grep -iE "$PAT")
+if [ -n "$HIT" ]; then
+  echo "✗ pre-commit 拦截：暂存区疑似密钥/密码，提交被拒绝：" >&2
+  printf '%s\n' "$HIT" >&2
+  echo "" >&2
+  echo "  - 真凭据：git restore --staged <file> 拿掉，凭据只放 gitignore 的本地文件" >&2
+  echo "  - 确认是假值/占位符：git commit --no-verify" >&2
+  exit 1
+fi
